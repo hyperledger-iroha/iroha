@@ -55,16 +55,15 @@ fn attach_client_fixture_outputs(
         )
         .expect("attach bounded canonical client fixture outputs");
 }
-fn mint_finality_authority_fixture(
+fn mint_finality_authorization_fixture(
     roster: &[ValidatorPower],
 ) -> (
     iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
 ) {
     use iroha_data_model::isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityValidatorKeysV1,
     };
 
     // Public test-only Pallas/Vesta generator multiples 1..=4, matching
@@ -106,24 +105,11 @@ fn mint_finality_authority_fixture(
             })
             .collect(),
     };
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: test_network_id(),
-        epoch: 0,
-        first_height: 1,
-        last_height: 10,
-        authority_generation: 0,
-        authority_id: authority
-            .authority_id()
-            .expect("valid exact mint-finality fixture generation"),
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(&authority)
-        .expect("valid exact mint-finality fixture authorization");
+    let authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &authority, 10,
+        )
+        .expect("complete genesis fixture authorization");
     (authorization, authority)
 }
 fn canonical_executed_network_fixture(
@@ -307,7 +293,7 @@ fn proof_for(
     let height = block.header().height();
     let header = block.header();
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        mint_finality_authority_fixture(&roster);
+        mint_finality_authorization_fixture(&roster);
     let context = HeightContext {
         network_id: test_network_id(),
         protocol_version: PROTOCOL_VERSION,

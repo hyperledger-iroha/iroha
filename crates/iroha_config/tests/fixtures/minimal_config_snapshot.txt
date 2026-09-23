@@ -817,6 +817,7 @@ Root {
             kagemusha_operation_index_bytes: Bytes(
                 67108864,
             ),
+            retained_carrier_shell_bytes: 268435456,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,

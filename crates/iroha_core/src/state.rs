@@ -387,9 +387,8 @@ mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
 pub(crate) use carrier_preparation::{
-    CarrierArchivePreparationError, CarrierJournalInputs, CarrierJournalPreparationError,
-    CarrierJournalShellReservation, PreparedCarrier, PublishedCarrier, PublishedNativeApply,
-    RetainedCarrier,
+    CarrierArchivePreparationError, CarrierJournalPreparationError, CarrierJournalShellReservation,
+    PreparedCarrier, PublishedCarrier, PublishedNativeApply, RetainedCarrier,
 };
 mod committed_hash_journal;
 #[cfg(test)]
@@ -424,6 +423,7 @@ mod lane_admitted_input;
 )]
 mod lane_decision_batch;
 pub(crate) use lane_decision_batch::NativeExecutionCustody;
+mod native_execution_resources;
 #[cfg_attr(
     not(test),
     expect(
@@ -432,15 +432,12 @@ pub(crate) use lane_decision_batch::NativeExecutionCustody;
     )
 )]
 mod native_lane_batch_replay;
-mod native_execution_resources;
-mod native_lane_fastpq;
 pub(crate) use native_execution_resources::NativeExecutionResourceAdmission;
+mod native_lane_fastpq;
 #[cfg(test)]
-pub(crate) use native_execution_resources::NativeSourceStructuralDemand;
-pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
-#[cfg(test)]
+pub(crate) use native_lane_batch_replay::NativeLaneBatchReplayV1;
 pub(crate) use native_lane_batch_replay::{
-    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+    NativeLaneBatchSourcePreparationV1, PendingNativeLaneSource, PreparedNativeLaneBatchSourceV1,
 };
 #[cfg_attr(
     not(test),
@@ -1023,20 +1020,19 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            certificate.network_id,
-            0,
-            &election_roster,
-        );
-        let authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&authority, 0, 1, 8);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                certificate.network_id,
+                8,
+                &election_roster,
+            );
         let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
             crate::sumeragi::v2_context::GenesisContextInputs {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_authority: authority,
-                    kagemusha_mint_finality_authorization: authorization,
+                    kagemusha_mint_finality_authority,
+                    kagemusha_mint_finality_authorization,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -1097,17 +1093,12 @@ mod threshold_key_lifecycle_certificate_tests {
         let parent_roster = sorted_roster();
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
-        let parent_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            network_id,
-            0,
-            &parent_roster,
-        );
-        let parent_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
-            &parent_authority,
-            0,
-            1,
-            1,
-        );
+        let (parent_authorization, parent_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                1,
+                &parent_roster,
+            );
         let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
             network_id,
             1,
@@ -1118,7 +1109,14 @@ mod threshold_key_lifecycle_certificate_tests {
                 &parent_authorization,
                 &successor_authority,
                 9,
+                iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
+                    iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                        session_id: [0x67; 32],
+                        transcript_hash: [0x68; 32],
+                    },
+                ),
                 iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+                [0x69; 32],
             );
         let successor_snapshot = FinalizedNextEpochSnapshot {
             committee_preparation: None,
@@ -1165,6 +1163,11 @@ mod threshold_key_lifecycle_certificate_tests {
 
         let mut non_boundary_parent = boundary_parent.clone();
         non_boundary_parent.epoch_end_height = 8;
+        non_boundary_parent.kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
+                &non_boundary_parent.kagemusha_mint_finality_authority,
+                8,
+            );
         non_boundary_parent.next_epoch_snapshot = None;
         assert_eq!(
             threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
@@ -14937,11 +14940,24 @@ impl<'state> StateBlock<'state> {
         );
         Some(out)
     }
-    fn prepare_replay_checkpoint_preview(&mut self) {
+    fn prepare_replay_checkpoint_preview(&mut self) -> Result<(), LaneLifecycleError> {
         let fields = self.fields.as_mut().expect("original executing State");
         let Some(pending) = fields.pending_autoscale_lifecycle.as_ref() else {
-            return;
+            return Ok(());
         };
+        // A later instruction may introduce custody after lifecycle staging.
+        // Validate the unpruned original overlay: pruning first would erase
+        // the reward records needed to reconcile its still-retained reserves.
+        let predecessor = fields
+            .canonical_runtime
+            .get_before_block()
+            .nexus_projection(&fields.runtime_policy.nexus)?;
+        ensure_pending_autoscale_lifecycle_staking_is_safe(
+            &fields.world,
+            &predecessor,
+            pending,
+            fields._curr_block.height().get(),
+        )?;
         State::prune_lane_lifecycle_world_block_state_for_lanes(
             &mut fields.world,
             &pending.catalog_update.lanes_to_reset,
@@ -14954,6 +14970,7 @@ impl<'state> StateBlock<'state> {
             &mut fields.verified_lane_relay_records,
             &pending.catalog_update.lanes_to_reset,
         );
+        Ok(())
     }
     #[inline]
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -24549,13 +24566,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
-        executor_data_model
-            .parameters
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
-        self.parameters
-            .get_mut()
-            .custom
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
+        executor_data_model.parameters.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
+        self.parameters.get_mut().custom.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
         let declared_permissions = executor_data_model.permissions().clone();
         let permission_is_declared = |permission: &Permission| {
             declared_permissions
@@ -30713,6 +30731,7 @@ impl State {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -51008,6 +51027,32 @@ pub fn compute_genesis_confidential_policy_hash(
         ValidatedSccpRegistryV1::empty().policy_hash(),
     )
 }
+/// Reject the retired next-roster custom parameter without interpreting its payload.
+pub(crate) fn is_retired_kagemusha_mint_finality_parameter(
+    id: &iroha_data_model::parameter::CustomParameterId,
+) -> bool {
+    id.name().as_ref() == "kagemusha_mint_finality_next_epoch_v1"
+}
+
+#[cfg(test)]
+mod retired_mint_finality_parameter_tests {
+    #[test]
+    fn retired_parameter_id_has_no_payload_or_authority_fallback() {
+        assert!(super::is_retired_kagemusha_mint_finality_parameter(
+            &"kagemusha_mint_finality_next_epoch_v1".parse().unwrap()
+        ));
+        for name in [
+            "sumeragi_npos_parameters",
+            "kagemusha_mint_finality",
+            "ordinary_custom",
+        ] {
+            assert!(!super::is_retired_kagemusha_mint_finality_parameter(
+                &name.parse().unwrap()
+            ));
+        }
+    }
+}
+
 const RETIRED_SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
 pub(crate) fn is_retired_sccp_registry_parameter(
     parameter: &iroha_data_model::parameter::CustomParameter,
@@ -59096,6 +59141,7 @@ mod tiered_snapshot_diff_tests {
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             block_hash_history_bytes:
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -63709,7 +63755,12 @@ fn replay_blocks_from_kura_range_inner(
             })?;
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
-        state_block.prepare_replay_checkpoint_preview();
+        state_block
+            .prepare_replay_checkpoint_preview()
+            .map_err(|error| eyre!(error))
+            .wrap_err_with(|| {
+                format!("unsafe lifecycle checkpoint preview for replayed block #{height}")
+            })?;
         let checkpoint_hash_start = Instant::now();
         let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
         replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
@@ -67609,8 +67660,8 @@ mod npos_effect_application_tests {
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
-    ton_breaker_hydration_fixture_for_testing,
+    authenticated_native_source_for_lifecycle_fixture, finalized_lane_relay_registration_fixture,
+    prove_finalized_lane_relay_for_registration, ton_breaker_hydration_fixture_for_testing,
 };
 
 mod telemetry_status;

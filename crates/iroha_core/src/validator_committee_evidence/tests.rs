@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    kagemusha_v1_test_fixtures::mint_finality_authorization,
+    kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority,
     state::{WorldReadOnly as _, threshold_key_lifecycle_certificate_preimage_v1},
     zk::kagemusha_v1_recursion::{
         KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
@@ -188,7 +188,7 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
             roster: roster.clone(),
             kagemusha_mint_finality_authority: fixture.incumbent.clone(),
             kagemusha_mint_finality_authorization: if height <= 10 {
-                mint_finality_authorization(&fixture.incumbent, 0, 1, 10)
+                mint_finality_genesis_for_authority(&fixture.incumbent, 10)
             } else {
                 fixture.authorization
             },

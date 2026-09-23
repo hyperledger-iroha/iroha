@@ -1,6 +1,6 @@
 //! Stable recursive authority carrier for finalized Kagemusha mint credits.
 //!
-//! A helper proof is either the release-pinned genesis roster, a quorum-authorized roster
+//! A helper proof is either the release-pinned genesis authorization, a quorum-authorized epoch
 //! rotation, or one finalized reserve receipt.  Rotation and mint branches recursively verify an
 //! authority-only predecessor under the same helper protocol and fold both the predecessor's
 //! current IPA opening claim and its complete carried history.  The reciprocal Pasta proof checks
@@ -95,11 +95,11 @@ pub struct KagemushaMintAuthorityCheckpointV1 {
     pub statement: KagemushaMintCreditStatementV1,
     /// Exact paired certificate binding.
     pub certificate_binding: DigestV1,
-    /// Current recursively authenticated roster identifier.
+    /// Current recursively authenticated authorization identifier.
     pub authority_head: DigestV1,
     /// Authenticated proof-release identifier.
     pub release_id: DigestV1,
-    /// Release-pinned genesis roster identifier.
+    /// Release-pinned genesis authorization identifier.
     pub genesis_authorization_id: DigestV1,
     /// Inner Eq deferred-audit commitment to the paired authority metadata, proved in outer
     /// cells 20..21.
@@ -166,17 +166,17 @@ pub(super) mod public_instance {
     pub const CERTIFICATE_LO: usize = 4;
     /// High limb of the exact paired finality-certificate binding.
     pub const CERTIFICATE_HI: usize = 5;
-    /// Low limb of the current recursively authenticated roster identifier.
+    /// Low limb of the current recursively authenticated authorization identifier.
     pub const AUTHORITY_LO: usize = CERTIFICATE_HI + 1;
-    /// High limb of the current recursively authenticated roster identifier.
+    /// High limb of the current recursively authenticated authorization identifier.
     pub const AUTHORITY_HI: usize = 7;
     /// Low limb of the authenticated Kagemusha release identifier.
     pub const RELEASE_LO: usize = AUTHORITY_HI + 1;
     /// High limb of the authenticated Kagemusha release identifier.
     pub const RELEASE_HI: usize = 9;
-    /// Low limb of the release-pinned genesis roster identifier.
+    /// Low limb of the release-pinned genesis authorization identifier.
     pub const GENESIS_LO: usize = 10;
-    /// High limb of the release-pinned genesis roster identifier.
+    /// High limb of the release-pinned genesis authorization identifier.
     pub const GENESIS_HI: usize = 11;
     /// Low limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_LO: usize = GENESIS_HI + 1;

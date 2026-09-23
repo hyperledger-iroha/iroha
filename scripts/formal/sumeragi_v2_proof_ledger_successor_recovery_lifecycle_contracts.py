@@ -1,5 +1,101 @@
 # Executed lexically before the successor recovery source contracts; do not import directly.
 
+def _parked_recovered_sign_completion_owner_errors(
+    path: Path, source: str,
+) -> list[str]:
+    """Bind parked Sign authority and acknowledgement to their defining owners."""
+    errors: list[str] = []
+    owner = "PreparedRecoveredLifecycleSignCompletionV1"
+    owner_header = "#[cfg_attr(not(test), allow(dead_code))] impl " + owner
+    context = (tuple(rust_code_tokens(owner_header)),)
+    declarations = rust_struct_items(source, owner)
+    if len(declarations) != 1:
+        errors.append(f"{path}: parked recovered Sign completion requires exactly one {owner} struct")
+    else:
+        declaration = declarations[0]
+        _require_rust_item_context(
+            path, declaration, (), "parked recovered Sign completion", errors,
+            expected_attributes=(
+                '#[must_use = "recovered Sign completion must enter restart-closed owner settlement"]',
+                '#[cfg_attr(not(test), allow(dead_code))]',
+            ),
+        )
+        _require_exact_rust_tokens(
+            path, declaration,
+            """pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
+                guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+                queue: Arc<V2IoCommandQueue>,
+            }""",
+            "parked recovered Sign completion private guarded ownership", errors,
+        )
+
+    contracts = (
+        (owner, "new", "parked recovered Sign completion exact queue transfer", """
+            fn new(
+                guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+                queue: Arc<V2IoCommandQueue>,
+                ownership_position: usize,
+            ) -> Option<Self> {
+                queue.transfer_recovered_lifecycle_sign_completion(
+                    guarded.result().dispatch_key(), ownership_position,
+                ).then_some(Self { guarded, queue })
+            }
+        """),
+        (owner, "project_adapter_completion_authority", "adapter-private recovered Sign completion projection", """
+            pub(in crate::sumeragi) fn project_adapter_completion_authority(
+                &self,
+            ) -> Option<RecoveredLifecycleSignAdapterCompletionAuthorityV1> {
+                let result = self.guarded.result();
+                if !result.is_exact() { return None; }
+                Some(RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+                    key: result.dispatch_key(), tag: result.task.tag,
+                    request: result.task.request.clone(), signature: result.signature.clone(),
+                    outbound_payload: result.outbound_payload.clone(),
+                })
+            }
+        """),
+        (owner, "dispatch_key", "parked recovered Sign completion original dispatch key", """
+            pub(in crate::sumeragi) fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+                self.guarded.result().dispatch_key()
+            }
+        """),
+        (owner, "acknowledge_after_publication", "post-publication recovered Sign completion acknowledgement", """
+            pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
+                let key = self.guarded.result().dispatch_key();
+                self.queue.acknowledge_recovered_lifecycle_sign(key);
+                self.guarded.acknowledge_after_publication();
+            }
+        """),
+        ("GuardedRecoveredLifecycleSignWorkerResultV1", "acknowledge_after_publication", "recovered Sign guarded acknowledgement", """
+            fn acknowledge_after_publication(mut self) { self.drop_guard.disarm(); }
+        """),
+        ("Drop for RecoveredLifecycleSignCompletionDropGuardV1", "drop", "recovered Sign abandoned completion closes output", """
+            fn drop(&mut self) {
+                if self.armed { self.output_guard.close_admission_for_restart(); }
+            }
+        """),
+    )
+    for expected_owner, name, description, expected_source in contracts:
+        header = owner_header if expected_owner == owner else "impl " + expected_owner
+        expected_context = (tuple(rust_code_tokens(header)),)
+        items = tuple(item for item in rust_items(source, name)
+                      if item.brace_context == expected_context)
+        if len(items) != 1:
+            errors.append(f"{path}: {description} requires exactly one {expected_owner}::{name}; found {len(items)}")
+            continue
+        item = items[0]
+        _require_rust_item_context(path, item, expected_context, description, errors)
+        _require_exact_rust_tokens(path, item, expected_source, description, errors)
+
+    for name in (
+        "into_parts", "into_result", "into_task", "request", "prepared_candidate",
+        "result", "acknowledgement", "acknowledge", "signature", "outbound_payload", "settle",
+    ):
+        if any(item.brace_context == context for item in rust_items(source, name)):
+            errors.append(f"{path}: parked recovered Sign completion must not expose {owner}::{name}")
+    return errors
+
+
 
 def _successor_recovery_lifecycle_source_fidelity_errors(
     adapter_path,
@@ -880,13 +976,56 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     ),
                 )
 
-            all_live_census = _require_rust_item(
+            all_live_census = _require_qualified_rust_item(
                 registry_validate_path,
                 registry_validate_source,
-                "exactly_covers_all_live_work_with_optional_active_producer",
+                "ConcreteLifecycleWorkRegistry",
+                "exactly_covers_all_live_work_with_optional_active_lease",
                 errors,
+                "fresh Serve exact active-lease census",
+                expected_attributes=("#[allow(clippy::too_many_lines)]",),
             )
             if all_live_census is not None:
+                _require_rust_token_sequence(
+                    registry_validate_path, all_live_census,
+                    """
+let active_lease_is_exact = match (&coordinator.active_lease, active_lease) {
+    (None, None) => true,
+    (Some(active), Some(expected)) => {
+        active == expected && matches!(active.work_class,
+            LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn)
+    }
+    (None, Some(_)) | (Some(_), None) => false,
+};
+""", "all-live census must authorize only the exact active Serve or Producer lease", errors,
+                )
+                for sequence in (
+                    "|| !active_lease_is_exact",
+                    """super::LifecycleState::Claimed(lease_id) => active_lease.is_none_or(|lease| {
+                        record.ordinal != lease.ordinal || record.work_class != lease.work_class
+                            || lease_id != lease.id
+                    })""",
+                    "!paired_next_vote_addresses.insert(next_address)",
+                    """!broadcast.matches_current_parked_record(
+                        broadcast.address, work.digest, coordinator, active_lease,
+                    ) || !broadcast.paired_next_sign_matches_terminal_record(coordinator, &exact_ledger)""",
+                    """!paired_live_next_vote_addresses.insert(next_address)
+                        || next_work.digest != next_digest""",
+                    """ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => {
+                        sign.dispatch_key.is_none() && sign.validates_in_ledger(&exact_ledger)
+                            && sign.matches_current_ready_record(address, digest, coordinator)
+                    }""",
+                    """broadcast.matches_current_live_census_record(
+                        address, digest, coordinator, active_lease,
+                    )""",
+                    "serve.matches_claimed_record(record, metadata, digest, lease)",
+                    "producer.matches_claimed_record(record, metadata, digest, lease)",
+                ):
+                    _require_rust_token_sequence(
+                        registry_validate_path, all_live_census, sequence,
+                        "all-live census must retain exact active and terminal carrier authority", errors,
+                    )
+
                 require_tokens(
                     registry_validate_path,
                     "fresh Serve exhaustive all-live registry census",
@@ -906,7 +1045,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                         "self.entries.len() != live.len()",
                         "serve_ordinal_pair_is_exact(serve, producer)",
                         "Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)",
-                        "!paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)",
+                        "!paired_live_next_vote_addresses.is_subset(&exact_next_vote_addresses)",
                         "replay_authority == &metadata.replay_authority",
                         "sign.dispatch_key.is_none()",
                         "sign.repair.validates_in_ledger(&exact_ledger)",
@@ -946,7 +1085,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                         "let live = coordinator.records.iter()",
                         "self.entries.len() != live.len()",
                         "coordinator.producer_debts.iter().all",
-                        "!paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)",
+                        "!paired_live_next_vote_addresses.is_subset(&exact_next_vote_addresses)",
                         "live.into_iter().all",
                     ),
                 )
@@ -1905,7 +2044,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 owner_source,
                 (
                     "kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>",
-                    "apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>",
+                    "apply_service: Option<crate::sumeragi::v2_apply::NativeApplyService>",
                     "fn with_recovered_kura_binding_and_apply_service(",
                     "assert!(self.kura_binding.is_none())",
                     "assert!(self.apply_service.is_none())",
@@ -2068,50 +2207,8 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "fn outbound_payload(",
                 ),
             )
-            parked_sign_completion = region(
-                worker_path,
-                worker_source,
-                "parked recovered Sign completion",
-                "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
-                "/// Result of atomically returning one guarded missing-sidecar Apply",
-            )
-            reject_tokens(
-                worker_path,
-                "parked recovered Sign completion",
-                parked_sign_completion,
-                (
-                    "fn into_parts(",
-                    "fn into_result(",
-                    "fn into_task(",
-                    "fn request(",
-                    "fn prepared_candidate(",
-                    "fn result(",
-                    "fn acknowledgement(",
-                    "fn acknowledge(",
-                    "fn signature(",
-                    "fn outbound_payload(",
-                    "fn settle(",
-                ),
-            )
-            require_tokens(
-                worker_path,
-                "adapter-private recovered Sign completion projection",
-                parked_sign_completion,
-                (
-                    "fn project_adapter_completion_authority(",
-                    "result.is_exact()",
-                    "RecoveredLifecycleSignAdapterCompletionAuthorityV1 {",
-                ),
-            )
-            require_tokens(
-                worker_path,
-                "post-publication recovered Sign completion acknowledgement",
-                parked_sign_completion,
-                (
-                    "fn acknowledge_after_publication(self)",
-                    "self.queue.acknowledge_recovered_lifecycle_sign(key)",
-                    "self.guarded.acknowledge_after_publication()",
-                ),
+            errors.extend(
+                _parked_recovered_sign_completion_owner_errors(worker_path, worker_source)
             )
             recovered_sign_preview = region(
                 adapter_path,

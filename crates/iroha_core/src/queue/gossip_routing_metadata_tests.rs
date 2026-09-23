@@ -22,15 +22,19 @@ fn gossip_batch_returns_routing_metadata() {
 }
 #[test]
 fn gossip_batch_preserves_admitted_routing_across_policy_change() {
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
     let (fresh_lanes, fresh_dataspaces) = Queue::test_catalogs_for_routes(&[
         (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         (refreshed.lane_id, refreshed.dataspace_id),
     ]);
+    let mut nexus = Nexus::default();
+    nexus.autoscale.enabled = false;
+    nexus.lane_catalog = (*fresh_lanes).clone();
+    nexus.dataspace_catalog = (*fresh_dataspaces).clone();
+    let mut state =
+        State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
     let queue = Queue::test(config_factory(), &time_source);
     let (account_id, key_pair) = gen_account_in("wonderland");
     register_test_authority(&state, &account_id);
@@ -54,12 +58,6 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
         Some(RoutingDecision::default())
     );
     let mut nexus = state.nexus_snapshot();
-    nexus.lane_catalog = (*fresh_lanes).clone();
-    nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-    nexus.fees.base_fee = Quantity::zero();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = refreshed.lane_id;
     nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
     state.set_nexus(nexus).expect("apply fresh Nexus state");

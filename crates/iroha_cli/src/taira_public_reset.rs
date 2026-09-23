@@ -130,6 +130,10 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
     DispatcherTransition(host::dispatcher_transition::DispatcherTransition),
+    /// Capture the stopped installed runtime into a private typed transition input.
+    CaptureDispatcherCurrentRuntime(
+        host::dispatcher_transition::prepare::capture::CaptureDispatcherCurrentRuntime,
+    ),
     /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
     PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
@@ -342,6 +346,9 @@ impl PublicReset {
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
             PublicResetCommand::DispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::CaptureDispatcherCurrentRuntime(args) => {
+                return args.run(&mut output);
+            }
             PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
 
             PublicResetCommand::SourceManifest(args) => {
@@ -7791,8 +7798,14 @@ mod executor_model {
         #[test]
         fn crash_recovery_resumes_at_recorded_step() {
             let (inventory, mut journal) = journal(sample_inventory());
-            journal.state.next_step = 4;
-            journal.state.phase = "install".to_owned();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|step| *step == ExecutionStep::Install)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.phase = ExecutionStep::Install.label().to_owned();
             journal.state.touched_validators = VALIDATOR_SLUGS
                 .iter()
                 .map(|slug| (*slug).to_owned())
@@ -7826,8 +7839,14 @@ mod executor_model {
         #[test]
         fn missing_forward_inputs_use_rollback_only_path_for_recorded_hosts() {
             let (inventory, mut journal) = journal(sample_inventory());
-            journal.state.next_step = 4;
-            journal.state.phase = "install".to_owned();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|step| *step == ExecutionStep::Install)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.phase = ExecutionStep::Install.label().to_owned();
             journal.state.touched_validators = VALIDATOR_SLUGS[..2]
                 .iter()
                 .map(|slug| (*slug).to_owned())
@@ -9483,15 +9502,99 @@ mod executor_model {
         }
 
         #[test]
-        fn old_inventory_shape_and_seven_artifact_closure_are_rejected() {
+        fn reset_execution_preserves_beacon_and_service_order_without_epoch_writer() {
+            for scope in [
+                QualificationScopeV1::CoreTestnet,
+                QualificationScopeV1::FullInrou,
+            ] {
+                let steps = execution_steps(scope);
+                assert_eq!(
+                    &steps[..3],
+                    &[
+                        ExecutionStep::Preflight,
+                        ExecutionStep::Stage,
+                        ExecutionStep::Stop
+                    ]
+                );
+                assert!(ExecutionStep::Canary.supports_recovery());
+                let kinds = scope.canary_kinds();
+                assert_eq!(
+                    &kinds[..8],
+                    &[
+                        "onboarding",
+                        "faucet",
+                        "write_canary",
+                        "beacon_install",
+                        "beacon_provider_1",
+                        "beacon_provider_2",
+                        "beacon_provider_3",
+                        "beacon_provider_4"
+                    ]
+                );
+                assert_eq!(kinds.len(), if scope.includes_inrou() { 12 } else { 8 });
+                assert!(!kinds.iter().any(|kind| kind.contains("epoch_supervisor")));
+            }
+        }
+
+        #[test]
+        fn retired_epoch_supervisor_commands_and_inputs_are_rejected() {
+            let command = <PublicReset as clap::Args>::augment_args(clap::Command::new("reset"));
+            for retired in [
+                "prepare-epoch-supervisor-plan",
+                "prepare-epoch-update",
+                "epoch-supervisor-host",
+            ] {
+                let error = command
+                    .clone()
+                    .try_get_matches_from(["reset", retired])
+                    .unwrap_err();
+                assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+            }
+            for selected in ["assemble", "authorize", "apply"] {
+                let subcommand = command.find_subcommand(selected).unwrap();
+                for retired in [
+                    "maintenance-admin-config",
+                    "epoch-seed-source",
+                    "epoch-seed-sources",
+                    "epoch-supervisor-plan",
+                ] {
+                    assert!(
+                        !subcommand
+                            .get_arguments()
+                            .any(|arg| arg.get_long() == Some(retired)),
+                        "{selected}: {retired}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn retired_inventory_fields_and_seven_artifact_closure_are_rejected() {
             let inventory = sample_inventory();
             validate_inventory_structure(&inventory).expect("complete current role fixture");
-            let mut value = json::to_value(&inventory).unwrap();
-            value
-                .as_object_mut()
-                .unwrap()
-                .insert("epoch_supervisor".into(), json::Value::Null);
-            assert!(json::from_value::<InventoryV1>(value).is_err());
+            let canonical = json::to_value(&inventory).unwrap();
+            for field in [
+                "epoch_supervisor",
+                "maintenance_admin_identity",
+                "maintenance_admin_config_sha256",
+            ] {
+                assert!(canonical.get(field).is_none());
+                let mut value = canonical.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), json::Value::Null);
+                assert!(json::from_value::<InventoryV1>(value).is_err(), "{field}");
+            }
+            let canonical_timeouts = json::to_value(&inventory.timeouts).unwrap();
+            for field in ["epoch_supervisor_pause_secs", "epoch_supervisor_start_secs"] {
+                let mut value = canonical_timeouts.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), json::Value::from(60_u64));
+                assert!(json::from_value::<TimeoutsV1>(value).is_err(), "{field}");
+            }
             let mut wrong = inventory;
             for validator in &mut wrong.validators {
                 validator.artifacts.retain(|entry| entry.role != "kagami");

@@ -25,8 +25,7 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        prelude::FindAccounts,
-        query::{dsl::IntoPredicate as _, prelude::QueryBuilderExt},
+        prelude::FindAccountIds,
         transaction::Executable,
     },
 };
@@ -1243,6 +1242,124 @@ async fn authoritative_v2_validator_restart_qualification_32_seeds() -> Result<(
     );
     Ok(())
 }
+/// Keep the global and public-lane committees at the same exact fixture geometry.
+fn validator_restart_builder(context: &str, validator_count: usize) -> Result<NetworkBuilder> {
+    ensure!(
+        matches!(validator_count, 4 | 7),
+        "restart fixture requires four or seven validators"
+    );
+    let fault_tolerance = i64::try_from((validator_count - 1) / 3)?;
+    Ok(NetworkBuilder::new()
+        .with_peers(validator_count)
+        .with_base_seed(context)
+        .with_auto_populated_trusted_peers()
+        .with_permissioned_lane_authority_bootstrap(
+            iroha_config::parameters::defaults::nexus::staking::min_validator_stake(),
+        )
+        .with_config_layer(move |layer| {
+            let mut universal = toml::Table::new();
+            universal.insert("id".into(), toml::Value::Integer(0));
+            universal.insert("alias".into(), toml::Value::String("universal".to_owned()));
+            universal.insert(
+                "fault_tolerance".into(),
+                toml::Value::Integer(fault_tolerance),
+            );
+            layer.write(
+                ["nexus", "dataspace_catalog"],
+                toml::Value::Array(vec![toml::Value::Table(universal)]),
+            );
+        })
+        .with_block_cadence(RESTART_BLOCK_CADENCE)
+        .with_sync_timeout(Duration::from_secs(180)))
+}
+
+/// Require the generated process identities to own the signed active lane pool.
+fn assert_restart_genesis_lane_authority(network: &iroha_test_network::Network) -> Result<()> {
+    use iroha_core::sumeragi::signed_genesis_validator_pops;
+    use iroha_data_model::isi::staking::{
+        ActivatePublicLaneValidator, RegisterPublicLaneValidator,
+    };
+    use iroha_model_base::topology::LaneId;
+
+    let expected = network
+        .peers()
+        .iter()
+        .map(|peer| (peer.account_id(), peer.id()))
+        .collect::<BTreeMap<_, _>>();
+    ensure!(
+        expected.len() == network.peers().len(),
+        "restart fixture repeats a generated validator account"
+    );
+    // Network::genesis returns the validated signed block, including the
+    // post-topology stake registrations; genesis_isi alone would omit these.
+    let genesis = network.genesis();
+    let voters = signed_genesis_validator_pops(&genesis)?;
+    ensure!(
+        voters.keys().cloned().collect::<BTreeSet<_>>()
+            == expected.values().cloned().collect::<BTreeSet<_>>(),
+        "signed genesis voting roster differs from the generated restart validators"
+    );
+    let mut registered = BTreeMap::new();
+    let mut activated = BTreeSet::new();
+    for transaction in genesis.0.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(eyre!("restart genesis must use explicit instructions"));
+        };
+        for instruction in instructions {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                ensure!(
+                    register.lane_id == LaneId::SINGLE
+                        && register.validator == register.stake_account
+                        && !register.initial_stake.is_zero(),
+                    "restart genesis has an unfunded or foreign lane registration"
+                );
+                ensure!(
+                    registered
+                        .insert(register.validator.clone(), register.peer_id.clone())
+                        .is_none(),
+                    "restart genesis repeats a public-lane validator registration"
+                );
+            }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                ensure!(
+                    activate.lane_id == LaneId::SINGLE
+                        && activated.insert(activate.validator.clone()),
+                    "restart genesis has a foreign or repeated lane activation"
+                );
+            }
+        }
+    }
+    ensure!(
+        registered == expected && activated == expected.keys().cloned().collect::<BTreeSet<_>>(),
+        "signed genesis must register and activate exactly the generated restart validators"
+    );
+    Ok(())
+}
+
+/// Exercise both real signed fixture constructions without starting any daemon.
+#[test]
+fn restart_fixture_bootstraps_exact_four_and_seven_validator_lane_authority() -> Result<()> {
+    init_instruction_registry();
+    for validator_count in [4, 7] {
+        let permits = tempfile::tempdir()?;
+        let network = validator_restart_builder(
+            &format!("restart-genesis-authority-fixture-{validator_count}"),
+            validator_count,
+        )?
+        .build_with_permit_dir(permits.path());
+        ensure!(network.peers().len() == validator_count);
+        ensure!(network.peers().iter().all(|peer| !peer.is_running()));
+        assert_restart_genesis_lane_authority(&network)?;
+    }
+    Ok(())
+}
+
 async fn run_validator_restart_scenario(
     context: &str,
     validator_count: usize,
@@ -1263,12 +1380,7 @@ async fn run_validator_restart_scenario(
         "restart scenario requires an exact 3f+1 committee and at most f distinct offline validators"
     );
     init_instruction_registry();
-    let builder = NetworkBuilder::new()
-        .with_peers(validator_count)
-        .with_base_seed(context)
-        .with_auto_populated_trusted_peers()
-        .with_block_cadence(RESTART_BLOCK_CADENCE)
-        .with_sync_timeout(Duration::from_secs(180));
+    let builder = validator_restart_builder(context, validator_count)?;
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         ensure!(
@@ -1295,6 +1407,7 @@ async fn run_validator_restart_scenario(
             network.peers().iter().all(NetworkPeer::is_running),
             "all {validator_count} voting validators must be running after fresh genesis"
         );
+        assert_restart_genesis_lane_authority(&network)?;
         let all_peers = network.peers().to_vec();
         let initial_statuses =
             wait_for_normal_statuses(&all_peers, 1, STATUS_TIMEOUT).await?;
@@ -4202,21 +4315,53 @@ async fn wait_for_held_quorum_evidence(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-/// Query one exact account without mistaking transport or authorization errors for absence.
-fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
-    let stored = client
-        .client()
-        .query(FindAccounts)
-        .filter_with(|account| account.equals("id", expected.clone()).into_predicate())
-        .execute_single_opt()?;
-    match stored {
-        Some(stored) if stored.id() == expected => Ok(true),
-        Some(stored) => Err(eyre!(
-            "account query for {expected} returned unexpected account {}",
-            stored.id()
-        )),
-        None => Ok(false),
+/// Establish account presence from the bounded account-identity producer.
+/// Absence requires exhausting the successful cursor; every query error survives.
+fn account_visibility_from_ids(
+    accounts: impl IntoIterator<Item = std::result::Result<AccountId, iroha::query::QueryError>>,
+    expected: &AccountId,
+) -> Result<bool> {
+    for account in accounts {
+        if &account? == expected {
+            return Ok(true);
+        }
     }
+    Ok(false)
+}
+
+/// Query identities only: consensus visibility does not require account metadata.
+fn query_account_visibility(client: &Client, expected: &AccountId) -> Result<bool> {
+    account_visibility_from_ids(client.client().query(FindAccountIds).execute()?, expected)
+}
+
+#[test]
+fn account_visibility_requires_the_exact_id_or_complete_absence() -> Result<()> {
+    let expected = fixture_account(0xD1)?;
+    let other = fixture_account(0xD2)?;
+    assert!(account_visibility_from_ids(
+        [Ok(other.clone()), Ok(expected.clone())],
+        &expected,
+    )?);
+    assert!(!account_visibility_from_ids([Ok(other)], &expected)?);
+    assert!(!account_visibility_from_ids([], &expected)?);
+    Ok(())
+}
+
+#[test]
+fn account_visibility_propagates_failed_cursor_instead_of_absence() -> Result<()> {
+    let expected = fixture_account(0xD1)?;
+    let other = fixture_account(0xD2)?;
+    for prefix in [false, true] {
+        let rows = prefix.then_some(Ok(other.clone())).into_iter().chain([
+            Err(iroha::query::QueryError::Other(eyre!(
+                "cursor source unavailable"
+            ))),
+            Ok(expected.clone()),
+        ]);
+        let error = account_visibility_from_ids(rows, &expected).unwrap_err();
+        ensure!(format!("{error:#}").contains("cursor source unavailable"));
+    }
+    Ok(())
 }
 
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
@@ -4415,3 +4560,4 @@ fn optional_prepare_qc(
 }
 include!("sumeragi_v2_runner/status_validation_helpers.rs");
 include!("sumeragi_v2_runner/status_set_validation.rs");
+include!("sumeragi_v2_runner/native_silent_author_tests.rs");

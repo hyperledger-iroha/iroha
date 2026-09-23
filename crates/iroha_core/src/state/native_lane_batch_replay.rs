@@ -126,6 +126,11 @@ enum NativeLaneSourceFailure {
 }
 
 impl NativeLaneSourcePreparationError {
+    /// Whether the original source may be retried after local host capacity recovers.
+    pub(crate) fn is_host_allocation(&self) -> bool {
+        matches!(&self.failure, NativeLaneSourceFailure::HostAllocation(_))
+    }
+
     fn new(reason: String, pending: PendingNativeLaneSource) -> Self {
         Self {
             failure: NativeLaneSourceFailure::Invalid(reason),

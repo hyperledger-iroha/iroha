@@ -370,6 +370,8 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
         )
     };
     let kura = Kura::blank_kura_for_testing();
+    // Establish the authenticated primary while storage is still empty.
+    let mut restored_state = make_state(Arc::clone(&kura));
     let snapshot_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
     kura.extend_hash_only_prefix_from_snapshot(&[snapshot_hash])
@@ -377,7 +379,6 @@ fn replay_skips_hash_only_blocks_only_when_restored_state_hash_matches() {
     let height = NonZeroUsize::new(1).expect("non-zero test height");
     assert!(kura.is_hash_only_block_height(height));
     assert!(kura.get_block(height).is_none());
-    let mut restored_state = make_state(Arc::clone(&kura));
     restored_state.push_block_hash_for_testing(snapshot_hash);
     assert_eq!(
         super::hash_only_replay_snapshot_hash(&kura, &restored_state, height)

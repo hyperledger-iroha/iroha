@@ -9768,6 +9768,10 @@ pub struct NexusStorage {
     /// Original allocation pool shared by the four fixed KAGEMUSHA indexes.
     #[config(default = "defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES")]
     pub kagemusha_operation_index_bytes: Bytes,
+    /// Finite shared carrier-shell and descriptor pool, excluding nested payload allocations.
+    /// Zero is a closed pool, never an unlimited setting.
+    #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
+    pub retained_carrier_shell_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -9777,6 +9781,7 @@ impl_default!(NexusStorage {
     budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
     kagemusha_operation_index_bytes: defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
+    retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
     disk_budget_weights: NexusStorageWeights::default(),
 });
 impl NexusStorage {
@@ -9830,6 +9835,7 @@ impl NexusStorage {
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             kagemusha_operation_index_bytes: self.kagemusha_operation_index_bytes,
+            retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
         })

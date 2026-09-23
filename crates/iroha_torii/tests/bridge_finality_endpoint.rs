@@ -95,7 +95,7 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(0, block_key.private_key()),
     );
-    let mint_authority = KagemushaMintFinalityAuthorityGenerationV1 {
+    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         generation: 0,
@@ -131,8 +131,13 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_authorization: mint_authorization,
-        kagemusha_mint_finality_authority: mint_authority,
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_roster,
+                10,
+            )
+            .expect("valid fixture mint-finality roster"),
+        kagemusha_mint_finality_authority: mint_roster,
         epoch_end_height: 10,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

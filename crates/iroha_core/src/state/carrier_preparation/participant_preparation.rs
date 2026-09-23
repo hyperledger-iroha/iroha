@@ -57,7 +57,7 @@ impl<'target> CarrierPreparation<'target> {
         }
     }
 
-    pub(super) fn try_prepare<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {
+    pub(super) fn try_prepare(&mut self) -> Result<(), CarrierPhysicalPreparationError> {
         assert!(
             !self.attempted && !self.released,
             "carrier preparation is one-shot"
@@ -70,7 +70,7 @@ impl<'target> CarrierPreparation<'target> {
         result
     }
 
-    fn prepare_inner<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {
+    fn prepare_inner(&mut self) -> Result<(), CarrierPhysicalPreparationError> {
         self.block_hashes
             .try_prepare(|_, _| Ok::<_, Infallible>(()))
             .map_err(|cause| CarrierPhysicalPreparationError::Component {

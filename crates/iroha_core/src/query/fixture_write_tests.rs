@@ -18,10 +18,6 @@ use iroha_data_model::{
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
-    isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityValidatorKeysV1,
-    },
     proof::{
         ProofId, ProofRecord, ProofStatus, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
     },
@@ -303,28 +299,17 @@ fn phase_vote_evidence() -> Evidence {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xA1; 32]),
     ));
-    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        generation: 0,
-        validators: roster
-            .iter()
-            .zip(1..=4_u8)
-            .map(|(validator, index)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: validator.validator.clone(),
-                eq_proof_public_key: [index; 32],
-                ep_proof_public_key: [index + 16; 32],
-            })
-            .collect(),
-    };
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id, 2, &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_authorization:
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&mint_roster, 0, 1, 2),
-        kagemusha_mint_finality_authority: mint_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: 2,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

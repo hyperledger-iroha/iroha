@@ -9,7 +9,9 @@ use super::{
 };
 use crate::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
+        GlobalThresholdBeaconSessionBindingV1, active_global_threshold_beacon_session_id_v1,
+        authenticated_global_threshold_beacon_roster_hash_v1,
+        global_threshold_beacon_npos_successor_seed_v1,
         validate_global_threshold_beacon_session_v1,
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
@@ -283,13 +285,22 @@ pub fn validate_signed_genesis_v2_authority(
     {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
-    let (authority, authorization) = bind_signed_mint_finality_authority(
-        &metadata,
-        signed_network_id,
+    let signed_authority = bind_signed_mint_finality_authority(&metadata, signed_network_id)?;
+    let signed_authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(
+        &signed_authority,
         context.epoch_end_height,
-    )?;
-    if authority != context.kagemusha_mint_finality_authority
-        || authorization != context.kagemusha_mint_finality_authorization
+    )
+    .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    if signed_authority != context.kagemusha_mint_finality_authority
+        || signed_authorization != context.kagemusha_mint_finality_authorization
+        || context
+            .next_epoch_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| {
+                snapshot.kagemusha_mint_finality_authority != signed_authority
+                    || snapshot.kagemusha_mint_finality_authorization.decision
+                        != KagemushaMintFinalityEpochDecisionV1::Retain
+            })
     {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
@@ -306,14 +317,11 @@ pub fn validate_signed_genesis_v2_authority(
 fn bind_signed_mint_finality_authority(
     metadata: &ConsensusHandshakeMetadata,
     network_id: NetworkId,
-    last_height: u64,
-) -> Result<
-    (
-        KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1,
-    ),
-    V2GenesisBootstrapError,
-> {
+) -> Result<KagemushaMintFinalityAuthorityGenerationV1, V2GenesisBootstrapError> {
+    metadata
+        .kagemusha_mint_finality
+        .validate()
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let authority = metadata
         .kagemusha_mint_finality
         .authority_generation
@@ -321,25 +329,7 @@ fn bind_signed_mint_finality_authority(
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(&authority)
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: 1,
-        network_id,
-        epoch: 0,
-        first_height: 1,
-        last_height,
-        authority_generation: authority.generation,
-        authority_id: authority
-            .authority_id()
-            .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?,
-        beacon: BeaconEpochBindingV1::Bootstrap,
-        previous_authorization_id: [0; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-    };
-    authorization
-        .validate_against_authority(&authority)
-        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
-    Ok((authority, authorization))
+    Ok(authority)
 }
 /// Verify the complete persisted height-one election against deterministically
 /// executed signed genesis state.
@@ -447,8 +437,7 @@ pub fn freeze_staged_genesis_v2(
             (epoch_length, parameters.epoch_seed())
         }
     };
-    let (authority, authorization) =
-        bind_signed_mint_finality_authority(&signed_metadata, network_id, epoch_end_height)?;
+    let authority = bind_signed_mint_finality_authority(&signed_metadata, network_id)?;
     if authority.generation != 0
         || authority.validators.len() != roster.len()
         || authority
@@ -459,6 +448,9 @@ pub fn freeze_staged_genesis_v2(
     {
         return Err(V2GenesisBootstrapError::InvalidSignedMintFinalityRoster);
     }
+    let authorization =
+        KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, epoch_end_height)
+            .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let election = FrozenElectionInputs {
         epoch: 0,
         kagemusha_mint_finality_authority: authority,
@@ -468,6 +460,8 @@ pub fn freeze_staged_genesis_v2(
         roster,
         leader_seed,
     };
+    // Height one has no finalized pre-boundary pulse: do not fabricate an
+    // installed beacon from the generation-zero Bootstrap authorization.
     let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &network_id, 1, &election)
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let staged_nexus_amx_context_hash =
@@ -686,9 +680,9 @@ pub enum V2GenesisBootstrapError {
 pub(crate) struct FrozenElectionInputs {
     /// Election epoch number.
     pub epoch: u64,
-    /// Immutable signing generation selected by the scheduling authorization.
+    /// Exact immutable paired-Pasta key generation retained by this election.
     pub kagemusha_mint_finality_authority: KagemushaMintFinalityAuthorityGenerationV1,
-    /// Exact epoch, interval, predecessor and beacon authorization.
+    /// Full incumbent-certified scheduling interval and its authority binding.
     pub kagemusha_mint_finality_authorization: KagemushaMintFinalityEpochAuthorizationV1,
     /// Final height governed by this snapshot.
     pub epoch_end_height: wire::Height,
@@ -802,9 +796,7 @@ fn successor_election_inputs(
         Some(snapshot) => FrozenElectionInputs {
             epoch: snapshot.epoch,
             kagemusha_mint_finality_authority: snapshot.kagemusha_mint_finality_authority.clone(),
-            kagemusha_mint_finality_authorization: snapshot
-                .kagemusha_mint_finality_authorization
-                .clone(),
+            kagemusha_mint_finality_authorization: snapshot.kagemusha_mint_finality_authorization,
             epoch_end_height: snapshot.epoch_end_height,
             mode: snapshot.mode,
             roster: snapshot.roster.clone(),
@@ -818,8 +810,7 @@ fn successor_election_inputs(
                 .clone(),
             kagemusha_mint_finality_authorization: parent
                 .height_context
-                .kagemusha_mint_finality_authorization
-                .clone(),
+                .kagemusha_mint_finality_authorization,
             epoch_end_height: parent.height_context.epoch_end_height,
             mode: parent.height_context.mode,
             roster: parent.height_context.roster.clone(),
@@ -864,6 +855,28 @@ pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
     boundary_height: wire::Height,
     successor_epoch: u64,
 ) -> Result<[u8; 32], V2ContextBuildError> {
+    authenticated_pre_boundary_beacon(
+        world,
+        block_hashes,
+        network_id,
+        boundary_height,
+        successor_epoch,
+    )
+    .map(|authenticated| authenticated.seed)
+}
+
+struct AuthenticatedPreBoundaryBeacon {
+    seed: [u8; 32],
+    binding: InstalledBeaconEpochBindingV1,
+}
+
+fn authenticated_pre_boundary_beacon(
+    world: &impl WorldReadOnly,
+    block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
+    network_id: &NetworkId,
+    boundary_height: wire::Height,
+    successor_epoch: u64,
+) -> Result<AuthenticatedPreBoundaryBeacon, V2ContextBuildError> {
     let pulse_height = boundary_height
         .checked_sub(1)
         .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
@@ -948,7 +961,13 @@ pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
     if seed == [0; 32] {
         return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
     }
-    Ok(seed)
+    Ok(AuthenticatedPreBoundaryBeacon {
+        seed,
+        binding: InstalledBeaconEpochBindingV1 {
+            session_id: binding.session_id,
+            transcript_hash: binding.transcript_hash,
+        },
+    })
 }
 /// Derive the complete transition committed by the old roster at an epoch's
 /// final height.
@@ -973,6 +992,15 @@ pub(crate) fn finalized_next_epoch_snapshot(
     if height != election.epoch_end_height {
         return Ok(None);
     }
+    retained_next_epoch_snapshot(state, network_id, height, election).map(Some)
+}
+
+fn retained_next_epoch_snapshot(
+    state: &impl StateReadOnly,
+    network_id: &NetworkId,
+    height: wire::Height,
+    election: &FrozenElectionInputs,
+) -> Result<wire::finality::FinalizedNextEpochSnapshot, V2ContextBuildError> {
     let successor_height = height
         .checked_add(1)
         .ok_or(V2ContextBuildError::HeightOverflow)?;
@@ -980,6 +1008,16 @@ pub(crate) fn finalized_next_epoch_snapshot(
         .epoch
         .checked_add(1)
         .ok_or(V2ContextBuildError::EpochOverflow)?;
+    let authority = &election.kagemusha_mint_finality_authority;
+    let previous = &election.kagemusha_mint_finality_authorization;
+    if authority.network_id != *network_id
+        || previous.epoch != election.epoch
+        || previous.last_height != height
+        || height != election.epoch_end_height
+        || previous.validate_against_authority(authority).is_err()
+    {
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization);
+    }
     let npos_params = if election.mode == wire::ConsensusMode::Npos {
         Some(
             super::v2_npos::committed_epoch_length_blocks(state.world()).map_err(|error| {
@@ -994,35 +1032,80 @@ pub(crate) fn finalized_next_epoch_snapshot(
     } else {
         None
     };
-    let authenticated_npos_seed = if npos_params.is_some() {
-        Some(finalized_global_beacon_npos_successor_seed_from_sources(
-            state.world(),
-            state.block_hashes(),
-            network_id,
-            height,
-            epoch,
-        )?)
-    } else {
-        None
-    };
-    // A deadline decides the already frozen attempt; it never rerolls its roster.
-    let mut roster = election.roster.clone();
-    let mut kagemusha_mint_finality_authority = election.kagemusha_mint_finality_authority.clone();
+    let authenticated_beacon = authenticated_pre_boundary_beacon(
+        state.world(),
+        state.block_hashes(),
+        network_id,
+        height,
+        epoch,
+    )?;
+    // TODO: Activate only from the exact prepared target and all-seat custody
+    // authority. Until that owner exists, retain the incumbent roster and key
+    // generation; a new NPoS selection is not a Retain decision.
+    let roster = election.roster.clone();
+    if authority.validators.len() != roster.len()
+        || authority
+            .validators
+            .iter()
+            .zip(&roster)
+            .any(|(mint, consensus)| mint.validator != consensus.validator)
+        || crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(
+            authority,
+        )
+        .is_err()
+    {
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthority);
+    }
+    let active_session = active_global_threshold_beacon_session_id_v1(state.world())
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if active_session != authenticated_beacon.binding.session_id {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    let session = state
+        .world()
+        .global_beacon_key_sessions()
+        .get(&active_session)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let peers = election
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    session
+        .validate()
+        .and_then(|()| {
+            authenticated_global_threshold_beacon_roster_hash_v1(&session.session, &peers)
+                .map(|_| ())
+        })
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if !session.is_active_at(successor_height) {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    let quorum = wire::DualQuorum::from_roster(&roster)?;
+    let validator_set_pops = roster
+        .iter()
+        .map(|entry| {
+            live_consensus_key_pop_for_peer_with_role(
+                state.world(),
+                &entry.validator,
+                successor_height,
+                ConsensusKeyRole::Validator,
+            )
+            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
+        .map_err(V2ContextBuildError::NextEpochCryptography)?;
     let epoch_end_height = match election.mode {
         wire::ConsensusMode::Permissioned => u64::MAX,
         wire::ConsensusMode::Npos => {
             let epoch_length = npos_params.expect(
                 "NPoS branch validates the committed schedule before snapshot construction",
             );
-            next_npos_epoch_end_height(
-                &election.kagemusha_mint_finality_authorization,
-                state
-                    .world()
-                    .validator_committee_transitions()
-                    .get(&epoch)
-                    .map(|transition| &transition.preparation),
-                epoch_length,
-            )?
+            height
+                .checked_add(epoch_length)
+                .ok_or(V2ContextBuildError::HeightOverflow)?
         }
     };
     let leader_seed = match election.mode {
@@ -1032,367 +1115,66 @@ pub(crate) fn finalized_next_epoch_snapshot(
             preimage.extend_from_slice(&height.to_le_bytes());
             Hash::new(preimage).into()
         }
-        wire::ConsensusMode::Npos => authenticated_npos_seed
-            .expect("NPoS branch authenticates the pre-boundary seed before roster selection"),
+        wire::ConsensusMode::Npos => authenticated_beacon.seed,
     };
-    let mut beacon = match election.kagemusha_mint_finality_authorization.beacon {
-        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id,
-            transcript_hash,
-        }) => {
-            let active = state
-                .world()
-                .global_beacon_key_sessions()
-                .get(&session_id)
-                .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
-            if !active.is_active_at(height) || active.session.transcript_hash != transcript_hash {
-                return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
-            }
-            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id,
-                transcript_hash,
-            })
-        }
-        BeaconEpochBindingV1::Bootstrap => {
-            let session_id = state
-                .world()
-                .active_global_beacon_key_session()
-                .ok_or(V2ContextBuildError::MissingPreBoundaryBeaconPulse)?;
-            let active = state
-                .world()
-                .global_beacon_key_sessions()
-                .get(&session_id)
-                .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
-            if !active.is_active_at(height) {
-                return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
-            }
-            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id,
-                transcript_hash: active.session.transcript_hash,
-            })
-        }
-    };
-    let BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-        session_id,
-        transcript_hash,
-    }) = beacon
-    else {
-        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
-    };
-    let active = state
-        .world()
-        .global_beacon_key_sessions()
-        .get(&session_id)
-        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
-    if state.world().active_global_beacon_key_session() != Some(session_id)
-        || !active.is_active_at(successor_height)
-        || active.session.network_id != *network_id
-        || active.session.transcript_hash != transcript_hash
-    {
-        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
-    }
-    active
-        .validate()
-        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
-    crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-        &active.session,
-        &roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
-    let mut decision = KagemushaMintFinalityEpochDecisionV1::Retain;
-    let mut transition_id = [0; 32];
-    if let Some(transition) = state.world().validator_committee_transitions().get(&epoch) {
-        transition
-            .preparation
-            .validate_against_preparing_authorization(
-                &election.kagemusha_mint_finality_authorization,
-            )
-            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
-        crate::state::validator_committee::verify_progress(state.world(), transition)
-            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
-        if transition.outcome.is_some() {
-            return Err(V2ContextBuildError::InvalidCommitteeTransition);
-        }
-        transition_id = transition
-            .preparation
-            .transition_id()
-            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
-        decision = KagemushaMintFinalityEpochDecisionV1::RetainAndCancel;
-        if transition.readiness.len() == transition.preparation.roster.len()
-            && transition.preparation.roster.iter().all(|seat| {
-                eligible_global_candidate(state.world(), &seat.validator, successor_height, true)
-                    && live_consensus_key_pop_for_peer_with_role(
-                        state.world(),
-                        &seat.validator,
-                        successor_height,
-                        ConsensusKeyRole::Validator,
-                    )
-                    .is_some()
-            })
-        {
-            let credentials = transition
-                .credentials
-                .as_ref()
-                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
-            let target_beacon = state
-                .world()
-                .global_beacon_key_sessions()
-                .get(&credentials.beacon.session_id)
-                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
-            if target_beacon.activated_at_height.is_some()
-                || target_beacon.retired_at_height.is_some()
-            {
-                return Err(V2ContextBuildError::InvalidCommitteeTransition);
-            }
-            decision = KagemushaMintFinalityEpochDecisionV1::Activate;
-            roster = transition.preparation.roster.clone();
-            kagemusha_mint_finality_authority = credentials.authority.clone();
-            beacon = BeaconEpochBindingV1::Installed(credentials.beacon);
-        }
-    }
-    let quorum = wire::DualQuorum::from_roster(&roster)?;
-    let validator_set_pops = roster
-        .iter()
-        .map(|seat| {
-            live_consensus_key_pop_for_peer_with_role(
-                state.world(),
-                &seat.validator,
-                successor_height,
-                ConsensusKeyRole::Validator,
-            )
-            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
-        .map_err(V2ContextBuildError::NextEpochCryptography)?;
-    let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: 1,
-        network_id: *network_id,
+    let authorization =
+        retained_epoch_authorization(election, epoch_end_height, authenticated_beacon.binding)?;
+    Ok(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch,
-        first_height: successor_height,
-        last_height: epoch_end_height,
-        authority_generation: kagemusha_mint_finality_authority.generation,
-        authority_id: kagemusha_mint_finality_authority
-            .authority_id()
-            .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?,
-        beacon,
-        previous_authorization_id: election
-            .kagemusha_mint_finality_authorization
-            .authorization_id()
-            .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?,
-        transition_id,
-        decision,
-    };
-    kagemusha_mint_finality_authorization
-        .validate_successor(&election.kagemusha_mint_finality_authorization)
-        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?;
-    let committee_preparation = if election.mode == wire::ConsensusMode::Npos {
-        freeze_future_committee(
-            state,
-            height,
-            &kagemusha_mint_finality_authorization,
-            leader_seed,
-        )?
-    } else {
-        None
-    };
-    Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
-        committee_preparation,
-        epoch,
-        kagemusha_mint_finality_authorization,
-        kagemusha_mint_finality_authority,
+        kagemusha_mint_finality_authorization: authorization,
+        kagemusha_mint_finality_authority: authority.clone(),
         epoch_end_height,
         mode: election.mode,
         roster,
         validator_set_pops,
         quorum,
         leader_seed,
-    }))
-}
-/// A configuration update can change only intervals that have not been frozen.
-fn next_npos_epoch_end_height(
-    preparing: &KagemushaMintFinalityEpochAuthorizationV1,
-    frozen: Option<&iroha_data_model::nexus::ValidatorCommitteePreparationV1>,
-    configured_length: u64,
-) -> Result<u64, V2ContextBuildError> {
-    if let Some(preparation) = frozen {
-        preparation
-            .validate_against_preparing_authorization(preparing)
-            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
-        return Ok(preparation.last_height);
-    }
-    preparing
-        .last_height
-        .checked_add(configured_length)
-        .ok_or(V2ContextBuildError::HeightOverflow)
-}
-
-fn eligible_global_candidate(
-    world: &impl WorldReadOnly,
-    peer: &PeerId,
-    height: u64,
-    frozen: bool,
-) -> bool {
-    let Some(parameters) = world.sumeragi_npos_parameters() else {
-        return false;
-    };
-    world.public_lane_validators().iter().any(|(key, record)| {
-        record.lane_id == iroha_model_base::topology::LaneId::SINGLE
-            && public_lane_validator_record_matches_key(key, record)
-            && &record.peer_id == peer
-            && if frozen {
-                crate::smartcontracts::isi::staking::validator_tenure_contains_height(
-                    record, height,
-                )
-                .unwrap_or(false)
-            } else {
-                validator_election_eligible_at_height(record, height)
-            }
-            && record.self_stake >= parameters.min_self_bond
-            && !record.total_stake.is_zero()
-            && world
-                .public_lane_stake_custody()
-                .get(key)
-                .is_some_and(|(asset, held)| {
-                    asset.definition() == &parameters.xor_asset_definition_id
-                        && held >= &record.total_stake
-                })
     })
 }
-
-/// Freeze a new attempt using a separately domain-separated authenticated election seed.
-fn freeze_future_committee(
-    state: &impl StateReadOnly,
-    selecting_height: u64,
-    preparing: &KagemushaMintFinalityEpochAuthorizationV1,
-    authenticated_seed: [u8; 32],
-) -> Result<Option<iroha_data_model::nexus::ValidatorCommitteePreparationV1>, V2ContextBuildError> {
-    use iroha_data_model::nexus::ValidatorCommitteePreparationV1;
-    let parameters = state
-        .world()
-        .sumeragi_npos_parameters()
-        .ok_or(V2ContextBuildError::MissingNposParameters)?;
-    parameters
-        .validate()
-        .map_err(|_| V2ContextBuildError::InvalidNposParameters)?;
-    let target_epoch = preparing
-        .epoch
-        .checked_add(1)
-        .ok_or(V2ContextBuildError::EpochOverflow)?;
-    let first_height = preparing
-        .last_height
-        .checked_add(1)
-        .ok_or(V2ContextBuildError::HeightOverflow)?;
-    let last_height = preparing
-        .last_height
-        .checked_add(parameters.epoch_length_blocks.get())
-        .ok_or(V2ContextBuildError::HeightOverflow)?;
-    let authority_generation = preparing
-        .authority_generation
-        .checked_add(1)
-        .ok_or(V2ContextBuildError::EpochOverflow)?;
-    let election_seed: [u8; 32] = Hash::new_from_chunks(&[
-        b"sumeragi-v2:validator-election:E-plus-2:v1",
-        state.network_id().as_bytes(),
-        &authenticated_seed,
-        &selecting_height.to_le_bytes(),
-        &target_epoch.to_le_bytes(),
-    ])
-    .into();
-    let mut pool = BTreeMap::new();
-    for (_, record) in state.world().public_lane_validators().iter() {
-        let peer = &record.peer_id;
-        if !eligible_global_candidate(state.world(), peer, first_height, false) {
-            continue;
-        }
-        if let Some(pop) = live_consensus_key_pop_for_peer_with_role(
-            state.world(),
-            peer,
-            first_height,
-            ConsensusKeyRole::Validator,
-        ) {
-            pool.insert(peer.clone(), pop);
-        }
-    }
-    let cap = pool.len().min(parameters.max_validators as usize).min(31);
-    if cap < 4 {
-        return Ok(None);
-    }
-    let seats = ((cap - 1) / 3) * 3 + 1;
-    let mut ranked = pool
-        .into_iter()
-        .map(|(peer, pop)| {
-            let rank = Hash::new_from_chunks(&[
-                b"sumeragi-v2:validator-seat:v1",
-                &election_seed,
-                &peer.encode(),
-            ]);
-            (rank, peer, pop)
-        })
-        .collect::<Vec<_>>();
-    ranked.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    ranked.truncate(seats);
-    ranked.sort_by(|a, b| a.1.cmp(&b.1));
-    let (roster, validator_set_pops) = ranked
-        .into_iter()
-        .map(|(_, validator, pop)| {
-            (
-                wire::ValidatorPower {
-                    validator,
-                    power: 1,
-                },
-                pop,
-            )
-        })
-        .unzip();
-    let prestate_count = state.block_hashes().hash_count();
-    if u64::try_from(prestate_count)
-        .ok()
-        .and_then(|n| n.checked_add(1))
-        != Some(selecting_height)
+/// Build only a contiguous Retain decision from the exact authenticated incumbent.
+fn retained_epoch_authorization(
+    election: &FrozenElectionInputs,
+    last_height: u64,
+    installed: InstalledBeaconEpochBindingV1,
+) -> Result<KagemushaMintFinalityEpochAuthorizationV1, V2ContextBuildError> {
+    let previous = &election.kagemusha_mint_finality_authorization;
+    previous
+        .validate_against_authority(&election.kagemusha_mint_finality_authority)
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization)?;
+    if previous.epoch != election.epoch
+        || previous.last_height != election.epoch_end_height
+        || (previous.beacon != BeaconEpochBindingV1::Bootstrap
+            && previous.beacon != BeaconEpochBindingV1::Installed(installed))
     {
-        return Err(V2ContextBuildError::InvalidCommitteeTransition);
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization);
     }
-    let selection_anchor = state
-        .block_hashes()
-        .hash_at(
-            prestate_count
-                .checked_sub(1)
-                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?,
-        )
-        .copied()
-        .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
-    let preparation = ValidatorCommitteePreparationV1 {
-        version: 1,
-        network_id: *state.network_id(),
-        selection_epoch: preparing.epoch - 1,
-        selection_height: selecting_height,
-        selection_anchor,
-        target_epoch,
-        first_height,
+    let next = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: previous.version,
+        network_id: previous.network_id,
+        epoch: previous
+            .epoch
+            .checked_add(1)
+            .ok_or(V2ContextBuildError::EpochOverflow)?,
+        first_height: previous
+            .last_height
+            .checked_add(1)
+            .ok_or(V2ContextBuildError::HeightOverflow)?,
         last_height,
-        authority_generation,
-        preparing_authorization_id: preparing
+        authority_generation: previous.authority_generation,
+        authority_id: previous.authority_id,
+        beacon: BeaconEpochBindingV1::Installed(installed),
+        previous_authorization_id: previous
             .authorization_id()
-            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?,
-        election_seed,
-        roster,
-        validator_set_pops,
+            .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization)?,
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
     };
-    preparation
-        .validate_against_preparing_authorization(preparing)
-        .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
-    wire::finality::verify_validator_power_roster_pops(
-        &preparation.roster,
-        &preparation.validator_set_pops,
-    )
-    .map_err(V2ContextBuildError::NextEpochCryptography)?;
-    Ok(Some(preparation))
+    next.validate_successor(previous)
+        .and_then(|()| next.validate_against_authority(&election.kagemusha_mint_finality_authority))
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization)?;
+    Ok(next)
 }
-
 /// Canonical height-context construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum V2ContextBuildError {
@@ -1408,12 +1190,12 @@ pub(crate) enum V2ContextBuildError {
     /// The current election epoch cannot be incremented.
     #[error("Sumeragi v2 epoch overflows u64")]
     EpochOverflow,
-    /// A supplied paired-Pasta roster is malformed or disagrees with the elected epoch.
-    #[error("invalid Kagemusha mint-finality epoch roster")]
+    /// The immutable paired-Pasta authority differs from the retained consensus roster.
+    #[error("invalid Kagemusha mint-finality authority generation")]
     InvalidKagemushaMintFinalityAuthority,
-    /// A frozen attempt or its authenticated preparation evidence is inconsistent.
-    #[error("invalid authenticated validator committee preparation")]
-    InvalidCommitteeTransition,
+    /// Scheduling authority is stale, forged, or changes the installed incumbent binding.
+    #[error("invalid Kagemusha mint-finality epoch authorization")]
+    InvalidKagemushaMintFinalityAuthorization,
     /// One selected next-epoch validator has no live pre-boundary PoP.
     #[error("Sumeragi v2 next-epoch roster is missing a live proof of possession")]
     MissingNextEpochProofOfPossession,
@@ -1448,7 +1230,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{BlockHashRead as _, State, World},
+        state::{State, World},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1500,67 +1282,68 @@ mod tests {
         entries.sort_by(|left, right| left.validator.cmp(&right.validator));
         entries
     }
-    fn fixture_election(
+    fn genesis_election(
         network_id: NetworkId,
-        epoch: u64,
-        first: u64,
-        last: u64,
         mode: wire::ConsensusMode,
         roster: Vec<wire::ValidatorPower>,
-        leader_seed: [u8; 32],
+        end: u64,
     ) -> FrozenElectionInputs {
         let authority =
             crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
-        let authorization = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
-            &authority, epoch, first, last,
-        );
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, end)
+            .expect("actual genesis authorization");
         FrozenElectionInputs {
-            epoch,
+            epoch: 0,
             kagemusha_mint_finality_authority: authority,
             kagemusha_mint_finality_authorization: authorization,
-            epoch_end_height: last,
+            epoch_end_height: end,
             mode,
             roster,
-            leader_seed,
+            leader_seed: [0x41; 32],
         }
     }
-    fn fixture_retention(
+    // Structural context fixtures below do not claim authenticated beacon evidence.
+    fn structural_retained_snapshot(
         election: &FrozenElectionInputs,
-        last: u64,
-        seed: [u8; 32],
-        pops: Vec<Vec<u8>>,
+        end: u64,
+        pop: u8,
+        seed: u8,
     ) -> wire::finality::FinalizedNextEpochSnapshot {
-        let authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                &election.kagemusha_mint_finality_authorization,
-                &election.kagemusha_mint_finality_authority,
-                last,
-                KagemushaMintFinalityEpochDecisionV1::Retain,
-            );
+        let binding = InstalledBeaconEpochBindingV1 {
+            session_id: [0x91; 32],
+            transcript_hash: [0x92; 32],
+        };
         wire::finality::FinalizedNextEpochSnapshot {
             committee_preparation: None,
             epoch: election.epoch + 1,
+            kagemusha_mint_finality_authorization: retained_epoch_authorization(
+                election, end, binding,
+            )
+            .expect("contiguous retention"),
             kagemusha_mint_finality_authority: election.kagemusha_mint_finality_authority.clone(),
-            kagemusha_mint_finality_authorization: authorization,
-            epoch_end_height: last,
+            epoch_end_height: end,
             mode: election.mode,
+            quorum: election.quorum().expect("next quorum"),
+            validator_set_pops: vec![vec![pop]; election.roster.len()],
             roster: election.roster.clone(),
-            validator_set_pops: pops,
-            quorum: election.quorum().unwrap(),
-            leader_seed: seed,
+            leader_seed: [seed; 32],
+        }
+    }
+    fn election_from_context(context: &wire::HeightContext) -> FrozenElectionInputs {
+        FrozenElectionInputs {
+            epoch: context.epoch,
+            kagemusha_mint_finality_authority: context.kagemusha_mint_finality_authority.clone(),
+            kagemusha_mint_finality_authorization: context.kagemusha_mint_finality_authorization,
+            epoch_end_height: context.epoch_end_height,
+            mode: context.mode,
+            roster: context.roster.clone(),
+            leader_seed: context.leader_seed,
         }
     }
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
         let network_id = test_network_id(0x41);
-        let election = fixture_election(network_id, 0, 1, end, mode, roster(powers), [0x41; 32]);
-        let next_epoch_snapshot = (end == 1).then(|| {
-            fixture_retention(
-                &election,
-                5,
-                [0x42; 32],
-                vec![vec![0x43]; election.roster.len()],
-            )
-        });
+        let election = genesis_election(network_id, mode, roster(powers), end);
+        let next_epoch_snapshot = None;
         build_genesis_height_context(GenesisContextInputs {
             network_id,
             election,
@@ -1790,14 +1573,11 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
-            let kagemusha_mint_finality_authority =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
-            let kagemusha_mint_finality_authorization =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
-                    &kagemusha_mint_finality_authority,
-                    0,
-                    1,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    network_id,
                     u64::MAX,
+                    &roster,
                 );
             let signed_parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
             let context = wire::HeightContext {
@@ -1882,181 +1662,6 @@ mod tests {
             election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
-        }
-    }
-    #[test]
-    fn frozen_successor_interval_survives_epoch_length_changes() {
-        let fixture = crate::state::validator_committee::tests::fixture(4);
-        let authorization = fixture.authorization;
-        let preparation = &fixture.transition.preparation;
-        for configured_length in [1, 10, 99, u64::MAX] {
-            assert_eq!(
-                next_npos_epoch_end_height(&authorization, Some(preparation), configured_length)
-                    .unwrap(),
-                30
-            );
-        }
-        assert_eq!(
-            next_npos_epoch_end_height(&authorization, None, 99).unwrap(),
-            119
-        );
-        assert!(next_npos_epoch_end_height(&authorization, None, u64::MAX).is_err());
-        let mut substituted = preparation.clone();
-        substituted.first_height += 1;
-        assert!(next_npos_epoch_end_height(&authorization, Some(&substituted), 10).is_err());
-    }
-
-    #[test]
-    fn future_committee_selects_exact_geometry_from_noncommittee_candidate_pools() {
-        use iroha_data_model::{
-            IntoKeyValue as _,
-            asset::{Asset, AssetId},
-        };
-        let network = test_network_id(0x78);
-        for (pool_size, expected_seats) in [(3_usize, 0_usize), (5, 4), (8, 7)] {
-            let mut world = World::new();
-            let parameters = SumeragiNposParameters {
-                epoch_length_blocks: NonZeroU64::new(10).unwrap(),
-                max_validators: 31,
-                min_self_bond: Quantity::from(10_000_u64),
-                ..SumeragiNposParameters::default()
-            };
-            let xor = parameters.xor_asset_definition_id.clone();
-            let mut world_parameters = world.parameters.block();
-            world_parameters
-                .get_mut()
-                .set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
-            world_parameters.commit();
-            let keys = (1..=pool_size)
-                .map(|seed| KeyPair::from_seed(vec![seed as u8; 32], Algorithm::BlsNormal))
-                .collect::<Vec<_>>();
-            let mut peers = Vec::new();
-            for (index, key) in keys.iter().enumerate() {
-                let peer = PeerId::new(key.public_key().clone());
-                let record = lane_record(&peer, LaneId::SINGLE, 10_000);
-                let owner = record.validator.clone();
-                let custody = AssetId::new(xor.clone(), owner.clone());
-                let (asset_id, asset) =
-                    Asset::new(custody.clone(), Quantity::from(10_000_u64)).into_key_value();
-                world.assets.insert(asset_id, asset);
-                world.public_lane_stake_custody.insert(
-                    (LaneId::SINGLE, owner.clone()),
-                    (custody, Quantity::from(10_000_u64)),
-                );
-                world
-                    .public_lane_validators
-                    .insert((LaneId::SINGLE, owner), record);
-                let id =
-                    ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("candidate-{index}"));
-                world.consensus_keys.insert(
-                    id.clone(),
-                    ConsensusKeyRecord {
-                        id: id.clone(),
-                        public_key: key.public_key().clone(),
-                        pop: Some(iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap()),
-                        activation_height: 1,
-                        expiry_height: None,
-                        replaces: None,
-                        status: ConsensusKeyStatus::Active,
-                    },
-                );
-                world
-                    .consensus_keys_by_pk
-                    .insert(key.public_key().to_string(), vec![id]);
-                peers.push(peer);
-            }
-            peers.sort();
-            let authority_roster = roster(&[1, 1, 1, 1]);
-            let authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-                network,
-                0,
-                &authority_roster,
-            );
-            let preparing = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
-                &authority, 1, 11, 20,
-            );
-            let state = State::new_with_chain_and_network_id_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                ChainId::from("future-selection"),
-                network,
-            );
-            let mut block = state.block(BlockHeader::new(
-                NonZeroU64::new(10).unwrap(),
-                None,
-                None,
-                0,
-                0,
-            ));
-            for height in 1_u64..=9 {
-                block
-                    .block_hashes
-                    .push(HashOf::from_untyped_unchecked(Hash::new(
-                        height.to_le_bytes(),
-                    )));
-            }
-            let first = freeze_future_committee(&block, 10, &preparing, [1; 32]).unwrap();
-            if expected_seats == 0 {
-                assert!(first.is_none());
-                continue;
-            }
-            let first = first.unwrap();
-            assert_eq!(
-                (first.target_epoch, first.first_height, first.last_height),
-                (2, 21, 30)
-            );
-            assert_eq!(first.roster.len(), expected_seats);
-            assert_eq!(
-                first.selection_anchor,
-                *block.block_hashes().hash_at(8).unwrap()
-            );
-            assert!(
-                first
-                    .roster
-                    .iter()
-                    .all(|seat| peers.contains(&seat.validator))
-            );
-            assert!(
-                first
-                    .roster
-                    .windows(2)
-                    .all(|pair| pair[0].validator < pair[1].validator)
-            );
-            assert_eq!(
-                first,
-                freeze_future_committee(&block, 10, &preparing, [1; 32])
-                    .unwrap()
-                    .unwrap()
-            );
-            assert!(
-                (2_u8..=16).any(
-                    |seed| freeze_future_committee(&block, 10, &preparing, [seed; 32])
-                        .unwrap()
-                        .unwrap()
-                        .roster
-                        != first.roster
-                ),
-                "extra candidates must participate in selection"
-            );
-            let selected = &first.roster[0].validator;
-            let owner = AccountId::new(selected.public_key().clone());
-            block
-                .world
-                .public_lane_validators
-                .get_mut(&(LaneId::SINGLE, owner))
-                .unwrap()
-                .election_exit_height = Some(21);
-            assert!(!eligible_global_candidate(
-                &block.world,
-                selected,
-                21,
-                false
-            ));
-            assert!(
-                eligible_global_candidate(&block.world, selected, 21, true),
-                "an exit request cannot revoke an already frozen seat"
-            );
         }
     }
     fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
@@ -2318,6 +1923,21 @@ mod tests {
         let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
         wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops)
     }
+    fn structural_boundary_context() -> wire::HeightContext {
+        let mut context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3);
+        for height in 2..=3 {
+            let snapshot = (height == 3).then(|| {
+                structural_retained_snapshot(&election_from_context(&context), 5, 0x43, 0x42)
+            });
+            context = build_successor_height_context(
+                &artifact(context, None),
+                Hash::new(b"boundary fixture lanes"),
+                snapshot,
+            )
+            .expect("contiguous structural boundary fixture");
+        }
+        context
+    }
     #[test]
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 3);
@@ -2326,6 +1946,14 @@ mod tests {
             .expect("successor context");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, parent_context.epoch);
+        assert_eq!(
+            successor.kagemusha_mint_finality_authority,
+            parent_context.kagemusha_mint_finality_authority
+        );
+        assert_eq!(
+            successor.kagemusha_mint_finality_authorization,
+            parent_context.kagemusha_mint_finality_authorization
+        );
         assert_eq!(successor.epoch_end_height, parent_context.epoch_end_height);
         assert_eq!(successor.roster, parent_context.roster);
         assert_eq!(successor.quorum, parent_context.quorum);
@@ -2334,34 +1962,14 @@ mod tests {
     }
     #[test]
     fn boundary_successor_uses_only_the_finalized_next_epoch_snapshot() {
-        let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
+        let parent_context = structural_boundary_context();
         let next_roster = roster(&[1, 1, 1, 1]);
-        let next_epoch = parent_context.epoch + 1;
-        let kagemusha_mint_finality_authority =
-            parent_context.kagemusha_mint_finality_authority.clone();
-        let kagemusha_mint_finality_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                &parent_context.kagemusha_mint_finality_authorization,
-                &kagemusha_mint_finality_authority,
-                5,
-                KagemushaMintFinalityEpochDecisionV1::Retain,
-            );
-        let snapshot = wire::finality::FinalizedNextEpochSnapshot {
-            committee_preparation: None,
-            epoch: next_epoch,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            epoch_end_height: 5,
-            mode: parent_context.mode,
-            quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
-            validator_set_pops: vec![vec![0x78]; next_roster.len()],
-            roster: next_roster.clone(),
-            leader_seed: [0x77; 32],
-        };
+        let snapshot =
+            structural_retained_snapshot(&election_from_context(&parent_context), 5, 0x78, 0x77);
         let parent = artifact(parent_context, Some(snapshot));
         let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
             .expect("epoch successor");
-        assert_eq!(successor.height, 2);
+        assert_eq!(successor.height, 4);
         assert_eq!(successor.epoch, 1);
         assert_eq!(successor.epoch_end_height, 5);
         assert_eq!(successor.roster, next_roster);
@@ -2374,30 +1982,10 @@ mod tests {
             .expect("non-boundary successor");
         assert_eq!(unchanged.epoch_end_height, 3);
         assert_eq!(unchanged.roster, non_boundary.height_context.roster);
-        let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
+        let boundary_context = structural_boundary_context();
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
-        let next_epoch = boundary_context.epoch + 1;
-        let kagemusha_mint_finality_authority =
-            boundary_context.kagemusha_mint_finality_authority.clone();
-        let kagemusha_mint_finality_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                &boundary_context.kagemusha_mint_finality_authorization,
-                &kagemusha_mint_finality_authority,
-                9,
-                KagemushaMintFinalityEpochDecisionV1::Retain,
-            );
-        let snapshot = wire::finality::FinalizedNextEpochSnapshot {
-            committee_preparation: None,
-            epoch: next_epoch,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            epoch_end_height: 9,
-            mode: boundary_context.mode,
-            roster: boundary_context.roster.clone(),
-            quorum: boundary_context.quorum,
-            validator_set_pops: next_pops.clone(),
-            leader_seed: [0x19; 32],
-        };
+        let snapshot =
+            structural_retained_snapshot(&election_from_context(&boundary_context), 9, 0x1A, 0x19);
         let boundary = artifact(boundary_context, Some(snapshot));
         let rotated = build_successor_height_context(&boundary, Hash::new(b"lanes"), None)
             .expect("boundary successor");
@@ -2412,9 +2000,65 @@ mod tests {
             next_pops
         );
     }
+    fn install_pre_boundary_beacon(
+        state: &mut State,
+        boundary_height: u64,
+        roster: &[wire::ValidatorPower],
+    ) {
+        let pulse_height = boundary_height - 1;
+        let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+            height: pulse_height - 1,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
+        };
+        let mut signing_keys = (1_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic beacon fixture signer")
+            })
+            .filter(|key| {
+                roster
+                    .iter()
+                    .any(|entry| entry.validator.public_key() == key.public_key())
+            })
+            .collect::<Vec<_>>();
+        signing_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert_eq!(
+            signing_keys.len(),
+            roster.len(),
+            "fixture owns every beacon signer"
+        );
+        let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
+            *state.network_id_ref(),
+            &signing_keys,
+            &[anchor],
+        );
+        let pulse = pulses.into_iter().next().expect("one authenticated pulse");
+        let link = validate_persisted_global_threshold_beacon_pulse_v1(&pulse)
+            .expect("real persisted pulse shape");
+        let mut hashes =
+            vec![
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"fixture chain"));
+                usize::try_from(pulse_height).expect("small fixture")
+            ];
+        hashes[usize::try_from(pulse.finalized_chain_anchor.height - 1).expect("anchor index")] =
+            pulse.finalized_chain_anchor.block_hash;
+        state.block_hashes = crate::state::BlockHashes::new(hashes);
+        let mut world = state.world.block();
+        world
+            .global_beacon_key_sessions
+            .insert(pulse.session_id, key);
+        world
+            .global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
+        world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
+        world
+            .global_beacon_latest_pulse
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+        world.commit();
+    }
     #[test]
     fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
-        const BOUNDARY_HEIGHT: u64 = 40;
+        const BOUNDARY_HEIGHT: u64 = 7;
         const SUCCESSOR_HEIGHT: u64 = BOUNDARY_HEIGHT + 1;
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -2458,25 +2102,15 @@ mod tests {
                     .consensus_keys_by_pk
                     .insert(record.public_key.to_string(), vec![id]);
             }
-            let mut beacon = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
-                network_id, [0x31; 32], &keys,
-            );
-            beacon
-                .activate(30)
-                .expect("activate finalized fixture beacon");
-            world
-                .global_beacon_key_sessions
-                .insert(beacon.session.session_id, beacon);
-            world
-                .global_beacon_active_session
-                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, [0x31; 32]);
-            State::new_with_chain_and_network_id_for_testing(
+            let mut state = State::new_with_chain_and_network_id_for_testing(
                 world,
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
                 network_id,
-            )
+            );
+            install_pre_boundary_beacon(&mut state, BOUNDARY_HEIGHT, &roster);
+            state
         };
         let expiring_state = state_with_lifecycle(true);
         let expiring_view = expiring_state.view();
@@ -2522,25 +2156,12 @@ mod tests {
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
         );
-        let mut election = fixture_election(
-            *expiring_view.network_id(),
-            4,
-            2,
-            BOUNDARY_HEIGHT,
+        let election = genesis_election(
+            network_id,
             wire::ConsensusMode::Permissioned,
             roster.clone(),
-            [0x72; 32],
+            BOUNDARY_HEIGHT,
         );
-        let beacon = expiring_view
-            .world()
-            .global_beacon_key_sessions()
-            .get(&[0x31; 32])
-            .unwrap();
-        election.kagemusha_mint_finality_authorization.beacon =
-            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: beacon.session.session_id,
-                transcript_hash: beacon.session.transcript_hash,
-            });
         assert!(matches!(
             finalized_next_epoch_snapshot(
                 &expiring_view,
@@ -2595,34 +2216,270 @@ mod tests {
             network_id,
         );
         let view = state.view();
-        let election = fixture_election(
-            *view.network_id(),
-            3,
-            2,
-            BOUNDARY_HEIGHT,
+        let election = genesis_election(
+            network_id,
             wire::ConsensusMode::Npos,
             election_roster,
-            [0x63; 32],
+            BOUNDARY_HEIGHT,
         );
         assert_eq!(
             finalized_next_epoch_snapshot(&view, view.network_id(), BOUNDARY_HEIGHT, &election,),
             Err(V2ContextBuildError::MissingPreBoundaryBeaconPulse)
         );
     }
+    fn retained_npos_fixture() -> (State, FrozenElectionInputs) {
+        let network_id = test_network_id(0x79);
+        let mut world = World::new();
+        let mut keys = (21_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).expect("real BLS seat")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|a, b| a.public_key().cmp(b.public_key()));
+        let mut roster = Vec::new();
+        for (index, key) in keys.iter().enumerate() {
+            let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("retained{index}"));
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("real PoP")),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id.clone()]);
+            world.consensus_keys.insert(id, record);
+            roster.push(wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            });
+        }
+        {
+            let mut block = world.block();
+            let mut params = SumeragiNposParameters::default();
+            params.epoch_length_blocks = NonZeroU64::new(7).expect("epoch length");
+            params.evidence_horizon_blocks = 14;
+            params.slashing_delay_blocks = 7;
+            block.parameters.get_mut().custom.insert(
+                SumeragiNposParameters::parameter_id(),
+                params.into_custom_parameter(),
+            );
+            block.commit();
+        }
+        let election = genesis_election(network_id, wire::ConsensusMode::Npos, roster, 7);
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("retained-authority-boundaries"),
+            network_id,
+        );
+        (state, election)
+    }
+    fn election_from_snapshot(
+        snapshot: wire::finality::FinalizedNextEpochSnapshot,
+    ) -> FrozenElectionInputs {
+        FrozenElectionInputs {
+            epoch: snapshot.epoch,
+            kagemusha_mint_finality_authority: snapshot.kagemusha_mint_finality_authority,
+            kagemusha_mint_finality_authorization: snapshot.kagemusha_mint_finality_authorization,
+            epoch_end_height: snapshot.epoch_end_height,
+            mode: snapshot.mode,
+            roster: snapshot.roster,
+            leader_seed: snapshot.leader_seed,
+        }
+    }
+    #[test]
+    fn retained_authority_crosses_multiple_epochs_with_exact_authenticated_beacon() {
+        let (mut state, mut election) = retained_npos_fixture();
+        let original_authority = election.kagemusha_mint_finality_authority.clone();
+        let original_roster = election.roster.clone();
+        let mut installed = None;
+        for boundary in [7, 14, 21] {
+            install_pre_boundary_beacon(&mut state, boundary, &election.roster);
+            let view = state.view();
+            let snapshot =
+                finalized_next_epoch_snapshot(&view, view.network_id(), boundary, &election)
+                    .expect("authenticated live retention")
+                    .expect("exact boundary");
+            let previous = election.kagemusha_mint_finality_authorization;
+            let next = snapshot.kagemusha_mint_finality_authorization;
+            assert_eq!(snapshot.epoch, election.epoch + 1);
+            assert_eq!(snapshot.epoch_end_height, boundary + 7);
+            assert_eq!(next.first_height, boundary + 1);
+            assert_eq!(
+                next.previous_authorization_id,
+                previous.authorization_id().expect("original authorization")
+            );
+            assert_eq!(next.decision, KagemushaMintFinalityEpochDecisionV1::Retain);
+            assert_eq!(
+                snapshot.kagemusha_mint_finality_authority,
+                original_authority
+            );
+            assert_eq!(snapshot.roster, original_roster);
+            assert_eq!(next.authority_generation, 0);
+            assert_eq!(next.transition_id, [0; 32]);
+            if let Some(binding) = installed {
+                assert_eq!(next.beacon, binding);
+            }
+            installed = Some(next.beacon);
+            assert!(matches!(next.beacon, BeaconEpochBindingV1::Installed(_)));
+            assert_eq!(
+                snapshot.leader_seed,
+                finalized_global_beacon_npos_successor_seed_from_sources(
+                    view.world(),
+                    view.block_hashes(),
+                    view.network_id(),
+                    boundary,
+                    snapshot.epoch
+                )
+                .expect("same verified pulse")
+            );
+            wire::finality::verify_validator_power_roster_pops(
+                &snapshot.roster,
+                &snapshot.validator_set_pops,
+            )
+            .expect("exact retained live seats");
+            election = election_from_snapshot(snapshot);
+        }
+    }
+    #[test]
+    fn retained_authority_rejects_changed_or_retired_beacon_session() {
+        for retire_session in [false, true] {
+            let (mut state, election) = retained_npos_fixture();
+            install_pre_boundary_beacon(&mut state, 7, &election.roster);
+            {
+                let mut world = state.world.block();
+                if retire_session {
+                    let session_id = *world
+                        .global_beacon_active_session
+                        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+                        .expect("fixture installed one active beacon");
+                    world
+                        .global_beacon_key_sessions
+                        .get_mut(&session_id)
+                        .expect("fixture retained the session")
+                        .retire(8)
+                        .expect("retire after the signed pulse");
+                } else {
+                    world
+                        .global_beacon_active_session
+                        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, [0xFA; 32]);
+                }
+                world.commit();
+            }
+            let view = state.view();
+            assert_eq!(
+                finalized_next_epoch_snapshot(&view, view.network_id(), 7, &election),
+                Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse),
+            );
+        }
+    }
+    #[test]
+    fn retained_authority_rejects_stale_forged_and_changed_beacon_inputs() {
+        let (mut state, election) = retained_npos_fixture();
+        install_pre_boundary_beacon(&mut state, 7, &election.roster);
+        let next = {
+            let view = state.view();
+            finalized_next_epoch_snapshot(&view, view.network_id(), 7, &election)
+                .expect("first actual retention")
+                .expect("boundary")
+        };
+        let retained = election_from_snapshot(next);
+        install_pre_boundary_beacon(&mut state, 14, &retained.roster);
+        let view = state.view();
+        for mutation in 0..5 {
+            let mut invalid = retained.clone();
+            match mutation {
+                0 => {
+                    invalid.kagemusha_mint_finality_authorization =
+                        election.kagemusha_mint_finality_authorization
+                }
+                1 => invalid.kagemusha_mint_finality_authorization.authority_id[0] ^= 1,
+                2 => {
+                    invalid
+                        .kagemusha_mint_finality_authorization
+                        .authority_generation += 1
+                }
+                3 => {
+                    let BeaconEpochBindingV1::Installed(ref mut binding) =
+                        invalid.kagemusha_mint_finality_authorization.beacon
+                    else {
+                        panic!("first actual retention installed the beacon");
+                    };
+                    binding.session_id[0] ^= 1;
+                }
+                _ => {
+                    let BeaconEpochBindingV1::Installed(ref mut binding) =
+                        invalid.kagemusha_mint_finality_authorization.beacon
+                    else {
+                        panic!("first actual retention installed the beacon");
+                    };
+                    binding.transcript_hash[0] ^= 1;
+                }
+            }
+            assert_eq!(
+                finalized_next_epoch_snapshot(&view, view.network_id(), 14, &invalid),
+                Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthorization),
+                "mutation {mutation}"
+            );
+        }
+        let mut changed_roster = retained.clone();
+        changed_roster.roster.swap(0, 1);
+        assert_eq!(
+            finalized_next_epoch_snapshot(&view, view.network_id(), 14, &changed_roster),
+            Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)
+        );
+        let next = finalized_next_epoch_snapshot(&view, view.network_id(), 14, &retained)
+            .expect("negative attempts did not mutate original authority")
+            .expect("boundary");
+        assert_eq!(
+            next.kagemusha_mint_finality_authorization
+                .previous_authorization_id,
+            retained
+                .kagemusha_mint_finality_authorization
+                .authorization_id()
+                .expect("original ID")
+        );
+    }
+    #[test]
+    fn genesis_boundary_cannot_synthesize_an_installed_beacon() {
+        let (state, election) = retained_npos_fixture();
+        let view = state.view();
+        for boundary in [1, 2] {
+            assert!(matches!(
+                authenticated_pre_boundary_beacon(
+                    view.world(),
+                    view.block_hashes(),
+                    view.network_id(),
+                    boundary,
+                    election.epoch + 1
+                ),
+                Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse
+                    | V2ContextBuildError::MissingPreBoundaryBeaconPulse)
+            ));
+        }
+    }
     #[test]
     fn genesis_rejects_non_unit_consensus_power() {
         let network_id = test_network_id(0x43);
         let election_roster = roster(&[1, 2, 1, 1]);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                10,
+                &election_roster,
+            );
         let error = build_genesis_height_context(GenesisContextInputs {
             network_id,
-            election: fixture_election(
+            election: genesis_election(
                 network_id,
-                0,
-                1,
-                10,
                 wire::ConsensusMode::Permissioned,
                 election_roster,
-                [0; 32],
+                10,
             ),
             next_epoch_snapshot: None,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
@@ -2676,3 +2533,7 @@ mod tests {
             .expect("the full terminal height context must validate");
     }
 }
+
+#[cfg(test)]
+#[path = "v2_context_authority_tests.rs"]
+mod authority_tests;

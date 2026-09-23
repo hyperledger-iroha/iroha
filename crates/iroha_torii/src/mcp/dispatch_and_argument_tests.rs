@@ -168,7 +168,8 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.da.proof_policy_snapshot")
+            .all(|tool| tool.name != "iroha.da.proof_policy_snapshot"),
+        "duplicate proof-policy MCP tool must remain retired"
     );
     assert!(
         tools

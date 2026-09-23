@@ -23,11 +23,11 @@ use iroha::{
         },
         nexus::{
             AdmitValidatorCommitteeSeatV1, PrepareValidatorCommitteeCredentialsV1,
-            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
-            PublicLaneRegistrationPreconditionV1, ValidatorCandidateKeyAuthorizationV1,
-            ValidatorCandidateKeysV1, ValidatorCommitteeCredentialsV1,
-            ValidatorCommitteeOperationV1, ValidatorCommitteePreparationV1,
-            ValidatorCommitteeSeatReadinessV1,
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+            ValidatorCandidateKeyAuthorizationV1, ValidatorCandidateKeysV1,
+            ValidatorCommitteeCredentialsV1, ValidatorCommitteeOperationV1,
+            ValidatorCommitteePreparationV1, ValidatorCommitteeSeatReadinessV1,
         },
         parameter::system::SumeragiNposParameters,
         prelude::*,
@@ -283,7 +283,7 @@ fn admit_four_candidates(
                 destination_asset: escrow.clone(),
                 amount: 2_000_u64.into(),
                 precondition: PublicLaneMonetaryPreconditionV1::Registration(
-                    PublicLaneRegistrationPreconditionV1 {
+                    PublicLaneMonetaryRegistrationV1 {
                         activation_height: TARGET_FIRST,
                     },
                 ),

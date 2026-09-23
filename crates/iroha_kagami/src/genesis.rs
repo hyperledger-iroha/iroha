@@ -1,3 +1,4 @@
+//! Genesis authority provisioning, validation, and signing commands.
 use crate::{Outcome, RunArgs};
 use clap::Subcommand;
 use color_eyre::eyre::eyre;
@@ -6,7 +7,7 @@ use iroha_genesis::RawGenesisTransaction;
 use iroha_model_base::topology::DataSpaceId;
 use std::io::{BufWriter, Write};
 
-pub(super) fn ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+pub(super) fn ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
     manifest: &RawGenesisTransaction,
     topology: &[iroha_model_base::peer::PeerId],
 ) -> color_eyre::Result<()> {
@@ -25,7 +26,7 @@ pub(super) fn ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topolo
         .collect::<Vec<_>>();
     if current != expected {
         return Err(eyre!(
-            "signed KAGEMUSHA mint-finality epoch-zero authority does not match the exact genesis topology"
+            "signed KAGEMUSHA mint-finality generation-zero authority does not match the exact genesis topology"
         ));
     }
     Ok(())
@@ -166,7 +167,7 @@ mod authority_tests {
             .build_raw()
             .expect("complete generation-zero fixture")
             .with_consensus_mode(SumeragiConsensusMode::Npos);
-            ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
                 &manifest, &current,
             )
             .expect("generation-zero authority matches the genesis topology");
@@ -187,11 +188,81 @@ mod authority_tests {
         )
         .build_raw()
         .expect("complete authority fixture");
-        ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
             &manifest,
             &test_peers(0x90),
         )
         .expect_err("another committee cannot replace the genesis authority");
+    }
+
+    #[test]
+    fn generation_zero_topology_requires_the_exact_initial_authority() {
+        let current = test_peers(0x30);
+        let manifest = complete_test_genesis_builder_for_peers(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("initial-authority"),
+                PathBuf::from("."),
+            ),
+            current.clone(),
+        )
+        .build_raw()
+        .expect("complete generation-zero manifest");
+        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+            &manifest, &current,
+        )
+        .expect("the exact initial committee owns the generation-zero keys");
+        assert!(
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+                &manifest,
+                &test_peers(0x50)
+            )
+            .is_err()
+        );
+        let mut parameters = manifest
+            .kagemusha_mint_finality_genesis_parameters()
+            .clone();
+        parameters.authority_generation.generation = 1;
+        let invalid = manifest.with_kagemusha_mint_finality_genesis_parameters(parameters);
+        assert!(
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+                &invalid, &current
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn genesis_epoch_requires_room_for_committed_beacon_authority() {
+        for length in [1, 2, 3] {
+            let mut npos_parameters = SumeragiNposParameters::default();
+            npos_parameters.epoch_length_blocks = NonZeroU64::new(length).unwrap();
+            npos_parameters.evidence_horizon_blocks = length;
+            npos_parameters.slashing_delay_blocks = length;
+            let manifest = complete_test_genesis_builder_for_peers(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("initial-beacon-window"),
+                    PathBuf::from("."),
+                )
+                .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter())),
+                test_peers(0x70),
+            )
+            .build_raw()
+            .expect("complete authority manifest")
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            let result = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest);
+            if length < 3 {
+                assert!(
+                    result
+                        .expect_err("missing committed beacon anchor")
+                        .to_string()
+                        .contains("epoch_length_blocks >= 3")
+                );
+            } else {
+                result.expect(
+                    "initial authority does not require a precomputed successor generation",
+                );
+            }
+        }
     }
 }
 mod embed_pop;

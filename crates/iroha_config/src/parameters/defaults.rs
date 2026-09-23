@@ -811,7 +811,9 @@ pub mod oracle {
 pub mod kura {
     use crate::{
         kura::FsyncMode,
-        parameters::actual::{KuraFastpqArtifactPolicy, KuraReplicaAdvertPolicy},
+        parameters::actual::{
+            KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy, KuraReplicaAdvertPolicy,
+        },
     };
     use iroha_config_base::util::Bytes;
     use nonzero_ext::nonzero;
@@ -825,6 +827,16 @@ pub mod kura {
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
     /// Requested allocation bytes retained by State's block-hash generations.
     pub const BLOCK_HASH_HISTORY_BYTES: Bytes = Bytes(256 * 1024 * 1024);
+    /// Finite extent retained by the initial membership segment (256 MiB).
+    pub const MEMBERSHIP_STORAGE_MAX_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
+    /// Membership controls and original append workspaces (64 MiB).
+    pub const MEMBERSHIP_STORAGE_MEMORY_BYTES: NonZeroUsize = nonzero!(64_usize * 1024 * 1024);
+    /// Initial single-generation limits; these do not provide indefinite history retention.
+    pub const MEMBERSHIP_STORAGE_POLICY: KuraMembershipStoragePolicy =
+        KuraMembershipStoragePolicy {
+            max_bytes: MEMBERSHIP_STORAGE_MAX_BYTES,
+            memory_bytes: MEMBERSHIP_STORAGE_MEMORY_BYTES,
+        };
     /// Number of recent lane-history entries retained alongside the block store.
     pub const LANE_HISTORY_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
@@ -3340,6 +3352,8 @@ pub mod nexus {
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
         /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
         pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
+        /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
+        pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).

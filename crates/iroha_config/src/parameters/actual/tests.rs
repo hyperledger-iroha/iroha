@@ -1648,11 +1648,16 @@ mod tests {
     }
     #[test]
     fn sumeragi_v2_default_nexus_amx_hash_is_stable() {
+        assert_eq!(
+            Nexus::default().staking.stake_asset_id,
+            Nexus::default().fees.fee_asset_id,
+            "recommended staking custody and fees must use the canonical XOR asset",
+        );
         let hash =
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "fceea54306bbc0cc6441a2aa6f6df5eee6a40404010fe1e50d49badbcb0ba927",
+            "5b26f8675654eb00ba24ff264288498fd93df739f5c412fe1fbe21c7e59134b3",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),

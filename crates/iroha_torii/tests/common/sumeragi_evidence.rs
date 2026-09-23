@@ -39,7 +39,7 @@ pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([seed; Hash::LENGTH]),
     ));
-    let mint_authority = KagemushaMintFinalityAuthorityGenerationV1 {
+    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         generation: 0,
@@ -77,8 +77,13 @@ pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
-        kagemusha_mint_finality_authorization: mint_authorization,
-        kagemusha_mint_finality_authority: mint_authority,
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_roster,
+                height.checked_add(1).expect("nonterminal fixture height"),
+            )
+            .expect("valid fixture mint-finality roster"),
+        kagemusha_mint_finality_authority: mint_roster,
         epoch_end_height: height.checked_add(1).expect("nonterminal fixture height"),
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

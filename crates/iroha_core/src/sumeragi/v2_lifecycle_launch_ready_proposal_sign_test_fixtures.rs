@@ -519,12 +519,10 @@ impl LaunchedProductionLifecycleV1 {
     ) -> ProductionRecoveredDecisionFetchStoreSettlementV1 {
         assert!(self.pending_lifecycle_completion.is_none());
         let context = self.executor.context().clone();
-        let (mut lane_work, _) =
-            crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
         crate::sumeragi::v2_runner::with_lifecycle_current_runner_turn_for_test(
             &context,
             crate::sumeragi::v2_runner::LifecycleRunnerRankTarget::Completion,
-            |runner| match self.drive_completion_pre_gate(runner, &mut lane_work) {
+            |runner| match self.drive_completion_pre_gate(runner) {
                 ProductionLifecycleCompletionPreGateV1::Selected(
                     ProductionLifecycleCompletionSelectionV1::RecoveredDecisionFetchCompletion(
                         settlement,

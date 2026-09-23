@@ -87,7 +87,7 @@ fn signed_snapshot_physical_fixture() -> SignedSnapshotPhysicalFixture {
         })
         .collect::<Vec<_>>();
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(network_id, 0, 0, 1, u64::MAX, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

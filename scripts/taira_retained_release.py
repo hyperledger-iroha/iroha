@@ -45,8 +45,7 @@ RESERVE = 256 * 1024**2
 RETIRE_GUEST_RESERVE = 32 * 1024**2
 RETIRE_BACKING_RESERVE = 32 * 1024**2
 TIMEOUT = 3600
-SUPERVISOR_ROOT = Path("/var/lib/taira-epoch-supervisor")
-SUPERVISOR_UNIT = "iroha-taira-epoch-supervisor.service"
+DEPLOYMENT_STATE_ROOT = Path("/var/lib/taira-deployment")
 
 
 class RetainedReleaseError(ValueError):
@@ -328,7 +327,7 @@ def current_bindings(plan, deployment):
     inventory = pin_json(plan["current_inventory"])
     protected = {deployment["state_root"], deployment["config_root"],
                  str(Path(deployment["current"]["daemon"]).parent), inventory["revision"]["source_root"],
-                 str(Path(deployment["runtime_root"]) / "journal-v1"), str(SUPERVISOR_ROOT)}
+                 str(Path(deployment["runtime_root"]) / "journal-v1"), str(DEPLOYMENT_STATE_ROOT)}
     for host in inventory["validators"] + [inventory["edge"]]:
         protected.update(host[key] for key in ("service_root", "state_root", "reset_guard"))
         protected.update(row["local_path"] for row in host["artifacts"])
@@ -340,11 +339,6 @@ def current_bindings(plan, deployment):
         need(unit_command(raw) == expected, "current daemon binding differs")
         fields = systemd_fields(Path(ref["path"]).name, ("FragmentPath", "DropInPaths", "Job"))
         need(fields == {"FragmentPath": ref["path"], "DropInPaths": "", "Job": ""}, "current unit has alternate or pending authority")
-    # This is a revalidation observation, not a claim of continuously locked absence.
-    need(not os.path.lexists(SUPERVISOR_ROOT), "supervisor authority appeared; retain quarantine")
-    fields = systemd_fields(SUPERVISOR_UNIT, ("LoadState", "ActiveState", "MainPID", "Job"))
-    need(fields == {"LoadState": "not-found", "ActiveState": "inactive", "MainPID": "0", "Job": ""},
-         "supervisor absence observation changed")
     return protected
 
 
@@ -420,7 +414,10 @@ def authority_locks(deployment):
     fds = []
     with contextlib.ExitStack() as stack:
         try:
-            for path in (root / ".routine-update.lock", root / "journal-v1/public-reset.lock"):
+            for path in (root / ".routine-update.lock", root / "journal-v1/public-reset.lock",
+                         DEPLOYMENT_STATE_ROOT / ".deployment.lock"):
+                if path.parent == DEPLOYMENT_STATE_ROOT:
+                    private_directory(DEPLOYMENT_STATE_ROOT)
                 directory = stack.enter_context(anchored_directory(path.parent))
                 fd = os.open(path.name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
                 fds.append(fd)
@@ -432,6 +429,8 @@ def authority_locks(deployment):
                      "authority lock replaced during acquisition")
                 with anchored_directory(path.parent) as reopened:
                     need(os.fstat(reopened).st_ino == os.fstat(directory).st_ino, "authority lock parent replaced")
+            need(not os.path.lexists(DEPLOYMENT_STATE_ROOT / ".reset-owner.json"),
+                 "retained reset owner blocks retirement; never reclaim or clear it")
             yield
         finally:
             for fd in reversed(fds):

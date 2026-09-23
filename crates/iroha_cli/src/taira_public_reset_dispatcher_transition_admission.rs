@@ -161,14 +161,17 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct Locks(Vec<(PathBuf, File, FileSnapshot)>);
+pub(super) struct Locks {
+    pinned: Vec<(PathBuf, File, FileSnapshot)>,
+    deployment: deployment_lifecycle::Guard,
+}
 impl Locks {
     pub(super) fn revalidate(&self) -> Result<()> {
-        for (path, file, snapshot) in &self.0 {
+        for (path, file, snapshot) in &self.pinned {
             require_root_no_symlink_ancestors(path, "held transition lock")?;
             ensure_pinned_unchanged(path, "held transition lock", file, snapshot)?;
         }
-        Ok(())
+        self.deployment.revalidate_unowned()
     }
 }
 pub(super) fn locks(plan: &Plan) -> Result<Locks> {
@@ -196,13 +199,12 @@ pub(super) fn locks_for_host(host_identity: &str) -> Result<Locks> {
         ensure_pinned_unchanged(&path, "transition lock", &file, &snapshot)?;
         held.push((path, file, snapshot));
     }
-    // This bounded transition admits the observed absent supervisor only. It never creates
-    // a new lock in an absent generation or bypasses an installed updater's ownership.
-    need(
-        !storage::exists(Path::new("/var/lib/taira-epoch-supervisor"))?,
-        "epoch supervisor must remain absent",
-    )?;
-    Ok(Locks(held))
+    let deployment =
+        deployment_lifecycle::acquire_unowned_existing(Instant::now() + Duration::from_secs(30))?;
+    Ok(Locks {
+        pinned: held,
+        deployment,
+    })
 }
 
 fn sealed(plan: &Plan) -> Result<()> {

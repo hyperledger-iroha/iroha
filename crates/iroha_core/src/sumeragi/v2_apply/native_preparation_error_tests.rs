@@ -16,7 +16,7 @@ mod native_preparation_errors {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         fixture.service.queue.set_sumeragi_wake(sender);
-        for origin in 0..5 {
+        for origin in 0..4 {
             for dependency in 0..5 {
                 let release = concread::release::ReleaseNotification::default();
                 let foreign = concread::release::ReleaseNotification::default();
@@ -53,16 +53,9 @@ mod native_preparation_errors {
                             BlockValidationError::StateStorageAdmission(refusal),
                         )),
                     ),
-                    _ => NativeCandidatePreparationError::Preflight(Box::new(
-                        BlockValidationError::from_npos_application_error(
-                            eyre::Report::new(refusal).wrap_err("pristine transaction admission"),
-                            if origin == 3 {
-                                "NPoS effects"
-                            } else {
-                                "merge beacon composition"
-                            },
-                        ),
-                    )),
+                    _ => NativeCandidatePreparationError::Preparation(
+                        MergeLedgerCommitError::StateStorageAdmission(refusal),
+                    ),
                 };
                 let classified = fixture
                     .service
@@ -171,7 +164,9 @@ mod native_preparation_errors {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         for error in [
             NativeCandidatePreparationError::Preparation(
-                "empty block: local metadata capture".to_owned(),
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "empty block: local metadata capture".to_owned(),
+                ),
             ),
             NativeCandidatePreparationError::Execution(
                 MergeLedgerCommitError::ExecutionRecorderConflict(

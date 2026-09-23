@@ -47,6 +47,7 @@ COMMON_ROOT_INPUTS = (
     "scripts/check_mobile_sdk_artifact_pin_commit.py",
     "codec",
     "scripts/check_mobile_sdk_artifacts.sh",
+    "scripts/mobile_sdk_android_artifacts.py",
     "scripts/norito_bridge_source_seal.py",
     "scripts/run_mobile_hermetic_command.py",
 )

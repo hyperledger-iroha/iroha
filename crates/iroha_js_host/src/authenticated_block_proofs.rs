@@ -580,7 +580,7 @@ mod tests {
                     .expect("fixture validator PoP")
             })
             .collect::<Vec<_>>();
-        let mint_finality_authority = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
+        let mint_finality_roster = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
             version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             generation: 0,
@@ -591,26 +591,15 @@ mod tests {
                 ).expect("derive canonical paired-Pasta fixture keys")
             }).collect(),
         };
-        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
- version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
- network_id: network_id,
- epoch: 0,
- first_height: 1,
- last_height: 10,
- authority_generation: mint_finality_authority.generation,
- authority_id: mint_finality_authority.authority_id().expect("canonical fixture authority"),
- beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
- previous_authorization_id: [0; 32],
- transition_id: [0; 32],
- decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-};
+        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_finality_roster, 10)
+            .expect("derive exact fixture mint-finality epoch identifier");
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: 0,
             kagemusha_mint_finality_authorization: mint_finality_authorization,
-            kagemusha_mint_finality_authority: mint_finality_authority,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

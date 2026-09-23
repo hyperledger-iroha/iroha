@@ -103,7 +103,7 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         })
         .collect::<Vec<_>>();
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(network_id, 0, 0, 1, u64::MAX, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -300,7 +300,7 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             Hash::new(b"snapshot eviction executed block wire placeholder"),
         );
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(*network_id, 0, 0, 1, 100, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(*network_id, 100, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -1058,7 +1058,9 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: REPLICA_ADVERT_POLICY,
     }

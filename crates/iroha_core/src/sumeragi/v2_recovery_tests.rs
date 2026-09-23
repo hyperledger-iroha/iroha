@@ -76,14 +76,7 @@ fn verified_context_for_policy_state(
         })
         .collect::<Vec<_>>();
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-            network_id,
-            0,
-            0,
-            1,
-            u64::MAX,
-            &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -1244,23 +1237,7 @@ fn arbitrary_self_signed_first_roster_is_rejected_before_state_or_context_mutati
     (
         attacker_context.kagemusha_mint_finality_authorization,
         attacker_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-        attacker_context.network_id,
-        attacker_context
-            .kagemusha_mint_finality_authority
-            .generation,
-        attacker_context.epoch,
-        if attacker_context.epoch == 0 {
-            1
-        } else {
-            attacker_context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
-        attacker_context.epoch_end_height,
-        &attacker_context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(attacker_context.network_id, attacker_context.epoch, attacker_context.epoch_end_height, &attacker_context.roster);
     attacker_context
         .validate()
         .expect("attacker context is internally valid");
@@ -1332,27 +1309,25 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
     let mut parent_context = verified.context().clone();
     parent_context.mode = wire::ConsensusMode::Npos;
     parent_context.epoch_end_height = 1;
-    parent_context
-        .kagemusha_mint_finality_authorization
-        .last_height = parent_context.epoch_end_height;
-    let transitioned_mint_finality_epoch_roster =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            parent_context.network_id,
-            1,
-            &transitioned_roster,
-        );
-    let transitioned_mint_finality_epoch_id =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    parent_context.kagemusha_mint_finality_authorization.last_height = parent_context.epoch_end_height;
+    let transitioned_mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        parent_context.network_id, parent_context.kagemusha_mint_finality_authority.generation + 1, &transitioned_roster,
+    );
+    let transitioned_mint_finality_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &parent_context.kagemusha_mint_finality_authorization,
-            &transitioned_mint_finality_epoch_roster,
+            &transitioned_mint_finality_authority,
             10,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
             iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
         );
+    assert_eq!(transitioned_mint_finality_authorization.first_height, 2);
+    assert_eq!(transitioned_mint_finality_authorization.last_height, 10);
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         committee_preparation: None,
         epoch: 1,
-        kagemusha_mint_finality_authorization: transitioned_mint_finality_epoch_id,
-        kagemusha_mint_finality_authority: transitioned_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization: transitioned_mint_finality_authorization,
+        kagemusha_mint_finality_authority: transitioned_mint_finality_authority,
         epoch_end_height: 10,
         mode: wire::ConsensusMode::Npos,
         roster: transitioned_roster,
@@ -1382,14 +1357,16 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         })
         .collect::<Vec<_>>();
     let attacker_quorum = wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
-    let (attacker_mint_finality_epoch_id, attacker_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-            parent_context.network_id,
-            1,
-            1,
-            2,
+    let attacker_mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        parent_context.network_id, parent_context.kagemusha_mint_finality_authority.generation + 1, &attacker_roster,
+    );
+    let attacker_mint_finality_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &parent_context.kagemusha_mint_finality_authorization,
+            &attacker_mint_finality_authority,
             10,
-            &attacker_roster,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
         );
     let child_context = wire::HeightContext {
         network_id: parent_context.network_id,
@@ -1403,8 +1380,8 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         snapshot_bootstrap: None,
         quorum: attacker_quorum,
         roster: attacker_roster,
-        kagemusha_mint_finality_authorization: attacker_mint_finality_epoch_id,
-        kagemusha_mint_finality_authority: attacker_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization: attacker_mint_finality_authorization,
+        kagemusha_mint_finality_authority: attacker_mint_finality_authority,
         nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
         execution_policy_hash: parent_context.execution_policy_hash,
         da_layout: parent_context.da_layout,
@@ -2051,34 +2028,24 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
         .collect::<Vec<_>>();
     let mut boundary_context = current_context;
     boundary_context.epoch_end_height = boundary_context.height;
-    boundary_context
-        .kagemusha_mint_finality_authorization
-        .last_height = boundary_context.epoch_end_height;
+    boundary_context.kagemusha_mint_finality_authorization.last_height = boundary_context.epoch_end_height;
     let next_epoch = boundary_context.epoch + 1;
-    boundary_context
-        .kagemusha_mint_finality_authorization
-        .last_height = boundary_context.epoch_end_height;
-    let next_mint_finality_epoch_roster =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            boundary_context.network_id,
-            boundary_context
-                .kagemusha_mint_finality_authority
-                .generation
-                + 1,
-            &next_roster,
-        );
-    let next_mint_finality_epoch_id =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    let next_mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        boundary_context.network_id, boundary_context.kagemusha_mint_finality_authority.generation + 1, &next_roster,
+    );
+    let next_mint_finality_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &boundary_context.kagemusha_mint_finality_authorization,
-            &next_mint_finality_epoch_roster,
+            &next_mint_finality_authority,
             u64::MAX,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
             iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         committee_preparation: None,
         epoch: next_epoch,
-        kagemusha_mint_finality_authorization: next_mint_finality_epoch_id,
-        kagemusha_mint_finality_authority: next_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization: next_mint_finality_authorization,
+        kagemusha_mint_finality_authority: next_mint_finality_authority,
         epoch_end_height: u64::MAX,
         mode: boundary_context.mode,
         quorum: wire::DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),

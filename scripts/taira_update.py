@@ -5,7 +5,7 @@ Requires completed maintained preparation and an owner-public deployment record.
 --plan-only contacts no host. The default command
 requires previously prepared same-release daemon, CLI and Kagami and executes
 the reviewed guest controller. --prepare-artifacts creates those exact binaries
-via native cat/SSH before the update. No secret files are read. Failed attempts are never overwritten.
+via native cat/SSH before the reviewed update. No secret files are read. Failed attempts are never overwritten.
 An explicit --failed-start-chain authenticates every failed startup since the
 completed deployment. Unchanged binaries can be retried in a fresh operation.
 Both pinned guest and Mac backing routes are required. Storage admission runs
@@ -18,7 +18,7 @@ import fcntl
 from urllib.parse import urlsplit
 import taira_retry as retry
 from taira_update_guest import (COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS,
-                                reject_retired_worker_plan)
+                                reject_retired_worker_plan, validate_update_plan_shape)
 import base64
 import hashlib
 import importlib.util
@@ -209,6 +209,7 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None):
         renderer_sha256=deployment['renderer_sha256'], secret_contents_read=False,
         transaction_submission=False,
         python_transaction_submission=False)
+    validate_update_plan_shape(value)
     return value
 
 
@@ -248,13 +249,13 @@ base=Path({plan['deployment']['runtime_root']!r})
 assert os.geteuid()==0 and base.resolve()==base
 for ancestor in [base,*base.parents]:
  s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
-state=Path('/var/lib/taira')
+state=Path('/var/lib/taira-deployment')
 for ancestor in state.parents:
  s=ancestor.lstat();assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and not s.st_mode&0o022
-s=state.lstat();assert state.resolve()==state and stat.S_ISDIR(s.st_mode) and s.st_uid==s.st_gid==0 and not s.st_mode&0o022
+s=state.lstat();assert state.resolve()==state and stat.S_ISDIR(s.st_mode) and s.st_uid==s.st_gid==0 and stat.S_IMODE(s.st_mode)==0o700
 lock_path=state/'.deployment.lock'
 lock=os.open(lock_path,os.O_RDWR|os.O_NOFOLLOW)
-s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.st_nlink==1 and s.st_size==0 and stat.S_IMODE(s.st_mode)==0o600
+s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.st_nlink==1 and stat.S_IMODE(s.st_mode)==0o600
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 t=lock_path.lstat();assert (s.st_dev,s.st_ino)==(t.st_dev,t.st_ino)
 assert not os.path.lexists(state/'.reset-owner.json')
@@ -379,7 +380,7 @@ def admit_storage(plan, phase, output):
 
 
 def prepare_artifacts(args, deployment, build_raw):
-    """Explicit create-new artifact phase before applying the deployment update."""
+    """Explicit create-new artifact phase before the reviewed runtime update."""
     build = retry.decode(build_raw)
     artifacts = validate_build(build, build['commit'])
     need(re.fullmatch('update-[0-9a-f]{32}', args.operation)
@@ -406,7 +407,7 @@ def prepare_artifacts(args, deployment, build_raw):
         write_new(args.output / (artifact['name'] + '-transfer.json'),
             json.dumps({'exit_code': 0, 'name': artifact['name'], 'size': artifact['size']}).encode())
     report = verify_prepared_remote(plan, argv, args.output)
-    print(json.dumps(report | {'next_action': 'review and apply the update using the prepared candidate artifacts'}))
+    print(json.dumps(report | {'next_action': 'review the update plan for the prepared candidate artifacts'}))
 
 
 def apply_plan(args):
@@ -414,7 +415,7 @@ def apply_plan(args):
     need(sha(raw) == args.plan_sha256, 'reviewed plan digest differs')
     plan = json.loads(raw)
     reject_retired_worker_plan(plan)
-    need(plan.get('schema') == 'taira.daemon-update.plan.v1', 'plan schema differs')
+    validate_update_plan_shape(plan)
     validate_deployment(plan['deployment'])
     build_raw = read_public(Path(plan['build_result_path']))
     need(sha(build_raw) == plan['build_result_sha256'], 'bound preparation result changed')
@@ -470,9 +471,9 @@ def main():
     parser.add_argument('--prepared-result', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--operation',
-                        help='explicit fresh update-<32hex> operation')
+                        help='explicit fresh update-<32hex> operation identity')
     parser.add_argument('--prepare-artifacts', action='store_true',
-                        help='create and verify the exact three candidate binaries before applying the update')
+                        help='create and verify the exact three candidate binaries before the reviewed runtime update')
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
     parser.add_argument('--failed-start-chain', type=Path,
                         help='ordered digest-bound failed attempts since the last completed deployment')

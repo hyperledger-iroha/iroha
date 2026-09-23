@@ -1998,7 +1998,7 @@ pub(in crate::sumeragi) struct DurableValidateDispatch {
 ///
 /// The sole volatile completion transaction reattaches `executed`, installs
 /// its executable typed outcome carrier, and publishes `wake` at the same
-/// physical address atomically. Sidecar deferral retains this value intact.
+/// physical address atomically. Local refusal remains outside semantic publication.
 #[derive(Debug)]
 #[must_use = "an executed durable Validate dispatch awaits typed completion publication"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2012,7 +2012,6 @@ pub(in crate::sumeragi) struct ExecutedDurableValidateDispatch {
 enum DurableValidateOutcomeKind {
     Validated,
     Rejected,
-    DeferredMergeSidecar,
 }
 /// Sealed exact authority for one Waiting-to-Ready Validate publication.
 ///
@@ -2051,25 +2050,16 @@ struct DurableValidatePublishedLocation {
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
 }
-/// Move-only merge-sidecar dependency retaining its exact executed dispatch.
-#[derive(Debug)]
-#[must_use = "a deferred Validate dispatch still requires sealed sidecar registration"]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(in crate::sumeragi) struct DeferredDurableValidateDispatch {
-    dispatch: ExecutedDurableValidateDispatch,
-}
 /// Closed result of the volatile Validate completion transaction.
 #[derive(Debug)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
-#[must_use = "published or deferred Validate completion authority must be retained"]
+#[must_use = "published Validate completion authority must be retained"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) enum DurableValidateCompletionPublication {
     /// The exact validated carrier and logical Ready replacement committed.
     PublishedValidated(PublishedValidated),
     /// The exact deterministic rejection carrier and Ready replacement committed.
     PublishedRejected(PublishedRejected),
-    /// Merge-sidecar absence left both volatile sides exactly Waiting/original.
-    DeferredMergeSidecar(DeferredDurableValidateDispatch),
 }
 
 /// Move-only exact identity of one Ready Validate successor which must run
@@ -2284,12 +2274,10 @@ impl ReadyValidateSuccessorV1 {
     /// Retain this exact successor across one reducer-fence Busy result.
     pub(super) fn retain_on_reducer_fence(mut self, wait: WaitToken) -> Option<Self> {
         if !matches!(wait.source(), WaitSource::External(_))
-            || self
-                .reducer_fence_wait
-                .is_some_and(|current| {
-                    current.source() != wait.source()
-                        || current.observed_generation() > wait.observed_generation()
-                })
+            || self.reducer_fence_wait.is_some_and(|current| {
+                current.source() != wait.source()
+                    || current.observed_generation() > wait.observed_generation()
+            })
         {
             return None;
         }

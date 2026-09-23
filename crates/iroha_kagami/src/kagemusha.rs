@@ -1,9 +1,4 @@
-//! Fail-closed KAGEMUSHA V1 release authentication and public authority provisioning.
-
-#[cfg(unix)]
-mod derive_mint_finality_authority_generation_v1;
-#[cfg(unix)]
-mod prove_committee_seat_readiness_v1;
+//! Fail-closed KAGEMUSHA V1 release authentication.
 
 use crate::{Outcome, RunArgs, json_macros::JsonDeserialize};
 use clap::{Args as ClapArgs, Subcommand};
@@ -113,7 +108,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 56] = [
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
-/// Authenticate the first-release format and provision exact public authority evidence.
+/// Authenticate the first-release format and its deployment evidence.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -125,18 +120,6 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
-    /// Provision public mint authority keys and candidate possession proofs from inherited seeds.
-    #[cfg(unix)]
-    #[command(name = "derive-mint-finality-authority-generation-v1")]
-    DeriveMintFinalityAuthorityGenerationV1(derive_mint_finality_authority_generation_v1::Args),
-    /// Provision one independent candidate's public mint keys and paired possession proof.
-    #[cfg(unix)]
-    #[command(name = "derive-mint-finality-candidate-v1")]
-    DeriveMintFinalityCandidateV1(derive_mint_finality_authority_generation_v1::CandidateArgs),
-    /// Prove actual Pasta seed and beacon-share possession for one exact prepared seat.
-    #[cfg(unix)]
-    #[command(name = "prove-committee-seat-readiness-v1")]
-    ProveCommitteeSeatReadinessV1(prove_committee_seat_readiness_v1::Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -180,18 +163,6 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer),
-            #[cfg(unix)]
-            Command::DeriveMintFinalityAuthorityGenerationV1(args) => {
-                derive_mint_finality_authority_generation_v1::run(args, writer)
-            }
-            #[cfg(unix)]
-            Command::DeriveMintFinalityCandidateV1(args) => {
-                derive_mint_finality_authority_generation_v1::run_candidate(args, writer)
-            }
-            #[cfg(unix)]
-            Command::ProveCommitteeSeatReadinessV1(args) => {
-                prove_committee_seat_readiness_v1::run(args, writer)
-            }
         }
     }
 }
@@ -1264,6 +1235,21 @@ fn same_input_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_rejects_epoch_key_derivation_commands() {
+        use clap::{Parser as _, error::ErrorKind};
+
+        for command in [
+            "derive-mint-finality-next-epoch-v1",
+            "derive-mint-finality-epoch-schedule-v1",
+        ] {
+            let error = crate::Cli::try_parse_from(["kagami", "kagemusha", command])
+                .err()
+                .expect("epoch-specific public key commands must not remain available");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+    }
 
     fn artifact_inventory() -> Vec<KagemushaArtifactBindingV1> {
         KagemushaArtifactRoleV1::ALL

@@ -25,9 +25,11 @@ use iroha_data_model::{
         },
     },
     nexus::{
-        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneRewardRecord,
-        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, public_lane_unbonding_commitment,
+        PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
+        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        public_lane_unbonding_commitment,
     },
     prelude::AccountId,
 };
@@ -1095,9 +1097,9 @@ fn register_public_lane_validator(
         &stake_ctx.staker_asset,
         &stake_ctx.escrow_asset,
         &initial_stake,
-        &PublicLaneMonetaryPreconditionV1::Registration(
-            iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height },
-        ),
+        &PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+            activation_height,
+        }),
     )?;
     crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
         state_transaction,
@@ -1585,12 +1587,10 @@ impl Execute for BondPublicLaneStake {
             &stake_ctx.staker_asset,
             &stake_ctx.escrow_asset,
             &amount,
-            &PublicLaneMonetaryPreconditionV1::Bond(
-                iroha_data_model::nexus::PublicLaneBondPreconditionV1 {
-                    activation_height: validator_record.activation_height,
-                    peer_id: validator_record.peer_id.clone(),
-                },
-            ),
+            &PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: validator_record.activation_height,
+                peer_id: validator_record.peer_id.clone(),
+            }),
         )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_bond_transfer(
             state_transaction,
@@ -1856,12 +1856,10 @@ impl Execute for FinalizePublicLaneUnbond {
             &stake_ctx.escrow_asset,
             &stake_ctx.staker_asset,
             &pending.amount,
-            &PublicLaneMonetaryPreconditionV1::Unbond(
-                iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 {
-                    activation_height: validator_record.activation_height,
-                    request_hash,
-                },
-            ),
+            &PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+                activation_height: validator_record.activation_height,
+                request_hash,
+            }),
         )?;
         crate::smartcontracts::isi::asset::isi::execute_staking_unbond_transfer(
             state_transaction,
@@ -3067,12 +3065,10 @@ fn apply_slash_to_validator_inner(
             &stake_ctx.escrow_asset,
             &slash_sink_asset,
             amount,
-            &PublicLaneMonetaryPreconditionV1::Slash(
-                iroha_data_model::nexus::PublicLaneSlashPreconditionV1 {
-                    activation_height: validator_snapshot.activation_height,
-                    slashable_exposure: slashable_exposure.clone(),
-                },
-            ),
+            &PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
+                activation_height: validator_snapshot.activation_height,
+                slashable_exposure: slashable_exposure.clone(),
+            }),
         )?;
     }
     let self_pending = pending_unbond_group_total(
@@ -3419,8 +3415,8 @@ mod tests {
             .world
             .public_lane_validators
             .get(&(lane_id, validator.clone()))
-            .expect("rebind fixture validator record");
-        let consent = PublicLanePeerBindingAuthorization::new(
+            .expect("fixture validator binding");
+        let payload = PublicLanePeerBindingAuthorization::new(
             *stx.network_id(),
             lane_id,
             validator.clone(),
@@ -3428,16 +3424,12 @@ mod tests {
             record.activation_height,
             record.peer_id.clone(),
         );
-        RebindPublicLaneValidatorPeer::new(
-            lane_id,
-            validator.clone(),
-            peer_id.clone(),
-            iroha_crypto::SignatureOf::try_new(signing_key.private_key(), &consent)
-                .expect("rebind fixture signature"),
-        )
+        let signature = iroha_crypto::SignatureOf::try_new(signing_key.private_key(), &payload)
+            .expect("fixture peer consent");
+        RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), peer_id.clone(), signature)
     }
+    include!("staking_monetary_fixture_tests.rs");
     include!("staking_core_tests.rs");
-    include!("staking_monetary_fixtures.rs");
     include!("staking_monetary_tests.rs");
     include!("staking_admission_tests.rs");
     include!("staking_reward_tests.rs");
@@ -3491,8 +3483,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(1),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
@@ -3557,8 +3549,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(81),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(81),
             peer_id: validator_peer_id(&validator),
@@ -3588,8 +3580,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(81),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(81),
             peer_id: validator_peer_id(&validator),
@@ -3631,8 +3623,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(82),
-                &(delegator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &delegator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(82),
             peer_id: validator_peer_id(&validator),
@@ -3687,8 +3679,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(14),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(14),
             peer_id: validator_peer_id(&validator),
@@ -3733,8 +3725,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(22),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(22),
             peer_id: validator_peer_id(&validator),
@@ -3779,8 +3771,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(23),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(23),
             peer_id: validator_peer_id(&validator),
@@ -3821,8 +3813,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(24),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(24),
             peer_id: validator_peer,
@@ -3875,8 +3867,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -3935,8 +3927,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 future_lane,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: future_lane,
             peer_id: validator_peer_id(&validator),
@@ -4013,8 +4005,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 stake_lane,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: stake_lane,
             peer_id: validator_peer_id(&validator),
@@ -4029,8 +4021,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 admin_lane,
-                &(delegator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &delegator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: admin_lane,
             peer_id: validator_peer_id(&delegator),
@@ -4190,8 +4182,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::SINGLE,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::SINGLE,
             peer_id: validator_peer_id(&validator),
@@ -4243,8 +4235,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: peer.clone(),
@@ -4287,8 +4279,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(43),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(43),
             peer_id: participant_peer.clone(),
@@ -4327,8 +4319,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::SINGLE,
-                &(delegator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &delegator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::SINGLE,
             peer_id: global_peer,
@@ -4362,8 +4354,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(43),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(43),
             peer_id: foreign_peer.clone(),
@@ -4396,8 +4388,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(44),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(44),
             peer_id: shared_peer.clone(),
@@ -4417,8 +4409,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(44),
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(44),
             peer_id: shared_peer,
@@ -4465,8 +4457,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: shared_peer,
@@ -4506,8 +4498,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -4577,8 +4569,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &registration_stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -4643,8 +4635,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: peer_id.clone(),
@@ -4683,8 +4675,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -4699,8 +4691,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
@@ -4739,8 +4731,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -4844,8 +4836,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -4893,8 +4885,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &stx,
                     lane_id,
-                    &(validator.clone()),
-                    &(Quantity::from(1_000_u64)),
+                    &validator,
+                    Quantity::from(1_000_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
@@ -4954,8 +4946,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(99),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(99),
             peer_id: validator_peer_id(&validator),
@@ -5208,8 +5200,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(1),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
@@ -5298,8 +5290,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(1),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
@@ -5334,8 +5326,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::SINGLE,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::SINGLE,
             peer_id: validator_peer_id(&validator),
@@ -5407,8 +5399,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(1),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
@@ -5635,8 +5627,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(1),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(1),
             peer_id: validator_peer_id(&validator),
@@ -5726,8 +5718,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(11),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(11),
             peer_id: validator_peer_id(&validator),
@@ -5787,8 +5779,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(7),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&validator),
@@ -5803,8 +5795,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(7),
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&replacement),
@@ -5833,8 +5825,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(7),
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&replacement),
@@ -5885,8 +5877,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -5930,8 +5922,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
@@ -5993,8 +5985,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6044,13 +6036,7 @@ mod tests {
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         FinalizePublicLaneUnbond {
-            monetary_plan: fixture_unbond_plan(
-                &stx,
-                lane_id,
-                &(validator.clone()),
-                &(validator.clone()),
-                &(request_id),
-            ),
+            monetary_plan: fixture_unbond_plan(&stx, lane_id, &validator, &validator, request_id),
             lane_id,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -6069,8 +6055,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(replacement.clone()),
-                &(Quantity::from(500_u64)),
+                &replacement,
+                Quantity::from(500_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
@@ -6090,14 +6076,14 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6114,15 +6100,16 @@ mod tests {
         let mut state_block = state.block(block2.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         SlashPublicLaneValidator {
             monetary_plan: fixture_slash_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
+                &validator,
                 1,
-                &(Quantity::from(100_u64)),
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -6159,6 +6146,7 @@ mod tests {
         let mut state_block = state.block(block3.as_ref().header());
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         finalize_validator_lifecycle(&mut stx).expect("finish the certified election interval");
@@ -6166,8 +6154,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6219,8 +6207,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6280,8 +6268,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &stx,
                     lane_id,
-                    &(replacement.clone()),
-                    &(Quantity::from(1_000_u64)),
+                    &replacement,
+                    Quantity::from(1_000_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
@@ -6323,8 +6311,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &stx,
                     lane_id,
-                    &(replacement.clone()),
-                    &(Quantity::from(1_000_u64)),
+                    &replacement,
+                    Quantity::from(1_000_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
@@ -6373,8 +6361,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6437,8 +6425,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6504,8 +6492,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6588,8 +6576,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(7),
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id: LaneId::new(7),
             peer_id: validator_peer_id(&validator),
@@ -6604,9 +6592,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 LaneId::new(7),
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(250_u64),
             ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
@@ -6655,9 +6643,9 @@ mod tests {
             monetary_plan: fixture_unbond_plan(
                 &early_tx,
                 LaneId::new(7),
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Hash::new("req")),
+                &validator,
+                &delegator,
+                Hash::new("req"),
             ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
@@ -6683,9 +6671,9 @@ mod tests {
             monetary_plan: fixture_unbond_plan(
                 &finalize_tx,
                 LaneId::new(7),
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Hash::new("req")),
+                &validator,
+                &delegator,
+                Hash::new("req"),
             ),
             lane_id: LaneId::new(7),
             validator: validator.clone(),
@@ -6748,8 +6736,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6799,8 +6787,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6815,9 +6803,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(250_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -6843,9 +6831,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(250_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -6892,9 +6880,9 @@ mod tests {
             monetary_plan: fixture_unbond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Hash::new("authority-unbond")),
+                &validator,
+                &delegator,
+                Hash::new("authority-unbond"),
             ),
             lane_id,
             validator: validator.clone(),
@@ -6932,9 +6920,9 @@ mod tests {
             monetary_plan: fixture_unbond_plan(
                 &finalize_tx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Hash::new("authority-unbond")),
+                &validator,
+                &delegator,
+                Hash::new("authority-unbond"),
             ),
             lane_id,
             validator: validator.clone(),
@@ -6979,8 +6967,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(42),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(42),
             peer_id: validator_peer_id(&validator),
@@ -7040,8 +7028,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 sibling_lane,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: sibling_lane,
             peer_id: validator_peer_id(&validator),
@@ -7102,8 +7090,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(2),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(2),
             peer_id: validator_peer_id(&validator),
@@ -7144,8 +7132,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(3),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
@@ -7168,8 +7156,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(3),
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
@@ -7212,8 +7200,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7297,8 +7285,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7313,9 +7301,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
+                &validator,
                 stx.block_height(),
-                &(Quantity::from(100_u64)),
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -7331,8 +7319,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                Quantity::from(250_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7359,8 +7347,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                Quantity::from(250_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7405,8 +7393,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7421,9 +7409,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
+                &validator,
                 stx.block_height(),
-                &(Quantity::from(200_u64)),
+                Quantity::from(200_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -7484,8 +7472,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &prerelease_tx,
                     lane_id,
-                    &(replacement.clone()),
-                    &(Quantity::from(1_000_u64)),
+                    &replacement,
+                    Quantity::from(1_000_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
@@ -7526,8 +7514,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &post_tx,
                 lane_id,
-                &(replacement.clone()),
-                &(Quantity::from(1_000_u64)),
+                &replacement,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&replacement),
@@ -7574,8 +7562,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(31),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(31),
             peer_id: validator_peer_id(&validator),
@@ -7625,8 +7613,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -7647,9 +7635,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(250_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(250_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -7719,8 +7707,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(12),
-                &(validator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                Quantity::from(500_u64),
             ),
             lane_id: LaneId::new(12),
             peer_id: validator_peer_id(&validator),
@@ -7735,9 +7723,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 LaneId::new(12),
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(500_u64),
             ),
             lane_id: LaneId::new(12),
             validator: validator.clone(),
@@ -7769,8 +7757,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &stx,
                     lane_id,
-                    &(validator.clone()),
-                    &(Quantity::from(500_u64)),
+                    &validator,
+                    Quantity::from(500_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
@@ -7807,9 +7795,9 @@ mod tests {
                 monetary_plan: fixture_bond_plan(
                     &stx,
                     lane_id,
-                    &(validator.clone()),
-                    &(delegator.clone()),
-                    &(Quantity::from(100_u64)),
+                    &validator,
+                    &delegator,
+                    Quantity::from(100_u64),
                 ),
                 lane_id,
                 validator: validator.clone(),
@@ -7892,9 +7880,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(100_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -7941,8 +7929,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(3),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(3),
             peer_id: validator_peer_id(&validator),
@@ -7979,8 +7967,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(42),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(42),
             peer_id: validator_peer_id(&validator),
@@ -8007,8 +7995,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(4),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(4),
             peer_id: validator_peer_id(&validator),
@@ -8044,8 +8032,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8077,9 +8065,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(100_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -8132,8 +8120,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8212,8 +8200,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8277,8 +8265,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(13),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(13),
             peer_id: validator_peer_id(&validator),
@@ -8293,9 +8281,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 LaneId::new(13),
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(500_u64),
             ),
             lane_id: LaneId::new(13),
             validator: validator.clone(),
@@ -8309,9 +8297,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &stx,
                 LaneId::new(13),
-                &(validator.clone()),
+                &validator,
                 stx.block_height(),
-                &(Quantity::from(400_u64)),
+                Quantity::from(400_u64),
             ),
             lane_id: LaneId::new(13),
             validator: validator.clone(),
@@ -8373,8 +8361,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8389,9 +8377,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(500_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(500_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -8470,8 +8458,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8527,9 +8515,9 @@ mod tests {
                 monetary_plan: fixture_slash_plan(
                     &slash_tx,
                     lane_id,
-                    &(validator.clone()),
+                    &validator,
                     offence_height,
-                    &(Quantity::from(1_u64)),
+                    Quantity::from(1_u64),
                 ),
                 lane_id,
                 validator: validator.clone(),
@@ -8556,9 +8544,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &slash_tx,
                 lane_id,
-                &(validator.clone()),
-                7,
-                &(Quantity::from(1_u64)),
+                &validator,
+                4,
+                Quantity::from(1_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -8584,9 +8572,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &slash_tx,
                 lane_id,
-                &(validator.clone()),
-                7,
-                &(Quantity::from(101_u64)),
+                &validator,
+                4,
+                Quantity::from(101_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -8616,9 +8604,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &slash_tx,
                 lane_id,
-                &(validator.clone()),
-                7,
-                &(Quantity::from(100_u64)),
+                &validator,
+                4,
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -8658,8 +8646,8 @@ mod tests {
                 monetary_plan: fixture_registration_plan(
                     &transaction,
                     lane_id,
-                    &(validator.clone()),
-                    &(Quantity::from(1_000_u64)),
+                    &validator,
+                    Quantity::from(1_000_u64),
                 ),
                 lane_id,
                 peer_id: validator_peer_id(&validator),
@@ -8839,6 +8827,8 @@ mod tests {
         record.status = PublicLaneValidatorStatus::Active;
         record.lane_id = LaneId::new(170);
         let err = SlashPublicLaneValidator {
+            // The exact plan captured before corruption must not bypass
+            // storage-key validation of this deliberately malformed record.
             monetary_plan,
             lane_id,
             validator: validator.clone(),
@@ -8881,8 +8871,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -8897,9 +8887,9 @@ mod tests {
             monetary_plan: fixture_bond_plan(
                 &stx,
                 lane_id,
-                &(validator.clone()),
-                &(delegator.clone()),
-                &(Quantity::from(100_u64)),
+                &validator,
+                &delegator,
+                Quantity::from(100_u64),
             ),
             lane_id,
             validator: validator.clone(),
@@ -9005,7 +8995,7 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
-            claim_plan: fixture_claim_plan(&stx, LaneId::new(0), &(validator.clone()), Some(1)),
+            claim_plan: fixture_reward_claim_plan(&stx, LaneId::new(0), &validator, Some(1)),
             lane_id: LaneId::new(0),
             account: validator.clone(),
         }
@@ -9018,9 +9008,9 @@ mod tests {
             .world
             .public_lane_reward_claims()
             .get(&(LaneId::new(0), validator.clone()))
-            .and_then(|state| state.through_epoch)
+            .copied()
             .expect("claim marker");
-        assert_eq!(claimed, 1);
+        assert_eq!(claimed.through_epoch, Some(1));
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let balance = view
             .world
@@ -9055,7 +9045,7 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
-            claim_plan: fixture_claim_plan(&stx, LaneId::new(11), &(validator.clone()), Some(1)),
+            claim_plan: fixture_reward_claim_plan(&stx, LaneId::new(11), &validator, Some(1)),
             lane_id: LaneId::new(11),
             account: validator.clone(),
         }
@@ -9068,20 +9058,25 @@ mod tests {
             .world
             .public_lane_reward_claims()
             .get(&(LaneId::new(11), validator.clone()))
-            .and_then(|state| state.through_epoch);
+            .copied();
         assert_eq!(
             claimed,
-            Some(1),
-            "processed dust advances the record cursor"
+            Some(PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(1)
+            })
         );
         assert_eq!(
             view.world.public_lane_reward_accruals().get(&(
                 LaneId::new(11),
                 validator.clone(),
-                reward_asset
+                reward_asset.clone()
             )),
             Some(&Quantity::from(50_u64)),
-            "unpaid dust remains reserved"
+            "processing dust must retain its complete unpaid entitlement",
+        );
+        assert_eq!(
+            view.world.public_lane_reward_reserves().get(&reward_asset),
+            Some(&Quantity::from(50_u64))
         );
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         assert!(
@@ -9126,7 +9121,7 @@ mod tests {
             .get(&reward_asset)
             .cloned();
         let error = ClaimPublicLaneRewards {
-            claim_plan: fixture_claim_plan(&stx, lane_id, &(validator.clone()), Some(1)),
+            claim_plan: fixture_reward_claim_plan(&stx, lane_id, &validator, Some(1)),
             lane_id,
             account: validator.clone(),
         }
@@ -9180,7 +9175,7 @@ mod tests {
         .execute(&_sink, &mut stx)
         .unwrap();
         ClaimPublicLaneRewards {
-            claim_plan: fixture_claim_plan(&stx, LaneId::new(12), &(validator.clone()), Some(1)),
+            claim_plan: fixture_reward_claim_plan(&stx, LaneId::new(12), &validator, Some(1)),
             lane_id: LaneId::new(12),
             account: validator.clone(),
         }
@@ -9193,9 +9188,9 @@ mod tests {
             .world
             .public_lane_reward_claims()
             .get(&(LaneId::new(12), validator.clone()))
-            .and_then(|state| state.through_epoch)
+            .copied()
             .expect("claim marker");
-        assert_eq!(claimed, 1);
+        assert_eq!(claimed.through_epoch, Some(1));
     }
     #[test]
     fn slash_rejects_above_max_ratio() {
@@ -9209,8 +9204,8 @@ mod tests {
             monetary_plan: fixture_registration_plan(
                 &stx,
                 LaneId::new(5),
-                &(validator.clone()),
-                &(Quantity::from(1_000_u64)),
+                &validator,
+                Quantity::from(1_000_u64),
             ),
             lane_id: LaneId::new(5),
             peer_id: validator_peer_id(&validator),
@@ -9225,9 +9220,9 @@ mod tests {
             monetary_plan: fixture_slash_plan(
                 &stx,
                 LaneId::new(5),
-                &(validator.clone()),
+                &validator,
                 stx.block_height(),
-                &(Quantity::from(200_u64)),
+                Quantity::from(200_u64),
             ),
             lane_id: LaneId::new(5),
             validator: validator.clone(),
@@ -9353,8 +9348,8 @@ mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-                network_id, 0, 0, 1, 1, &roster,
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 1, &roster,
             );
         let context = HeightContext {
             network_id,

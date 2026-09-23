@@ -48,6 +48,8 @@ use zeroize::Zeroizing;
 
 #[path = "production_beacon_canary_receipt.rs"]
 mod canary_receipt;
+#[path = "production_epoch_retention.rs"]
+mod epoch_retention;
 #[path = "production_beacon_prepare.rs"]
 mod prepare;
 #[path = "public_transaction_sequence.rs"]
@@ -978,52 +980,11 @@ fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
     store.read_block_data(index[0].start, &mut bytes)?;
     Ok(decode_framed_signed_block(&bytes)?)
 }
-
-fn read_exact_finality(
-    config_path: &Path,
-    height: u64,
-) -> Result<iroha_data_model::bridge::BridgeFinalityProof> {
-    use iroha_data_model::bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof};
-    let native = config(config_path)?;
-    let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
-    let (block_header, finality_artifact) = store.read_verified_v2_finality(height)?;
-    ensure!(
-        block_header.height().get() == height && finality_artifact.height == height,
-        "retained native finality differs from the exact live DKG phase"
-    );
-    Ok(BridgeFinalityProof {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
-        block_header,
-        finality_artifact,
-    })
-}
-
-fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisProvisioningBundle> {
-    let manifest_json = fs::read(prepared.genesis_directory.join("genesis.json"))?;
-    let manifest = iroha_genesis::RawGenesisTransaction::from_path(
-        prepared.genesis_directory.join("genesis.json"),
-    )?;
-    let signed_wire = fs::read(prepared.genesis_directory.join("genesis.signed.nrt"))?;
-    let validated = iroha_genesis::validate_prepared_genesis_bundle(
-        &signed_wire,
-        &manifest,
-        &prepared.genesis_public_key,
-        prepared.network_id.into_genesis_hash(),
-    )?;
-    ensure!(
-        validated.block().hash() == prepared.network_id.into_genesis_hash(),
-        "retained native manifest changed the exact signed genesis"
-    );
-    Ok(NativeGenesisProvisioningBundle {
-        manifest_sha256: iroha_crypto::sha256(&manifest_json),
-        manifest_json,
-        signed_wire,
-        public_key: prepared.genesis_public_key.clone(),
-        block_hash: validated.block().hash(),
-        chain_discriminant: manifest.chain_discriminant(),
-    })
-}
-fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
+fn verify_pulse(
+    peer_configs: &[PathBuf],
+    bundle: &Value,
+    catalog_entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     iroha_genesis::init_instruction_registry();
     let record: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
@@ -1049,9 +1010,11 @@ fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
         .ok_or_else(|| eyre!("validated signed genesis omitted NPoS parameters"))?;
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
-        epoch_length == 11,
-        "fixture must exercise the mandatory pulse at height 10"
+        epoch_length == epoch_retention::EPOCH_LENGTH,
+        "fixture must exercise the real catalog merge at mandatory height 10"
     );
+    let catalog_tree: MerkleTree<TransactionEntrypoint> =
+        [catalog_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -1078,18 +1041,24 @@ fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Authenticate the entire prefix from the independently pinned signed genesis,
-        // including the real successor authorization at the scheduling boundary.
-        use iroha_data_model::bridge::{
-            BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier,
-        };
-        use iroha_data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
-        };
-        let (header, initial) = store.read_verified_v2_finality(1)?;
+        // Native completion has already authenticated this exact native catalog
+        // transaction as Applied on all four peers. Bind it to the sole leaf of
+        // the execution-bearing merge at the mandatory pulse height, excluding
+        // unrelated transactions, QueuePlan admissions and anchor padding.
+        let context = block
+            .execution_context()
+            .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
+        let reference = context.merge_entry.as_ref().ok_or_else(|| {
+            eyre!("catalog transaction did not execute on the mandatory pulse carrier")
+        })?;
         ensure!(
-            header.hash() == record.session.network_id.into_genesis_hash(),
-            "journal genesis differs from authenticated fixture genesis"
+            reference.execution_batch_hash.is_some()
+                && reference.entrypoint_count == Some(1)
+                && reference.entrypoint_merkle_root == catalog_tree.root()
+                && block.external_entrypoint_count() == 0
+                && context.queue_plan_admissions.is_empty()
+                && context.autonomous_lane_payloads.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native catalog merge"
         );
         let initial_authority = initial
             .height_context
@@ -1580,9 +1549,13 @@ async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<(
 }
 
 async fn run_fresh_custody_bootstrap() -> Result<()> {
-    // Bind the same immutable build identity used by the exact paid-operation trust helper.
-    let build_identity = iroha_core::compiled_build_identity!()
-        .wrap_err("production beacon fixture has invalid compiled build metadata")?;
+    // Validate the same immutable identity used by the paid trust helper before
+    // artifact reads, custody creation, genesis generation, or child startup.
+    // The complete fixture binds every proof to this exact release source.
+    let build_identity = epoch_retention::admit_build_identity(
+        iroha_core::compiled_build_identity!()
+            .wrap_err("production beacon fixture has invalid compiled build metadata")?,
+    )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let daemon = binary(
@@ -1663,9 +1636,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         "beacon fixture starting four validators: budget={:.3}s",
         PHASE_BUDGET.as_secs_f64()
     );
-    let broker_binary = Program::IrohadDisposableBroker.resolve_async().await?;
-    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, 1)?;
-    let mut brokers = Vec::new();
+    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, None, 1)?;
     let outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
@@ -1781,9 +1752,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         // Deployment uses the generated genesis-authorized client. The fresh
         // public account remains the onboarding/faucet/canary actor and receives
         // no deployment administration permissions.
-        // Application transactions retain their independent exact fee and finality checks;
-        // epoch progress uses the authenticated retained authority without a key-schedule worker.
-        super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
+        // The first genuine paid catalog transaction admits at 8, anchors at 9,
+        // and executes at the mandatory pulse height 10. Its native completion
+        // verifies the exact signed operation independently on all four peers.
+        let catalog_entrypoint_hash = super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
             binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
@@ -1794,12 +1766,13 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             retained_catalog_recovery(&mut runtime, &prepared, &peer_configs).await?;
             both_public_sequences(&mut runtime, &peer_configs, &prepared.routed_client).await?;
         }
-        wait_for_exact_height(&clients, 12, Instant::now() + PHASE_BUDGET).await?;
+        let installed: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
+            json::from_value(field(&bundle, "record")?.clone())?;
+        epoch_retention::verify_boundary_chain(
+            &prepared, &clients, &installed, Instant::now() + PHASE_BUDGET,
+        ).await?;
         peers.stop(Instant::now() + PHASE_BUDGET).await?;
-        verify_pulse(&peer_configs, &bundle)?;
-        for broker in &mut brokers {
-            broker.stop(Instant::now() + Duration::from_secs(30)).await?;
-        }
+        verify_pulse(&peer_configs, &bundle, catalog_entrypoint_hash)?;
         eprintln!("four fresh production-custody validators completed native onboarding/faucet/canary/install and paid deployment across a verified mandatory pulse");
         Ok(())
     }.await;

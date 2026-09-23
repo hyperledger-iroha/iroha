@@ -15,7 +15,7 @@ const PHYSICAL_RESOURCE_OWNED_TREE_NAMES: [&str; 10] = [
 
 /// Exact Kura-managed physical scope, excluding delegated consensus stores.
 ///
-/// The total-byte owner enumerates these declared trees, eleven fixed root files,
+/// The total-byte owner enumerates these declared trees, twelve fixed root files,
 /// and bounded process-generation publication residue. In particular,
 /// `sumeragi_v2` WAL/body/certificate-serve files have independent writers and
 /// are not part of this inventory. The `.kura.lock` process-control descriptor
@@ -67,8 +67,8 @@ impl KuraPhysicalResourceScope {
     ) -> std::result::Result<(), resource_inventory::Unavailable> {
         use resource_inventory::Unavailable as Missing;
         if self.trees.len() != PHYSICAL_RESOURCE_OWNED_TREE_NAMES.len()
-            || self.files.len() < 11
-            || self.files.len() > 11 + AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT
+            || self.files.len() < 12
+            || self.files.len() > 12 + AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_ROOT_ENTRY_LIMIT
         {
             return Err(Missing::OwnerMismatch);
         }
@@ -140,7 +140,7 @@ impl Kura {
         PHYSICAL_RESOURCE_OWNED_TREE_NAMES.map(|name| self.store_root.join(name))
     }
 
-    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 11] {
+    fn physical_resource_fixed_root_files(&self) -> [PathBuf; 12] {
         let root = &self.store_root;
         let query = root.join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
         let projection = root.join(crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE);
@@ -157,6 +157,7 @@ impl Kura {
             Self::prune_intent_temp_path_for(root),
             Self::autonomous_lifecycle_process_generation_path_for(root),
             Self::autonomous_lifecycle_process_generation_temp_path_for(root),
+            root.join(membership_storage::SEGMENT_NAME),
         ]
     }
 
@@ -195,6 +196,7 @@ impl Kura {
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
             PRUNE_INTENT_FILE_NAME, AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_FILE,
+            membership_storage::SEGMENT_NAME,
         ].contains(&stable)
             || (name.starts_with("lane_geometry_journal.norito")
                 && lane_geometry::resource_evidence_file_kind(name).is_some())

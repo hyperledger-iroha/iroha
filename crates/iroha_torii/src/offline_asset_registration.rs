@@ -85,7 +85,7 @@ pub(crate) async fn handler(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(asset_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let context = "v1/offline/assets/{asset_definition_id}/registration";
+    let context = "v1/assets/definitions/{asset}/registration";
     let visibility = torii_dataspace_context_from_headers(&app, &headers, &method, &uri, context)?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote.ip()), context).await?;

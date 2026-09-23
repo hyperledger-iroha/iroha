@@ -1555,12 +1555,21 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         BTreeSet::from([retired_request_hash]),
         "completion publishes one exact cancellation identity"
     );
+    // This component's original owner publishes cancellation explicitly; the
+    // Native runner does not poll or reactivate the retired lane adapter.
+    assert!(
+        crate::sumeragi::v2_runner::apply_retired_historical_recovery_requests(
+            &mut adapter,
+            &services,
+        )
+        .expect("consume the completed historical request")
+            > 0
+    );
     assert!(
         !reconcile_terminal_lane_output_handoffs(
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
                 .decided_lane_recovery_permit()
                 .expect("settled Apply mints terminal handoff authority"),
-            &mut adapter,
             &services,
             1,
         )
@@ -2573,20 +2582,9 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
     (
         finality_context.kagemusha_mint_finality_authorization,
         finality_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         finality_context.network_id,
-        finality_context
-            .kagemusha_mint_finality_authority
-            .generation,
         finality_context.epoch,
-        if finality_context.epoch == 0 {
-            1
-        } else {
-            finality_context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
         finality_context.epoch_end_height,
         &finality_context.roster,
     );
@@ -3426,24 +3424,9 @@ fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
             .context
             .kagemusha_mint_finality_authorization,
         fixture.adapter.context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         fixture.adapter.context.network_id,
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authority
-            .generation,
         fixture.adapter.context.epoch,
-        if fixture.adapter.context.epoch == 0 {
-            1
-        } else {
-            fixture
-                .adapter
-                .context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
         fixture.adapter.context.epoch_end_height,
         &fixture.adapter.context.roster,
     );
@@ -3528,24 +3511,9 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
             .context
             .kagemusha_mint_finality_authorization,
         fixture.adapter.context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         fixture.adapter.context.network_id,
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authority
-            .generation,
         fixture.adapter.context.epoch,
-        if fixture.adapter.context.epoch == 0 {
-            1
-        } else {
-            fixture
-                .adapter
-                .context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
         fixture.adapter.context.epoch_end_height,
         &fixture.adapter.context.roster,
     );

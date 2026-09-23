@@ -3,11 +3,11 @@
 use super::*;
 use crate::state::StateReadOnly;
 use iroha_data_model::nexus::{
-    PUBLIC_LANE_PREPARATION_LIMIT, PublicLaneBondPreconditionV1, PublicLaneMonetaryScopeV1,
-    PublicLanePreparationBalanceV1, PublicLanePreparationOperationV1,
-    PublicLanePreparationRequestV1, PublicLanePreparationV1, PublicLanePrepareClaimV1,
-    PublicLanePreparedPlanV1, PublicLaneRegistrationPreconditionV1, PublicLaneRewardClaimPlanV1,
-    PublicLaneRewardClaimSourceV1, PublicLaneRewardRecordRefV1, PublicLaneUnbondPreconditionV1,
+    PUBLIC_LANE_PREPARATION_LIMIT, PublicLaneMonetaryBondV1, PublicLaneMonetaryRegistrationV1,
+    PublicLaneMonetaryScopeV1, PublicLaneMonetaryUnbondV1, PublicLanePreparationBalanceV1,
+    PublicLanePreparationOperationV1, PublicLanePreparationRequestV1, PublicLanePreparationV1,
+    PublicLanePrepareClaimV1, PublicLanePreparedPlanV1, PublicLaneRewardClaimPlanV1,
+    PublicLaneRewardClaimSourceV1, PublicLaneRewardRecordRefV1,
     public_lane_reward_record_commitment,
 };
 use std::collections::BTreeSet;
@@ -267,9 +267,9 @@ pub fn prepare_public_lane_plan(
                 context.staker_asset,
                 context.escrow_asset,
                 intent.amount.clone(),
-                PublicLaneMonetaryPreconditionV1::Registration(
-                    PublicLaneRegistrationPreconditionV1 { activation_height },
-                ),
+                PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+                    activation_height,
+                }),
             )
         }
         PublicLanePreparationOperationV1::Bond(intent) => {
@@ -286,7 +286,7 @@ pub fn prepare_public_lane_plan(
                 context.staker_asset,
                 context.escrow_asset,
                 intent.amount.clone(),
-                PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+                PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
                     activation_height: record.activation_height,
                     peer_id: record.peer_id.clone(),
                 }),
@@ -313,7 +313,7 @@ pub fn prepare_public_lane_plan(
                 context.escrow_asset,
                 context.staker_asset,
                 pending.amount.clone(),
-                PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+                PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
                     activation_height: record.activation_height,
                     request_hash,
                 }),

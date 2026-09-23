@@ -57,15 +57,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Data availability helper (DA-8)
 
 ```rust
-use iroha_client::client::{Client, ClientConfiguration};
-use iroha_client::da::DaIngestParams;
-use iroha_data_model::da::types::ExtraMetadata;
 use eyre::Result;
+use iroha::{client::Client, data_model::da::types::StorageTicketId};
+use iroha_storage_client::client::StorageClient;
 
-fn persist_da_payload(client: &Client, payload: Vec<u8>, storage_ticket: &str) -> Result<()> {
-    client
-        .submit_da_blob(payload, &DaIngestParams::default(), ExtraMetadata::default(), None)?;
-    let persisted = client.fetch_da_manifest_to_dir(storage_ticket, "artifacts/da")?;
+async fn persist_da_manifest(client: &Client, storage_ticket: &StorageTicketId) -> Result<()> {
+    let storage = StorageClient::new(client);
+    let persisted = storage.fetch_da_manifest_to_dir(storage_ticket, "artifacts/da").await?;
     println!(
         "manifest saved to {} / chunk plan {}",
         persisted.manifest_raw.display(),

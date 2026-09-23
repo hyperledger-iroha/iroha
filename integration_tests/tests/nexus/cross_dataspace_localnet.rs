@@ -649,7 +649,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
-                iroha::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator_id.clone()),
                     AssetId::new(stake_asset_id.clone(), cross_dataspace_gas_account_id()),
                     Quantity::from(VALIDATOR_STAKE),
@@ -7483,40 +7483,46 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
             b"g13p historical roster genesis",
         )));
-        let kagemusha_mint_finality_authority =
-            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-                version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id,
-                generation: 0,
-                validators: roster
-                    .iter()
-                    .enumerate()
-                    .map(|(index, validator)| {
-                        iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
-                            validator: validator.validator.clone(),
-                            eq_proof_public_key: [u8::try_from(index + 1)
-                                .expect("small fixture roster");
-                                32],
-                            ep_proof_public_key: [u8::try_from(index + 17)
-                                .expect("small fixture roster");
-                                32],
-                        }
-                    })
-                    .collect(),
-            };
-        let kagemusha_mint_finality_authorization = iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
- version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
- network_id: network_id,
- epoch: 0,
- first_height: 1,
- last_height: 100,
- authority_generation: kagemusha_mint_finality_authority.generation,
- authority_id: kagemusha_mint_finality_authority.authority_id().expect("canonical fixture authority"),
- beacon: iroha::data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
- previous_authorization_id: [0; 32],
- transition_id: [0; 32],
- decision: iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-};
+        use iroha::data_model::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+            KagemushaMintFinalityEpochDecisionV1,
+        };
+        let kagemusha_mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            generation: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[0xA0 + u8::try_from(index).expect("small fixture roster"); 32],
+                        0,
+                        validator.validator.clone(),
+                    )
+                    .expect("derive paired-Pasta fixture authority")
+                })
+                .collect(),
+        };
+        let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            first_height: 1,
+            last_height: 100,
+            authority_generation: 0,
+            authority_id: kagemusha_mint_finality_authority
+                .authority_id()
+                .expect("fixture authority identity"),
+            beacon: BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32],
+            transition_id: [0; 32],
+            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+        };
+        kagemusha_mint_finality_authorization
+            .validate_against_authority(&kagemusha_mint_finality_authority)
+            .expect("fixture genesis authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -7691,6 +7697,40 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(lane_registrations.len(), LANE_VALIDATOR_COUNT);
+        for registration in &lane_registrations {
+            assert_eq!(
+                registration.monetary_plan.network_scope,
+                iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+            );
+            assert_eq!(registration.monetary_plan.valid_until_height, 1);
+            assert_eq!(
+                registration.monetary_plan.source_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    registration.validator.clone()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.destination_asset,
+                iroha_data_model::asset::AssetId::new(
+                    stake_asset_definition_id(),
+                    cross_dataspace_gas_account_id()
+                )
+            );
+            assert_eq!(
+                registration.monetary_plan.amount,
+                registration.initial_stake
+            );
+            assert_eq!(
+                registration.monetary_plan.precondition,
+                iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1
+                    }
+                )
+            );
+        }
+
         assert!(
             lane_registrations
                 .iter()

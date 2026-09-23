@@ -54,9 +54,16 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Self {
+        Self::with_observer_permissions([])
+    }
+
+    pub(super) fn with_observer_permissions(
+        extra_permissions: impl IntoIterator<Item = Permission>,
+    ) -> Self {
         let manager = AccountId::new(key(1).public_key().clone());
         let operator = AccountId::new(key(2).public_key().clone());
         let observer = AccountId::new(key(3).public_key().clone());
+        let mut extra_permissions = Some(extra_permissions);
         let mut world = World::new();
         for authority in [&manager, &operator, &observer] {
             let (id, account) = Account::new(authority.clone())
@@ -66,7 +73,7 @@ impl Fixture {
         }
         for (authority, permission) in [
             (
-                observer,
+                observer.clone(),
                 Permission::from(CanCheckSorafsFinalPromotion {
                     deployment_id: DEPLOYMENT.into(),
                 }),
@@ -86,6 +93,9 @@ impl Fixture {
         ] {
             let mut permissions = Permissions::new();
             permissions.insert(permission);
+            if authority == observer {
+                permissions.extend(extra_permissions.take().unwrap());
+            }
             world.account_permissions.insert(authority, permissions);
         }
         let state = Arc::new(State::new_with_chain_and_network_id_for_testing(

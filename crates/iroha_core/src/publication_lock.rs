@@ -9,11 +9,28 @@
 pub(crate) struct PublicationMutex<T = ()> {
     inner: parking_lot::Mutex<T>,
     released: concread::release::ReleaseNotification,
+    /// Successful ordinary acquisitions invalidate earlier readonly observations.
+    mutation_epoch: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
+
+/// Move-only permission for audited nonmutating uses of one original unit fence.
+///
+/// Only the paired constructor can create this capability. The shared epoch
+/// allocation identifies the exact original mutex even if its value moves.
+/// No caller-supplied path, pointer, or generation can manufacture the binding.
+#[derive(Debug)]
+pub(crate) struct PublicationReadPermit {
+    original_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// A read permit belongs to a different original physical fence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PublicationReadPermitMismatch;
 
 /// An original storage mutex guard, retaining the established lock-order boundary.
 pub(crate) struct PublicationGuard<'state, T = ()> {
     inner: concread::release::ReleaseGuard<'state, PhysicalPublicationGuard<'state, T>>,
+    mutation_epoch: Option<u64>,
 }
 
 /// Original physical guard whose unlock policy is selected before its release.
@@ -35,15 +52,25 @@ impl<T> Drop for PhysicalPublicationGuard<'_, T> {
 }
 
 impl<T> PublicationGuard<'_, T> {
+    /// Mutation epoch captured under this original physical guard; exhaustion
+    /// permanently refuses observation reuse.
+    pub(crate) fn mutation_epoch(&self) -> Option<u64> {
+        self.mutation_epoch
+    }
+
     /// Unlock this original mutex into its exact source's retained release batch.
     /// A foreign batch returns the original guard without unlocking or notifying.
     pub(crate) fn try_release_into(
         self,
         batch: &mut concread::release::DeferredReleaseBatch,
     ) -> Result<(), Self> {
+        let mutation_epoch = self.mutation_epoch;
         self.inner
             .try_release_into(batch, drop)
-            .map_err(|inner| Self { inner })
+            .map_err(|inner| Self {
+                inner,
+                mutation_epoch,
+            })
     }
 
     /// Unlock the actual mutex and retain its original notification until the
@@ -91,6 +118,7 @@ impl<T> PublicationMutex<T> {
         Self {
             inner: parking_lot::Mutex::new(value),
             released: concread::release::ReleaseNotification::default(),
+            mutation_epoch: None,
         }
     }
 
@@ -99,7 +127,29 @@ impl<T> PublicationMutex<T> {
         &'state self,
         guard: parking_lot::MutexGuard<'state, T>,
     ) -> PublicationGuard<'state, T> {
+        // Advance while the actual physical mutex is held, before any caller
+        // can create/rename/unlink or unwind. Saturation permanently disables
+        // observation reuse instead of allowing an ABA wraparound.
+        if let Some(epoch) = &self.mutation_epoch {
+            let _ = epoch.fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |epoch| epoch.checked_add(1),
+            );
+        }
+        self.wrap_read_only(guard)
+    }
+
+    fn wrap_read_only<'state>(
+        &'state self,
+        guard: parking_lot::MutexGuard<'state, T>,
+    ) -> PublicationGuard<'state, T> {
+        let epoch = self.mutation_epoch.as_ref().and_then(|epoch| {
+            let epoch = epoch.load(std::sync::atomic::Ordering::Relaxed);
+            (epoch != u64::MAX).then_some(epoch)
+        });
         PublicationGuard {
+            mutation_epoch: epoch,
             inner: self.released.guard(PhysicalPublicationGuard {
                 guard: Some(guard),
                 fair: false,
@@ -128,6 +178,39 @@ impl<T> PublicationMutex<T> {
     ) -> Result<PublicationGuard<'_, T>, concread::release::ReleaseWait> {
         let wait = self.released.observe();
         self.try_lock().ok_or(wait)
+    }
+}
+
+impl PublicationMutex {
+    /// Create one unit fence and its original, uncloneable read capability.
+    ///
+    /// The owner must keep the permit private and lend it only to complete
+    /// paths audited for absence of namespace mutation or mutable callbacks.
+    /// Ordinary `new` and `default` constructors do not issue a read permit.
+    pub(crate) fn with_read_permit() -> (Self, PublicationReadPermit) {
+        let original_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut mutex = Self::new(());
+        mutex.mutation_epoch = Some(std::sync::Arc::clone(&original_epoch));
+        let permit = PublicationReadPermit { original_epoch };
+        (mutex, permit)
+    }
+
+    /// Retain the same physical fence without invalidating prior namespace
+    /// observations, using only its originally paired read capability.
+    /// This remains an exclusive physical acquisition, not a shared read lock.
+    /// A foreign permit fails before acquiring or observing the target mutex.
+    pub(crate) fn lock_read_only(
+        &self,
+        permit: &PublicationReadPermit,
+    ) -> Result<PublicationGuard<'_>, PublicationReadPermitMismatch> {
+        if !self
+            .mutation_epoch
+            .as_ref()
+            .is_some_and(|epoch| std::sync::Arc::ptr_eq(epoch, &permit.original_epoch))
+        {
+            return Err(PublicationReadPermitMismatch);
+        }
+        Ok(self.wrap_read_only(self.inner.lock()))
     }
 }
 
@@ -380,3 +463,192 @@ mod tests {
 #[cfg(test)]
 #[path = "publication_lock_scoped_tests.rs"]
 mod scoped_tests;
+
+#[cfg(test)]
+mod mutation_epoch_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::atomic::Ordering,
+        task::{Context, Poll, Waker},
+    };
+
+    fn read_epoch(mutex: &PublicationMutex, permit: &PublicationReadPermit) -> Option<u64> {
+        mutex.lock_read_only(permit).unwrap().mutation_epoch()
+    }
+
+    // Mirrors generic publication-lease acquisition: a shared reference to the
+    // original wrapper must never erase its mutation behavior.
+    fn lease_like_acquire(mutex: &PublicationMutex) -> PublicationGuard<'_> {
+        mutex
+            .try_lock_or_wait()
+            .unwrap_or_else(|_| panic!("uncontended original publication fence"))
+    }
+
+    #[test]
+    fn every_successful_ordinary_acquisition_invalidates_prior_observations() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        assert_eq!(read_epoch(&mutex, &permit), Some(0));
+        assert_eq!(read_epoch(&mutex, &permit), Some(0));
+        assert_eq!(mutex.lock().mutation_epoch(), Some(1));
+        assert_eq!(read_epoch(&mutex, &permit), Some(1));
+        assert_eq!(mutex.try_lock().unwrap().mutation_epoch(), Some(2));
+        assert_eq!(lease_like_acquire(&mutex).mutation_epoch(), Some(3));
+        {
+            let mut deferred = mutex.defer_notifications();
+            let held = deferred.lock();
+            assert_eq!(held.guard.as_ref().unwrap().mutation_epoch(), Some(4));
+        }
+        assert_eq!(read_epoch(&mutex, &permit), Some(4));
+    }
+
+    #[test]
+    fn contended_probes_do_not_claim_a_mutation_acquisition() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        let held = mutex.lock_read_only(&permit).unwrap();
+        assert!(mutex.try_lock().is_none());
+        assert!(mutex.try_lock_or_wait().is_err());
+        assert_eq!(held.mutation_epoch(), Some(0));
+        assert_eq!(
+            mutex
+                .mutation_epoch
+                .as_ref()
+                .unwrap()
+                .load(Ordering::Relaxed),
+            0
+        );
+        drop(held);
+        assert_eq!(lease_like_acquire(&mutex).mutation_epoch(), Some(1));
+    }
+
+    #[test]
+    fn read_permit_is_bound_to_original_mutex_and_survives_owner_move() {
+        let (original, permit) = PublicationMutex::with_read_permit();
+        let (foreign, foreign_permit) = PublicationMutex::with_read_permit();
+        let default = PublicationMutex::default();
+        let constructed = PublicationMutex::new(());
+        // Wrong permits refuse even while the target is physically locked.
+        // Validation after lock acquisition would deadlock this same thread.
+        let held = original.lock_read_only(&permit).unwrap();
+        assert!(matches!(
+            original.lock_read_only(&foreign_permit),
+            Err(PublicationReadPermitMismatch)
+        ));
+        assert!(matches!(
+            foreign.lock_read_only(&permit),
+            Err(PublicationReadPermitMismatch)
+        ));
+        assert!(matches!(
+            default.lock_read_only(&permit),
+            Err(PublicationReadPermitMismatch)
+        ));
+        assert!(matches!(
+            constructed.lock_read_only(&permit),
+            Err(PublicationReadPermitMismatch)
+        ));
+        assert_eq!(held.mutation_epoch(), Some(0));
+        assert_eq!(
+            foreign
+                .mutation_epoch
+                .as_ref()
+                .unwrap()
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(default.mutation_epoch.is_none());
+        assert!(constructed.mutation_epoch.is_none());
+        assert_eq!(default.lock().mutation_epoch(), None);
+        assert_eq!(constructed.try_lock().unwrap().mutation_epoch(), None);
+        drop(held);
+        let moved = Box::new(original);
+        assert_eq!(read_epoch(&moved, &permit), Some(0));
+        assert_eq!(moved.lock().mutation_epoch(), Some(1));
+        assert_eq!(read_epoch(&moved, &permit), Some(1));
+    }
+
+    #[test]
+    fn errors_and_unwind_invalidate_before_any_caller_work() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        let failed: Result<(), &'static str> = (|| {
+            let held = mutex.lock();
+            assert_eq!(held.mutation_epoch(), Some(1));
+            Err("operation failed after acquiring original mutation fence")
+        })();
+        assert!(failed.is_err());
+        assert_eq!(read_epoch(&mutex, &permit), Some(1));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let held = lease_like_acquire(&mutex);
+            assert_eq!(held.mutation_epoch(), Some(2));
+            panic!("operation unwinds after acquiring original mutation fence");
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(read_epoch(&mutex, &permit), Some(2));
+        assert_eq!(mutex.try_lock().unwrap().mutation_epoch(), Some(3));
+    }
+
+    #[test]
+    fn saturated_epoch_permanently_disables_reuse_without_wrapping() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        // Private test setup; no production epoch setter is exposed.
+        mutex
+            .mutation_epoch
+            .as_ref()
+            .unwrap()
+            .store(u64::MAX - 2, Ordering::Relaxed);
+        assert_eq!(mutex.lock().mutation_epoch(), Some(u64::MAX - 1));
+        assert_eq!(read_epoch(&mutex, &permit), Some(u64::MAX - 1));
+        assert_eq!(lease_like_acquire(&mutex).mutation_epoch(), None);
+        for _ in 0..3 {
+            assert_eq!(read_epoch(&mutex, &permit), None);
+            assert_eq!(mutex.try_lock().unwrap().mutation_epoch(), None);
+            assert_eq!(
+                mutex
+                    .mutation_epoch
+                    .as_ref()
+                    .unwrap()
+                    .load(Ordering::Relaxed),
+                u64::MAX
+            );
+        }
+    }
+
+    #[test]
+    fn read_guard_unlock_and_deferred_notification_preserve_original_source() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        let held = mutex.lock_read_only(&permit).unwrap();
+        let wait = mutex
+            .try_lock_or_wait()
+            .err()
+            .expect("physical fence is held");
+        let mut pending = Box::pin(wait.wait_for_release());
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(pending.as_mut().poll(&mut context), Poll::Pending);
+        let released = held.release_deferred();
+        // Probe the private backend only in this notification-order test, so
+        // the probe itself cannot signal the notification under observation.
+        assert!(mutex.inner.try_lock().is_some());
+        assert_eq!(pending.as_mut().poll(&mut context), Poll::Pending);
+        drop(released);
+        assert_eq!(pending.as_mut().poll(&mut context), Poll::Ready(()));
+        assert_eq!(read_epoch(&mutex, &permit), Some(0));
+        assert_eq!(mutex.lock().mutation_epoch(), Some(1));
+    }
+
+    #[test]
+    fn foreign_release_batch_preserves_guard_and_captured_epoch() {
+        let (mutex, permit) = PublicationMutex::with_read_permit();
+        let foreign: PublicationMutex = PublicationMutex::default();
+        let mut foreign_batch = foreign.deferred_releases();
+        let held = mutex.lock();
+        let held = held
+            .try_release_into(&mut foreign_batch)
+            .err()
+            .expect("foreign batch returns the original guard");
+        assert_eq!(held.mutation_epoch(), Some(1));
+        assert!(mutex.try_lock().is_none());
+        let mut original_batch = mutex.deferred_releases();
+        assert!(held.try_release_into(&mut original_batch).is_ok());
+        assert_eq!(read_epoch(&mutex, &permit), Some(1));
+        drop(original_batch);
+    }
+}

@@ -36,7 +36,7 @@ class ContinuityGenesisAuthorityTests(unittest.TestCase):
             "validators": [{"validator": f"peer-{index}"} for index in range(4)],
         }
         manifest = {"kagemusha_mint_finality": {"authority_generation": authority}}
-        self.assertEqual(retry._continuity_genesis_peers(manifest),
+        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
                          [f"peer-{index}" for index in range(4)])
 
         for altered in (
@@ -51,7 +51,7 @@ class ContinuityGenesisAuthorityTests(unittest.TestCase):
                 dict(authority, validators=[{"validator": "peer-0"}] * 4)}},
         ):
             with self.subTest(altered=altered), self.assertRaises(RuntimeError):
-                retry._continuity_genesis_peers(altered)
+                retry._continuity_mint_finality_peers(altered)
 
 
 def beacon_input_fixture(draft):
@@ -282,6 +282,27 @@ def derived_capacity(inputs=None, runtime=None, build=None):
         guest_headroom_path="/private/runtime",
         backing_path="/approved/vm",
     )
+
+
+class MintFinalityContinuityTests(unittest.TestCase):
+    def test_capture_reads_only_generation_zero_authority(self):
+        rows = [{"validator": f"peer-{i}"} for i in range(4)]
+        manifest = {"kagemusha_mint_finality": {"authority_generation": {
+            "version": 1, "generation": 0, "validators": rows,
+        }}}
+        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
+                         [row["validator"] for row in rows])
+        for altered in (
+            {"kagemusha_mint_finality": {"epoch_roster": {"validators": rows}}},
+            {"kagemusha_mint_finality": {"authority_generation": {
+                "version": 1, "generation": 1, "validators": rows,
+            }}},
+            {"kagemusha_mint_finality": {"authority_generation": {
+                "version": 1, "generation": 0, "validators": rows[:3] + [rows[0]],
+            }}},
+        ):
+            with self.assertRaises(RuntimeError):
+                retry._continuity_mint_finality_peers(altered)
 
 
 class RetryTests(unittest.TestCase):
@@ -1088,9 +1109,6 @@ class RetryTests(unittest.TestCase):
         flags = (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
-
-
-
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -1113,10 +1131,9 @@ class RetryTests(unittest.TestCase):
         del missing_key[offset:offset + 2]
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(missing_key).encode(), "full_inrou")
-        for flag in ("--maintenance-admin-config", "--epoch-seed-sources", "--epoch-supervisor-plan"):
-            retired = [*args, flag, "/retired/input"]
-            with self.subTest(flag=flag), self.assertRaises(retry.RetryError):
-                retry.local_arguments(json.dumps(retired).encode(), "full_inrou")
+        for flag,count in (("--maintenance-admin-config",1),("--epoch-seed-sources",4),("--epoch-supervisor-plan",1)):
+            incomplete=[*args, flag, *["/retired/input" for _ in range(count)]]
+            with self.subTest(flag=flag),self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(incomplete).encode(),"full_inrou")
         bad=list(args);bad.insert(0,"--http-operator-key-sha256");bad.insert(1,"a"*64)
         with self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(bad).encode(),"full_inrou")
         args[0] = "--private-key"
@@ -1306,7 +1323,7 @@ class DeploymentRetirementLockTests(unittest.TestCase):
         self.assertEqual(self.closed, [fd for _, fd, _ in reversed(self.opened)])
         self.assert_all_closed()
 
-    def test_epoch_failure_releases_preceding_retirement_locks(self):
+    def test_deployment_failure_releases_preceding_retirement_locks(self):
         paths = self.prepare_retirement_locks()
         (self.state / ".reset-owner.json").write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
         with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
@@ -1373,7 +1390,8 @@ class BeaconArgumentTests(unittest.TestCase):
         assembly, derived, value = self.prepare()
         self.assertEqual(self.static, original)
         self.assertEqual(derived[1], str(assembly / "public-inputs"))
-        self.assertFalse((assembly / "native-assembly-args.json").exists(),"beacon preparation returns arguments before the coordinator publishes them")
+        self.assertEqual(json.loads((assembly / "native-assembly-args.json").read_bytes()), derived)
+        self.assertEqual(json.loads((assembly / "native-local-args.json").read_bytes()), original)
         paths = derived[derived.index("--beacon-validator-unit") + 1:]
         self.assertEqual(len(paths), 4)
         for index, (path, row) in enumerate(zip(paths, value["final_units"]), 1):
@@ -1420,8 +1438,10 @@ class BeaconArgumentTests(unittest.TestCase):
             "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
         for scope in ("core_testnet", "full_inrou"):
             result = retry.apply_arguments(inputs, scope)
+            self.assertNotIn("--maintenance-admin-config",result)
             self.assertNotIn("--epoch-seed-sources",result)
             self.assertNotIn("--epoch-supervisor-plan",result)
+            self.assertNotIn("--epoch-seed-source",result)
             self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
             for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
                 self.assertNotIn(flag, result)
@@ -1534,7 +1554,6 @@ class CoreScopeTests(unittest.TestCase):
     def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
         args = []
         for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
-
                             ("--validator-client-config", 4), ("--validator-operator-key", 1),
                             ("--onboarding-token", 1), ("--validator-unit", 4),
                             ("--edge-unit", 1), ("--known-hosts", 1)):
@@ -1656,9 +1675,6 @@ class WorkflowTests(unittest.TestCase):
         for flag, count in (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
-
-
-
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -1790,8 +1806,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("--http-operator-key-sha256",argv)
         self.assertNotIn("--observation-trust",argv)
         if phase in ("assemble", "apply"):
-            for flag in ("--maintenance-admin-config", "--epoch-supervisor-plan", "--epoch-seed-sources", "--epoch-seed-source"):
-                self.assertNotIn(flag, argv)
+            for retired in ("--maintenance-admin-config", "--epoch-supervisor-plan", "--epoch-seed-sources", "--epoch-seed-source"):
+                self.assertNotIn(retired, argv)
             self.assertEqual("--public-inputs" in argv, phase == "assemble")
             self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
             self.assertIn("--validator-operator-key", argv)
@@ -1936,6 +1952,8 @@ class WorkflowTests(unittest.TestCase):
         static=json.loads((attempt/"assembly/native-local-args.json").read_bytes())
         retained=json.loads((attempt/"assembly/native-retained-args.json").read_bytes())
         self.assertEqual(static, retained)
+        derived = json.loads((attempt / "assembly/native-assembly-args.json").read_bytes())
+        self.assertEqual(derived[derived.index("--public-inputs") + 1], str(attempt / "assembly/public-inputs"))
         self.assertEqual(result["completed"], list(retry.PHASES))
         self.assertEqual(result["qualification_scope"], "core_testnet")
 

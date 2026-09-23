@@ -44,7 +44,7 @@ class CheckError(RuntimeError):
     pass
 
 def focused_regression_stages(scope, focused):
-    if focused != ["core=fixture"]:
+    if focused not in (["core=fixture"], [f"core=fixture-{index}" for index in range(496)]):
         raise CheckError("unknown exact fixture regression")
 
 def wait_for(path):
@@ -72,7 +72,7 @@ def run_checks(root, *, environment, lock_fds, qualification_scope):
     print("fixture native gate passed", flush=True)
 
 def run_prequalification(root, *, focused_regressions, **kwargs):
-    assert focused_regressions == ["core=fixture"]
+    focused_regression_stages(kwargs["qualification_scope"], focused_regressions)
     run_checks(root, **kwargs)
 ''')
     (scripts / "descendant.py").write_text(
@@ -98,7 +98,13 @@ def run_prequalification(root, *, focused_regressions, **kwargs):
     def status(session):
         result = invoke("check-status", "--session-dir", session)
         assert result.stdout, result.stderr
-        return result.returncode, json.loads(result.stdout)
+        observation = json.loads(result.stdout)
+        assert set(observation) == {"schema", "session_id", "state", "request_path",
+                                    "focused_regression_count", "result", "log",
+                                    "release_qualified"}
+        assert observation["request_path"] == str(session / "request.json")
+        assert type(observation["focused_regression_count"]) is int
+        return result.returncode, observation
 
     yield root, lane, invoke, launch, status
     # Never kill or restart a worker, even on assertion failure. Release the
@@ -124,6 +130,7 @@ def test_detached_check_survives_launcher_exit_and_keeps_real_lane_lock(runner, 
     code, observation = status(session)
     assert code == 2 and observation["state"] == "running"
     assert observation["release_qualified"] is False
+    assert observation["focused_regression_count"] == 1
     assert stat.S_IMODE(session.stat().st_mode) == 0o700
     assert stat.S_IMODE((session / "check.log").stat().st_mode) == 0o600
     assert stat.S_IMODE((session / "request.json").stat().st_mode) == 0o400
@@ -148,6 +155,30 @@ def test_detached_check_survives_launcher_exit_and_keeps_real_lane_lock(runner, 
     assert {p.name: p.read_bytes() for p in session.iterdir()} == before
 
 
+def test_status_keeps_large_focus_request_in_immutable_record(runner, tmp_path):
+    root, _, _, launch, status = runner
+    session = tmp_path / "large-focus"
+    focused = [f"core=fixture-{index}" for index in range(496)]
+    launch(session, *(argument for name in focused for argument in ("--focus-regression", name)))
+    eventually(lambda: (root / "ready").exists(), bool)
+    request_path = session / "request.json"
+    original = request_path.read_bytes()
+    assert json.loads(original)["focused_regressions"] == focused
+    code, running = status(session)
+    assert code == 2 and running["state"] == "running"
+    (root / "continue").touch()
+    code, passed = eventually(lambda: status(session), lambda row: row[1]["state"] != "running")
+    assert code == 0 and passed["state"] == "passed"
+    for observation in (running, passed):
+        assert observation["focused_regression_count"] == len(focused)
+        assert observation["request_path"] == str(request_path)
+        encoded = json.dumps(observation)
+        assert all(name not in encoded for name in focused)
+        assert len(encoded) < len(original) // 4
+    assert request_path.read_bytes() == original
+    assert stat.S_IMODE(request_path.stat().st_mode) == 0o400
+
+
 def test_failed_gate_has_durable_failure(runner, tmp_path):
     root, _, _, launch, status = runner
     (root / "mode").write_text("fail")
@@ -155,6 +186,7 @@ def test_failed_gate_has_durable_failure(runner, tmp_path):
     launch(session)
     code, observation = eventually(lambda: status(session), lambda row: row[1]["state"] != "running")
     assert code == 1 and observation["state"] == "failed"
+    assert observation["focused_regression_count"] == 0
     assert observation["result"]["error_type"] == "PrepareError"
     assert "fixture gate failure" in (session / "check.log").read_text()
 

@@ -529,21 +529,29 @@ fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
 fn bind_inherited_mint_finality_authority(
     network_id: NetworkId,
     local_validator: &PeerId,
-    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
+    generation: &KagemushaMintFinalityAuthorityGenerationV1,
     seed: Zeroizing<[u8; 32]>,
 ) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
-    if epoch.network_id != network_id {
+    if generation.network_id != network_id {
         return Err("mint-finality roster does not match the configured network".to_owned());
     }
-    let validator_index = epoch
+    let validator_index = generation
         .validators
         .iter()
         .position(|entry| &entry.validator == local_validator)
         .and_then(|index| u32::try_from(index).ok());
     let authority = if let Some(validator_index) = validator_index {
-        KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(epoch.clone()), seed, validator_index)
+        KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(generation.clone()),
+            seed,
+            validator_index,
+        )
     } else {
-        KagemushaMintFinalityLocalAuthorityV1::new_unseated(epoch, local_validator.clone(), seed)
+        KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+            generation,
+            local_validator.clone(),
+            seed,
+        )
     };
     authority.map_err(|_| {
         "mint-finality seed or candidate identity does not match the authenticated genesis authority"
@@ -1323,13 +1331,13 @@ mod tests {
         .expect("future candidate retains its own seed without a genesis vote");
         assert!(pending.authority().is_none());
         assert!(pending.signer().is_none());
-        let mut wrong_epoch = roster.clone();
-        wrong_epoch.generation = 1;
+        let mut wrong_generation = roster.clone();
+        wrong_generation.generation = 1;
         assert!(
             bind_inherited_mint_finality_authority(
                 roster.network_id,
                 local,
-                &wrong_epoch,
+                &wrong_generation,
                 Zeroizing::new([0x71; 32])
             )
             .is_err()

@@ -1409,7 +1409,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                         &mut executor,
                         completion,
                     ),
-                    Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
+                    Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied(_))
                 ));
                 assert!(
                     !executor.ready_to_finish(),

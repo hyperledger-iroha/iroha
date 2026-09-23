@@ -1,0 +1,18 @@
+{
+  "docs/history/2026-09-22/kagemusha-readiness/indexed-batch-predecessor-active.md": {
+    "sha256": "d3d174aaf02fb143c4fc7b688c183b174a463bbd2e28483ee2db1ac55bf8a345",
+    "source": "specs/kagemusha_v1_production_readiness.md"
+  },
+  "docs/history/2026-09-22/kagemusha-readiness/indexed-batch-predecessor-readme.md": {
+    "sha256": "ca21a8ed5c9e4a57720490c790d1e12d9959fa2e58155b2e13e3c1db3bd0f0ed",
+    "source": "docs/history/2026-09-22/kagemusha-readiness/README.md"
+  },
+  "docs/history/2026-09-22/kagemusha-readiness/indexed-batch-predecessor-status-row.md": {
+    "sha256": "0822abcba77ab4c9cd2ccd10727b348822563d37cb1e80c123d7b3eff85a3aa7",
+    "source": "status.md"
+  },
+  "docs/history/2026-09-22/kagemusha-readiness/indexed-batch-predecessor-validation.md": {
+    "sha256": "013faac73867ce2b2d9b4ceac4562bd7ee96835b44c4b26a43cea526b4369198",
+    "source": "specs/kagemusha_v1_production_readiness.md"
+  }
+}

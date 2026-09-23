@@ -24,7 +24,17 @@ fn advance_role_index(layout: &mut StoredPolynomialLayoutV1) {
         | StoredPolynomialRoleV1::LookupPermuted { lookup, .. }
         | StoredPolynomialRoleV1::LookupProduct { lookup } => *lookup += 1,
         StoredPolynomialRoleV1::CopyPermutationProduct { set } => *set += 1,
-        StoredPolynomialRoleV1::Instance { column } => *column += 1,
+        StoredPolynomialRoleV1::Instance { column }
+        | StoredPolynomialRoleV1::KeyFixed { column }
+        | StoredPolynomialRoleV1::KeyPermutation { column } => *column += 1,
+        StoredPolynomialRoleV1::KeyMask { kind } => {
+            use super::super::StoredKeyMaskV1;
+            *kind = match kind {
+                StoredKeyMaskV1::L0 => StoredKeyMaskV1::LLast,
+                StoredKeyMaskV1::LLast => StoredKeyMaskV1::LActiveRow,
+                StoredKeyMaskV1::LActiveRow => StoredKeyMaskV1::L0,
+            };
+        }
         StoredPolynomialRoleV1::QuotientAliasedPart { part, .. } => *part += 1,
         StoredPolynomialRoleV1::QuotientPiece { piece } => *piece += 1,
         StoredPolynomialRoleV1::VanishingRandom | StoredPolynomialRoleV1::QuotientNumerator => {
@@ -1080,3 +1090,6 @@ fn fp_inverse_roles_preserve_closed_conversion_bounds() {
 fn fq_inverse_roles_preserve_closed_conversion_bounds() {
     inverse_roles_preserve_closed_conversion_bounds::<Fq>();
 }
+
+#[path = "key_role_tests.rs"]
+mod key_role_tests;

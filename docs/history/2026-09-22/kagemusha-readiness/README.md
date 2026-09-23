@@ -40,3 +40,13 @@ with its own captured candidate. The immediately preceding [active section](inde
 [status row](indexed-reader-predecessor-status-row.md) and
 [archive introduction](indexed-reader-predecessor-readme.md) are retained exactly;
 see [their manifest](indexed-reader-predecessor-manifest.json).
+
+The [Kotlin protocol validation note](kotlin-core-validation.md) records the fresh
+57-test SDK run: 33 passed and 24 failed at unavailable ABI-23 native address
+validation. Its SDK source snapshot does not qualify the Rust native graph or
+physical devices; a current-source bridge rebuild and rerun remain required.
+
+The [indexed-key batch](indexed-key-batch-validation.md) records 79 passing functions
+in both modes, installed coefficient/snapshot/role work and the cross-coset test.
+Its preceding active/validation sections, status row and archive introduction are
+preserved byte-for-byte in the [batch predecessor manifest](indexed-batch-predecessor-manifest.json).

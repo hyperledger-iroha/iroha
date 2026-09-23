@@ -726,9 +726,9 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         proposal_owner.owner()
     ));
 }
-fn fixture_kagemusha_mint_finality_roster(
+fn fixture_kagemusha_mint_finality_authority(
     network_id: iroha_data_model::NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[wire::ValidatorPower],
     seed_base: u8,
 ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
@@ -740,7 +740,7 @@ fn fixture_kagemusha_mint_finality_roster(
                 [seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8")); 32];
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &seed,
-                epoch,
+                generation,
                 validator.validator.clone(),
             )
             .expect("derive deterministic fixture Pasta keys")
@@ -749,7 +749,7 @@ fn fixture_kagemusha_mint_finality_roster(
     iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        generation: epoch,
+        generation,
         validators,
     }
 }
@@ -772,12 +772,10 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
     let kagemusha_mint_finality_authority =
-        fixture_kagemusha_mint_finality_roster(network_id, 0, &roster, 0xA0);
+        fixture_kagemusha_mint_finality_authority(network_id, 0, &roster, 0xA0);
     let kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
             &kagemusha_mint_finality_authority,
-            0,
-            1,
             u64::MAX,
         );
     let context = wire::HeightContext {
@@ -866,6 +864,10 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         max_merge_sidecar_deferrals: 1,
         local_completions: VecDeque::new(),
         held_io_completion: None,
+        pending_native_publication: None,
+        pending_local_apply: None,
+        native_source_wait: None,
+        native_source_completion: None,
         next_completion_source: CompletionSource::Io,
         locked_candidate_acquisition: None,
         next_locked_candidate_acquisition_id: 0,
@@ -1505,17 +1507,15 @@ fn start_timeout_delivery_constructor_for_test(
 ) -> Result<ProductionV2Services, String> {
     let mut context = template.context.clone();
     context.network_id = state.network_id;
-    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_roster(
+    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_authority(
         context.network_id,
-        context.epoch,
+        context.kagemusha_mint_finality_authority.generation,
         &context.roster,
         0xA0,
     );
     context.kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
             &context.kagemusha_mint_finality_authority,
-            context.epoch,
-            context.kagemusha_mint_finality_authorization.first_height,
             context.epoch_end_height,
         );
     context.validate().expect("constructor fixture context");
@@ -1543,10 +1543,13 @@ fn start_timeout_delivery_constructor_for_test(
         );
     let (handoff, _) = durable_exact_output_handoff_owner_pair();
     ProductionV2Services::start(
-        context,
+        super::super::v2::VerifiedHeightContext::genesis(
+            context,
+            template.validator_set_pops.clone(),
+        )
+        .expect("constructor fixture authenticated height"),
         tag,
         decided,
-        template.validator_set_pops.clone(),
         template.local_peer.clone(),
         template.local_validator,
         template.key_pair.clone(),
@@ -1651,17 +1654,15 @@ fn timeout_certificate_constructor_rejects_wrong_prefix_and_recovers_decided() {
     // worker-spawn probe; source ordering puts this error before I/O spawn.
     let mut context = template.context.clone();
     context.network_id = state.network_id;
-    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_roster(
+    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_authority(
         context.network_id,
-        context.epoch,
+        context.kagemusha_mint_finality_authority.generation,
         &context.roster,
         0xA0,
     );
     context.kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
             &context.kagemusha_mint_finality_authority,
-            context.epoch,
-            context.kagemusha_mint_finality_authorization.first_height,
             context.epoch_end_height,
         );
     drop(

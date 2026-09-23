@@ -3,8 +3,9 @@
 //! Namespace transitions consume their original retryable storage owners before
 //! State visibility while retaining the original Queue retirement cut. Native
 //! Decisions use their original source, Kura custody and World application markers;
-//! retired participant manifests remain refused. TODO: complete production resource
-//! admission and retire the old writer with the live Validate/Apply cutover.
+//! retired participant manifests remain refused. Actual source and execution
+//! owners survive worker handoff; nested payload allocation remains outside the
+//! concrete descriptor and shell admission policy.
 
 use super::super::super::{PreparedCarrierJournals, RetainedCarrierEffects};
 use super::*;
@@ -39,20 +40,19 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPublicationError
 /// Actual published State and its original block, events, source and reservations.
 /// This token has no second publication or reexecution operation.
 /// Move the complete owner across worker completion before borrowing Native Apply
-/// authority; its original source and all three reservations remain attached.
+/// authority; its original source and its retained shell reservation remain attached.
 #[must_use = "retain published custody until original lane Apply completion is delivered"]
-pub(crate) struct PublishedCarrier<A, B, I> {
+pub(crate) struct PublishedCarrier<A> {
     block: CommittedBlock,
     committed_event: iroha_data_model::events::pipeline::BlockEvent,
     events: Vec<EventBox>,
     checkpoint: KuraWsvCheckpointReceipt,
+    finality: crate::block::VerifiedV2FinalityArtifact,
     // Original opaque State family, retained without a State borrow or pointer ABA.
     state_owner: crate::state::NativeLaneStateOwner,
     source: super::super::super::super::execution_prefix::ValidatedExecutionPrefix,
     // These outlive all values retained for completion delivery.
     _admission: A,
-    _binding: B,
-    _installation: I,
 }
 
 /// Borrowed proof of completed global publication of the original Native source.
@@ -67,26 +67,32 @@ pub(crate) struct PublishedNativeApply<'published> {
 }
 
 impl PublishedNativeApply<'_> {
-    /// Exact local instances retained by the original published Native source.
-    /// A duplicated instance cannot be acknowledged twice by a completion.
+    /// Return distinct original instances from the published Native source.
     pub(crate) fn original_instance_ids(
         &self,
     ) -> Result<Vec<iroha_data_model::block::consensus_v2::HeightContextId>, String> {
         let mut seen = std::collections::BTreeSet::new();
         let mut ids = Vec::new();
-        for group in self.source.sources() {
-            for context in group.contexts() {
-                let id = context.instance_id();
-                if !seen.insert(id) {
-                    return Err("published Native source contains a duplicate instance".into());
-                }
-                ids.push(id);
+        for id in self.instance_ids() {
+            if !seen.insert(id) {
+                return Err("published Native source contains a duplicate instance".into());
             }
+            ids.push(id);
         }
         if ids.is_empty() {
             return Err("published Native source contains no original instance".into());
         }
         Ok(ids)
+    }
+
+    /// Enumerate only original authenticated instances from the published source.
+    pub(crate) fn instance_ids(
+        &self,
+    ) -> impl Iterator<Item = iroha_data_model::block::consensus_v2::HeightContextId> + '_ {
+        self.source
+            .sources()
+            .iter()
+            .flat_map(|group| group.contexts().iter().map(|context| context.instance_id()))
     }
 
     // Authenticate the actual published group before using it for either Apply
@@ -189,11 +195,8 @@ impl PublishedNativeApply<'_> {
     }
 }
 
-impl<A, B, I> PublishedCarrier<A, B, I> {
+impl<A> PublishedCarrier<A> {
     /// Reauthenticate the original State family, Kura checkpoint and finality.
-    ///
-    /// The receipt comes from this publisher, including its held writer and
-    /// namespace handles; a reopened Kura or copied marker cannot replace it.
     pub(crate) fn reauthenticate_exact_publication(
         &self,
         state: &State,
@@ -224,6 +227,28 @@ impl<A, B, I> PublishedCarrier<A, B, I> {
         )
         .map_err(|error| error.to_string())?;
         Ok(self.checkpoint.finality_receipt().clone())
+    }
+
+    /// Match the physical State family that consumed the original journals.
+    pub(crate) fn matches_state(&self, state: &crate::state::State) -> bool {
+        self.state_owner.matches_state(state)
+    }
+
+    /// Borrow the committed pipeline event emitted by the exact finality transition.
+    pub(crate) fn committed_event(&self) -> &iroha_data_model::events::pipeline::BlockEvent {
+        &self.committed_event
+    }
+
+    /// Borrow the exact durable receipt retained by the original checkpoint writer.
+    pub(crate) fn receipt(&self) -> &crate::kura::KuraV2CommitReceipt {
+        self.checkpoint.finality_receipt()
+    }
+
+    /// Borrow the authenticated finality artifact consumed by actual publication.
+    pub(crate) fn artifact(
+        &self,
+    ) -> &iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact {
+        self.finality.artifact()
     }
 
     /// Borrow exact Native completion authority only from actual State publication.
@@ -262,16 +287,16 @@ impl<A, B, I> PublishedCarrier<A, B, I> {
     }
 }
 
-impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
+impl<A> PhysicallyPreparedCarrier<'_, A> {
     /// Publish the original component journals once, then finish derived work
     /// outside their physical fences while retaining Apply serialization.
     /// No fallible/refusal branch exists after the first component is visible.
     pub(in crate::state::carrier_preparation::journals) fn publish(
         self,
     ) -> Result<
-        PublishedCarrier<A, B, I>,
+        PublishedCarrier<A>,
         (
-            DecisionBoundCarrierJournals<A, B, DetachedCarrierComponents, KuraWsvCheckpointReceipt>,
+            DecisionBoundCarrierJournals<A, DetachedCarrierComponents, KuraWsvCheckpointReceipt>,
             CarrierPublicationError,
         ),
     > {
@@ -350,23 +375,17 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
 
         // Reservations are declared before decomposition so even unwind drops
         // component writers/fences before returning their retained capacity.
-        let installation;
-        let binding;
+
         let admission;
-        let Self {
-            target,
-            decision,
-            installation: retained_installation,
-        } = this;
-        installation = retained_installation;
+        let Self { target, decision } = this;
+
         let DecisionBoundCarrierJournals {
             checkpoint,
-            finality: _finality,
+            finality,
             committed_event,
             journals,
-            _binding_admission: retained_binding,
         } = decision;
-        binding = retained_binding;
+
         let PreparedCarrierJournals {
             valid,
             context: _context,
@@ -490,6 +509,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         drop(world_retirement);
         drop(hash_retirement);
         Ok(PublishedCarrier {
+            finality,
             block: valid,
             committed_event,
             events: publication_events,
@@ -497,8 +517,6 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             state_owner,
             source: source_prefix,
             _admission: admission,
-            _binding: binding,
-            _installation: installation,
         })
     }
 }

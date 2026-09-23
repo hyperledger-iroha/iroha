@@ -2550,40 +2550,27 @@ pub async fn handler_get_da_manifest(
         }
     };
     let manifest_hash = BlobDigest::from_hash(blake3_hash(manifest_bytes));
-    let mut body = Map::new();
-    body.insert(
-        "storage_ticket".into(),
-        Value::from(hex::encode(ticket.as_bytes())),
-    );
-    body.insert(
-        "client_blob_id".into(),
-        Value::from(hex::encode(manifest.client_blob_id.as_bytes())),
-    );
-    body.insert(
-        "blob_hash".into(),
-        Value::from(hex::encode(manifest.blob_hash.as_bytes())),
-    );
-    body.insert(
-        "chunk_root".into(),
-        Value::from(hex::encode(manifest.chunk_root.as_bytes())),
-    );
-    body.insert(
-        "manifest_hash".into(),
-        Value::from(hex::encode(manifest_hash.as_bytes())),
-    );
-    body.insert("lane_id".into(), Value::from(manifest.lane_id.as_u32()));
-    body.insert("epoch".into(), Value::from(manifest.epoch));
-    body.insert("manifest".into(), manifest_json);
-    body.insert(
-        "manifest_norito".into(),
-        Value::from(BASE64.encode(manifest_bytes)),
-    );
-    body.insert(
-        "manifest_len".into(),
-        Value::from(manifest_bytes.len() as u64),
-    );
-    body.insert("chunk_plan".into(), chunk_plan);
-    let response = utils::respond_value_with_format(Value::Object(body), format);
+    let body = iroha_torii_shared::da::DaManifestResponse {
+        storage_ticket: hex::encode(ticket.as_bytes()),
+        client_blob_id: hex::encode(manifest.client_blob_id.as_bytes()),
+        blob_hash: hex::encode(manifest.blob_hash.as_bytes()),
+        chunk_root: hex::encode(manifest.chunk_root.as_bytes()),
+        manifest_hash: hex::encode(manifest_hash.as_bytes()),
+        lane_id: manifest.lane_id.as_u32(),
+        epoch: manifest.epoch,
+        manifest_len: manifest_bytes.len() as u64,
+        manifest_norito: BASE64.encode(manifest_bytes),
+        manifest: manifest_json,
+        chunk_plan,
+    };
+    let body = json::to_value(&body).map_err(|err| {
+        ResponseError::from(build_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("failed to render manifest response: {err}"),
+            format,
+        ))
+    })?;
+    let response = utils::respond_value_with_format(body, format);
     attach_pdp_commitment_header_from_spool(
         &app.da_ingest.manifest_store_dir,
         &manifest_artifact,

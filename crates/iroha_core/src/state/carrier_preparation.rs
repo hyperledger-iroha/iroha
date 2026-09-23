@@ -4,9 +4,9 @@
 //! seal, source inventory and witness while staging deterministic metadata. It
 //! exposes no mutable State or publication operation. The existing commitment
 //! remains the execution-prefix projection, not a complete prepared State root.
-//! TODO: finish non-World/resource admission and consume the prepared journals
-//! under exact QC and durable Kura/Native authorization. Keep the existing
-//! execution commitment; complete ownership does not require a new wire root.
+//! Publication consumes these journals under exact finality and original
+//! State/Queue/Kura custody. The execution commitment remains unchanged.
+//! TODO: extend concrete shell admission to aggregate nested payload accounting.
 
 use super::{EventBox, StateBlock};
 use crate::{
@@ -29,10 +29,9 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
-pub(crate) use journals::CarrierArchivePreparationError;
-pub(crate) use journals::RetainedCarrier;
 pub(crate) use journals::{
-    CarrierJournalInputs, CarrierJournalPreparationError, CarrierJournalShellReservation,
+    CarrierArchivePreparationError, CarrierJournalPreparationError, CarrierJournalShellReservation,
+    RetainedCarrier,
 };
 pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 
@@ -98,9 +97,7 @@ impl<'state> PreparedCarrier<'state> {
             .map(|demand| demand.total_bytes())
     }
 
-    /// Reserve exact World/capture/effects shells from the original finite pool.
-    /// Other execution and publication demand must be admitted separately before
-    /// invoking the validator; this structural owner is not complete admission.
+    /// Reserve exact World, capture and effects shells before candidate execution.
     pub(crate) fn reserve_journal_shells<A>(
         budget: &mv::allocation::AllocationBudget,
     ) -> Result<journals::CarrierJournalShellReservation<A>, mv::allocation::AllocationRefusal>
@@ -112,6 +109,12 @@ impl<'state> PreparedCarrier<'state> {
     pub(in crate::state) fn reserve_journal_shells_for_test<A>()
     -> journals::CarrierJournalShellReservation<A> {
         journals::CarrierJournalShellReservation::for_test()
+    }
+
+    /// Exact inline allocation for the deferred effects owner captured by journals.
+    /// Nested payloads use their existing standard allocations and are excluded.
+    pub(crate) fn retained_effects_layout() -> std::alloc::Layout {
+        std::alloc::Layout::new::<journals::RetainedCarrierEffects>()
     }
 
     /// Inspect the exact retained Native custody without source reconstruction.
@@ -131,7 +134,7 @@ impl<'state> PreparedCarrier<'state> {
     /// Consume the exact validator output; errors drop every staged journal.
     pub(crate) fn prepare(
         input: ValidatedCarrierPreparationInput<'state>,
-    ) -> Result<Self, (Box<SignedBlock>, String)> {
+    ) -> Result<Self, (Box<SignedBlock>, super::MergeLedgerCommitError)> {
         execution_prefix::prepare(input)
     }
 

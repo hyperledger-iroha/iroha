@@ -108,9 +108,13 @@ Both exact boundary reruns, five resource tests, fourteen producer tests and
 nine public API tests pass. Two full-artifact tests remain excluded from that
 30-test count. The original complete shared-opening process disappeared without
 a terminal libtest summary after its host supervisor exited; its partial log
-does not establish completion. A rerun uses the final retained executable and
-writes stdout and exit status directly inside the guest. Its result remains
-pending. Only the two test owners changed between the first successful
+does not establish completion. The direct-guest rerun completed in 6,005.92 seconds:
+29 tests passed, none failed, and one explicitly ignored full-transfer diagnostic
+was not executed. The executable hash stayed unchanged. Its controller incorrectly
+expected 30 passes with no ignores and marked its receipt failed despite the zero
+test exit. The original receipt is retained alongside a separate observation
+binding the exact log, executable and 29-pass/one-ignore summary. No test was rerun
+to repair this accounting error. Only the two test owners changed between the first successful
 codec build and this rebuild. These runs reuse the existing Linux target with
 a command-line `profile.test.package.fastpq_prover.opt-level=2` override;
 debug assertions and overflow checks stay enabled. No workspace profile changed.
@@ -156,6 +160,89 @@ the retained shared-opening suite, with four workers per process. The guest had
 12 CPUs and 45,020,596 KiB available memory before dispatch. A shared kernel lock
 prevents the earlier queued continuation from dispatching a duplicate producer.
 The independent positive/negative captured-artifact test follows successful
-production of both artifacts. Neither full run is counted as complete here.
+production of both artifacts. The complete producer and separate captured-artifact
+controls now pass; the shared-opening selection finished with the 29-pass/one-ignore
+result above.
 Their shared-load development timings do not qualify release performance or a
 speedup.
+
+The ordinary fixed-row artifact subsequently completed self-verification and
+independent verification: 7,479,589 bytes, SHA256
+`f04743d3bd5747df43399a6f8cf603d49dc02e5e4353dce46e2b96c45190863d`.
+The retained file's size and digest were checked independently. This is 525,002
+bytes smaller than the previous two-segment encoding, exactly twice the row-codec
+saving. Proving including self-verification took 2,882.27 seconds and independent
+verification 20.69 seconds, with 750 AIR evaluations and two terminal checks.
+The AXT artifact also completed self-verification and independent verification:
+7,496,970 bytes, SHA256
+`fb721978fa1fe467e4bc1187d0cfe3e1590edd12f1dfa5546ddeb7ee4f427e29`.
+Proving including self-verification took 1,268.22 seconds, and independent
+verification took 14.26 seconds, with the same 750 AIR evaluations and two terminal
+checks. The combined producer exited zero in 4,186.93 seconds; maximum RSS was
+2,122,276 KiB. The retained executable hash stayed unchanged.
+
+The separate captured-artifact test passed in 29.08 seconds. It verifies both
+artifacts against an independently prepared fixture and rejects wrong caller
+context, child reordering and truncation. Its before/after input hashes agree.
+All source, executable, artifact and log bindings remain in `borrowed-frame/`.
+Both artifacts exceed production size limits; these shared-load development
+measurements do not qualify production latency or memory.
+
+## Cached field reduction
+
+The cached six-lane hash now uses the unsigned Goldilocks carry/borrow reduction
+already used by the Metal field kernel. Its correction bounds cover arbitrary
+u64 operands, and the final result remains canonical. The unchanged one-shot and
+streaming hash implementations remain independent output oracles. The applied
+prefix source SHA256 is
+`0ad3a37fa36f6981ba59043ec20a18a4d08ae016c9d29fef64edc73fcb430c26`.
+
+Two new regression tests cover 324 boundary products, all four carry/borrow
+branches and 65,536 deterministic full-width products against u128 remainder.
+The complete dependency-free `fastpq_isi` unit harness, built directly from the
+maintained source with Rust 1.93.1, opt-level 2, debug assertions and overflow
+checks, passes 68 tests in 2.44 seconds. Its one timing diagnostic remains ignored.
+All eleven captured crate files stay unchanged through compilation and execution.
+This direct-rustc result is separate from the pending Cargo/dependent-prover gate.
+
+A balanced comparison of the actual cached hash checks 32 row-size and 64
+parent-size byte fields against both unchanged one-shot owners, including every
+timed output. Median row hashing was 5.477 to 4.578 ms; parent hashing was 0.408
+to 0.346 ms. These are shared-guest development observations for raw typed fields,
+excluding Norito framing, and do not establish a complete-prover or release
+speedup. The earlier checked-arithmetic variant regressed and was not applied.
+Final primitive receipts are in `prefix-reduction-final/`; the comparison remains
+in `prefix-reduction-stage/full-prefix/run-opt2-checked/` under this date's validation
+directory. The completed full producer used its earlier retained executable and
+did not exercise this arithmetic change. The focused macOS Clippy check for the
+corrected constant placement passes; the attempted full workspace-lint invocation
+retains pre-existing test-cast diagnostics and a manifest-feature diagnostic, so
+strict Clippy is not established by that invocation.
+
+## Replacement protocol algebra
+
+The first real-crate build of the projected public columns, checked DEEP
+composition and radix-2/4/8/16 folding passed in 491.54 seconds. All captured
+source hashes stayed unchanged. Its library executable SHA256 is
+`041e6e4651a247bef26b8b58ecd67bb3411a923bb57414ea9d1c47d01d599c26`;
+the public integration executable is
+`0d05d3fb1e8f965201eae467adaaa78a1c1608dcabaffe5bca8f7311eafe4af2`.
+
+All 58 selected tests passed, with no failures or ignores: eight folding tests,
+five public-column tests, eight DEEP composition tests, 16 framing tests, seven
+existing profile checks, five fixed-row codec tests and nine public API tests.
+Folding tests compare independent coefficient evaluation for every supported
+arity and extension challenge coordinate, malformed-input atomicity, and one/four
+worker parity. Projection tests cover physical rows and off-domain base/Fp4
+polynomials; composition tests independently divide polynomials and check all
+606 components and their required degree shifts. The dependent hash consumers
+also exercise the updated cached reduction. Complete producers were not rerun
+on this executable. Receipts and logs are in `deep-algebra/`.
+
+The build exposed unused-item warnings because the projected-column module was
+registered in the normal library before its consumer exists. Its registration
+was then restricted to tests, matching the two other unintegrated algebra
+owners. That one-line registration correction postdates this executable and
+needs the next coherent compile. No lint suppression or production dispatch was
+added. These modules are replacement-protocol implementation work; complete
+wire, transcript, prover, verifier and admission integration remain unfinished.

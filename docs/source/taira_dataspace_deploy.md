@@ -10,21 +10,13 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
-## Validator committee readiness
+## Validator epoch authorization
 
-Scheduling epochs retain the authenticated mint authority and beacon until an
-incumbent-certified boundary activates a fully prepared replacement. The removed
-rolling epoch schedule and supervisor are not deployment prerequisites.
-
-Operators inspect the selected future committee with `iroha staking committee
-status` using an independent context/height anchor, publish consented candidate
-keys, prepare the exact finalized beacon credentials, and admit every selected
-seat's actual key/share possession proof. Kagami can produce an individual
-candidate publication and exact-attempt readiness proof from inherited secret
-pipes. Public proof generation and successful submission do not establish runtime
-credential installation. Boundary finality alone certifies activation or retains
-the current authority and cancels an incomplete attempt. Dataspace deployment
-receives no validator secrets and does not own these committee operations.
+Scheduling epochs advance through certified contiguous authorizations that
+retain the incumbent authority generation, its original signing keys and the
+authenticated beacon session. The current production boundary retains that
+authority; prepared generation activation is not operational. Application
+deployment requires no validator seed material or key renewal transaction.
 
 ## Commands
 

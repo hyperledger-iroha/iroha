@@ -1,5 +1,113 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _quarantined_retained_marker_replay_errors(path: Path, source: str) -> list[str]:
+    """Bind recovery to the original store/service pair transferred into live execution."""
+    errors: list[str] = []
+    label = "fixed quarantined recovered marker replay"
+    item = _require_qualified_rust_item(
+        path, source, "QuarantinedV2BodyStore", "into_revalidated_lifecycle_startup",
+        errors, label,
+    )
+    if item is None:
+        return errors
+    markers = (
+        "fn into_revalidated_lifecycle_startup(",
+        "apply_service: V2ApplyService",
+        "context: super::v2::VerifiedHeightContext",
+        "Result<(RevalidatedV2BodyStore, super::v2_apply::NativeApplyService), V2ApplyError>",
+        "apply_service.recovered_finality_subject(context.context())",
+        "self.0.retain_recovered_markers_for_subject(subject)",
+        "self.0.retain_recovered_markers_for_authority(validation_authority)",
+        "let mut service = super::v2_apply::NativeApplyService::new(apply_service, &self.0, context)?",
+        "service.revalidate_recovered_markers(&mut self.0)?",
+        "let store = self.0.into_revalidated_startup()?",
+        "Ok((store, service))",
+    )
+    body = rust_code_tokens(item.source)
+    cursor = 0
+    for marker in markers:
+        tokens = rust_code_tokens(marker)
+        position = next((
+            index for index in range(cursor, len(body) - len(tokens) + 1)
+            if body[index:index + len(tokens)] == tokens
+        ), -1)
+        if position < 0:
+            errors.append(f"{path}: {label} must preserve exact production order {markers}")
+            break
+        cursor = position + len(tokens)
+    for token in (
+        "NativeApplyService::new(",
+        "service.revalidate_recovered_markers(",
+        "self.0.into_revalidated_startup(",
+    ):
+        count = _token_sequence_count(body, rust_code_tokens(token))
+        if count != 1:
+            errors.append(f"{path}: {label} requires one {token!r}; found {count}")
+    for token in (".revalidate_recovered_markers(|", ".revalidate_recovered_candidate("):
+        if _token_sequence_count(body, rust_code_tokens(token)):
+            errors.append(f"{path}: {label} retained forbidden scalar replay {token!r}")
+    return errors
+
+
+def _retained_replay_factory_errors(path: Path, source: str) -> list[str]:
+    """Require one authenticated recovery factory to transfer its replayed store/service pair."""
+    errors: list[str] = []
+    label = "canonical Kura-bound lifecycle-owner factory"
+    item = _require_qualified_rust_item(
+        path, source, "AuthenticatedRecoveredAdapterStartup",
+        "open_production_lifecycle_owner_with_pending_kura_v1", errors, label,
+        expected_attributes=("#[allow(clippy::result_large_err, clippy::too_many_arguments)]",),
+    )
+    if item is None:
+        return errors
+    markers = (
+        'factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1',
+        'body_store: super::v2_body_store::QuarantinedV2BodyStore',
+        'pending_kura: Option<&RecoveredPendingKuraApplyReplayV1>',
+        'if pending_kura.is_some() && !matches!(self.authority, RecoveredWalStartupAuthorityV1::None)',
+        'if !self.effects.is_empty()',
+        'let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, local_signer, } = factory_inputs',
+        'Arc::ptr_eq(&adapter_owner, &self.factory_owner)',
+        'storage.context_id != context.id() || storage.height != context.height',
+        'body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )',
+        'self.adapter.wal.matches_path(&storage.wal_path)',
+        'let apply_service = super::v2_apply::V2ApplyService::new(',
+        'storage.genesis_account.clone()',
+        'apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )',
+        'let replay_context = VerifiedHeightContext { context: self.adapter.wire_context.clone(), proofs_of_possession: self.adapter.proofs_of_possession.clone(), parent_verification: self.adapter.parent_verification.clone(), }',
+        'let (body_store, apply_service) = body_store .into_revalidated_lifecycle_startup(apply_service, replay_context, validation_authority)',
+        'let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage',
+        'self.open_production_lifecycle_owner_v1_at_authenticated_roots(',
+        'let owner = match successor_floor',
+        'owner.authenticate_recovered_successor_floor(floor)',
+        'let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, local_signer: Some(local_signer.public_key().clone()), }',
+        'owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)',
+    )
+    body = rust_code_tokens(item.source)
+    cursor = 0
+    for marker in markers:
+        tokens = rust_code_tokens(marker)
+        position = next((
+            index for index in range(cursor, len(body) - len(tokens) + 1)
+            if body[index:index + len(tokens)] == tokens
+        ), -1)
+        if position < 0:
+            errors.append(f"{path}: {label} must preserve exact production order {markers}")
+            break
+        cursor = position + len(tokens)
+    for token in (
+        "V2ApplyService::new(",
+        "let replay_context = VerifiedHeightContext",
+        ".into_revalidated_lifecycle_startup(",
+        "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
+        "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
+    ):
+        count = _token_sequence_count(body, rust_code_tokens(token))
+        if count != 1:
+            errors.append(f"{path}: {label} requires one {token!r}; found {count}")
+    return errors
+
+
 def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind recovered-height storage, lifecycle, and ingress sources."""
 
@@ -555,31 +663,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
                 "fn open_production_lifecycle_owner_v1_at_authenticated_roots(",
             )
-            require_order(
-                adapter_path,
-                "canonical Kura-bound lifecycle-owner factory",
-                canonical_owner_factory,
-                (
-                    "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
-                    "body_store: super::v2_body_store::QuarantinedV2BodyStore",
-                    "if !self.effects.is_empty()",
-                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, local_signer, } = factory_inputs",
-                    "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
-                    "storage.context_id != context.id() || storage.height != context.height",
-                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
-                    "self.adapter.wal.matches_path(&storage.wal_path)",
-                    "let apply_service = super::v2_apply::V2ApplyService::new(",
-                    "storage.genesis_account.clone()",
-                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
-                    "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage",
-                    "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
-                    "let owner = match successor_floor",
-                    "owner.authenticate_recovered_successor_floor(floor)",
-                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, local_signer: Some(local_signer.public_key().clone()), }",
-                    "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
-                ),
-            )
+            errors.extend(_retained_replay_factory_errors(adapter_path, adapter_source))
             reject_tokens(
                 adapter_path,
                 "canonical Kura-bound lifecycle-owner factory",
@@ -729,14 +813,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "BlockSignaturePolicy::GenesisAuthority(",
                         "WalRecordV2::Decision(decision.clone())",
                         "let owner = result.unwrap_or_else",
-                        "let mut lane_work = super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(",
+                        "let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard)",
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
                         ".with_runner_setup(&mut setup_runner",
                         "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
-                        "launched.drive_completion_turn_for_test(runner, &mut lane_work)",
+                        "launched.drive_completion_turn_for_test(runner)",
                         "ProductionCompletionDispatchV1::ApplyQueued",
-                        "launched.drive_completion_turn_for_test(runner, &mut lane_work)",
+                        "launched.drive_completion_turn_for_test(runner)",
                         "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched .activate(Instant::now(), activation, local_proposal_state)",
@@ -752,13 +836,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted",
                         "!selected.restart_required()",
                         "let mut runner = super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test()",
-                        "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
+                        "settle_terminal_fixture_runner_handoff(&mut activated, &mut runner, &mut native, output_guard.as_ref(),)",
+                        "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(activated, &mut runner, &mut native, 64, &mut cleanup_supervisor,",
                         "assert_eq!(receipt.context_id(), recovered_context.id())",
                         "assert_eq!(artifact.subject, subject)",
-                        ".retain_merge_sidecars_for_global_view(",
                         "let mut successor = recovered_context.clone()",
+                        "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
                         "Ok::<_, super::super::v2_runner::V2RunnerError>((successor, ()))",
-                        "drop(retained_sidecars)",
                         "assert!(outcome.cleanup().warnings().is_empty())",
                         "assert!(outcome.wal_retirement_warning().is_none())",
                     ),
@@ -832,20 +916,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "impl QuarantinedV2BodyStore {",
                 "impl RevalidatedV2BodyStore {",
             )
-            require_order(
-                body_store_path,
-                "fixed quarantined recovered marker replay",
-                quarantine,
-                (
-                    "fn into_revalidated_lifecycle_startup(",
-                    "apply_service.recovered_finality_subject(context)",
-                    "self.0.retain_recovered_markers_for_subject(subject)",
-                    "self.0.retain_recovered_markers_for_authority(validation_authority)",
-                    "self.0.revalidate_recovered_markers(|body|",
-                    "apply_service.revalidate_recovered_candidate(context, body)",
-                    "self.0.into_revalidated_startup()",
-                ),
-            )
+            errors.extend(_quarantined_retained_marker_replay_errors(
+                body_store_path, body_store_source,
+            ))
             reject_tokens(
                 body_store_path,
                 "fixed quarantined recovered marker replay",
@@ -1298,7 +1371,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "let (ready_to_finish, executor_slice, ready_proposal_sign_preempts_producer) =",
                     "drain_disposition.terminal_settlement_stops_runtime()",
                     "AdvanceExecutorSliceOutcomeV1::Idle",
-                    "let executor_slice = advance_executor(receiver, owner, executor, services, 1)?;",
+                    "let executor_slice = advance_executor(receiver, owner, executor, services, producer_claim.required_ready_ordinal(), 1,)?;",
                     "ready_proposal_sign_preempts_bounded_producer_point(fence)",
                     "if ready_proposal_sign_preempts_producer",
                     "continue;",
@@ -1312,27 +1385,27 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "if terminal_planning_fenced && !ready_to_finish",
                     "if !terminal_planning_fenced",
                     "pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)",
-                    "refresh_pending_queue_plan_admission_handoffs(active_view)",
+                    "queue_plan.needs_refresh(active_view)?",
+                    "queue_plan.refresh(active_view)?",
                     "let producer_turn = if terminal_planning_fenced",
                     "claim_producer_turn_for_local_proposal",
                     "schedule_local_proposal(",
                     "claimed.into_attempted",
                     "settle_producer_turn_after_local_proposal",
-                    "let finalization_ready = if ready_to_finish",
+                    "let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve()",
                     "activated.ready_for_finalized_rollover(&mut active_runner)?",
                     "if ready_to_finish && !finalization_ready",
                     "let rollover_ready = if finalization_ready",
-                    "preflight_finalized_lane_rollover(",
+                    "preflight_finalized_native_rollover(executor, services, native)",
                     "if finalization_ready && !rollover_ready",
                     "if rollover_ready",
                     "reconcile_terminal_lane_output_handoffs(",
                     "close_runner_ingress_for_finalized_drain(",
                     "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
                     "drain_finalized_lane_relay_prefix(",
-                    "dispatch_lane_work_effects(",
-                    "let terminal_exact_output_pending =",
+                    "dispatch_queue_plan_admission_effects(",
                     "reconcile_terminal_lane_output_handoffs(",
-                    "if terminal_exact_output_pending",
+                    "if block_sync_server.has_pending_historical_body_serve()",
                     "if drained_terminal_ingress || drained_terminal_relay",
                     "ensure_closed_drained_cut()",
                     "finalize_lifecycle_height(",
@@ -1364,7 +1437,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "fn rollover_finalized_height_outputs_for_lifecycle(",
                     "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleOutputRolloverPermitV1",
-                    "rollover_finalized_height_outputs(",
+                    "let authority = native.finalized_output_authority(receipt, artifact)",
+                    "services.handoff_native_height_output_to_durable_reconstruction(receipt, artifact, &authority)",
+                    "services.seal_native_height_output_handoff(receipt, artifact, &authority)?",
+                    "native.complete_output_handoff(receipt, artifact)",
                 ),
             )
             store_retirement = region(

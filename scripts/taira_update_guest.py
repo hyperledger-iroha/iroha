@@ -36,7 +36,6 @@ FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
 DEPLOYMENT_LOCK_FD = None
-DEPLOYMENT_STATE_ROOT = Path('/var/lib/taira')
 RETIRED_WORKER_STATE = Path('/var/lib/taira-epoch-supervisor')
 RETIRED_WORKER_UNIT = Path('/etc/systemd/system/iroha-taira-epoch-supervisor.service')
 
@@ -91,6 +90,22 @@ ENV = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root', 'LC_ALL': 'C'}
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def validate_update_plan_shape(plan):
+    """Admit the sole update contract before dispatch or failed-start recovery."""
+    required = {'schema', 'commit', 'network_id', 'artifacts', 'operation', 'deployment',
+                'units', 'retained_predecessor', 'guest_sha256', 'capacity_sha256',
+                'runner_sha256', 'renderer_sha256', 'secret_contents_read',
+                'transaction_submission', 'python_transaction_submission'}
+    optional = {'failed_start', 'build_result_path', 'build_result_sha256'}
+    need(isinstance(plan, dict) and required <= set(plan) <= required | optional,
+         'update plan fields differ from the canonical contract')
+    need(plan['schema'] == 'taira.daemon-update.plan.v1'
+         and ('build_result_path' in plan) == ('build_result_sha256' in plan)
+         and all(plan[field] is False for field in
+                 ('secret_contents_read', 'transaction_submission', 'python_transaction_submission')),
+         'update plan schema or read-only custody claims differ')
 
 
 def load_capacity(plan, capacity_source):
@@ -165,6 +180,7 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
     """Authenticate public failed-start lineage without inventing a completed runtime."""
     reject_retired_worker_plan(failed)
     reject_retired_worker_plan(baseline)
+    validate_update_plan_shape(failed)
     current = deployment['current']
     roles = deployment['roles']
     units = [f'iroha3d-{role}.service' for role in roles]
@@ -1093,6 +1109,10 @@ def cohort_observation_owner(pid=None):
             'argv': ['/usr/bin/python3', '-I', '-'], 'lock': {'device': device, 'inode': inode}}
 
 
+
+DEPLOYMENT_STATE_ROOT = Path('/var/lib/taira-deployment')
+
+
 def stopped_owner_maintenance(operation):
     """Let the native custody owner retire only the proven stopped cohort."""
     request_name = 'stopped-owner-maintenance-request.json'
@@ -1239,6 +1259,7 @@ def retained_attempt(plan):
 
 
 def apply(plan, capacity_source):
+    validate_update_plan_shape(plan)
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
     need(plan['commit'] != PREDECESSOR['commit'], 'candidate cannot repeat the completed runtime')
@@ -1389,6 +1410,7 @@ def apply(plan, capacity_source):
                 'validator_stop_confirmed': validator_stop_confirmed,
                 'installed_units': [row['role'] for row in installed]})
         finally:
+            # Failure-record I/O must not suppress candidate containment.
             if new_start_attempted:
                 # Keep the failed candidate and its retained state for diagnosis,
                 # while preventing the service supervisor from repeating failures.
@@ -1443,7 +1465,7 @@ def verify_prepared_artifacts(plan):
     need(re.fullmatch('[0-9a-f]{40}', plan['commit'])
          and re.fullmatch('update-[0-9a-f]{32}', plan['operation']), 'invalid prepared operation')
     root = stamp(DEPLOYMENT_STATE_ROOT, True)
-    need(root[4] == 0, 'deployment state root custody differs')
+    need(stat.S_IMODE(root[2]) == 0o700 and root[4] == 0, 'deployment state root custody differs')
     path = DEPLOYMENT_STATE_ROOT / '.deployment.lock'
     fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
     try:
@@ -1486,7 +1508,8 @@ def deployment_locks(plan):
                            (DEPLOYMENT_STATE_ROOT, '.deployment.lock')):
             metadata = stamp(root, True)
             if root == DEPLOYMENT_STATE_ROOT:
-                need(metadata[4] == 0, 'deployment state root custody differs')
+                need(stat.S_IMODE(metadata[2]) == 0o700 and metadata[4] == 0,
+                     'deployment state root custody differs')
             path = root / name
             flags = os.O_RDWR | os.O_NOFOLLOW
             if name == '.routine-update.lock':
@@ -1512,6 +1535,6 @@ def deployment_locks(plan):
 
 
 def apply_locked(plan, capacity_source):
-    """Hold both update flocks across validator publication and containment."""
+    """Hold both update flocks across stop, publication, restart and containment."""
     with deployment_locks(plan):
         apply(plan, capacity_source)

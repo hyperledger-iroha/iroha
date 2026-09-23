@@ -402,23 +402,42 @@ fn lifecycle_decision_apply_source_keeps_explicit_lineage_outside_generic_effect
             "lifecycle Apply task reintroduced generic owner {forbidden}"
         );
     }
-    let lifecycle_execute = apply_source
-        .split_once("fn execute_lifecycle_decision_apply(")
+    let retained_apply_source = include_str!("../v2_apply/native_validation.rs");
+    let lifecycle_execute = retained_apply_source
+        .split_once("fn execute_retained_lifecycle_apply(")
         .expect("dedicated lifecycle Apply executor remains present")
         .1
-        .split_once("fn execute_exact_apply(")
-        .expect("dedicated lifecycle Apply executor precedes the shared core")
+        .split_once("/// The startup-created application service")
+        .expect("dedicated lifecycle Apply executor precedes the startup service")
         .0;
     assert!(
         lifecycle_execute
             .find("matches_height_context(context)")
             .is_some_and(|oracle| {
                 lifecycle_execute
-                    .find("self.execute_exact_apply(")
+                    .find("self.publish_retained_task(")
                     .is_some_and(|execute| oracle < execute)
             }),
         "lifecycle Apply must authenticate its exact context before storage execution"
     );
+    assert_eq!(
+        lifecycle_execute.matches("self.publish_retained_task(").count(),
+        1,
+        "lifecycle Apply must consume one original retained publication"
+    );
+    for required in [
+        "task.exact_lineage()",
+        "super::ExactApplyTaskRef::LifecycleLive(&task)",
+        "super::ExactApplyTaskRef::LifecycleRecovered(&task)",
+        "None => return Err(V2ApplyError::TaskMismatch)",
+        "LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }",
+        "LifecycleCarrierPublication::Actual(published)",
+    ] {
+        assert!(
+            lifecycle_execute.contains(required),
+            "lifecycle Apply lost original lineage/publication ownership: {required}"
+        );
+    }
     let live_carrier_source =
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_work_registry_source_for_test(
         );
@@ -1819,4 +1838,303 @@ pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
         0,
     )
     .expect("same-row semantic completion retains the exact final acknowledgement")
+}
+
+
+impl LifecyclePlannerIoFixture {
+    /// Transfer one original ordinary Apply through its real queue and deferred callback.
+    pub(in crate::sumeragi) fn publish_ordinary_apply_deferred_for_test(
+        &self,
+        services: &ProductionV2Services,
+        task: ApplyTask,
+        refusal: super::super::v2_body_store::LocalValidationRefusal,
+    ) {
+        let work_id = task.id();
+        let ordinal = task.lifecycle_ordinal();
+        services
+            .io
+            .as_ref()
+            .expect("live worker")
+            .command_tx
+            .try_send(V2IoCommand::Apply(task))
+            .expect("admit the original Apply to the actual bounded worker queue");
+        let V2IoCommand::Apply(task) = self.command_rx.try_recv().expect("activate original Apply")
+        else {
+            panic!("the queue changed the original Apply command kind");
+        };
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::ApplyDeferred { task, refusal },
+            Some(ordinal),
+        )
+        .expect("publish the original deferred callback under real completion accounting");
+    }
+
+    /// Inspect the physical head without creating any event that could drive a retry.
+    pub(in crate::sumeragi) fn assert_ordinary_apply_wait_for_test(
+        &self,
+        services: &ProductionV2Services,
+        pending: bool,
+        command_depth: usize,
+    ) {
+        assert_eq!(services.pending_local_apply.is_some(), pending);
+        assert!(services.held_io_completion.is_none());
+        assert!(services.available_local_completion().is_none());
+        assert!(
+            matches!(
+                services
+                    .io
+                    .as_ref()
+                    .expect("live worker")
+                    .completion_rx
+                    .try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ),
+            "the physical completion channel is empty and still connected"
+        );
+        assert!(
+            self.admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .is_empty()
+        );
+        let state = self.command_rx.queue.lock();
+        assert_eq!(state.commands.len(), command_depth);
+        assert_eq!(state.work.len(), usize::from(!pending));
+        assert_eq!(self.admission.queued(), command_depth);
+    }
+
+    /// Saturate only real command capacity, without generating any completion.
+    pub(in crate::sumeragi) fn fill_ordinary_apply_retry_queue_for_test(
+        &self,
+        services: &ProductionV2Services,
+    ) -> usize {
+        let sender = &services.io.as_ref().expect("live worker").command_tx;
+        for count in 0..=self.admission.capacity() {
+            match sender.try_send(V2IoCommand::Shutdown) {
+                Ok(()) => {}
+                Err(V2IoTrySendError::Full(V2IoCommand::Shutdown)) => {
+                    assert!(count > 0);
+                    return count;
+                }
+                _ => panic!("the connected bounded queue must refuse only for capacity"),
+            }
+        }
+        panic!("the actual command queue did not enforce its configured bound");
+    }
+
+    /// Return command capacity without publishing an unrelated physical callback.
+    pub(in crate::sumeragi) fn release_ordinary_apply_retry_queue_for_test(&self, count: usize) {
+        for _ in 0..count {
+            assert!(matches!(
+                self.command_rx.try_recv(),
+                Ok(V2IoCommand::Shutdown)
+            ));
+        }
+        assert!(matches!(
+            self.command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    /// Consume exactly one retried command and verify every original Apply coordinate.
+    pub(in crate::sumeragi) fn assert_and_finish_ordinary_apply_retry_for_test(
+        &self,
+        services: &ProductionV2Services,
+        original: &ApplyTask,
+    ) {
+        let V2IoCommand::Apply(queued) = self.command_rx.try_recv().expect("one retried Apply")
+        else {
+            panic!("retry changed the original command kind");
+        };
+        assert_eq!(queued.id(), original.id());
+        assert_eq!(queued.tag(), original.tag());
+        assert_eq!(
+            queued.authorized_owner_tag(),
+            original.authorized_owner_tag()
+        );
+        assert_eq!(queued.subject(), original.subject());
+        assert_eq!(queued.certificate(), original.certificate());
+        assert_eq!(queued.validated_receipt(), original.validated_receipt());
+        assert_eq!(queued.lifecycle_ordinal(), original.lifecycle_ordinal());
+        assert!(
+            matches!(self.command_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "bounded pre-gate probes cannot duplicate the original task"
+        );
+        self.command_rx.complete_work(queued.id());
+        services
+            .io
+            .as_ref()
+            .expect("live worker")
+            .command_tx
+            .acknowledge_completion(queued.id());
+        assert!(self.command_rx.queue.lock().work.is_empty());
+        assert_eq!(self.admission.queued(), 0);
+    }
+}
+
+
+impl LifecyclePlannerIoFixture {
+    /// Exercise an actual live/recovered Apply's guarded physical wait before finality.
+    /// The same move-only task is returned to its existing worker queue on success.
+    pub(in crate::sumeragi) fn retry_lifecycle_apply_after_physical_release_for_test(
+        &mut self,
+        services: &mut ProductionV2Services,
+    ) {
+        use super::super::v2_body_store::{BodyValidationBusy, LocalValidationRefusal};
+        let V2IoCommand::LifecycleDecisionApply(task) = self
+            .command_rx
+            .try_recv()
+            .expect("activate the original registry-admitted lifecycle Apply")
+        else {
+            panic!("the actual live/recovered Apply must own the next command");
+        };
+        let key = task.dispatch_key();
+        let original = (
+            task.exact_tag(),
+            task.subject(),
+            task.certificate().clone(),
+            task.validated_receipt().clone(),
+        );
+        let assert_original = |task: &crate::sumeragi::v2_apply::LifecycleDecisionApplyTaskV1| {
+            assert_eq!(task.dispatch_key(), key);
+            assert_eq!(task.exact_tag(), original.0);
+            assert_eq!(task.subject(), original.1);
+            assert_eq!(task.certificate(), &original.2);
+            assert_eq!(task.validated_receipt(), &original.3);
+        };
+        let (events, _) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+        ));
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        queue.set_sumeragi_wake(wake_tx);
+        let held = queue.lock_lane_retirement_observer();
+        let wait = match queue.try_lock_lane_retirement_observer() {
+            Err(wait) => wait,
+            Ok(_) => panic!("the original physical Queue fence is held"),
+        };
+        let result = LifecycleDecisionApplyWorkerResultV1::Deferred {
+            task,
+            refusal: LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
+                "lane_reservation_transition_lock",
+                wait,
+                queue.sumeragi_waker(),
+            )),
+        };
+        self.command_rx
+            .complete_lifecycle_decision_apply(key, &result)
+            .expect("retain the exact command as CompletionPending");
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::LifecycleDecisionApply(Box::new(
+                GuardedLifecycleDecisionApplyWorkerResultV1::new(
+                    result,
+                    Arc::clone(&services.output_guard),
+                ),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish the guarded original Deferred result through the physical channel");
+        let mut completion = match services
+            .take_next_lifecycle_completion()
+            .expect("classify original Deferred Apply")
+        {
+            LifecycleCompletionTakeV1::Apply(completion) => completion,
+            _ => panic!(
+                "the dedicated Apply must retain its guarded result and exact acknowledgement"
+            ),
+        };
+        let owners = completion_owner_snapshot(&self.admission, None);
+        let assert_retained = |completion: &PreparedLifecycleDecisionApplyCompletionV1| {
+            let LifecycleDecisionApplyWorkerResultV1::Deferred { task, .. } = completion.result()
+            else {
+                panic!("physical contention cannot publish application finality");
+            };
+            assert_original(task);
+            assert_eq!(
+                self.command_rx.queue.lock().lifecycle_decision_applies[&key].state,
+                V2IoWorkState::CompletionPending
+            );
+            assert_eq!(completion_owner_snapshot(&self.admission, None), owners);
+            assert!(!services.output_guard.restart_required());
+        };
+        for _ in 0..3 {
+            completion = match completion.retry_deferred() {
+                LifecycleDecisionApplyDeferredRetryV1::Unavailable(retained) => retained,
+                _ => panic!("no retry before the original physical dependency releases"),
+            };
+            assert_retained(&completion);
+        }
+        let (events, _) = tokio::sync::broadcast::channel(8);
+        let foreign = crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+        );
+        drop(foreign.lock_lane_retirement_observer());
+        assert!(
+            wake_rx.try_recv().is_err(),
+            "a foreign Queue cannot wake the retained original Apply"
+        );
+        completion = match completion.retry_deferred() {
+            LifecycleDecisionApplyDeferredRetryV1::Unavailable(retained) => retained,
+            _ => panic!("a foreign release cannot authorize the original task"),
+        };
+        assert_retained(&completion);
+        let occupied = self.fill_ordinary_apply_retry_queue_for_test(services);
+        drop(held);
+        wake_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("the same registered future must survive every returned guarded completion");
+        for _ in 0..3 {
+            completion = match completion.retry_deferred() {
+                LifecycleDecisionApplyDeferredRetryV1::Unavailable(retained) => retained,
+                _ => panic!("physical release cannot bypass the actual worker queue bound"),
+            };
+            assert_retained(&completion);
+        }
+        self.release_ordinary_apply_retry_queue_for_test(occupied);
+        assert!(
+            matches!(
+                services
+                    .io
+                    .as_ref()
+                    .expect("live worker")
+                    .completion_rx
+                    .try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ),
+            "capacity returns without an unrelated physical completion"
+        );
+        assert!(matches!(
+            completion.retry_deferred(),
+            LifecycleDecisionApplyDeferredRetryV1::Requeued
+        ));
+        let state = self.command_rx.queue.lock();
+        assert_eq!(state.commands.len(), 1);
+        let Some(V2IoCommand::LifecycleDecisionApply(task)) = state.commands.front() else {
+            panic!("the exact original task must re-enter the dedicated queue");
+        };
+        assert_original(task);
+        assert_eq!(
+            state.lifecycle_decision_applies[&key].state,
+            V2IoWorkState::Queued
+        );
+        assert_eq!(self.admission.queued(), 1);
+        assert!(
+            !self
+                .admission
+                .lifecycle_decision_apply_completion_is_exact(key)
+        );
+        assert!(completion_owner_snapshot(&self.admission, None).is_empty());
+        assert!(!services.output_guard.restart_required());
+        // The caller now executes this exact task and retains all its existing
+        // LedgerV1, executor, validation-seal retirement, and finality assertions.
+    }
 }

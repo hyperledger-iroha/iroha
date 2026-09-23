@@ -2099,7 +2099,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_da_read_endpoints_dispatch() {
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
         (1045, "iroha.da.proof_policies", norito::json!({})),
-        (1046, "iroha.da.proof_policy_snapshot", norito::json!({})),
         (
             1047,
             "iroha.da.manifests.get",
@@ -2920,8 +2919,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.da.proof_policy_snapshot"),
-        "expected agent-friendly DA proof-policy snapshot MCP tool"
+            .all(|name| name != "iroha.da.proof_policy_snapshot"),
+        "duplicate proof-policy snapshot MCP tool must remain retired"
     );
     assert!(
         names.iter().any(|name| name == "iroha.da.manifests.get"),

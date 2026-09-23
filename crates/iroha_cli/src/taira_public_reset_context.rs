@@ -1,4 +1,4 @@
-//! Current typed topology intent and native-derived pre-plan reset context.
+//! Current typed topology intent and native-derived reset context.
 use super::*;
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -60,14 +60,13 @@ pub(in super::super) struct ResetTopologyIntentV1 {
     pub(in super::super) timeouts: TimeoutsV1,
 }
 
-/// Real native local inputs required before either generated plan exists.
+/// Real native local inputs required before the generated beacon plan exists.
 #[derive(clap::Args, Debug)]
 pub(in super::super) struct ResetContextInputs {
     #[arg(long, value_name = "DIR")]
     pub(in super::super) public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     pub(in super::super) runtime_client_config: PathBuf,
-    #[arg(long, value_name = "PATH")]
     #[arg(long, value_name = "PATH", num_args = 4)]
     pub(in super::super) validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
@@ -167,7 +166,6 @@ impl DerivedResetContext {
         beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
     ) -> Result<InventoryV1> {
         self.revalidate()?;
-
         let mut value = InventoryV1 {
             schema: INVENTORY_SCHEMA_V1.into(),
             qualification_scope: self.intent.qualification_scope.clone(),
@@ -244,7 +242,7 @@ pub(in super::super) fn derive_reset_context(
         .collect::<Vec<_>>();
     let known_hosts = validate_known_host_endpoints(&endpoints, &inputs.known_hosts)?;
     let (runtime, mut pins) = derive_runtime_parts(intent, inputs, &public)?;
-    let wire = derive_authenticated_genesis(inputs, &public)?;
+    let wire = pin_authenticated_genesis(inputs, &public)?;
     let wire_bytes = pinned_bytes(&wire, 64 * 1024 * 1024)?;
     deployment_profile::derive_admitted_profile(
         &public.genesis_hash,
@@ -254,7 +252,6 @@ pub(in super::super) fn derive_reset_context(
         &public,
         &wire_bytes,
     )?;
-
     pins.extend(release.pins);
     pins.extend([operator, wire, known_hosts]);
     let context = DerivedResetContext {
@@ -281,7 +278,8 @@ pub(in super::super) fn derive_reset_context(
     Err(eyre!("native reset context requires Unix"))
 }
 
-fn derive_authenticated_genesis(
+/// Pin and authenticate both native genesis representations before deriving trust.
+fn pin_authenticated_genesis(
     inputs: &ResetContextInputs,
     public: &public_inputs::PublicInputsV1,
 ) -> Result<PinnedInput> {
@@ -301,7 +299,7 @@ fn derive_authenticated_genesis(
     if sha256_hex(&manifest_bytes) != public.raw_manifest_sha256
         || sha256_hex(&wire_bytes) != public.signed_genesis_sha256
     {
-        return Err(eyre!("genesis differs from authenticated bundle"));
+        return Err(eyre!("signed genesis differs from authenticated bundle"));
     }
     iroha_genesis::validate_prepared_genesis_bundle(
         &wire_bytes,

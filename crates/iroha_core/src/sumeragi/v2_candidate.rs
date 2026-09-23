@@ -545,8 +545,8 @@ impl V2CandidateAssembler {
     /// retains the immutable driver handoff across errors; once preparation is
     /// complete, all its waits and evidence return beside the assembly outcome.
     /// No State execution, validation vote, publication or Apply occurs here.
-    /// TODO: connect this entry point together with the retained consumer at the
-    /// process-lived runner cutover; Native ingress remains closed until then.
+    /// The process-lived candidate worker returns this original preparation on
+    /// every outcome; source waits never become ordinary execution or empty work.
     pub(crate) fn assemble_native(
         &self,
         request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
@@ -856,7 +856,9 @@ impl V2CandidateAssembler {
                         let trial = native_base
                             .clone()
                             .retain_native_lane_decision_prefix(mid)
-                            .map_err(CandidateError::CanonicalEncoding)?;
+                            .map_err(CandidateError::CanonicalEncoding)?
+                            .with_network_input_time_floor(candidate_creation_time)
+                            .ok_or(CandidateError::BlockTimeOverflow)?;
                         let bytes = trial
                             .canonical_proposal_wire_len(
                                 u64::from(request.local_validator),
@@ -878,7 +880,9 @@ impl V2CandidateAssembler {
                     if low < original_count {
                         builder = builder
                             .retain_native_lane_decision_prefix(low)
-                            .map_err(CandidateError::CanonicalEncoding)?;
+                            .map_err(CandidateError::CanonicalEncoding)?
+                            .with_network_input_time_floor(candidate_creation_time)
+                            .ok_or(CandidateError::BlockTimeOverflow)?;
                         report.native_deferred += original_count - low;
                         if low == 0 {
                             prepared_work.native_lane_decisions = None;
@@ -1025,6 +1029,7 @@ impl V2CandidateAssembler {
                     reason: CandidateWorkDeferral::NativeLaneSource,
                 });
             }
+            let candidate_creation_time = builder.creation_time();
             let signing = request
                 .output_guard
                 .begin_fail_stop_operation()
@@ -1383,7 +1388,9 @@ impl V2CandidateAssembler {
             .map_err(CandidateError::NativeLaneDecisionInvalid)?;
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
-        Ok(builder)
+        builder
+            .with_network_input_time_floor(candidate_creation_time)
+            .ok_or(CandidateError::BlockTimeOverflow)
     }
     #[allow(clippy::too_many_arguments)]
     fn sign_prepared_block(
@@ -2167,6 +2174,9 @@ pub(crate) enum CandidateError {
     /// Built header drifted from context/tag/parent inputs.
     #[error("built Sumeragi v2 candidate header differs from immutable inputs")]
     BuiltHeaderMismatch,
+    /// The exact input clock has no representable successor millisecond.
+    #[error("Sumeragi v2 candidate logical time exceeds u64 milliseconds")]
+    BlockTimeOverflow,
     /// BlockBuilder output order drifted from execution-context order.
     #[error("built Sumeragi v2 entrypoint order differs from its routing contexts")]
     BuiltEntrypointOrderMismatch,
@@ -2478,11 +2488,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id,
-                0,
-                0,
-                1,
                 u64::MAX,
                 &roster,
             );

@@ -6,6 +6,7 @@ use crate::da::{
 };
 use eyre::{Result, WrapErr, eyre};
 use iroha::client::Client;
+use iroha_data_model::da::types::StorageTicketId;
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use sorafs_orchestrator::{
@@ -18,6 +19,9 @@ use sorafs_orchestrator::{
 };
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+#[cfg(test)]
+mod da_tests;
 
 /// Optional tuning knobs applied when orchestrating `SoraFS` gateway fetches.
 #[derive(Debug, Default, Clone)]
@@ -111,9 +115,9 @@ impl<'client> StorageClient<'client> {
     /// # Errors
     ///
     /// Returns an error if the request fails or the manifest and chunk plan are invalid.
-    pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
-        let response = self.client.get_da_manifest_json(storage_ticket_hex)?;
-        DaManifestBundle::from_json(&response)
+    pub async fn da_manifest(&self, storage_ticket: &StorageTicketId) -> Result<DaManifestBundle> {
+        let response = self.client.da().manifest(storage_ticket).await?;
+        DaManifestBundle::try_from(response)
     }
 
     /// Fetch and persist a DA manifest bundle.
@@ -121,12 +125,12 @@ impl<'client> StorageClient<'client> {
     /// # Errors
     ///
     /// Returns an error if fetching, validation, or persistence fails.
-    pub fn fetch_da_manifest_to_dir(
+    pub async fn fetch_da_manifest_to_dir(
         &self,
-        storage_ticket_hex: &str,
+        storage_ticket: &StorageTicketId,
         output_dir: impl AsRef<Path>,
     ) -> Result<DaManifestPersistedPaths> {
-        let bundle = self.get_da_manifest_bundle(storage_ticket_hex)?;
+        let bundle = self.da_manifest(storage_ticket).await?;
         let label = bundle.storage_ticket_hex.clone();
         bundle.persist_to_dir(output_dir, label)
     }
@@ -168,13 +172,13 @@ impl<'client> StorageClient<'client> {
     /// Returns an error when the manifest, gateway fetch, or proof construction fails.
     pub async fn prove_da_availability(
         &self,
-        storage_ticket_hex: &str,
+        storage_ticket: &StorageTicketId,
         gateway_config: SorafsGatewayFetchConfig,
         providers: impl IntoIterator<Item = SorafsGatewayProviderInput>,
         fetch_options: SorafsGatewayFetchOptions,
         proof_config: DaProofConfig,
     ) -> Result<DaAvailabilityProof> {
-        let manifest = self.get_da_manifest_bundle(storage_ticket_hex)?;
+        let manifest = self.da_manifest(storage_ticket).await?;
         let plan = build_car_plan_from_manifest(&manifest.decode_manifest()?)?;
         let fetch_session = self
             .sorafs_fetch_via_gateway(&plan, gateway_config, providers, fetch_options)
@@ -197,7 +201,7 @@ impl<'client> StorageClient<'client> {
     /// Returns an error when fetching, proof construction, or persistence fails.
     pub async fn prove_da_availability_to_dir(
         &self,
-        storage_ticket_hex: &str,
+        storage_ticket: &StorageTicketId,
         gateway_config: SorafsGatewayFetchConfig,
         providers: impl IntoIterator<Item = SorafsGatewayProviderInput>,
         mut fetch_options: SorafsGatewayFetchOptions,
@@ -234,7 +238,7 @@ impl<'client> StorageClient<'client> {
         }
         let proof = self
             .prove_da_availability(
-                storage_ticket_hex,
+                storage_ticket,
                 gateway_config,
                 providers,
                 fetch_options,
@@ -633,7 +637,7 @@ mod tests {
         );
     }
 
-    fn test_client() -> Client {
+    pub(super) fn test_client() -> Client {
         let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
             .expect("deterministic client key");
         let account = AccountId::new(key_pair.public_key().clone());
@@ -654,10 +658,10 @@ mod tests {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id,
             account,
-            account_chain_discriminant: 0,
+            account_chain_discriminant: 753,
             key_pair,
             basic_auth: None,
-            torii_api_url: "http://127.0.0.1:8080".parse().expect("Torii URL"),
+            torii_api_url: "http://127.0.0.1:8080/".parse().expect("Torii URL"),
             torii_request_timeout: DEFAULT_TORII_REQUEST_TIMEOUT,
             transaction_ttl: Duration::from_secs(5),
             transaction_status_timeout: Duration::from_secs(10),

@@ -3239,16 +3239,13 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
     require_order(
         "pending_lifecycle",
         pending_lane,
-        "affine pending-Kura lane preparation",
+        "affine pending-Kura installed-tip retention",
         (
             "let expected = self.installed.expected()",
             "services.matches_installed_pending_kura_tip(expected)",
-            "let mut lane_work = operation(expected, executor, services)?",
-            "services.matches_lifecycle_lane_work(&lane_work)",
-            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?",
+            "ProductionLifecyclePreActivationErrorV1::OwnershipMismatch",
             "let _ = self.installed.take_genesis()",
-            "PreparedPendingKuraLaneRecoveryV1 { installed, lane_work, launched, }",
+            "PreparedPendingKuraLaneRecoveryV1 { installed, launched, }",
         ),
     )
     pending_activation = item("pending_lifecycle", "activate_no_clock")
@@ -3267,7 +3264,7 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "activate_effect_completion_observer(observer)",
             "runner.open_and_publish_recovered_height(",
             "activation.complete()",
-            "PendingKuraActivatedProductionLifecycleV1 { runner_activation, installed, lane_work, launched, }",
+            "PendingKuraActivatedProductionLifecycleV1 { runner_activation, installed, launched, }",
         ),
     )
     reject_tokens(
@@ -3289,6 +3286,7 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
         "pending-Kura local finalization census",
         (
             "self.launched.executor.ready_to_finish()",
+            "!self.launched.owner.has_recovered_lifecycle_outputs()",
             "self.launched.pending_kura_apply_replay.is_none()",
             "self.launched.recovered_local_proposal_attempt.is_none()",
             "pending_kura_apply_recovery_evidence()",
@@ -3297,7 +3295,6 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "self.launched.pending_ingress_capacity.is_none()",
             "self.launched.completion_observer_activation.is_none()",
             "matches_installed_pending_kura_tip(self.installed.expected())",
-            "matches_lifecycle_lane_work(&self.lane_work)",
             "exactly_covers_finalization_work(&self.launched.owner.coordinator)",
         ),
     )
@@ -3305,7 +3302,7 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
     require_order(
         "pending_lifecycle",
         pending_finalization,
-        "pending-Kura affine lane finalization",
+        "pending-Kura affine lifecycle finalization",
         (
             "self.locally_ready_for_finalized_rollover()",
             "verify_published_store_marker_finalization_census()",
@@ -3317,8 +3314,7 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "begin_fail_stop_operation()",
             "finish_height(&receipt, &artifact)",
             "operation.complete()",
-            "FinalizedProductionLifecycleRolloverV1",
-            "lane_work",
+            "FinalizedProductionLifecycleRolloverV1 { owner, services, receipt, artifact, finalized_adapter: finalized, retired_ingress, }",
         ),
     )
     missing_pending = item("preactivation", "missing_pending_kura_replay")
@@ -3359,6 +3355,9 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
     _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
         paths, sources, errors, item, require_order, reject_tokens, require_tokens
     )
+    _pending_kura_native_output_source_fidelity_errors(
+        paths, sources, errors, item, qualified_item, require_order, reject_tokens
+    )
 
 
 def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
@@ -3391,7 +3390,7 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "reconcile_executor_locked_body(executor, services)",
             "pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)?",
             "reconcile_pending_lane_startup(",
-            "pending.prepare_lane_recovery(",
+            "pending.prepare_lane_recovery::<V2RunnerError>(&mut setup_runner)",
             "prepared.activate_no_clock(activation)?",
             "run_pending_active_height(",
             "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
@@ -3416,21 +3415,28 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
         pending_live,
         "restricted pending-Kura live recovery and finalization",
         (
+            "native.take_service_publication(services)",
+            "native.service_sources(services, Instant::now())",
+            "native.poll(native_global, native_network, Instant::now(), receiver)?",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
             "settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)",
+            "settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)",
             "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
-            "retry_exact_output_and_apply_sidecar_admissions(",
+            "retry_recovered_decision_fetch_if_due(",
             "services.service_kura_replica_advert_refresh_turn(Instant::now())",
             "services.drain_completions(executor)?",
             "reconcile_executor_locked_body(executor, services)?",
             "drain_decided_lane_recovery_ingress(",
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
-            "retry_exact_output_and_apply_sidecar_admissions(",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
+            "services.retry_pending_exact_output()",
             "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
             "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)",
+            "activated.ready_for_finalized_rollover(&mut active_runner)?",
+            "super::preflight_finalized_native_rollover(executor, services, native)",
             "activated.into_finalized_rollover(&mut active_runner)?",
             "finalized.finality()",
             "into_parts_with_lifecycle_storage_authority(",
-            "finalized.rollover_outputs(",
+            "finalized.rollover_outputs( &mut active_runner, native, &next_context, control_queue_capacity, )?",
             "post_output.retire_lifecycle_stores()?",
             "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
         ),
@@ -3444,9 +3450,10 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "continue",
             "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?",
             "loop",
+            "native.poll(native_global, native_network, Instant::now(), receiver)?",
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
-            "dispatch_lane_work_effects(",
+            "dispatch_queue_plan_admission_effects(",
             "drained.is_some()",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
             "if block_sync_server.has_pending_historical_body_serve()",
@@ -3484,26 +3491,17 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "self.test_failures.kura_store.store(true, std::sync::atomic::Ordering::Relaxed)",
         ),
     )
-    pending_lane_fixture = item("lane_work", "pending_kura_lifecycle_fixture_for_test")
+    native_fixture = item("startup_test", "lifecycle_native_process_fixture")
     require_order(
-        "lane_work",
-        pending_lane_fixture,
-        "unactivated affine pending-Kura lane fixture",
+        "startup_test",
+        native_fixture,
+        "pending-Kura fixture retains the actual Native process, State and output guard",
         (
-            "Self::new_with_output_guard_and_transport_for_test(",
-            "None",
-            "Some(expected)",
-            "output_guard",
-            "exact_output_handoff_owner",
-        ),
-    )
-    reject_tokens(
-        "lane_work",
-        pending_lane_fixture,
-        "unactivated affine pending-Kura lane fixture",
-        (
-            "activate_for_test_without_lane_drain_queue(",
-            "activate_after_lane_drain_queue_install(",
+            "NativeRunnerProcess::new(",
+            "Arc::clone(state)",
+            "Arc::clone(guard)",
+            "PeerId::new(key.public_key().clone())",
+            "key.clone()",
         ),
     )
     pending_lifecycle_behavior = item(
@@ -3525,18 +3523,18 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
             "executor.lifecycle_live_clocks_are_unarmed()",
             "recovery_stages.ends_with(&[Stage::ApplicationDispatched, Stage::Completed])",
-            ".prepare_lane_recovery(",
-            "pending_kura_lifecycle_fixture_for_test(",
+            "let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard)",
+            ".prepare_lane_recovery::<super::super::v2_runner::V2RunnerError>(&mut setup_runner)",
             ".activate_no_clock(activation)",
             "executor.lifecycle_live_clocks_are_unarmed()",
             "executor.ready_to_finish()",
             "services.matches_installed_pending_kura_tip(expected)",
-            "services.matches_lifecycle_lane_work(lane_work)",
+            "native.preflight_publication(services, receipt, artifact)",
             "if !finalize",
             ".into_clean_shutdown(&mut active_runner)",
             ".into_finalized_rollover(&mut active_runner)",
             "finalized.finality()",
-            ".rollover_outputs(&mut active_runner, lane_work, &successor, 64)",
+            ".rollover_outputs(&mut active_runner, &mut native, &successor, 64)",
             ".retire_lifecycle_stores()",
             "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
         ),
@@ -3604,3 +3602,173 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
                     f"{paths['wal_test']}:{pending_behavior.line}: pending-Kura bridge "
                     f"behavior omits exact fail-closed assertion {message!r}"
                 )
+
+
+def _pending_kura_native_output_source_fidelity_errors(
+    paths, sources, errors, item, qualified_item, require_order, reject_tokens
+) -> None:
+    """Bind no-clock rollover to the original process publication, not lane sidecars."""
+
+    def native_item(name):
+        return qualified_item(
+            "native_process", name, ("impl", "NativeRunnerProcess"),
+            "pending-Kura Native process publication custody",
+        )
+
+    publication = native_item("take_service_publication")
+    require_order(
+        "native_process", publication, "one retained actual service publication",
+        (
+            "if self.publication.is_none()",
+            "self.publication = services.take_native_publication()",
+            "NativePublication { published, settled: false, }",
+        ),
+    )
+    retained = native_item("settle_pending_publication")
+    require_order(
+        "native_process", retained, "publication survives deferred physical Apply and errors",
+        (
+            "if let Some(mut publication) = self.publication.take()",
+            "let result = if publication.settled",
+            "self.settle_published(&publication.published)",
+            "if let Ok(settled) = result.as_ref()",
+            "publication.settled = *settled",
+            "self.publication = Some(publication)",
+            "result?",
+        ),
+    )
+    settled = native_item("settle_published")
+    require_order(
+        "native_process", settled, "original carrier drives physical Native settlement",
+        (
+            "let Some(published) = carrier.native_apply() else",
+            "return Ok(true)",
+            "self.driver.settle_published_carrier(&published)",
+        ),
+    )
+    preflight = native_item("preflight_publication")
+    require_order(
+        "native_process", preflight, "exact publication and physical completion before rollover",
+        (
+            "self.take_service_publication(services)",
+            "self.settle_pending_publication()?",
+            "let Some(publication) = self.publication.as_ref() else",
+            "return Ok(false)",
+            "Self::authenticate_publication(&publication.published, receipt, artifact)?",
+            "Ok(publication.settled)",
+        ),
+    )
+    authenticate = native_item("authenticate_publication")
+    require_order(
+        "native_process", authenticate, "publication authenticates every finality coordinate",
+        (
+            "let actual = published.receipt()",
+            "published.artifact() != artifact",
+            "actual.height() != receipt.height()",
+            "actual.block_hash() != receipt.block_hash()",
+            "actual.context_id() != receipt.context_id()",
+            "actual.subject() != receipt.subject()",
+            "actual.certificate() != receipt.certificate()",
+            "actual.artifact_hash() != receipt.artifact_hash()",
+            "return Err(V2RunnerError::Service(",
+        ),
+    )
+    authority = native_item("finalized_output_authority")
+    require_order(
+        "native_process", authority, "affine output authority borrows the settled original publication",
+        (
+            "self.publication.as_ref().filter(|publication| publication.settled)",
+            "Self::authenticate_publication(&publication.published, receipt, artifact)?",
+            "Ok(super::NativeFinalizedOutputAuthority { published: &publication.published, })",
+        ),
+    )
+    retire = native_item("complete_output_handoff")
+    require_order(
+        "native_process", retire, "exact output authority before publication retirement",
+        (
+            "self.finalized_output_authority(receipt, artifact)?",
+            "self.publication.take()",
+            "Ok(())",
+        ),
+    )
+    for rust_item in (publication, retained, preflight, authority, retire):
+        reject_tokens(
+            "native_process", rust_item, "move-only Native publication corridor",
+            (".clone()", "NativeRunnerProcess::new(", "NativePublication::new("),
+        )
+
+    preflight = item("native_finalized_output", "preflight_finalized_native_rollover")
+    require_order(
+        "native_finalized_output", preflight,
+        "pending-Kura executor finality joins the same retained Native process",
+        (
+            "if !executor.ready_to_finish()",
+            "return Ok(false)",
+            "executor.durable_finality()",
+            "native.preflight_publication(services, receipt, artifact)",
+        ),
+    )
+    output = item("native_finalized_output", "rollover_finalized_height_outputs_for_lifecycle")
+    require_order(
+        "native_finalized_output", output,
+        "exact successor handoff must seal before the original Native publication retires",
+        (
+            "artifact.height.checked_add(1) != Some(successor.height)",
+            "artifact.height_context.network_id != successor.network_id",
+            "successor.parent_commit_qc.as_ref() != Some(&artifact.commit_qc)",
+            "return Err(",
+            "native.finalized_output_authority(receipt, artifact)",
+            "services.handoff_native_height_output_to_durable_reconstruction(receipt, artifact, &authority)?",
+            "services.seal_native_height_output_handoff(receipt, artifact, &authority)?",
+            "!handoff.matches_finality_artifact(artifact)",
+            "!handoff.authorizes_immediate_successor(successor)",
+            "return Err(",
+            "native.complete_output_handoff(receipt, artifact)",
+        ),
+    )
+    authority_auth = qualified_item(
+        "native_finalized_output", "authenticate",
+        ("impl", "NativeFinalizedOutputAuthority", "<", "'", "_", ">"),
+        "actual publication State and finality authority",
+    )
+    require_order(
+        "native_finalized_output", authority_auth,
+        "global output authority authenticates the original State and full finality",
+        (
+            "let original = self.published.receipt()",
+            "!self.published.matches_state(state)",
+            "self.published.artifact() != artifact",
+            "original.height() != receipt.height()",
+            "original.block_hash() != receipt.block_hash()",
+            "original.context_id() != receipt.context_id()",
+            "original.subject() != receipt.subject()",
+            "original.certificate() != receipt.certificate()",
+            "original.artifact_hash() != receipt.artifact_hash()",
+            "return Err(",
+        ),
+    )
+    for name, operation in (
+        ("handoff_native_height_output_to_durable_reconstruction", "handoff_applied_height_output_inner"),
+        ("seal_native_height_output_handoff", "seal_applied_height_output_inner"),
+    ):
+        service = item("worker_services", name)
+        require_order(
+            "worker_services", service, "Native State authority precedes exact global output mutation",
+            (
+                "authority.authenticate(&self.state, receipt, artifact)?",
+                f"self.{operation}(receipt, artifact, None)",
+            ),
+        )
+    lifecycle_output = qualified_item(
+        "launch", "rollover_outputs", ("impl", "FinalizedProductionLifecycleRolloverV1"),
+        "pending-Kura lifecycle moves the same Native output authority",
+        expected_attributes=("#[allow(dead_code, clippy::too_many_arguments, clippy::result_large_err)]",),
+    )
+    require_order(
+        "launch", lifecycle_output, "sealed lifecycle output consumes its exact Native owner",
+        (
+            "native: &mut super::super::v2_runner::NativeRunnerProcess",
+            "super::super::v2_runner::rollover_finalized_height_outputs_for_lifecycle(",
+            "native, &services, &receipt, &artifact, successor, control_queue_capacity,",
+        ),
+    )

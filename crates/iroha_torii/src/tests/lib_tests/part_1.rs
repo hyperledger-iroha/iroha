@@ -3206,13 +3206,9 @@ fn grant_account_permissions_for_test(
             .add_account_permission(authority, permission);
     }
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
     block
-        .commit()
-        .expect("commit should persist onboarding permissions");
+        .commit_world_overlay_for_testing()
+        .expect("commit should persist onboarding permissions without an empty block");
 }
 fn onboarding_credential_domain_permissions(domain: &DomainId) -> [Permission; 1] {
     [Permission::from(CanManageAccountAlias {
@@ -3241,11 +3237,9 @@ fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSp
     .execute(&program_id.sponsor, &mut stx)
     .expect("sponsor may register its program");
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
-    block.commit().expect("commit fee sponsor program fixture");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit fee sponsor program fixture without an empty block");
 }
 fn onboarding_alias_test_app_with_role_permissions(
     authority: &AccountId,

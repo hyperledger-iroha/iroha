@@ -13,7 +13,7 @@ fn signed_candidate(
         validator.clone(),
         Quantity::from(stake),
         Metadata::default(),
-        fixture_registration_plan(stx, lane_id, validator, &Quantity::from(stake)),
+        fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(stake)),
     );
     let registered = stx
         .world
@@ -31,15 +31,19 @@ fn signed_candidate(
                 .sumeragi
                 .key_activation_lead_blocks
     };
-    let activation_height = if stx._curr_block.is_genesis() && stx.block_hashes.is_empty() {
-        stx.block_height()
-    } else {
-        validator_eligibility_height(stx, lane_id, stx.block_height(), key_height)
-            .expect("election height")
-    };
-    registration.monetary_plan.precondition = PublicLaneMonetaryPreconditionV1::Registration(
-        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height },
-    );
+    let activation_height = next_unfrozen_election_height(
+        key_height,
+        stx.world
+            .sumeragi_npos_parameters()
+            .expect("NPoS schedule")
+            .epoch_length_blocks
+            .get(),
+    )
+    .expect("election height");
+    registration.monetary_plan.precondition =
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+            activation_height,
+        });
     let authorization = PublicLaneCandidateAuthorization::new(
         *stx.network_id(),
         registration.clone(),
@@ -234,7 +238,7 @@ fn activation_requires_validator_authority_after_genesis() {
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
-        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
+        fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("registration");
@@ -303,7 +307,7 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
-        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
+        fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("register owner-bound peer");
@@ -550,7 +554,7 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
         validator.clone(),
         2000_u64.into(),
         Metadata::default(),
-        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(2000_u64)),
+        fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(2000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator before topology freeze");
@@ -589,10 +593,27 @@ fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
     unbond(&validator, 1000_u64, "participant-self-unbond-a")
         .execute(&validator, &mut stx)
         .expect("owner may schedule a slashable withdrawal");
-    unbond(&validator, 1000_u64, "participant-self-unbond-b")
+    let error = unbond(&validator, 1000_u64, "participant-self-unbond-b")
         .execute(&validator, &mut stx)
-        .expect("exit permits full principal to remain in pending slashable custody");
-    unbond(&delegator, 100_u64, "participant-delegator-unbond")
+        .expect_err("self withdrawal below minimum changes global eligibility");
+    assert!(error.to_string().contains("prepared epoch key transition"));
+    BondPublicLaneStake {
+        monetary_plan: fixture_bond_plan(
+            &stx,
+            lane_id,
+            &validator,
+            &delegator,
+            Quantity::from(100_u64),
+        ),
+        lane_id,
+        validator: validator.clone(),
+        staker: delegator.clone(),
+        amount: 100_u64.into(),
+        metadata: Metadata::default(),
+    }
+    .execute(&delegator, &mut stx)
+    .expect("delegation does not change global seat selection");
+    unbond(&delegator, 100_u64, "global-safe-delegator-unbond")
         .execute(&delegator, &mut stx)
         .expect("delegator may schedule a slashable withdrawal");
     let key = (lane_id, validator.clone());
@@ -639,7 +660,7 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
         validator.clone(),
         1000_u64.into(),
         Metadata::default(),
-        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
+        fixture_registration_plan(&stx, lane_id, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");
@@ -656,9 +677,9 @@ fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
         monetary_plan: fixture_bond_plan(
             &stx,
             lane_id,
-            &(validator.clone()),
-            &(validator.clone()),
-            &(1000_u64.into()),
+            &validator,
+            &validator,
+            Quantity::from(1000_u64),
         ),
         lane_id,
         validator: validator.clone(),

@@ -152,11 +152,9 @@ fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
     );
     world.apply_executor_data_model(model);
     stx.apply();
-    block.transactions.insert_block(
-        HashSet::new(),
-        NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-    );
-    block.commit().expect("declare onboarding DPN permissions");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("declare onboarding DPN permissions without a synthetic empty block");
 }
 #[test]
 fn onboarding_readiness_dpn_user_requires_exact_direct_admin() {

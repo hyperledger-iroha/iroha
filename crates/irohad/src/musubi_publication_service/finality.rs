@@ -710,14 +710,8 @@ mod tests {
         kagemusha_mint_finality_authority
             .validate()
             .expect("Musubi finality Pasta authority must be canonical");
-        let kagemusha_mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, epoch: 0,
-            first_height: 1, last_height: 100, authority_generation: 0,
-            authority_id: kagemusha_mint_finality_authority.authority_id().expect("authority commitment"),
-            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32], transition_id: [0; 32],
-            decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-        };
+        let kagemusha_mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&kagemusha_mint_finality_authority, 100)
+            .expect("derive Musubi finality Pasta authority identifier");
         let height = block.header().height().get();
         let context = HeightContext {
             network_id,

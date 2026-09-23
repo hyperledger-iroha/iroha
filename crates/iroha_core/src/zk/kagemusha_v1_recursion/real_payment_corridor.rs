@@ -73,9 +73,10 @@ use iroha_data_model::{
     block::consensus_v2::{HeightContextId, ValidatorPower},
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaMintFinalitySealMessageV1, KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1,
-        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
+        KagemushaPastaSchnorrSignatureV1, KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
+        kagemusha_mint_finality_root_v1,
     },
     kagemusha::{
         KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
@@ -1116,10 +1117,10 @@ impl FundingCertificate {
             &validators,
         );
         let authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&roster, 0, 1, 100);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(&roster, 10);
         let genesis_authorization_id = authorization
             .authorization_id()
-            .expect("genesis scheduling authorization ID");
+            .expect("genesis authorization ID");
         let leaf = KagemushaTopUpLeafV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: digest(b"funding-operation", 0),
@@ -1136,6 +1137,7 @@ impl FundingCertificate {
             authorization,
             tree.execution_root(),
             tree.leaf_count(),
+            2,
             None,
         );
         let seals = (0_u32..3)
@@ -1180,6 +1182,7 @@ impl FundingCertificate {
                     authorization,
                     kagemusha_mint_finality_root_v1(empty_root),
                     0,
+                    1,
                     None,
                 ),
                 seals: Vec::new(),
@@ -1198,19 +1201,18 @@ impl FundingCertificate {
 
     fn message(
         roster: &KagemushaMintFinalityAuthorityGenerationV1,
-        authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+        authorization: KagemushaMintFinalityEpochAuthorizationV1,
         root: Hash,
         count: u32,
-        next: Option<
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
-        >,
+        block_height: u64,
+        next: Option<KagemushaMintFinalityEpochAuthorizationV1>,
     ) -> KagemushaMintFinalitySealMessageV1 {
         KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             epoch_authorization: authorization,
             validator_count: u32::try_from(roster.validators.len()).expect("four validators"),
             network_id: roster.network_id,
-            block_height: if count == 0 { 1 } else { 2 },
+            block_height,
             height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(digest(
                 b"funding-height",
                 u64::from(count),
@@ -2815,6 +2817,176 @@ fn funding_certificate_preflight_has_exact_real_quorum_and_positive_membership()
     let mut substituted = funding.finalized.clone();
     substituted.seal_bundle.message.subject_digest = digest(b"substituted-finality-subject", 0);
     assert!(!certificate_signature_equations(&substituted));
+}
+
+#[test]
+fn mint_authority_heads_bind_authorization_instead_of_key_generation() {
+    let (_, _, funding) = funding_fixture();
+    let generation_id = funding
+        .bootstrap
+        .authority_generation
+        .authority_id()
+        .unwrap();
+    assert_ne!(generation_id, funding.genesis_authorization_id);
+    for (certificate, step) in [
+        (&funding.bootstrap, KagemushaMintAuthorityStepV1::Bootstrap),
+        (
+            &funding.finalized,
+            KagemushaMintAuthorityStepV1::FinalizedMint,
+        ),
+    ] {
+        assert_eq!(
+            certificate.authorization_head_for_step(step).unwrap(),
+            funding.genesis_authorization_id
+        );
+    }
+    assert!(
+        funding.bootstrap.validate_shape().is_err(),
+        "unsigned bootstrap cannot authorize a mint"
+    );
+    let mut different_schedule = funding.bootstrap.clone();
+    different_schedule
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .last_height -= 1;
+    assert_ne!(
+        different_schedule
+            .authorization_head_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+            .unwrap(),
+        funding.genesis_authorization_id,
+        "the unchanged generation does not authorize another genesis interval"
+    );
+}
+
+#[test]
+fn mint_authority_retention_advances_authorization_with_original_signing_keys() {
+    use iroha_data_model::isi::kagemusha_v1::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    };
+    let (_, _, funding) = funding_fixture();
+    let mut certificate = funding.finalized;
+    let authority = &certificate.authority_generation;
+    let genesis = KagemushaMintFinalityEpochAuthorizationV1::genesis(authority, 2).unwrap();
+    let retained = KagemushaMintFinalityEpochAuthorizationV1 {
+        epoch: 1,
+        first_height: 3,
+        last_height: 4,
+        previous_authorization_id: genesis.authorization_id().unwrap(),
+        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: digest(b"retention-test-session", 0),
+            transcript_hash: digest(b"retention-test-transcript", 0),
+        }),
+        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        ..genesis
+    };
+    retained.validate_successor(&genesis).unwrap();
+    certificate.membership.root = kagemusha_mint_finality_empty_root_v1().unwrap();
+    let message = &mut certificate.seal_bundle.message;
+    message.epoch_authorization = genesis;
+    message.next_epoch_authorization = Some(retained);
+    message.kagemusha_top_up_count = 0;
+    message.kagemusha_top_up_root = kagemusha_mint_finality_root_v1(certificate.membership.root);
+    certificate.seal_bundle.seals = (0_u32..3)
+        .map(|index| {
+            KagemushaMintFinalitySignerV1::from_seed(
+                Zeroizing::new([0xA0 + index as u8; 32]),
+                index,
+                authority,
+            )
+            .unwrap()
+            .sign(message)
+            .unwrap()
+        })
+        .collect();
+    assert!(certificate_signature_equations(&certificate));
+    let retained_id = retained.authorization_id().unwrap();
+    assert_ne!(retained_id, genesis.authorization_id().unwrap());
+    assert_eq!(retained.authority_id, genesis.authority_id);
+    assert_eq!(
+        certificate
+            .authorization_head_for_step(KagemushaMintAuthorityStepV1::Rotate)
+            .unwrap(),
+        retained_id,
+        "zero-top-up retention must advance the recursive authorization head"
+    );
+    assert!(
+        certificate
+            .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+            .is_err()
+    );
+    assert!(certificate.validate_shape().is_err());
+    let mut wrong_parent = certificate.clone();
+    wrong_parent
+        .seal_bundle
+        .message
+        .next_epoch_authorization
+        .as_mut()
+        .unwrap()
+        .previous_authorization_id = genesis.authority_id;
+    assert!(
+        wrong_parent
+            .authorization_head_for_step(KagemushaMintAuthorityStepV1::Rotate)
+            .is_err()
+    );
+}
+
+#[test]
+fn bootstrap_certificate_is_zero_authority_and_pins_complete_genesis_authorization() {
+    let (_, _, funding) = funding_fixture();
+    let bootstrap = &funding.bootstrap;
+    bootstrap
+        .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    assert!(bootstrap.seal_bundle.seals.is_empty());
+    assert_eq!(bootstrap.seal_bundle.message.kagemusha_top_up_count, 0);
+    assert!(
+        bootstrap
+            .seal_bundle
+            .message
+            .next_epoch_authorization
+            .is_none()
+    );
+    assert!(bootstrap.seal_bundle.message.signing_digest().is_err());
+    assert!(bootstrap.validate_shape().is_err());
+    assert_eq!(
+        bootstrap
+            .seal_bundle
+            .message
+            .epoch_authorization
+            .authorization_id()
+            .unwrap(),
+        funding.genesis_authorization_id
+    );
+    assert_ne!(
+        bootstrap.authority_generation.authority_id().unwrap(),
+        funding.genesis_authorization_id
+    );
+    let binding = bootstrap
+        .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    let mut changed = bootstrap.clone();
+    changed.seal_bundle.message.epoch_authorization.last_height += 1;
+    assert_ne!(
+        changed
+            .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+            .unwrap(),
+        binding
+    );
+    for mutation in 0..4 {
+        let mut changed = bootstrap.clone();
+        match mutation {
+            0 => changed.seal_bundle.message.kagemusha_top_up_count = 1,
+            1 => changed.seal_bundle.message.block_height = 2,
+            2 => changed.seal_bundle.seals = funding.finalized.seal_bundle.seals.clone(),
+            _ => changed.authority_generation.generation = 1,
+        }
+        assert!(
+            changed
+                .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+                .is_err()
+        );
+    }
 }
 
 #[test]

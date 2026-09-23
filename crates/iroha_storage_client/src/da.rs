@@ -2,6 +2,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 use eyre::{Result, WrapErr, eyre};
+use iroha::da::DaManifestResponse;
 use iroha_data_model::da::manifest::DaManifestV1;
 use norito::{
     decode_from_bytes,
@@ -59,67 +60,6 @@ pub struct DaManifestPersistedPaths {
 }
 
 impl DaManifestBundle {
-    /// Parse a Torii `/v1/da/manifests/{ticket}` JSON payload into a bundle.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when required fields are missing, malformed, or fail to decode.
-    pub fn from_json(value: &Value) -> Result<Self> {
-        let object = value
-            .as_object()
-            .ok_or_else(|| eyre!("DA manifest response must be a JSON object"))?;
-        let storage_ticket_hex = require_hex_field(object, &["storage_ticket", "storageTicket"])?;
-        let client_blob_id_hex = require_hex_field(object, &["client_blob_id", "clientBlobId"])?;
-        let blob_hash_hex = require_hex_field(object, &["blob_hash", "blobHash"])?;
-        let chunk_root_hex = require_hex_field(object, &["chunk_root", "chunkRoot"])?;
-        let manifest_hash_hex = require_hex_field(object, &["manifest_hash", "manifestHash"])?;
-        let lane_id = require_u64_field(object, &["lane_id", "laneId"])?;
-        let epoch = require_u64_field(object, &["epoch"])?;
-        let manifest_len =
-            optional_u64_field(object, &["manifest_len", "manifestLen"])?.unwrap_or(0);
-        let manifest_b64 = object
-            .get("manifest_norito")
-            .or_else(|| object.get("manifestNorito"))
-            .or_else(|| object.get("manifest_b64"))
-            .or_else(|| object.get("manifestB64"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre!("DA manifest response missing `manifest_norito` field"))?;
-        let manifest_bytes = Base64Standard
-            .decode(manifest_b64.as_bytes())
-            .map_err(|err| eyre!("failed to decode manifest_norito: {err}"))?;
-        let manifest_json = object
-            .get("manifest")
-            .or_else(|| object.get("manifest_json"))
-            .or_else(|| object.get("manifestJson"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let chunk_plan = object
-            .get("chunk_plan")
-            .or_else(|| object.get("chunkPlan"))
-            .cloned()
-            .ok_or_else(|| eyre!("DA manifest response missing `chunk_plan` field"))?;
-        let parsed_chunk_plan = chunk_fetch_plan_from_json(&chunk_plan)
-            .map_err(|err| eyre!("DA manifest response contained invalid chunk_plan: {err}"))?;
-        if hex::encode(parsed_chunk_plan.payload_digest) != blob_hash_hex {
-            return Err(eyre!(
-                "DA manifest response contained invalid chunk_plan: payload digest does not match blob_hash"
-            ));
-        }
-        Ok(Self {
-            storage_ticket_hex,
-            client_blob_id_hex,
-            blob_hash_hex,
-            chunk_root_hex,
-            manifest_hash_hex,
-            lane_id,
-            epoch,
-            manifest_len,
-            manifest_bytes,
-            manifest_json,
-            chunk_plan,
-        })
-    }
-
     /// Decode the embedded Norito manifest payload.
     ///
     /// # Errors
@@ -200,44 +140,122 @@ fn sanitize_manifest_label(label: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-fn require_hex_field(object: &Map, keys: &[&str]) -> Result<String> {
-    for key in keys {
-        if let Some(Value::String(value)) = object.get(*key) {
-            let trimmed = value.trim();
-            if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Ok(trimmed.to_ascii_lowercase());
+impl TryFrom<DaManifestResponse> for DaManifestBundle {
+    type Error = eyre::Report;
+
+    fn try_from(response: DaManifestResponse) -> Result<Self> {
+        for (field, value) in [
+            ("storage_ticket", &response.storage_ticket),
+            ("client_blob_id", &response.client_blob_id),
+            ("blob_hash", &response.blob_hash),
+            ("chunk_root", &response.chunk_root),
+            ("manifest_hash", &response.manifest_hash),
+        ] {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(eyre!(
+                    "field `{field}` must be canonical lowercase 32-byte hex"
+                ));
             }
-            return Err(eyre!("field `{key}` must be a 32-byte hex string"));
+        }
+        let parsed_plan = chunk_fetch_plan_from_json(&response.chunk_plan)
+            .map_err(|err| eyre!("DA manifest response contained invalid chunk_plan: {err}"))?;
+        if hex::encode(parsed_plan.payload_digest) != response.blob_hash {
+            return Err(eyre!(
+                "DA manifest response contained invalid chunk_plan: payload digest does not match blob_hash"
+            ));
+        }
+        let manifest_bytes = Base64Standard
+            .decode(response.manifest_norito.as_bytes())
+            .wrap_err("failed to decode manifest_norito")?;
+        if response.manifest_len != manifest_bytes.len() as u64 {
+            return Err(eyre!("manifest_len does not match the Norito artifact"));
+        }
+        if response.manifest_hash != hex::encode(blake3::hash(&manifest_bytes).as_bytes()) {
+            return Err(eyre!("manifest_hash does not match the Norito artifact"));
+        }
+        let manifest: DaManifestV1 =
+            decode_from_bytes(&manifest_bytes).wrap_err("failed to decode DaManifestV1")?;
+        if manifest.version != DaManifestV1::VERSION {
+            return Err(eyre!("unsupported DA manifest version"));
+        }
+        if response.storage_ticket != hex::encode(manifest.storage_ticket.as_bytes())
+            || response.client_blob_id != hex::encode(manifest.client_blob_id.as_bytes())
+            || response.blob_hash != hex::encode(manifest.blob_hash.as_bytes())
+            || response.chunk_root != hex::encode(manifest.chunk_root.as_bytes())
+            || response.lane_id != manifest.lane_id.as_u32()
+            || response.epoch != manifest.epoch
+        {
+            return Err(eyre!(
+                "DA manifest response metadata does not match the Norito artifact"
+            ));
+        }
+        if !matches_json_projection(&response.manifest, &json::to_value(&manifest)?) {
+            return Err(eyre!("manifest JSON does not match the Norito artifact"));
+        }
+        let plan = build_car_plan_from_manifest(&manifest)?;
+        if !matches_json_projection(
+            &response.chunk_plan,
+            &sorafs_car::fetch_plan::try_chunk_fetch_plan_to_json(&plan)?,
+        ) {
+            return Err(eyre!("chunk_plan does not match the Norito manifest"));
+        }
+        Ok(Self {
+            storage_ticket_hex: response.storage_ticket,
+            client_blob_id_hex: response.client_blob_id,
+            blob_hash_hex: response.blob_hash,
+            chunk_root_hex: response.chunk_root,
+            manifest_hash_hex: response.manifest_hash,
+            lane_id: u64::from(response.lane_id),
+            epoch: response.epoch,
+            manifest_len: response.manifest_len,
+            manifest_bytes,
+            manifest_json: response.manifest,
+            chunk_plan: response.chunk_plan,
+        })
+    }
+}
+
+/// Compare JSON projections without Norito's integer/float equality coercion.
+fn matches_json_projection(actual: &Value, expected: &Value) -> bool {
+    // Explicit traversal avoids growing the call stack with untrusted JSON nesting.
+    let mut pending = vec![(actual, expected)];
+    while let Some((actual, expected)) = pending.pop() {
+        match (actual, expected) {
+            (Value::Array(actual), Value::Array(expected)) if actual.len() == expected.len() => {
+                pending.extend(actual.iter().zip(expected));
+            }
+            (Value::Object(actual), Value::Object(expected)) if actual.len() == expected.len() => {
+                for ((actual_key, actual), (expected_key, expected)) in actual.iter().zip(expected)
+                {
+                    if actual_key != expected_key {
+                        return false;
+                    }
+                    pending.push((actual, expected));
+                }
+            }
+            (
+                Value::Number(json::Number::F64(actual)),
+                Value::Number(json::Number::F64(expected)),
+            ) => {
+                if actual.to_bits() != expected.to_bits() {
+                    return false;
+                }
+            }
+            (Value::Number(json::Number::F64(_)), _) | (_, Value::Number(json::Number::F64(_))) => {
+                return false;
+            }
+            // Integer storage widths have the same JSON representation. Containers
+            // are handled above so their numeric children never use coercive equality.
+            (Value::Array(_) | Value::Object(_), _) => return false,
+            _ if actual != expected => return false,
+            _ => {}
         }
     }
-    Err(eyre!("response missing `{}` field", keys[0]))
-}
-
-fn require_u64_field(object: &Map, keys: &[&str]) -> Result<u64> {
-    optional_u64_field(object, keys)?
-        .map_or_else(|| Err(eyre!("response missing `{}` field", keys[0])), Ok)
-}
-
-fn optional_u64_field(object: &Map, keys: &[&str]) -> Result<Option<u64>> {
-    for key in keys {
-        if let Some(value) = object.get(*key) {
-            return parse_u64_value(value, key).map(Some);
-        }
-    }
-    Ok(None)
-}
-
-fn parse_u64_value(value: &Value, label: &str) -> Result<u64> {
-    match value {
-        Value::Number(number) => number
-            .as_u64()
-            .ok_or_else(|| eyre!("field `{label}` must be a positive integer")),
-        Value::String(raw) => raw
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| eyre!("invalid integer value for `{label}`: {err}")),
-        _ => Err(eyre!("field `{label}` must be an integer")),
-    }
+    true
 }
 
 /// Sampling and verification controls for `PoR` proof generation.
@@ -765,7 +783,7 @@ fn value_from_u32(value: u32) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use iroha_data_model::da::{
         manifest::{ChunkCommitment, ChunkRole},
@@ -792,52 +810,47 @@ mod tests {
         ]))
     }
 
+    pub(crate) fn manifest_response() -> DaManifestResponse {
+        let (manifest, _) = sample_manifest_and_payload();
+        let bytes = norito::to_bytes(&manifest).expect("manifest frame");
+        DaManifestResponse {
+            storage_ticket: hex::encode(manifest.storage_ticket.as_bytes()),
+            client_blob_id: hex::encode(manifest.client_blob_id.as_bytes()),
+            blob_hash: hex::encode(manifest.blob_hash.as_bytes()),
+            chunk_root: hex::encode(manifest.chunk_root.as_bytes()),
+            manifest_hash: hex::encode(blake3::hash(&bytes).as_bytes()),
+            lane_id: manifest.lane_id.as_u32(),
+            epoch: manifest.epoch,
+            manifest_len: bytes.len() as u64,
+            manifest_norito: Base64Standard.encode(&bytes),
+            manifest: json::to_value(&manifest).expect("manifest JSON"),
+            chunk_plan: sorafs_car::fetch_plan::try_chunk_fetch_plan_to_json(
+                &build_car_plan_from_manifest(&manifest).unwrap(),
+            )
+            .unwrap(),
+        }
+    }
+
     #[test]
     fn manifest_bundle_parses_required_fields() {
-        let mut object = Map::new();
-        object.insert("storage_ticket".into(), Value::from("11".repeat(32)));
-        object.insert("client_blob_id".into(), Value::from("22".repeat(32)));
-        object.insert("blob_hash".into(), Value::from("33".repeat(32)));
-        object.insert("chunk_root".into(), Value::from("44".repeat(32)));
-        object.insert("lane_id".into(), Value::from(0));
-        object.insert("epoch".into(), Value::from(1));
-        object.insert("manifest_len".into(), Value::from(16));
-        object.insert(
-            "manifest_norito".into(),
-            Value::from(Base64Standard.encode([0_u8; 4])),
+        let response = manifest_response();
+        let bundle = DaManifestBundle::try_from(response.clone()).expect("bundle");
+        assert_eq!(bundle.storage_ticket_hex, response.storage_ticket);
+        assert_eq!(bundle.client_blob_id_hex, response.client_blob_id);
+        assert_eq!(bundle.blob_hash_hex, response.blob_hash);
+        assert_eq!(bundle.chunk_root_hex, response.chunk_root);
+        assert_eq!(bundle.manifest_hash_hex, response.manifest_hash);
+        assert_eq!(bundle.lane_id, u64::from(response.lane_id));
+        assert_eq!(bundle.epoch, response.epoch);
+        assert_eq!(bundle.manifest_bytes.len() as u64, response.manifest_len);
+        assert_eq!(
+            bundle.decode_manifest().unwrap(),
+            sample_manifest_and_payload().0
         );
-        object.insert(
-            "manifest".into(),
-            Value::Object(Map::from_iter([("dummy".into(), Value::from(1))])),
-        );
-        object.insert("chunk_plan".into(), empty_chunk_fetch_plan(0x33));
-        object.insert("manifest_hash".into(), Value::from("55".repeat(32)));
-        let bundle = DaManifestBundle::from_json(&Value::Object(object)).expect("bundle");
-        assert_eq!(bundle.storage_ticket_hex, "11".repeat(32));
-        assert_eq!(bundle.client_blob_id_hex, "22".repeat(32));
-        assert_eq!(bundle.blob_hash_hex, "33".repeat(32));
-        assert_eq!(bundle.chunk_root_hex, "44".repeat(32));
-        assert_eq!(bundle.manifest_hash_hex, "55".repeat(32));
-        assert_eq!(bundle.lane_id, 0);
-        assert_eq!(bundle.epoch, 1);
     }
 
     #[test]
     fn manifest_bundle_rejects_retired_or_unbound_chunk_plans() {
-        let base = Map::from_iter([
-            ("storage_ticket".into(), Value::from("11".repeat(32))),
-            ("client_blob_id".into(), Value::from("22".repeat(32))),
-            ("blob_hash".into(), Value::from("33".repeat(32))),
-            ("chunk_root".into(), Value::from("44".repeat(32))),
-            ("manifest_hash".into(), Value::from("55".repeat(32))),
-            ("lane_id".into(), Value::from(0)),
-            ("epoch".into(), Value::from(1)),
-            ("manifest_len".into(), Value::from(4)),
-            (
-                "manifest_norito".into(),
-                Value::from(Base64Standard.encode([0_u8; 4])),
-            ),
-        ]);
         let invalid_plans = [
             Value::Array(Vec::new()),
             Value::Object(Map::from_iter([
@@ -851,15 +864,134 @@ mod tests {
             empty_chunk_fetch_plan(0x77),
         ];
         for plan in invalid_plans {
-            let mut object = base.clone();
-            object.insert("chunk_plan".into(), plan);
-            let error = DaManifestBundle::from_json(&Value::Object(object))
+            let mut response = manifest_response();
+            response.chunk_plan = plan;
+            let error = DaManifestBundle::try_from(response)
                 .expect_err("retired or unbound plan must be rejected");
             assert!(
                 error.to_string().contains("invalid chunk_plan"),
-                "unexpected error: {error:?}"
+                "{error:?}"
             );
         }
+    }
+
+    #[test]
+    fn manifest_bundle_binds_every_projection_to_the_canonical_artifact() {
+        let mutations: &[fn(&mut DaManifestResponse)] = &[
+            |r| r.storage_ticket = "ab".repeat(32),
+            |r| r.client_blob_id = "ab".repeat(32),
+            |r| r.blob_hash = "ab".repeat(32),
+            |r| r.chunk_root = "ab".repeat(32),
+            |r| r.manifest_hash = "ab".repeat(32),
+            |r| r.lane_id += 1,
+            |r| r.epoch += 1,
+            |r| r.manifest_len += 1,
+            |r| r.manifest_norito = "not-base64".into(),
+            |r| r.manifest = Value::Null,
+            |r| {
+                r.chunk_plan
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("chunk_fetch_specs".into(), Value::Array(Vec::new()));
+            },
+            |r| r.client_blob_id = "AB".repeat(32),
+            |r| r.client_blob_id.push(' '),
+        ];
+        for (index, mutate) in mutations.iter().enumerate() {
+            let mut response = manifest_response();
+            mutate(&mut response);
+            assert!(
+                DaManifestBundle::try_from(response).is_err(),
+                "mutation {index}"
+            );
+        }
+        for artifact in [vec![0_u8; 4], {
+            let mut bytes = norito::to_bytes(&sample_manifest_and_payload().0).unwrap();
+            bytes.push(0);
+            bytes
+        }] {
+            let mut response = manifest_response();
+            response.manifest_len = artifact.len() as u64;
+            response.manifest_hash = hex::encode(blake3::hash(&artifact).as_bytes());
+            response.manifest_norito = Base64Standard.encode(artifact);
+            assert!(
+                DaManifestBundle::try_from(response).is_err(),
+                "invalid frame"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_bundle_rejects_noncanonical_nested_chunk_spec_fields() {
+        for (field, value) in [
+            ("unexpected", Value::from(true)),
+            ("offset", Value::from("0")),
+        ] {
+            let mut response = manifest_response();
+            response
+                .chunk_plan
+                .as_object_mut()
+                .unwrap()
+                .get_mut("chunk_fetch_specs")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), value);
+            assert!(
+                DaManifestBundle::try_from(response).is_err(),
+                "noncanonical chunk spec field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_bundle_rejects_integer_fields_encoded_as_floats() {
+        for (field, value) in [("version", 1.0), ("epoch", 7.0), ("lane_id", -0.0)] {
+            let mut response = manifest_response();
+            response
+                .manifest
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), Value::Number(json::Number::F64(value)));
+            let error = DaManifestBundle::try_from(response).expect_err("float is not an integer");
+            assert!(error.to_string().contains("manifest JSON"), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn json_projection_comparison_preserves_numeric_shape_and_nested_structure() {
+        let integer = json::from_str::<Value>(r#"{"items":[{"count":1,"zero":0}]}"#).unwrap();
+        for json in [
+            r#"{"items":[{"count":1.0,"zero":0}]}"#,
+            r#"{"items":[{"count":1,"zero":-0.0}]}"#,
+            r#"{"items":[{"count":1,"zero":0,"extra":true}]}"#,
+            r#"{"items":[{"count":1}]}"#,
+            r#"{"items":[]}"#,
+            r#"{"items":null}"#,
+        ] {
+            let altered = json::from_str::<Value>(json).unwrap();
+            assert!(!matches_json_projection(&altered, &integer), "{json}");
+            assert!(!matches_json_projection(&integer, &altered), "{json}");
+        }
+        assert!(matches_json_projection(&integer, &integer));
+        assert!(matches_json_projection(
+            &Value::from(1_i64),
+            &Value::from(1_u64)
+        ));
+        assert!(matches_json_projection(
+            &Value::from(1_u128),
+            &Value::from(1_u64)
+        ));
+        assert!(matches_json_projection(
+            &Value::from(1.5),
+            &Value::from(1.5)
+        ));
+        assert!(!matches_json_projection(
+            &Value::from(-0.0),
+            &Value::from(0.0)
+        ));
     }
 
     #[test]

@@ -48,24 +48,6 @@ fn select_blocked_ordinary_lane_local_ingress(
         .map_err(V2RunnerError::Service)
 }
 
-fn drain_blocked_ordinary_lane_local_ingress(
-    receiver: &FairV2Ingress,
-    lane_work: &mut V2LaneWorkAdapter,
-    active_view: wire::View,
-    permit: LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
-) -> Result<bool, V2RunnerError> {
-    let Some(inbound) = select_blocked_ordinary_lane_local_ingress(receiver, permit)? else {
-        return Ok(false);
-    };
-    if !inbound.message().is_lane_local() {
-        return Err(V2RunnerError::Service(
-            "blocked-ordinary lane-local selector returned global ingress".to_owned(),
-        ));
-    }
-    let _ = lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?;
-    Ok(true)
-}
-
 enum DecidedLaneRecoveryDrainAuthorization {
     LaneLocal,
     KuraReplicaAdvert,
@@ -329,12 +311,9 @@ struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     bound_leader_wire: Option<FairV2IngressOwnershipEvidence>,
     executor: &'a V2EffectExecutor,
     services: &'a mut ProductionV2Services,
-    lane_work: &'a mut V2LaneWorkAdapter,
-    active_view: wire::View,
     decided_subject: wire::BlockSubject,
     kura: &'a Kura,
     block_sync_server: &'a mut V2BlockSyncServer,
-    mode: DecidedLaneRecoveryIngressDrainMode,
 }
 
 impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
@@ -428,22 +407,9 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
 impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCommitter<'_> {
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
-        if self.mode == DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix {
-            // Preflight already proved this peer's exact finalized lane
-            // artifact durable. Admitting a historical certificate from the
-            // finite prefix could start a recovery session after ingress is
-            // permanently closed, so retire every remaining lane-local
-            // occurrence without mutating the current-height adapter.
-            return retire_finalized_lane_local_ingress(inbound);
-        }
-        let _ = self
-            .lane_work
-            .accept_lane_message_with_ingress_ownership(inbound, self.active_view)?;
-        if self.services.lifecycle_output_guard().restart_required() {
-            return Err(V2RunnerError::RestartRequired);
-        }
-        let _ = service_historical_recovery_tick(self.lane_work, self.services)?;
-        Ok(())
+        // The legacy lane protocol has no live signer or recovery adapter.
+        // Retire only after verifying the original physical ingress ownership.
+        retire_finalized_lane_local_ingress(inbound)
     }
 
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
@@ -504,7 +470,13 @@ fn select_decided_lane_recovery_ingress(
     let mut authorization_error = None;
     let inbound = receiver
         .try_recv_if_checked(|inbound| {
-            if authorization_error.is_some() {
+            if authorization_error.is_some()
+                || matches!(
+                    inbound.message(),
+                    BlockMessage::NativeLane(_) | BlockMessage::NativeLaneDecision(_)
+                )
+            {
+                // Native occurrences keep their process owner across global rollover.
                 return false;
             }
             if let DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut } = mode
@@ -547,8 +519,8 @@ fn drain_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,
     executor: &V2EffectExecutor,
     services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-    active_view: wire::View,
+    _native: &mut NativeRunnerProcess,
+    _active_view: wire::View,
     kura: &Kura,
     block_sync_server: &mut V2BlockSyncServer,
     mode: DecidedLaneRecoveryIngressDrainMode,
@@ -572,12 +544,9 @@ fn drain_decided_lane_recovery_ingress(
         bound_leader_wire: None,
         executor,
         services,
-        lane_work,
-        active_view,
         decided_subject,
         kura,
         block_sync_server,
-        mode,
     };
     let outcome = commit_decided_lane_recovery_drain(authorization, &mut committer)?;
     // Non-Serve global traffic for this replayed terminal height is

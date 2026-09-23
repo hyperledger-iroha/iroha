@@ -838,10 +838,7 @@ mod tests {
         assert!(transition.readiness_context(4).is_err());
         let mut changed = transition.clone();
         changed.preparation.election_seed[0] ^= 1;
-        assert_ne!(
-            first.transition_id,
-            changed.readiness_context(0).unwrap().transition_id
-        );
+        assert!(changed.readiness_context(0).is_err());
         changed
             .credentials
             .as_mut()

@@ -3625,6 +3625,60 @@ def test_rust_method_owner_qualified_trait_is_exact(header, accepted):
     assert len(items) == int(accepted)
 
 
+def test_rust_method_inherent_qualification_preserves_ambiguity_checks():
+    checker = load_checker()
+    source = """impl<T> Owner<T> where T: Policy {
+    fn release(&mut self) { release_original_writers(); }
+}
+impl<T> Lease for Owner<T> where T: Policy {
+    fn release(&mut self) { Owner::release(self); }
+}
+impl<T> Other<Owner<T>> {
+    fn release(&mut self) { foreign_release(); }
+}
+"""
+    assert len(checker._extract_rust_binding_items(source, "method", "Owner::release")) == 2
+    (inherent,) = checker._extract_rust_binding_items(
+        source, "method", "inherent Owner::release",
+    )
+    assert "release_original_writers()" in inherent
+    assert "Owner::release(self)" not in inherent
+    (forwarder,) = checker._extract_rust_binding_items(
+        source, "method", "Lease for Owner::release",
+    )
+    assert "Owner::release(self)" in forwarder
+    assert checker._extract_rust_binding_items(
+        source, "method", "inherent Lease for Owner::release",
+    ) == ()
+    duplicate = source + "\nimpl Owner<Other> {\n    fn release(&mut self) { decoy(); }\n}"
+    assert len(checker._extract_rust_binding_items(
+        duplicate, "method", "inherent Owner::release",
+    )) == 2
+
+
+def test_rust_method_qualified_trait_path_is_not_a_foreign_owner():
+    checker = load_checker()
+    source = """impl<T> crate::Lease for Owner<T> {
+    fn release(&mut self) { Owner::release(self); }
+}
+impl<T> foreign::Lease for Owner<T> {
+    fn release(&mut self) { foreign_release(); }
+}
+impl<T> crate::Lease for Other<Owner<T>> {
+    fn release(&mut self) { other_release(); }
+}
+"""
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "crate::Lease for Owner::release",
+    )
+    assert "Owner::release(self)" in item
+    assert "foreign_release()" not in item
+    assert "other_release()" not in item
+    for symbol in ("inherent Owner::release", "crate::Lease for OtherOwner::release",
+                   "crate::Lease for Owner::release;", "crate::Lease for Owner::"):
+        assert checker._extract_rust_binding_items(source, "method", symbol) == ()
+
+
 def test_native_prepublication_formatted_call_sites_match_raw_ledger():
     """The canonical raw ledger must accept both exact Rustfmt call sites."""
     module = load_checker()

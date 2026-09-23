@@ -807,9 +807,7 @@ fn queue_plan_capacity_harness_for_test(
 ) -> iroha_core::sumeragi::SumeragiIngressTestHarness {
     use iroha_data_model::{
         block::consensus_v2 as wire,
-        isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        },
+        isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
     };
     let mut signers = signers.iter().collect::<Vec<_>>();
     signers.sort_by(|a, b| a.public_key().cmp(b.public_key()));
@@ -820,7 +818,7 @@ fn queue_plan_capacity_harness_for_test(
             power: 1,
         })
         .collect::<Vec<_>>();
-    let authority = KagemushaMintFinalityAuthorityGenerationV1 {
+    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 0,
         validators: roster.iter().enumerate().map(|(index, validator)| {
             iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
@@ -840,21 +838,8 @@ fn queue_plan_capacity_harness_for_test(
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_authorization:
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-                version: KAGEMUSHA_CHAIN_VERSION_V1,
-                network_id,
-                epoch: 0,
-                first_height: 1,
-                last_height: 100,
-                authority_generation: 0,
-                authority_id: authority.authority_id().unwrap(),
-                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-                previous_authorization_id: [0; 32],
-                transition_id: [0; 32],
-                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-            },
-        kagemusha_mint_finality_authority: authority,
+        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_roster, 100).unwrap(),
+        kagemusha_mint_finality_authority: mint_roster,
         nexus_amx_context_hash: Hash::new(b"Torii capacity fixture nexus"),
         execution_policy_hash: Hash::new(b"Torii capacity fixture policy"),
         da_layout: layout,

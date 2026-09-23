@@ -1,7 +1,7 @@
 """Structural controls for Native physical ingress across global rollover.
 
-Native admission remains closed at the production entrypoint. These controls
-bind its private bounded custody path, not activation or network liveness.
+The production entrypoint shares bounded physical custody with the Native
+consumer. These controls bind that custody path and its source identity.
 """
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from sumeragi_v2_multilane_geometry_evidence_contract import _code
 CORE = "crates/iroha_core/src/sumeragi/mod.rs"
 NATIVE = "crates/iroha_core/src/sumeragi/fair_v2_ingress_native.rs"
 POSITION = "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
-CARRIER = "crates/iroha_core/src/sumeragi/v2_runner/native_ingress_carrier.rs"
-RUNTIME = "crates/iroha_core/src/sumeragi/v2_runner/native_lane_runtime.rs"
+PROCESS = "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs"
+CONSUMER = "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"
 TESTS = "crates/iroha_core/src/sumeragi/tests/mod_native_ingress_rollover.rs"
 SOURCE_RELATIVES = tuple(map(Path, (
-    CORE, NATIVE, POSITION, CARRIER, RUNTIME, TESTS,
+    CORE, NATIVE, POSITION, PROCESS, CONSUMER, TESTS,
     "scripts/formal/sumeragi_v2_multilane_native_ingress_contract.py",
     "pytests/scripts/sumeragi_v2_multilane_native_ingress_contract_test.py",
 )))
@@ -50,11 +50,6 @@ EXACT = (
     (CORE, "method", "FairV2Ingress::try_push_at", """
         fn try_push_at(&self, inbound: InboundBlockMessage, enqueued_at: Instant)
         -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
-            if inbound.message().is_native_lane() {
-                return Err(FairV2IngressPushError::rejected(
-                    inbound, FairV2IngressRejectReason::UnsupportedEnvelope,
-                ));
-            }
             self.try_push_owned_at(inbound, enqueued_at)
         }
     """),
@@ -120,64 +115,47 @@ ORDERED = (
     (CORE, "method", "FairV2IngressOwnershipEvidence::matches_reply_routes", (
         "fair_v2_ingress_route_sets_same_exact_history(self.current_routes.as_ref(), routes)",
     )),
-    (CARRIER, "method", "NativeFairIngressCarrier::from_checked_dequeue", (
-        "let exact = inbound.ingress_ownership().is_some_and(|ownership|",
-        "inbound.message().is_native_lane()",
-        "ownership.validate_exact()",
-        "ownership.matches_message(inbound.message())",
-        "ownership.matches_semantic_origin(inbound.sender())",
-        "ownership.matches_native_authenticated_hop(inbound.via())",
-        "ownership.matches_reply_routes(inbound.reply_routes())",
-        "ownership.leader_wire_token().is_none()",
-        "ownership.leader_wire_runtime_receipt().is_none()",
-        "if !exact {",
-        "return Err((",
-        "let InboundBlockMessage {",
-        "BlockMessage::NativeLane(envelope) => NativeLaneInput::Control(envelope)",
-        "BlockMessage::NativeLaneDecision(decision) => NativeLaneInput::Decision(*decision)",
-        "ownership: ingress_ownership.expect(\"validated Native dequeue has fair ownership\")",
+    (CORE, "method", "FairV2Ingress::try_recv_native_process_checked", (
+        "FairV2IngressCheckedSelectionScope::NativeProcess",
+        "!native.has_pending_ingress() && inbound.message().is_native_lane()",
+        "native.admits_source_response(inbound.message())",
+        ".map(|selected| selected.map(|(inbound, _)| inbound))",
     )),
-    (CARRIER, "method", "NativeFairIngressCarrier::admit_with", (
-        "let Self { input, provenance } = self;",
-        "match admit(input) {",
-        "NativeLaneAdmission::Accepted => NativeFairIngressAdmission::Accepted",
-        "NativeLaneAdmission::Retry(input) => {",
-        "NativeFairIngressAdmission::Retry(Self { input, provenance })",
-        "NativeLaneAdmission::Rejected { input, reason } => {",
-        "carrier: Self { input, provenance }",
+    (PROCESS, "method", "NativeRunnerProcess::service_native_ingress", (
+        ".try_recv_native_process_checked(self)",
+        "let is_native = inbound.message().is_native_lane();",
+        "PreparedDequeuedV2IngressV1::new(",
+        "Arc::clone(&self.guard)",
+        "if is_native {",
+        "self.consume_native_ingress(prepared, receiver)",
+        "ordinary_ingress_consumer::consume_prepared_native_source_response(",
     )),
-    (CARRIER, "method", "NativeIngressTransferFailStop::drop", (
-        "if !self.completed {",
-        "self.guard.close_admission_for_restart()",
+    (PROCESS, "method", "NativeRunnerProcess::consume_native_ingress", (
+        "if self.pending_ingress.is_some()",
+        "prepared.close_output_for_restart();",
+        "self.pending_ingress = ordinary_ingress_consumer::consume_prepared_native_ingress(",
+        "prepared,",
+        "receiver,",
+        "&mut self.driver",
     )),
-    (CARRIER, "method", "NativeFairIngressPump::accept_checked_dequeue", (
-        "if self.pending.is_some()",
-        "self.guard.close_admission_for_restart()",
-        "NativeFairIngressCarrier::from_checked_dequeue(inbound)",
-        "self.guard.close_admission_for_restart()",
-        "self.pending = Some(carrier)",
+    (CONSUMER, "method", "PreparedDequeuedV2IngressV1::drop", (
+        "if self.armed {",
+        "self.output_guard.close_admission_for_restart();",
     )),
-    (CARRIER, "method", "NativeFairIngressPump::service_with", (
-        "if self.guard.restart_required()",
-        "let transfer = NativeIngressTransferFailStop {",
-        "if self.pending.is_none()",
-        "try_recv_if_checked(|candidate| candidate.message().is_native_lane())",
-        "self.accept_checked_dequeue(inbound)?",
-        "let carrier = self.pending.take()",
-        "match carrier.admit_with(admit)",
-        "NativeFairIngressAdmission::Retry(carrier)",
-        "self.pending = Some(carrier)",
-        "transfer.complete()",
-        "outcome",
-    )),
-    (CARRIER, "method", "NativeFairIngressPump::drop", (
-        "if self.pending.is_some()",
-        "self.guard.close_admission_for_restart()",
-    )),
-    (RUNTIME, "method", "NativeLaneRuntime::service_checked_fair_ingress", (
-        "let driver = &mut self.driver",
-        "self.fair_ingress",
-        ".service_with(ingress, |input| driver.admit(observed, input))",
+    (CONSUMER, "fn", "consume_prepared_native_ingress", (
+        "if !prepared.matches_ingress(receiver)",
+        "!native_lanes.matches_output_guard(&prepared.output_guard)",
+        "prepared.close_output_for_restart();",
+        "let initial_admission = prepared.output_guard.acquire()",
+        "let inbound = prepared.inbound.take()",
+        "NativeLaneOwnedAdmission::Accepted => {}",
+        "NativeLaneOwnedAdmission::Retry(inbound) => {",
+        "prepared.inbound = Some(inbound);",
+        "return Ok(Some(prepared));",
+        "NativeLaneOwnedAdmission::Rejected { inbound, reason } => {",
+        "drop(inbound);",
+        "let final_admission = output_guard.acquire()",
+        "prepared.complete();",
     )),
     (CORE, "method", "FairV2Ingress::try_push", (
         "self.try_push_at(inbound, Instant::now())",
@@ -274,8 +252,6 @@ def validate_owners(root: Path, errors: list[str], rust_binding_item: Callable) 
         if item is None:
             continue
         code, cursor = _code(item), 0
-        if symbol == "NativeFairIngressPump::service_with" and code.count(_code("transfer.complete()")) != 2:
-            errors.append("Native ingress NativeFairIngressPump::service_with must disarm only the empty and settled transfer paths")
         for relation in relations:
             needle = _code(relation)
             position = code.find(needle, cursor)

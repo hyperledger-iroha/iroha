@@ -12,7 +12,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
 * [`kagami kagemusha authenticate-release-v1`↴](#kagami-kagemusha-authenticate-release-v1)
-* [`kagami kagemusha derive-mint-finality-authority-generation-v1`↴](#kagami-kagemusha-derive-mint-finality-authority-generation-v1)
 * [`kagami genesis`↴](#kagami-genesis)
 * [`kagami genesis sign`↴](#kagami-genesis-sign)
 * [`kagami genesis generate`↴](#kagami-genesis-generate)
@@ -276,9 +275,6 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 ###### **Subcommands:**
 
 * `authenticate-release-v1` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
-* `derive-mint-finality-authority-generation-v1` — Provision a public exact 3f+1 authority generation and candidate proofs
-* `derive-mint-finality-candidate-v1` — Provision one independent candidate and its signed possession proof
-* `prove-committee-seat-readiness-v1` — Prove both mint-key and beacon-share custody for one prepared seat
 
 
 
@@ -303,49 +299,6 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `--native-artifact <PATH>` — Exact c-jni library whose bytes must match the native-artifact manifest
 
 
-
-## `kagami kagemusha derive-mint-finality-authority-generation-v1`
-
-Provision one public authority generation and paired candidate possession proofs.
-
-**Usage:** `kagami kagemusha derive-mint-finality-authority-generation-v1 --network-id <NETWORK_ID> --generation <GENERATION> --validator <PEER_ID> --seed-fd <FD> --peer-private-key-fd <FD>`
-
-* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
-* `--generation <GENERATION>` — Immutable public key generation; zero provisions genesis
-* `--validator <PEER_ID>` — Repeat an exact 3f+1 committee (4–31) in strict PeerId order
-* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly 32 independent raw seed bytes per validator, followed by EOF
-
-## `kagami kagemusha derive-mint-finality-candidate-v1`
-
-Provision one candidate independently of committee selection.
-
-**Usage:** `kagami kagemusha derive-mint-finality-candidate-v1 --network-id <NETWORK_ID> --generation <GENERATION> --validator <PEER_ID> --seed-fd <FD> --peer-private-key-fd <FD>`
-
-* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
-* `--generation <GENERATION>` — Candidate public key generation
-* `--validator <PEER_ID>` — One canonical BLS-normal candidate identity
-* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly one nonzero 32-byte seed, followed by EOF
-* `--peer-private-key-fd <FD>` — Distinct transferred read pipe containing the matching canonical BLS-normal private key, with optional terminal newline; the peer signs the complete candidate publication
-
-Both commands wipe consumed input before output. Public possession proofs bind network,
-generation, peer, and both Pasta keys. They do not authorize an epoch or committee transition,
-attest beacon-share custody, or submit a transaction.
-
-## `kagami kagemusha prove-committee-seat-readiness-v1`
-
-Produce an `AdmitValidatorCommitteeSeatV1` for the exact public prepared attempt.
-
-**Usage:** `kagami kagemusha prove-committee-seat-readiness-v1 --status <FILE> --validator-index <INDEX> --seed-fd <FD> --beacon-share-fd <FD>`
-
-* `--status <FILE>` — Canonical `ValidatorCommitteeStatusV1` from independently anchored `iroha staking committee status`
-* `--validator-index <INDEX>` — Zero-based seat in the immutable ordered committee
-* `--seed-fd <FD>` — Inherited read pipe carrying exactly 32 seed bytes and EOF
-* `--beacon-share-fd <FD>` — Distinct inherited read pipe carrying exactly three canonical 32-byte secret-share scalars and EOF
-
-Secrets are bounded, consumed and wiped before public output. The producer checks
-exact preparation, candidate consent, transcript, key generation and seat custody.
-The submitting CLI independently authenticates chain selection again. This command
-neither installs runtime custody nor activates a committee.
 
 ## `kagami genesis`
 

@@ -144,6 +144,7 @@ impl Kura {
             .ok_or(Unavailable::Arithmetic)?;
         let lane_entries = exact(&self.lane_storage_entries.lock())?;
         let certified_pairs = exact(&self.certified_pair_durability.lock())?;
+        let receipt_namespaces = exact(&self.lane_receipt_namespace_durability.lock())?;
         let frontier_artifacts = exact(&self.certified_frontier_artifact_validation.lock())?;
         let native = exact(&self.native_amx_publication_capacity_reservations.lock())?;
         let post_wsv = exact(&self.post_wsv_lane_artifact_budget_reservations.lock())?;
@@ -151,6 +152,7 @@ impl Kura {
         let frontier = [
             lane_entries,
             certified_pairs,
+            receipt_namespaces,
             frontier_artifacts,
             native,
             post_wsv,

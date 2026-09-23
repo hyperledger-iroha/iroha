@@ -623,15 +623,16 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
     let genesis = archive_replay_genesis_at(500);
     let genesis_hash = genesis.hash();
     let kura = Kura::blank_kura_for_testing();
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body advertised by archive replay state");
+    // Authenticate and provision the configured lane before publishing history.
     let state = State::new_with_chain_and_network_id_for_testing(
         world,
-        kura,
+        std::sync::Arc::clone(&kura),
         LiveQueryStore::start_test(),
         iroha_model_base::chain::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
+    kura.store_block(std::sync::Arc::new(genesis))
+        .expect("retain the exact genesis body advertised by archive replay state");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);
@@ -1512,15 +1513,16 @@ fn archive_location_replay_state(world: World) -> State {
     let genesis_hash = genesis.hash();
     assert_eq!(genesis_hash, archive_location_genesis_header().hash());
     let kura = Kura::blank_kura_for_testing();
-    kura.store_block(std::sync::Arc::new(genesis))
-        .expect("retain the exact genesis body before advertising committed height");
+    // Authenticate and provision the configured lane before publishing history.
     let state = State::new_with_chain_and_network_id_for_testing(
         world,
-        kura,
+        std::sync::Arc::clone(&kura),
         LiveQueryStore::start_test(),
         iroha_model_base::chain::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
+    kura.store_block(std::sync::Arc::new(genesis))
+        .expect("retain the exact genesis body before advertising committed height");
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);

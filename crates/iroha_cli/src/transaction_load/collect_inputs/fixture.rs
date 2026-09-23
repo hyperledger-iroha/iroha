@@ -132,13 +132,11 @@ fn context(keys: &[KeyPair], network_id: NetworkId) -> HeightContext {
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1, network_id: network_id, epoch: 0,
-            first_height: 1, last_height: 2048, authority_generation: mint.generation,
-            authority_id: mint.authority_id().unwrap(), beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0;32], transition_id: [0;32],
-            decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-        },
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint, 2048,
+            )
+            .unwrap(),
         kagemusha_mint_finality_authority: mint,
         epoch_end_height: 2048,
         next_epoch_snapshot: None,

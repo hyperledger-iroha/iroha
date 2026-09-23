@@ -99,55 +99,36 @@ def test_portable_replacements_keep_all_fixed_mappings() -> None:
     sbom = (REPO_ROOT / "scripts/android_sbom_provenance.sh").read_text(
         encoding="utf-8"
     )
-    for module, filename in (
-        ("java/iroha_android/jvm", "iroha-android-jvm.cyclonedx.json"),
-        ("java/iroha_android/android", "iroha-android.cyclonedx.json"),
-        ("examples/android/operator-console", "operator-console.cyclonedx.json"),
-        ("examples/android/retail-wallet", "retail-wallet.cyclonedx.json"),
-    ):
-        assert module in sbom
-        assert filename in sbom
+    for module in ("core-jvm", "client-android", "kagemusha-wallet-android"):
+        assert f":{module}:cyclonedxDirectBom" in sbom
+    assert "java/iroha_android" not in sbom
+
 
 def test_android_sbom_collection_preserves_each_module_report(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
+    repo_root.mkdir()
     destination = tmp_path / "collected"
-    destination.mkdir()
-    reports = {
-        "java/iroha_android/jvm": "jvm",
-        "java/iroha_android/android": "android",
-        "examples/android/operator-console": "operator-console",
-        "examples/android/retail-wallet": "retail-wallet",
-    }
-    for module, contents in reports.items():
-        report = repo_root / module / "build" / "reports" / "bom" / "bom.json"
+    reports = ("core-jvm", "client-android", "kagemusha-wallet-android")
+    for module in reports:
+        report = repo_root / "kotlin" / module / "build/reports/bom/bom.json"
         report.parent.mkdir(parents=True)
-        report.write_text(contents, encoding="utf-8")
-
+        report.write_text(json.dumps({
+            "bomFormat": "CycloneDX", "components": [],
+            "metadata": {"component": {"group": "org.hyperledger.iroha.sdk",
+                                         "name": module, "version": "1.2.3"}}
+        }), encoding="utf-8")
     script = REPO_ROOT / "scripts/android_sbom_provenance.sh"
+    environment = os.environ.copy()
+    environment.pop("MOBILE_SDK_ANDROID_ARTIFACT_DIR", None)
+    environment["MOBILE_SDK_PYTHON_BINARY"] = sys.executable
     result = subprocess.run(
-        [
-            "/bin/bash",
-            "-c",
-            'source "$1"; collect_sbom_reports "$2" "$3"',
-            "bash",
-            str(script),
-            str(repo_root),
-            str(destination),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+        ["/bin/bash", "-c", 'source "$1"; collect_sbom_reports "$2" "$3"',
+         "bash", str(script), str(repo_root), str(destination)],
+        check=False, capture_output=True, text=True, env=environment,
     )
-
     assert result.returncode == 0, result.stderr
-    assert {
-        path.name: path.read_text(encoding="utf-8")
-        for path in destination.iterdir()
-    } == {
-        "iroha-android-jvm.cyclonedx.json": "jvm",
-        "iroha-android.cyclonedx.json": "android",
-        "operator-console.cyclonedx.json": "operator-console",
-        "retail-wallet.cyclonedx.json": "retail-wallet",
+    assert {path.name for path in destination.iterdir()} == {
+        f"iroha-{module}.cyclonedx.json" for module in reports
     }
 
 

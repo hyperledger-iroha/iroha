@@ -330,6 +330,13 @@ fn write_decision_startup_with_body_marker(
     );
     (startup, body_store)
 }
+impl SumeragiV2Adapter {
+    /// Reuse the genuine finite lifecycle configuration for Native custody tests.
+    pub(in crate::sumeragi) fn native_source_lifecycle_config_for_test() -> SumeragiV2Config {
+        lifecycle_owner_config()
+    }
+}
+
 fn lifecycle_owner_config() -> SumeragiV2Config {
     SumeragiV2Config {
         format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,

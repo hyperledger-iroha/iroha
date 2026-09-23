@@ -133,14 +133,14 @@ class RetainedReleaseTests(unittest.TestCase):
             self.retire()
         self.assertEqual(len(calls), 4)
 
-    def test_supervisor_appears_during_quarantine_unlinks_nothing(self):
+    def test_current_authority_changes_during_quarantine_unlinks_nothing(self):
         rename = owner.rename_exclusive
         def change(*args):
             rename(*args)
             if args[0].parent == self.bins:
-                self.bindings.side_effect = owner.RetainedReleaseError("supervisor authority appeared")
+                self.bindings.side_effect = owner.RetainedReleaseError("current unit authority changed")
         with patch.object(owner, "rename_exclusive", side_effect=change), patch.object(os, "unlink") as unlink:
-            with self.assertRaisesRegex(ValueError, "supervisor"):
+            with self.assertRaisesRegex(ValueError, "unit authority"):
                 self.retire()
             unlink.assert_not_called()
         self.assertEqual(sum(path.exists() for path in self.quarantines()), 1)
@@ -444,6 +444,79 @@ class RetainedReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lock replaced"):
                 with owner.authority_locks(self.deployment):
                     self.fail("replaced lock must not authorize work")
+
+    def test_retirement_requires_existing_shared_lock_and_holds_it_through_work(self):
+        journal = self.root / "journal-v1"; journal.mkdir(mode=0o700)
+        lifecycle = self.root / "deployment"; lifecycle.mkdir(mode=0o700)
+        for path in (self.root / ".routine-update.lock", journal / "public-reset.lock"):
+            path.touch(mode=0o600)
+        shared = lifecycle / ".deployment.lock"
+        with patch.object(owner, "DEPLOYMENT_STATE_ROOT", lifecycle):
+            with self.assertRaises(FileNotFoundError):
+                with owner.authority_locks(self.deployment):
+                    self.fail("missing owner lock must not authorize work")
+            self.assertFalse(shared.exists())
+            shared.touch(mode=0o600)
+            competing = os.open(shared, os.O_RDWR)
+            try:
+                owner.fcntl.flock(competing, owner.fcntl.LOCK_EX | owner.fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    with owner.authority_locks(self.deployment):
+                        self.fail("another lifecycle owner must exclude retirement")
+                owner.fcntl.flock(competing, owner.fcntl.LOCK_UN)
+                with owner.authority_locks(self.deployment):
+                    with self.assertRaises(BlockingIOError):
+                        owner.fcntl.flock(competing, owner.fcntl.LOCK_EX | owner.fcntl.LOCK_NB)
+                owner.fcntl.flock(competing, owner.fcntl.LOCK_EX | owner.fcntl.LOCK_NB)
+            finally:
+                os.close(competing)
+
+    def test_retirement_refuses_any_reset_owner_presence_without_reading_or_clearing(self):
+        journal = self.root / "journal-v1"; journal.mkdir(mode=0o700)
+        lifecycle = self.root / "deployment"; lifecycle.mkdir(mode=0o700)
+        for path in (self.root / ".routine-update.lock", journal / "public-reset.lock",
+                     lifecycle / ".deployment.lock"):
+            path.touch(mode=0o600)
+        marker = lifecycle / ".reset-owner.json"
+        for kind in ("regular", "symlink", "directory"):
+            if kind == "regular": marker.write_bytes(b"never read")
+            elif kind == "symlink": marker.symlink_to(lifecycle / "absent")
+            else: marker.mkdir(mode=0o700)
+            with self.subTest(kind=kind), patch.object(owner, "DEPLOYMENT_STATE_ROOT", lifecycle), \
+                 patch.object(owner, "read", side_effect=AssertionError("owner contents must stay unread")):
+                with self.assertRaisesRegex(ValueError, "retained reset owner"):
+                    with owner.authority_locks(self.deployment):
+                        self.fail("durable owner must exclude retirement between native invocations")
+                self.assertTrue(os.path.lexists(marker))
+            if kind == "directory": marker.rmdir()
+            else: marker.unlink()
+
+    def test_current_bindings_protect_deployment_custody_and_only_query_validator_units(self):
+        import json
+        self.stack.close()
+        roles = [f"taira-validator-{i}" for i in range(1, 5)]
+        deployment = dict(runtime_root=str(self.root), state_root="/var/lib/taira",
+            config_root="/srv/taira", current=dict(daemon=str(self.root / "current/bin/iroha3d_taira")),
+            roles=roles)
+        host = dict(service_root="/srv/taira/validator", state_root="/var/lib/taira/validator",
+                    reset_guard="/var/lib/taira/guard", artifacts=[dict(local_path="/retained/binary")])
+        inventory = dict(revision=dict(source_root="/retained/source"), validators=[host] * 4, edge=host)
+        def unit(path, digest):
+            index = int(Path(path).stem.removeprefix("iroha3d-taira-validator-"))
+            command = [deployment["current"]["daemon"], "--config",
+                       f"/srv/taira/taira-validator-{index}/current/config/config.toml", "--sora"]
+            return ("ExecStart=/usr/bin/python3 -c " + json.dumps("cmd=" + repr(command))).encode()
+        def systemd(name, fields):
+            self.assertEqual(fields, ("FragmentPath", "DropInPaths", "Job"))
+            return dict(FragmentPath="/etc/systemd/system/" + name, DropInPaths="", Job="")
+        with patch.object(owner, "pin_json", return_value=inventory), \
+             patch.object(owner, "read", side_effect=unit), \
+             patch.object(owner, "systemd_fields", side_effect=systemd) as probe:
+            protected = owner.current_bindings(self.plan, deployment)
+        self.assertIn(str(owner.DEPLOYMENT_STATE_ROOT), protected)
+        self.assertIn("/retained/source", protected)
+        self.assertIn("/retained/binary", protected)
+        self.assertEqual(probe.call_count, 4)
 
     def test_backing_demand_mirrors_guest_then_adds_physical_reserve(self):
         with patch.object(owner.sys, "platform", "darwin"), patch.object(owner, "send_frame") as send:

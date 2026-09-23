@@ -1,7 +1,7 @@
 //! Native lane evidence codec for the existing Sumeragi reducer.
 //!
-//! TODO: connect this boundary to the process-owned lane reducer driver, exact
-//! body/RS16 custody, P2P ingress and descriptor-relative durable WAL owner.
+//! The process-owned lane driver joins this boundary to exact body/RS16 custody,
+//! authenticated P2P ingress and the descriptor-relative durable WAL owner.
 //! This module authenticates bytes and projects them into the shared reducer.
 //! It never selects work, authorizes a second vote, acknowledges fsync or marks
 //! a body Ready. Current-instance admission and effect custody remain required.

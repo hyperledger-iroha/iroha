@@ -101,21 +101,7 @@ fn core_context_rejects_same_label_foreign_genesis_network() {
     (
         foreign.kagemusha_mint_finality_authorization,
         foreign.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-        foreign.network_id,
-        foreign.kagemusha_mint_finality_authority.generation,
-        foreign.epoch,
-        if foreign.epoch == 0 {
-            1
-        } else {
-            foreign
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
-        foreign.epoch_end_height,
-        &foreign.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign.network_id, foreign.epoch, foreign.epoch_end_height, &foreign.roster);
     foreign
         .validate()
         .expect("foreign context remains structural");

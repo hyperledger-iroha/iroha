@@ -692,21 +692,7 @@ fn autonomous_retirement_handoff_fixture(
     (
         context.kagemusha_mint_finality_authorization,
         context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
-        context.network_id,
-        context.kagemusha_mint_finality_authority.generation,
-        context.epoch,
-        if context.epoch == 0 {
-            1
-        } else {
-            context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
-        context.epoch_end_height,
-        &context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(context.network_id, context.epoch, context.epoch_end_height, &context.roster);
     context
         .validate()
         .expect("retired autonomous handoff context is valid");

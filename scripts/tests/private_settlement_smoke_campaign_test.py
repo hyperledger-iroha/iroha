@@ -458,6 +458,19 @@ class SmokeEvidenceTests(unittest.TestCase):
             with self.assertRaises(M.CampaignError):
                 self.validate()
 
+    def test_finality_rejects_retired_authority_context_fields(self) -> None:
+        for canonical, retired in (
+            ("kagemusha_mint_finality_authorization", "kagemusha_mint_finality_epoch_id"),
+            ("kagemusha_mint_finality_authority", "kagemusha_mint_finality_epoch_roster"),
+        ):
+            with self.subTest(field=retired):
+                self.evidence, self.result = evidence_fixture(0, self.sha)
+                context = self.evidence["finality-after-15.json"]["finality_artifact"]["height_context"]
+                context[retired] = context.pop(canonical)
+                with self.assertRaisesRegex(M.release_runner.RunnerError, "height context fields mismatch"):
+
+                    self.validate()
+
     def test_semantic_finality_allows_equivalent_parent_qc_signer_subsets(self) -> None:
         parent = copy.deepcopy(self.evidence["finality-before-00.json"]["finality_artifact"]["commit_qc"])
         for name, proof in self.evidence.items():

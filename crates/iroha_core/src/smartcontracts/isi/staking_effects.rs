@@ -7,7 +7,7 @@ use iroha_data_model::nexus::{
     public_lane_reward_record_commitment,
 };
 
-/// Restrict a signed plan to this network and one governed epoch of validity.
+/// Restrict genesis plans to initial height one and network plans to a committed epoch window.
 pub(super) fn validate_plan_context(
     state_transaction: &StateTransaction<'_, '_>,
     network_scope: &PublicLaneMonetaryScopeV1,
@@ -27,6 +27,18 @@ pub(super) fn validate_plan_context(
                 .into(),
         ));
     }
+    let height = state_transaction.block_height();
+    if matches!(network_scope, PublicLaneMonetaryScopeV1::Genesis) {
+        // Genesis already authenticates every exact movement and custody
+        // precondition. Its one-block lifetime does not depend on an election
+        // schedule, which Permissioned genesis must not contain.
+        if height != 1 || valid_until_height != 1 {
+            return Err(Error::InvariantViolation(
+                "genesis staking monetary plans must expire at initial height one".into(),
+            ));
+        }
+        return Ok(());
+    }
     let parameters = state_transaction
         .world
         .sumeragi_npos_parameters()
@@ -40,7 +52,6 @@ pub(super) fn validate_plan_context(
             format!("invalid staking monetary plan epoch parameters: {error}").into(),
         )
     })?;
-    let height = state_transaction.block_height();
     let latest = height
         .checked_add(parameters.epoch_length_blocks.get())
         .ok_or_else(|| {

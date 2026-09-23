@@ -829,10 +829,13 @@ def test_history_delegation_preserves_exact_owner_and_error(tmp_path, symbol, ol
 def test_history_delegation_preserves_lease_guard_on_reacquisition(tmp_path, mutex):
     binding = next(b for b in BINDINGS if b[3] == "read_native_amx_participant_application_history_with_lease")
     item = source_item(binding)
-    old = f"lease.is_none().then(|| self.{mutex}.lock())"
+    old = ("lease\n            .is_none()\n            .then(|| self.lock_consensus_sidecar_read())\n            .transpose()?"
+           if mutex == "sidecar_lock" else f"lease.is_none().then(|| self.{mutex}.lock())")
+    replacement = ("Some(self.lock_consensus_sidecar_read()?)" if mutex == "sidecar_lock"
+                   else f"Some(self.{mutex}.lock())")
     assert item.count(old) == 2
     first, _, second = item.rpartition(old)
-    post = first + f"Some(self.{mutex}.lock())" + second
+    post = first + replacement + second
     changed_provider(tmp_path, binding, item, post)
     # The first required conditional remains; the second probe must still be
     # rejected rather than passing a simple token-presence check.
@@ -861,6 +864,42 @@ def test_history_body_read_requires_both_inner_guard_drops(tmp_path):
     errors = []
     contract.validate_authority_recovery_item(post, binding, errors)
     assert any("violates order" in error for error in errors)
+
+
+def test_raw_recovery_requires_ancestor_barrier_before_publication(tmp_path):
+    binding = next(b for b in BINDINGS if b[3] == "Kura::recover_exact_canonical_lane_artifact")
+    item = source_item(binding)
+    barrier = next(token for token in binding[4] if token.startswith("if !self.sync_bound_progress_namespace"))
+    writer = """        let checkpoint = self.write_lane_block_artifact_locked(
+            artifact,
+            LaneBlockArtifactConflictPolicy::PreserveCanonical,
+        )?;"""
+    assert item.count(barrier) == 1 and item.count(writer) == 1
+    post = item.replace(barrier, "", 1).replace(writer, writer + "\n        " + barrier, 1)
+    assert all(token in post for token in binding[4])
+    changed_provider(tmp_path, binding, item, post)
+    errors = []
+    contract.validate_authority_recovery_item(post, binding, errors)
+    assert any("violates order" in error for error in errors)
+
+
+@pytest.mark.parametrize("old,new", [
+    ("self.lock_consensus_sidecar_read()?", "self.sidecar_lock.lock()"),
+    ("AutonomousLaneBlockViewStateReadMode::LatestReadOnly",
+     "AutonomousLaneBlockViewStateReadMode::Recover"),
+    (")? != bytes", ")? == bytes"),
+])
+def test_current_autonomous_observer_preserves_read_epoch_and_identity(tmp_path, old, new):
+    binding = next(b for b in BINDINGS if b[3] == "read_current_autonomous_lane_block_artifact_under_guards")
+    item = source_item(binding)
+    errors = []
+    contract.validate_authority_recovery_item(item, binding, errors)
+    assert errors == []
+    assert item.count(old) == 1
+    post = item.replace(old, new, 1)
+    changed_provider(tmp_path, binding, item, post)
+    contract.validate_authority_recovery_item(post, binding, errors)
+    assert errors
 
 
 @pytest.mark.parametrize("symbol,old,new", [

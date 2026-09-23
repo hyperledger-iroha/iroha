@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn reward_accruals_preserve_reserves_and_block_retirement() {
+    fn processed_reward_cursor_preserves_unpaid_source_accrual_backing() {
         let (mut world, asset) = fixture();
         world.public_lane_reward_claims.insert(
             (LaneId::SINGLE, BOB_ID.clone()),
@@ -240,42 +240,38 @@ mod tests {
                 through_epoch: Some(0),
             },
         );
-        let key = (LaneId::SINGLE, BOB_ID.clone(), asset.clone());
-        world
-            .public_lane_reward_accruals
-            .insert(key.clone(), Quantity::from(25_u64));
-        assert!(validate_public_lane_reward_reserves(&world.view()).is_ok());
-        let nexus = iroha_config::parameters::actual::Nexus::default();
-        assert!(matches!(
-            ensure_live_shared_dataspace_staking_owner_is_not_reset(
-                &world.view(),
-                &nexus,
-                &nexus,
-                &BTreeSet::from([LaneId::SINGLE]),
-                100,
-            ),
-            Err(LaneLifecycleError::UnsafeRetirement { .. })
-        ));
-        world
-            .public_lane_reward_accruals
-            .insert(key.clone(), Quantity::from(26_u64));
-        assert!(
-            validate_public_lane_reward_reserves(&world.view())
-                .unwrap_err()
-                .contains("exceeds")
+        world.public_lane_reward_accruals.insert(
+            (LaneId::SINGLE, BOB_ID.clone(), asset.clone()),
+            Quantity::from(25_u64),
         );
+        validate_public_lane_reward_reserves(&world.view())
+            .expect("processing the record does not release unpaid custody");
         world
-            .public_lane_reward_accruals
-            .insert(key, Quantity::zero());
+            .public_lane_reward_reserves
+            .insert(asset.clone(), Quantity::from(24_u64));
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
+        world
+            .public_lane_reward_reserves
+            .insert(asset.clone(), Quantity::from(26_u64));
+        world.public_lane_reward_accruals.insert(
+            (LaneId::SINGLE, BOB_ID.clone(), asset),
+            Quantity::from(26_u64),
+        );
+        let error = validate_public_lane_reward_reserves(&world.view()).unwrap_err();
+        assert!(
+            error.contains("exceeds its processed entitlement"),
+            "{error}"
+        );
     }
+
     #[test]
     fn reward_reserves_reject_substituted_network_currency() {
         let (world, _) = fixture();
         {
             let mut parameters = world.parameters.block();
             parameters.get_mut().set_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
+                iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                    .into_custom_parameter(),
             ));
             parameters.commit();
         }
@@ -285,6 +281,7 @@ mod tests {
                 .contains("network XOR")
         );
     }
+
     #[test]
     fn reward_reserves_require_the_exact_custody_balance() {
         let (mut world, asset) = fixture();
@@ -390,7 +387,13 @@ mod tests {
                     through_epoch: Some(0),
                 },
             );
-            block.public_lane_reward_reserves.remove(asset.clone());
+            block.public_lane_reward_accruals.insert(
+                (LaneId::SINGLE, BOB_ID.clone(), asset.clone()),
+                Quantity::from(10_u64),
+            );
+            block
+                .public_lane_reward_reserves
+                .insert(asset.clone(), Quantity::from(10_u64));
             block.commit();
         }
         let value = json::to_value(&state).expect("serialize paired reward state");

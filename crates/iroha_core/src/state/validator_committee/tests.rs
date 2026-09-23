@@ -11,7 +11,10 @@ use crate::{
         FinalizedGlobalThresholdBeaconKeySessionRecordV1, prepared_session_and_signers_fixture_v1,
         prove_global_threshold_beacon_seat_readiness_v1,
     },
-    kagemusha_v1_test_fixtures::{mint_finality_authority, mint_finality_authorization},
+    kagemusha_v1_test_fixtures::{
+        mint_finality_authority, mint_finality_genesis_for_authority,
+        mint_finality_successor_authorization,
+    },
     state::World,
     zk::kagemusha_v1_recursion::{
         prove_kagemusha_mint_finality_candidate_possession_v1,
@@ -90,16 +93,18 @@ pub(crate) fn fixture_with_selection_anchor(
     let mut old_record =
         FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(old.record().clone()).unwrap();
     old_record.activate(5).unwrap();
-    let mut authorization = mint_finality_authorization(&incumbent, 1, 11, 20);
-    authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-        session_id: old.record().session_id,
-        transcript_hash: old.record().transcript_hash,
-    });
-    authorization.decision = KagemushaMintFinalityEpochDecisionV1::Retain;
-    authorization.transition_id = [0; 32];
-    authorization.previous_authorization_id = mint_finality_authorization(&incumbent, 0, 1, 10)
-        .authorization_id()
-        .unwrap();
+    let genesis = mint_finality_genesis_for_authority(&incumbent, 10);
+    let authorization = mint_finality_successor_authorization(
+        &genesis,
+        &incumbent,
+        20,
+        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: old.record().session_id,
+            transcript_hash: old.record().transcript_hash,
+        }),
+        KagemushaMintFinalityEpochDecisionV1::Retain,
+        [0; 32],
+    );
     let preparation = ValidatorCommitteePreparationV1 {
         version: 1,
         network_id: network,
@@ -373,7 +378,7 @@ fn committee_bootstrap_beacon_requires_the_exact_genesis_authority() {
         .clone();
     record.activated_at_height = None;
     let world = World::new();
-    let genesis = mint_finality_authorization(&fixture.incumbent, 0, 1, 10);
+    let genesis = mint_finality_genesis_for_authority(&fixture.incumbent, 10);
     assert_eq!(
         validate_beacon_preparation(
             &world.view(),

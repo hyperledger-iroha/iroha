@@ -1447,3 +1447,6 @@ fn both_pasta_index_range_and_permutation_helpers_refuse_overflow_wrong_roots_an
 
 #[path = "indexed_reads_tests.rs"]
 mod indexed_reads_tests;
+
+#[path = "indexed_snapshot_tests.rs"]
+mod indexed_snapshot_tests;

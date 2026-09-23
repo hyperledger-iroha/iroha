@@ -57,6 +57,9 @@ use crate::zk::{
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
 };
 
+#[cfg(test)]
+mod bootstrap_gates_tests;
+
 mod epoch_authorization;
 use epoch_authorization::{constrain_authorization_successor, constrain_epoch_authorization};
 
@@ -81,9 +84,9 @@ const EP_PARITY_TAG: u8 = 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u64)]
 pub enum KagemushaMintAuthorityStepV1 {
-    /// Pin the release-authenticated genesis roster without accepting a quorum assertion.
+    /// Pin the release-authenticated genesis authorization without accepting a quorum assertion.
     Bootstrap = 0,
-    /// Let the current roster's exact quorum authorize the next roster identifier.
+    /// Let the current quorum certify the next epoch authorization, including retention.
     Rotate = 1,
     /// Prove one reserve receipt under the recursively authenticated current roster.
     FinalizedMint = 2,
@@ -102,12 +105,33 @@ pub struct KagemushaMintCertificateWitnessV1 {
     pub membership: KagemushaTopUpMembershipWitnessV1,
     /// Exact current-epoch `2f + 1` paired Pasta seal bundle.
     pub seal_bundle: KagemushaMintFinalitySealBundleV1,
-    /// Complete dynamic epoch roster.  The recursive relation must authenticate its derived state
+    /// Complete immutable key generation. The recursive relation must authenticate its derived state
     /// digest; it is not trusted merely because it is present here.
     pub authority_generation: KagemushaMintFinalityAuthorityGenerationV1,
 }
 
 impl KagemushaMintCertificateWitnessV1 {
+    /// Return the scheduling authorization authenticated by this recursive step.
+    pub(super) fn authorization_head_for_step(
+        &self,
+        step: KagemushaMintAuthorityStepV1,
+    ) -> Result<DigestV1, String> {
+        self.validate_for_step(step)?;
+        let message = &self.seal_bundle.message;
+        let authorization = match step {
+            KagemushaMintAuthorityStepV1::Rotate => {
+                message.next_epoch_authorization.as_ref().ok_or_else(|| {
+                    "mint-authority transition lacks its next authorization".to_owned()
+                })?
+            }
+            KagemushaMintAuthorityStepV1::Bootstrap
+            | KagemushaMintAuthorityStepV1::FinalizedMint => &message.epoch_authorization,
+        };
+        authorization
+            .authorization_id()
+            .map_err(|error| error.to_string())
+    }
+
     /// Validate all non-authoritative shape and semantic bindings before circuit construction.
     ///
     /// Signature equations and roster authority are intentionally not reduced to this native
@@ -130,11 +154,12 @@ impl KagemushaMintCertificateWitnessV1 {
             .statement
             .canonical_digest()
             .map_err(|error| error.to_string())?;
-        let signing = self
-            .seal_bundle
-            .message
-            .signing_digest()
-            .map_err(|error| error.to_string())?;
+        let signing = if step == KagemushaMintAuthorityStepV1::Bootstrap {
+            self.seal_bundle.message.bootstrap_binding_digest()
+        } else {
+            self.seal_bundle.message.signing_digest()
+        }
+        .map_err(|error| error.to_string())?;
         let roster = self
             .authority_generation
             .authority_id()
@@ -160,10 +185,12 @@ impl KagemushaMintCertificateWitnessV1 {
         self.authority_generation
             .validate()
             .map_err(|error| format!("invalid mint-finality roster: {error}"))?;
-        self.seal_bundle
-            .message
-            .validate()
-            .map_err(|error| format!("invalid mint-finality seal message: {error}"))?;
+        if step == KagemushaMintAuthorityStepV1::Bootstrap {
+            self.seal_bundle.message.validate_bootstrap()
+        } else {
+            self.seal_bundle.message.validate()
+        }
+        .map_err(|error| format!("invalid mint-finality seal message: {error}"))?;
         self.membership
             .leaf
             .validate()
@@ -181,8 +208,9 @@ impl KagemushaMintCertificateWitnessV1 {
         } else if !self.seal_bundle.seals.is_empty()
             || self.seal_bundle.message.epoch_authorization.decision
                 != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+            || self.seal_bundle.message.next_epoch_authorization.is_some()
         {
-            return Err("mint-authority bootstrap requires unsigned genesis authorization".into());
+            return Err("mint-authority bootstrap requires genesis without seals or a successor".into());
         }
         if step == KagemushaMintAuthorityStepV1::FinalizedMint {
             self.membership
@@ -196,7 +224,9 @@ impl KagemushaMintCertificateWitnessV1 {
         } else if step == KagemushaMintAuthorityStepV1::Rotate
             && self.seal_bundle.message.next_epoch_authorization.is_none()
         {
-            return Err("mint-authority rotation lacks the quorum-signed next roster".into());
+            return Err(
+                "mint-authority transition lacks the quorum-signed next authorization".into(),
+            );
         }
         let statement_digest = self
             .statement
@@ -676,6 +706,14 @@ where
         message.next_epoch_authorization.is_some(),
     )));
     gate.assert_bit(ctx, next_epoch_present);
+    constrain_bootstrap_message_gates(
+        ctx,
+        gate,
+        bootstrap,
+        top_up_count,
+        block_height,
+        next_epoch_present,
+    );
     let next_epoch_present_byte = PastaSha256ByteV1::range_checked(ctx, &range, next_epoch_present);
     let next_authorization = constrain_epoch_authorization(
         ctx,
@@ -1244,6 +1282,25 @@ fn mark_iroha_hash<F: KagemushaPoseidonFieldV1>(
     bits[0] = PastaSha256BitV1::decompose(ctx, gate, one, 1)[0];
     digest[31] = PastaSha256ByteV1::from_bits_le(ctx, gate, &bits);
     digest
+}
+
+// The selector, unsigned widths, Genesis authorization and disabled validator seals are
+// constrained by the surrounding certificate relation. These three gates isolate the
+// unsigned bootstrap message from both monetary certificates and epoch transitions.
+fn constrain_bootstrap_message_gates<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    bootstrap: AssignedValue<F>,
+    top_up_count: AssignedValue<F>,
+    block_height: AssignedValue<F>,
+    next_epoch_present: AssignedValue<F>,
+) {
+    let bootstrap_count = gate.mul(ctx, Existing(bootstrap), Existing(top_up_count));
+    gate.assert_is_const(ctx, &bootstrap_count, &F::ZERO);
+    let one = ctx.load_constant(F::ONE);
+    constrain_equal_if(ctx, gate, block_height, one, bootstrap);
+    let bootstrap_next = gate.mul(ctx, Existing(bootstrap), Existing(next_epoch_present));
+    gate.assert_is_const(ctx, &bootstrap_next, &F::ZERO);
 }
 
 fn constrain_equal_if<F: KagemushaPoseidonFieldV1>(

@@ -1,5 +1,8 @@
+use crate::state::PendingQueuePlanAdmissionDisposition;
 macro_rules! qp_lane_case { ($($tokens:tt)*) => { $($tokens)* }; }
-fn queue_plan_remote_leader_view(adapter: &V2LaneWorkAdapter) -> wire::View {
+pub(in crate::sumeragi) fn queue_plan_remote_leader_view(
+    adapter: &V2LaneWorkAdapter,
+) -> wire::View {
     let local = adapter.local_validator_index().expect("local validator");
     (0..u64::try_from(adapter.context.roster.len()).expect("bounded roster") * 2)
         .find(|view| adapter.context.leader(*view) != local)
@@ -41,26 +44,15 @@ pub(in crate::sumeragi) fn queue_plan_test_certificate(
     )
 }
 
-pub(in crate::sumeragi) fn prepare_queue_plan_test(
-    adapter: &mut V2LaneWorkAdapter,
-    keys: &[KeyPair],
-) {
-    enable_multilane_nexus(adapter, keys, LaneId::new(1), DataSpaceId::new(7));
-}
-
 fn queue_plan_relay(
-    adapter: &mut V2LaneWorkAdapter,
+    owner: &mut QueuePlanAdmissionOwner,
     sender: &PeerId,
     bytes: Vec<u8>,
     view: wire::View,
 ) -> V2LaneIngressOutcome {
-    adapter.accept_relay_message(
-        LaneRelayMessage::QueuePlanAdmissionCertificate {
-            sender: sender.clone(),
-            certificate: Arc::new(bytes),
-        },
-        view,
-    )
+    owner
+        .accept_certificate(sender.clone(), Arc::new(bytes), view)
+        .expect("original QueuePlan admission owner")
 }
 
 fn assert_queue_plan_kura_source(adapter: &V2LaneWorkAdapter, bytes: &[u8]) {
@@ -72,21 +64,23 @@ fn assert_queue_plan_kura_source(adapter: &V2LaneWorkAdapter, bytes: &[u8]) {
 }
 
 fn assert_queue_plan_rejected(
-    adapter: &mut V2LaneWorkAdapter,
+    owner: &mut QueuePlanAdmissionOwner,
     sender: &PeerId,
     bytes: Vec<u8>,
     view: wire::View,
 ) {
     assert_eq!(
-        queue_plan_relay(adapter, sender, bytes, view),
+        queue_plan_relay(owner, sender, bytes, view),
         V2LaneIngressOutcome::Rejected
     );
 }
 
 #[test]
 fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x40);
     adapter
         .kura
@@ -100,12 +94,11 @@ fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
         .retain_merge_sidecars_for_global_view(view, None, None)
         .expect("view");
     assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
+        owner
+            .refresh(view)
             .expect("service the separately scheduled durable admission handoff")
     );
-    let effect = adapter
-        .drain_effects(usize::MAX)
+    let effect = queue_plan_take_effects(&mut owner, usize::MAX)
         .into_iter()
         .find_map(|effect| match effect {
             V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
@@ -125,16 +118,18 @@ fn queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes() {
 
 #[test]
 fn queue_plan_leader_stages_exact_handoff_idempotently() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)
         .expect("view");
-    adapter.drain_effects(usize::MAX);
+    queue_plan_take_effects(&mut owner, usize::MAX);
     let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x41);
     let sender = PeerId::new(KeyPair::random().public_key().clone());
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, bytes.clone(), 0),
         V2LaneIngressOutcome::Inserted
     );
     let scans = adapter
@@ -145,12 +140,12 @@ fn queue_plan_leader_stages_exact_handoff_idempotently() {
         .kura
         .pending_queue_plan_admission_exact_reads
         .load(Ordering::Relaxed);
-    let effects = adapter.effect_count();
+    let effects = owner.effect_count();
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, bytes.clone(), 0),
         V2LaneIngressOutcome::Duplicate
     );
-    assert_eq!(adapter.effect_count(), effects);
+    assert_eq!(owner.effect_count(), effects);
     assert_eq!(
         adapter
             .kura
@@ -170,8 +165,10 @@ fn queue_plan_leader_stages_exact_handoff_idempotently() {
 
 #[test]
 fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let (binding, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x46);
     adapter
         .state
@@ -187,19 +184,19 @@ fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
     );
     let sender = PeerId::new(KeyPair::random().public_key().clone());
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, bytes.clone(), 0),
         V2LaneIngressOutcome::Inserted,
         "an exact pending WSV marker must not be mistaken for an applied transaction"
     );
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, bytes.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, bytes.clone(), 0),
         V2LaneIngressOutcome::Duplicate,
         "the recovered sidecar must remain idempotent"
     );
 
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(0)
+        owner
+            .reconcile(0)
             .expect("reconcile exact pending marker")
             .is_empty()
     );
@@ -218,12 +215,14 @@ fn queue_plan_exact_marker_retains_certificate_until_transaction_application() {
 
 #[test]
 fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let sender = adapter.local_peer.clone();
     let (_, valid) = queue_plan_test_certificate(&adapter, &keys, 0x42);
     let remote_view = queue_plan_remote_leader_view(&adapter);
-    assert_queue_plan_rejected(&mut adapter, &sender, valid, remote_view);
+    assert_queue_plan_rejected(&mut owner, &sender, valid, remote_view);
     let (_, stale) = queue_plan_test_certificate_at_height(
         &adapter,
         &keys,
@@ -233,7 +232,7 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
             b"stale predecessor",
         ))),
     );
-    assert_queue_plan_rejected(&mut adapter, &sender, stale, 0);
+    assert_queue_plan_rejected(&mut owner, &sender, stale, 0);
 
     let future_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"future predecessor"));
@@ -294,7 +293,7 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
         }];
     let self_declared =
         norito::encode_canonical(&self_declared).expect("encode self-declared future certificate");
-    assert_queue_plan_rejected(&mut adapter, &sender, self_declared.clone(), 0);
+    assert_queue_plan_rejected(&mut owner, &sender, self_declared.clone(), 0);
     assert!(
         adapter
             .kura
@@ -304,19 +303,14 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
         "a self-declared future roster must not consume durable Kura capacity"
     );
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, future.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, future.clone(), 0),
         V2LaneIngressOutcome::Inserted,
         "the current leader must durably park an authenticated Future certificate"
     );
     let future_certificate_hash = Hash::new(&future);
     assert_queue_plan_kura_source(&adapter, &future);
-    assert_eq!(
-        adapter
-            .refresh_merge_candidates(0)
-            .expect("defer durable Future"),
-        MergeRefreshOutcome::Deferred
-    );
-    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    assert!(owner.reconcile(0).expect("defer durable Future").is_empty());
+    assert!(queue_plan_take_effects(&mut owner, usize::MAX).is_empty());
     assert_queue_plan_kura_source(&adapter, &future);
     {
         let mut hashes = adapter.state.block_hashes.block();
@@ -324,20 +318,20 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
         hashes.commit_for_tests();
     }
     adapter.context.height += 1;
+    owner.set_context_for_test(adapter.context.clone());
     let caught_up_view = queue_plan_remote_leader_view(&adapter);
     let leader = adapter.context.roster
         [usize::try_from(adapter.context.leader(caught_up_view)).unwrap()]
     .validator
     .clone();
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(caught_up_view)
+        owner
+            .reconcile(caught_up_view)
             .expect("reclassify caught-up Future")
             .is_empty()
     );
     assert!(
-        adapter
-            .drain_effects(usize::MAX)
+        queue_plan_take_effects(&mut owner, usize::MAX)
             .into_iter()
             .any(|effect| matches!(
                 effect,
@@ -346,6 +340,7 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
             ))
     );
     adapter.context.height -= 1;
+    owner.set_context_for_test(adapter.context.clone());
     {
         let hashes = adapter.state.block_hashes.block_and_revert();
         hashes.commit_for_tests();
@@ -379,8 +374,8 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
         );
         world.commit();
     }
-    assert_queue_plan_rejected(&mut adapter, &sender, conflict, 0);
-    assert_queue_plan_rejected(&mut adapter, &sender, vec![0xFF; 16], 0);
+    assert_queue_plan_rejected(&mut owner, &sender, conflict, 0);
+    assert_queue_plan_rejected(&mut owner, &sender, vec![0xFF; 16], 0);
     let pending = adapter
         .kura
         .pending_queue_plan_admission_certificates_bounded(
@@ -391,8 +386,8 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
 
 #[test]
 fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let queue = Arc::new(Queue::test(
         iroha_config::parameters::actual::Queue::default(),
         &iroha_primitives::time::TimeSource::new_system(),
@@ -400,6 +395,8 @@ fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
     adapter
         .install_lane_drain_queue(queue)
         .expect("install queue needed for exact stale-claim reconciliation");
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let sender = adapter.local_peer.clone();
     let future_authority_height = adapter
         .context
@@ -416,7 +413,7 @@ fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
         ))),
     );
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, future.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, future.clone(), 0),
         V2LaneIngressOutcome::Inserted
     );
     assert_queue_plan_kura_source(&adapter, &future);
@@ -426,8 +423,8 @@ fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
         Hash::new(b"future source incarnation rotated before catch-up"),
     );
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(0)
+        owner
+            .reconcile(0)
             .expect("source-authority drift must retire instead of wedging reconciliation")
             .is_empty()
     );
@@ -443,13 +440,14 @@ fn queue_plan_handoff_retires_future_after_current_source_incarnation_drifts() {
 
 #[test]
 fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner = queue_plan_owner_from_adapter(&adapter, &keys, 1);
     let view = queue_plan_remote_leader_view(&adapter);
     adapter
         .retain_merge_sidecars_for_global_view(view, None, None)
         .expect("view");
-    adapter.drain_effects(usize::MAX);
+    queue_plan_take_effects(&mut owner, usize::MAX);
     for tag in [0x47, 0x48] {
         let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, tag);
         adapter
@@ -457,51 +455,34 @@ fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
             .persist_pending_queue_plan_admission_certificate(&bytes)
             .expect("persist");
     }
-    adapter.limits.effect_capacity = NonZeroUsize::new(1).unwrap();
     assert!(
-        !adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap(),
+        !owner.refresh(view).unwrap(),
         "one slot cannot enqueue both exact certificates"
     );
-    assert!(
-        adapter
-            .queue_plan_admission_handoffs_need_refresh(view)
-            .unwrap()
-    );
-    let first = match adapter.drain_effects(1).pop().unwrap() {
+    assert!(owner.needs_refresh(view).unwrap());
+    let first = match queue_plan_take_effects(&mut owner, 1).pop().unwrap() {
         V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } => certificate,
         other => panic!("unexpected effect {other:?}"),
     };
     assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap(),
+        owner.refresh(view).unwrap(),
         "a retained first transfer must not consume the released slot again"
     );
-    let second = match adapter.drain_effects(1).pop().unwrap() {
+    let second = match queue_plan_take_effects(&mut owner, 1).pop().unwrap() {
         V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } => certificate,
         other => panic!("unexpected effect {other:?}"),
     };
     assert_ne!(first, second);
-    assert!(
-        !adapter
-            .queue_plan_admission_handoffs_need_refresh(view)
-            .unwrap()
-    );
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap()
-    );
-    assert!(adapter.drain_effects(1).is_empty());
+    assert!(!owner.needs_refresh(view).unwrap());
+    assert!(owner.refresh(view).unwrap());
+    assert!(queue_plan_take_effects(&mut owner, 1).is_empty());
     assert!(!adapter.output_guard.restart_required());
 }
 
 #[test]
 fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let queue = Arc::new(Queue::test(
         iroha_config::parameters::actual::Queue::default(),
         &iroha_primitives::time::TimeSource::new_system(),
@@ -509,6 +490,8 @@ fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover()
     adapter
         .install_lane_drain_queue(queue)
         .expect("install exact queue owner for pending admission reconciliation");
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let sender = adapter.local_peer.clone();
     let successor_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"post-WSV predecessor before process-height rollover",
@@ -530,7 +513,7 @@ fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover()
         hashes.commit_for_tests();
     }
     assert_eq!(
-        queue_plan_relay(&mut adapter, &sender, certificate.clone(), 0),
+        queue_plan_relay(&mut owner, &sender, certificate.clone(), 0),
         V2LaneIngressOutcome::Inserted,
         "authenticate and durably retain the future certificate before WSV publication"
     );
@@ -553,30 +536,35 @@ fn queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover()
     // WSV can publish before the asynchronous Apply owner completes process-height rollover.
     // An old adapter cannot terminalize the next height's authenticated admission.
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(0)
+        owner
+            .reconcile(0)
             .expect("old adapter must defer a current-State admission")
             .is_empty()
     );
     assert_queue_plan_kura_source(&adapter, &certificate);
 
     adapter.context.height = current_carrier_height;
+    owner.set_context_for_test(adapter.context.clone());
     let current_view = queue_plan_remote_leader_view(&adapter);
     let current_leader = adapter.context.roster
         [usize::try_from(adapter.context.leader(current_view)).unwrap()]
     .validator
     .clone();
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(current_view)
+        owner
+            .reconcile(current_view)
             .expect("handoff from the current height adapter")
             .is_empty()
     );
-    assert!(adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
-        matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+    assert!(
+        queue_plan_take_effects(&mut owner, usize::MAX)
+            .into_iter()
+            .any(|effect| {
+                matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
             peer, view, certificate: observed,
         } if peer == current_leader && view == current_view && observed.as_slice() == certificate)
-    }));
+            })
+    );
     assert_queue_plan_kura_source(&adapter, &certificate);
 }
 
@@ -626,8 +614,8 @@ fn queue_plan_materialized_certificate_for_binding(
     reason = "one exact admission is traced through durable Queue ownership and both height adapters"
 )]
 fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
     let journal_dir = tempfile::tempdir().unwrap();
     let journal_path = journal_dir.path().join("post-wsv-reservations.norito");
     let plan_path = journal_path.with_extension("plans.norito");
@@ -637,6 +625,8 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
         DataSpaceId::UNIVERSAL,
         &journal_path,
     );
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let successor_parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"materialized-post-WSV-parent-before-process-height-rollover",
     ));
@@ -710,8 +700,8 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
     assert_eq!(before_fifo, vec![binding.entrypoint_hash]);
     assert_eq!((queue.active_len(), queue.queued_len()), (1, 1));
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(0)
+        owner
+            .reconcile(0)
             .expect("the old adapter defers a valid current-State admission")
             .is_empty()
     );
@@ -727,21 +717,21 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
     );
 
     adapter.context.height = current_height;
+    owner.set_context_for_test(adapter.context.clone());
     let view = queue_plan_remote_leader_view(&adapter);
     let leader = adapter.context.roster[usize::try_from(adapter.context.leader(view)).unwrap()]
         .validator
         .clone();
+    assert!(owner.reconcile(view).unwrap().is_empty());
     assert!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(view)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(adapter.drain_effects(usize::MAX).into_iter().any(|effect| {
-        matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+        queue_plan_take_effects(&mut owner, usize::MAX)
+            .into_iter()
+            .any(|effect| {
+                matches!(effect, V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
             peer, view: observed_view, certificate: observed,
         } if peer == leader && observed_view == view && observed.as_slice() == certificate)
-    }));
+            })
+    );
     assert_queue_plan_kura_source(&adapter, &certificate);
     assert_eq!(std::fs::read(&plan_path).unwrap(), before_journal);
     assert_eq!(queue.fifo_snapshot_for_test(), before_fifo);
@@ -757,9 +747,7 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
         .find(|view| adapter.context.leader(*view) == local_index)
         .expect("the current-height leader schedule eventually selects this validator");
     assert_eq!(
-        adapter
-            .reconcile_pending_queue_plan_admissions(local_view)
-            .unwrap(),
+        owner.reconcile(local_view).unwrap(),
         vec![certificate.clone()],
         "the current leader selects the exact retained admission for its next carrier"
     );
@@ -769,8 +757,10 @@ fn queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover
 
 #[test]
 fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let old_worker_height = adapter.context.height;
     let successor_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"queue-plan-canonical-successor-before-worker-handoff",
@@ -792,17 +782,17 @@ fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
         .kura
         .persist_pending_queue_plan_admission_certificate(&certificate)
         .expect("admission arrives after State commit and before worker handoff");
-    let effects_before = adapter.effect_count();
+    let effects_before = owner.effect_count();
     for view in [0, queue_plan_remote_leader_view(&adapter)] {
         assert!(
-            adapter
-                .reconcile_pending_queue_plan_admissions(view)
+            owner
+                .reconcile(view)
                 .expect("an obsolete worker defers without attempting queue retirement")
                 .is_empty()
         );
         assert_queue_plan_kura_source(&adapter, &certificate);
         assert_eq!(
-            adapter.effect_count(),
+            owner.effect_count(),
             effects_before,
             "old workers cannot route the new certificate using their frozen leader"
         );
@@ -822,8 +812,10 @@ fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
 
 #[test]
 fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x71);
     adapter
         .kura
@@ -840,33 +832,16 @@ fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
     adapter
         .retain_merge_sidecars_for_global_view(first_view, None, None)
         .unwrap();
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(first_view)
-            .unwrap()
-    );
-    assert!(
-        !adapter
-            .queue_plan_admission_handoffs_need_refresh(first_view)
-            .unwrap()
-    );
+    assert!(owner.refresh(first_view).unwrap());
+    assert!(!owner.needs_refresh(first_view).unwrap());
     // No arrival/dirty notification: the certified view itself changes the
     // destination. The queued old-view occurrence must not satisfy the new one.
     adapter
         .retain_merge_sidecars_for_global_view(next_view, None, None)
         .unwrap();
-    assert!(
-        adapter
-            .queue_plan_admission_handoffs_need_refresh(next_view)
-            .unwrap()
-    );
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(next_view)
-            .unwrap()
-    );
-    let queued = adapter
-        .drain_effects(usize::MAX)
+    assert!(owner.needs_refresh(next_view).unwrap());
+    assert!(owner.refresh(next_view).unwrap());
+    let queued = queue_plan_take_effects(&mut owner, usize::MAX)
         .into_iter()
         .filter_map(|effect| match effect {
             V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
@@ -889,37 +864,27 @@ fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
 
 #[test]
 fn queue_plan_handoff_new_inventory_preserves_prior_exact_transfers() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let view = queue_plan_remote_leader_view(&adapter);
     let (_, first) = queue_plan_test_certificate(&adapter, &keys, 0x72);
     adapter
         .kura
         .persist_pending_queue_plan_admission_certificate(&first)
         .unwrap();
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap()
-    );
-    assert_eq!(adapter.drain_effects(usize::MAX).len(), 1);
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap()
-    );
-    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    assert!(owner.refresh(view).unwrap());
+    assert_eq!(queue_plan_take_effects(&mut owner, usize::MAX).len(), 1);
+    assert!(owner.refresh(view).unwrap());
+    assert!(queue_plan_take_effects(&mut owner, usize::MAX).is_empty());
     let (_, second) = queue_plan_test_certificate(&adapter, &keys, 0x73);
     adapter
         .kura
         .persist_pending_queue_plan_admission_certificate(&second)
         .unwrap();
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap()
-    );
-    let effects = adapter.drain_effects(usize::MAX);
+    assert!(owner.refresh(view).unwrap());
+    let effects = queue_plan_take_effects(&mut owner, usize::MAX);
     assert_eq!(effects.len(), 1);
     assert!(
         matches!(&effects[0], V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. }
@@ -930,76 +895,41 @@ fn queue_plan_handoff_new_inventory_preserves_prior_exact_transfers() {
 }
 
 #[test]
-fn queue_plan_handoff_stale_generation_cannot_complete_a_new_destination() {
-    let (adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    let first_view = queue_plan_remote_leader_view(&adapter);
-    let first = QueuePlanAdmissionHandoffGeneration {
-        round: wire::ConsensusRound {
-            context_id: adapter.context.id(),
-            height: adapter.context.height,
-            view: first_view,
-        },
-        leader: adapter.context.roster[adapter.context.leader(first_view) as usize]
-            .validator
-            .clone(),
-        pending: BTreeSet::from([Hash::new(b"exact retained certificate")]),
-    };
-    let mut next = first.clone();
-    next.round.view += 1;
-    next.leader = adapter.context.roster[adapter.context.leader(next.round.view) as usize]
-        .validator
-        .clone();
-    let hash = *first.pending.first().unwrap();
-    let mut state = QueuePlanAdmissionHandoffState::Unobserved;
-    state.begin(first.clone());
-    assert!(state.admit(&first, hash));
-    state.begin(next.clone());
-    assert!(!state.contains(&hash));
-    assert!(!state.admit(&first, hash));
-    assert!(!state.finish(&first));
-    assert!(state.needs_refresh(next.round, &next.leader));
-    assert!(state.admit(&next, hash));
-    assert!(state.finish(&next));
-    assert!(!state.needs_refresh(next.round, &next.leader));
-    let mut arrival = next.clone();
-    let new_hash = Hash::new(b"new durable inventory member");
-    arrival.pending.insert(new_hash);
-    state.begin(arrival.clone());
-    assert!(
-        state.contains(&hash),
-        "the prior exact transfer survives an arrival"
-    );
-    assert!(
-        !state.finish(&next),
-        "an older inventory cannot complete the new generation"
-    );
-    assert!(state.admit(&arrival, new_hash));
-    assert!(state.finish(&arrival));
-}
-
-#[test]
 fn queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup() {
-    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
-    prepare_queue_plan_test(&mut adapter, &keys);
+    // Freeze both lane geometries before finalizing the durable parent chain.
+    let (mut adapter, keys) = native_multilane_signing_fixture();
+    let mut owner =
+        queue_plan_owner_from_adapter(&adapter, &keys, adapter.limits.effect_capacity.get());
     let view = queue_plan_remote_leader_view(&adapter);
     let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x74);
     adapter
         .kura
         .persist_pending_queue_plan_admission_certificate(&bytes)
         .unwrap();
-    assert!(
-        adapter
-            .refresh_pending_queue_plan_admission_handoffs(view)
-            .unwrap()
-    );
+    assert!(owner.refresh(view).unwrap());
     adapter.purge_queued_merge_broadcasts();
     assert!(
-        adapter
-            .drain_effects(usize::MAX)
+        queue_plan_take_effects(&mut owner, usize::MAX)
             .into_iter()
             .any(|effect| matches!(effect,
         V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. }
         if certificate.as_slice() == bytes.as_slice()))
     );
     assert_queue_plan_kura_source(&adapter, &bytes);
+}
+
+/// Complete only the exact inspected occurrence through the real acknowledgement API.
+fn queue_plan_take_effects(
+    owner: &mut QueuePlanAdmissionOwner,
+    limit: usize,
+) -> Vec<V2LaneWorkEffect> {
+    let mut effects = Vec::new();
+    for _ in 0..limit {
+        let Some(effect) = owner.next_effect() else {
+            break;
+        };
+        assert!(owner.acknowledge_effect(&effect));
+        effects.push(effect);
+    }
+    effects
 }

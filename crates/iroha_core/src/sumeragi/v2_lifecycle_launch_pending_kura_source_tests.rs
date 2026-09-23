@@ -158,9 +158,9 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
     assert_source_tokens_in_order(
         runtime_readiness,
         &[
-            "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+            ".retry_pending_exact_output()",
             "services.drain_completions(executor)?",
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
+            "dispatch_queue_plan_admission_effects(",
             "Ok(executor.ready_to_finish())",
             "let ready = ready_to_finish",
             "&& !block_sync_server.has_pending_historical_body_serve()",
@@ -174,17 +174,17 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
     // first-occurrence search would accidentally select the earlier retry.
     assert_source_token_count(
         runtime_readiness,
-        "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+        ".retry_pending_exact_output()",
         2,
     );
     let post_dispatch_readiness = source_region(
         runtime_readiness,
-        "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;",
+        "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
         "Ok(executor.ready_to_finish())",
     );
     assert_source_token_count(
         post_dispatch_readiness,
-        "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+        ".retry_pending_exact_output()",
         1,
     );
     assert_forbidden_source_tokens(
@@ -200,7 +200,7 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
     assert_source_tokens_in_order(
         finalized_preflight,
         &[
-            "preflight_finalized_lane_rollover(",
+            "preflight_finalized_native_rollover(",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
             "if !rollover_ready",
             "wake_rx.recv_timeout(IDLE_POLL)",
@@ -214,7 +214,7 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
     let closed_prefix = source_region(
         pending_runner_source,
         "activated.close_runner_ingress_for_finalized_drain",
-        "let (finalized, lane_work) = activated.into_finalized_rollover",
+        "let finalized = activated.into_finalized_rollover",
     );
     assert_source_tokens_in_order(
         closed_prefix,
@@ -222,7 +222,7 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
             "loop {",
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
+            "dispatch_queue_plan_admission_effects(",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
             "if block_sync_server.has_pending_historical_body_serve()",
             "wake_rx.recv_timeout(IDLE_POLL)",
@@ -238,20 +238,25 @@ fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) 
     );
     let rollover = include_str!("v2_runner/finalized_output_rollover.rs");
     assert_source_tokens_in_order(
-        source_region(
-            rollover,
-            "fn rollover_finalized_height_outputs(",
-            "/// Run the existing finalized-output handoff",
-        ),
+        rollover,
         &[
-            "durable_completion_matches_finality(artifact)",
-            "durable_lane_rollover_authority(artifact)",
-            "drain_finalized_lane_work_output(",
-            "has_pending_exact_output()",
-            "seal_applied_height_output_handoff(",
-            "into_retained_merge_sidecars(",
+            "pub(in crate::sumeragi) fn rollover_finalized_height_outputs_for_lifecycle(",
+            "artifact.height.checked_add(1) != Some(successor.height)",
+            "successor.parent_commit_qc.as_ref() != Some(&artifact.commit_qc)",
+            ".finalized_output_authority(receipt, artifact)",
+            ".handoff_native_height_output_to_durable_reconstruction(receipt, artifact, &authority)",
+            "seal_native_height_output_handoff(receipt, artifact, &authority)",
+            "handoff.matches_finality_artifact(artifact)",
+            "handoff.authorizes_immediate_successor(successor)",
+            ".complete_output_handoff(receipt, artifact)",
         ],
     );
+    assert_required_source_tokens(
+        rollover,
+        &["!self.published.matches_state(state)", "self.published.artifact() != artifact",
+          "original.artifact_hash() != receipt.artifact_hash()"],
+    );
+
 }
 
 #[test]
@@ -260,7 +265,7 @@ fn pending_kura_terminal_height_authenticates_after_closed_drain_without_a_succe
     let terminal = source_region(
         source,
         "activated.close_runner_ingress_for_finalized_drain",
-        "let (finalized, lane_work) = activated.into_finalized_rollover",
+        "let finalized = activated.into_finalized_rollover",
     );
     assert_source_tokens_in_order(
         terminal,

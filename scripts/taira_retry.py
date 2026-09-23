@@ -3,8 +3,8 @@
 
 The build identity is immutable; each attempt gets a fresh inventory and nonce.
 Native assemble/authorize/apply remain the authentication and execution authority.
-Native preparation derives public genesis and beacon inputs from a closed topology
-intent and actual retained input paths.
+Native preparation derives public genesis and authenticated beacon inputs from
+a closed topology intent and actual retained input paths.
 Only the pinned renderer creates final FD200 units; native code admits credentials.
 Static retained path arguments and per-attempt derived assembly arguments have
 separate records. No prior four-file public bundle is accepted as the new closure.
@@ -758,9 +758,9 @@ RETIRE_BINS = None
 RETIRE_BINARY_MANIFEST = None
 RETIRE_PUBLIC_IMPORTS = ()
 RETIRE_PROTECTED_INPUTS = ()
-RETIRE_DEPLOYMENT_STATE = Path("/var/lib/taira")
-RETIRE_WORKER_STATE = Path("/var/lib/taira-epoch-supervisor")
-RETIRE_WORKER_UNIT = Path("/etc/systemd/system/iroha-taira-epoch-supervisor.service")
+RETIRE_DEPLOYMENT_STATE = Path('/var/lib/taira-deployment')
+RETIRE_WORKER_STATE = Path('/var/lib/taira-epoch-supervisor')
+RETIRE_WORKER_UNIT = Path('/etc/systemd/system/iroha-taira-epoch-supervisor.service')
 
 
 class _retire_RebindError(Exception):
@@ -1395,7 +1395,7 @@ def _retire_deployment_lock():
     root = direct(RETIRE_DEPLOYMENT_STATE)
     root_info = root.lstat()
     _retire_need(stat.S_ISDIR(root_info.st_mode) and root_info.st_uid == 0
-                 and root_info.st_gid == 0 and not root_info.st_mode & 0o022,
+                 and root_info.st_gid == 0 and stat.S_IMODE(root_info.st_mode) == 0o700,
                  "deployment state root custody differs")
     for parent in root.parents:
         info = parent.lstat()
@@ -2850,27 +2850,37 @@ def _continuity_checked_hash_body(value):
     return value[5:69].lower()
 
 
-def _continuity_genesis_peers(manifest):
-    """Extract the exact generation-zero peers from a canonical genesis manifest."""
-    _continuity_need(isinstance(manifest, dict), "Native genesis must be an object")
-    parameters = manifest.get("kagemusha_mint_finality")
-    _continuity_need(isinstance(parameters, dict), "Native genesis lacks mint-finality authority")
-    authority = parameters.get("authority_generation")
-    _continuity_need(isinstance(authority, dict), "Native genesis lacks authority generation")
-    _continuity_need(type(authority.get("version")) is int and authority["version"] == 1,
-                     "Native genesis has an unsupported authority layout")
+def _continuity_mint_finality_peers(manifest):
+    """Read the sole first-release generation-zero authority in native order."""
+    mint = manifest.get("kagemusha_mint_finality")
     _continuity_need(
-        type(authority.get("generation")) is int and authority["generation"] == 0,
-        "Native genesis must bind authority generation zero",
+        isinstance(mint, dict) and set(mint) == {"authority_generation"},
+        "Genesis must contain only the first-release mint-finality authority",
     )
-    validators = authority.get("validators")
-    _continuity_need(isinstance(validators, list) and len(validators) == 4,
-                     "Exact four native ordered peers required")
-    _continuity_need(all(isinstance(item, dict) and isinstance(item.get("validator"), str)
-                         and item["validator"] for item in validators),
-                     "Native authority contains an invalid peer identity")
-    peers = [item["validator"] for item in validators]
-    _continuity_need(len(set(peers)) == 4, "Exact four native ordered peers required")
+    authority = mint["authority_generation"]
+    _continuity_need(
+        isinstance(authority, dict)
+        and type(authority.get("version")) is int
+        and authority["version"] == 1
+        and type(authority.get("generation")) is int
+        and authority["generation"] == 0
+        and isinstance(authority.get("validators"), list),
+        "Genesis must contain a generation-zero mint-finality authority",
+    )
+    rows = authority["validators"]
+    _continuity_need(len(rows) == 4, "Exact four native ordered peers required")
+    peers = []
+    for row in rows:
+        _continuity_need(
+            isinstance(row, dict)
+            and isinstance(row.get("validator"), str)
+            and bool(row["validator"]),
+            "Mint-finality validator identity is missing",
+        )
+        peers.append(row["validator"])
+    _continuity_need(
+        len(set(peers)) == 4, "Exact four distinct native ordered peers required"
+    )
     return peers
 
 
@@ -2899,7 +2909,7 @@ def _continuity_capture(args):
     manifest = _continuity_parse(
         CONTINUITY_PREP / "network/genesis.json", limit=32 * 1024 * 1024
     )
-    peers = _continuity_genesis_peers(manifest)
+    peers = _continuity_mint_finality_peers(manifest)
     renderer = _continuity_load_public_module(
         CONTINUITY_UNIT_RENDERER, CONTINUITY_RENDERER_SHA
     )
@@ -3812,6 +3822,8 @@ def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft,
     derived = list(static_args)
     derived[derived.index("--public-inputs") + 1] = str(bundle)
     derived.extend(["--beacon-inputs", str(inputs), "--beacon-validator-unit", *paths])
+    write_public(assembly / "native-local-args.json", list(static_args))
+    write_public(assembly / "native-assembly-args.json", derived)
     return derived
 
 
@@ -4909,8 +4921,6 @@ def guest_locked(request, capacity, root):
         derived_args = prepare_beacon_arguments(
             cli, assembly, plan, args, arguments, draft, inventory, logs)
         completed.append(phase)
-        write_public(assembly / "native-local-args.json", args)
-        write_public(assembly / "native-assembly-args.json", derived_args)
         phase = "assemble"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
         run_native(

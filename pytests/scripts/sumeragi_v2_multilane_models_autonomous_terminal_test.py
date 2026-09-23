@@ -820,3 +820,59 @@ def test_autonomous_terminal_recovery_rejects_unbound_capacity_deltas(
         and "additional_unreserved_stable_bytes: u64" in error
         for error in errors
     ), errors
+
+
+def test_autonomous_terminal_recovery_rejects_foreign_pending_tip_owner(tmp_path: Path) -> None:
+    """Recovered-tip activation must authenticate its exact installed owner."""
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    assert validate_autonomous_terminal_recovery_fixture(tmp_path, module, models) == ()
+    replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "pub(in crate::sumeragi) fn prepare_lane_recovery<E>(",
+        "if !services.matches_installed_pending_kura_tip(expected)",
+        "if false",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(tmp_path, module, models)
+    assert any("prepare_lane_recovery" in e and "matches_installed_pending_kura_tip" in e for e in errors), errors
+
+
+def test_autonomous_terminal_recovery_rejects_activation_before_locked_body_binding(tmp_path: Path) -> None:
+    """The current activation consumes the reconciled original proposal owner."""
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    assert validate_autonomous_terminal_recovery_fixture(tmp_path, module, models) == ()
+    replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_non_pending_lifecycle_loop(",
+        "reconcile_executor_locked_body(executor, services)?",
+        "skip_locked_body_reconciliation()",
+    )
+    errors = validate_autonomous_terminal_recovery_fixture(tmp_path, module, models)
+    assert any("run_non_pending_lifecycle_loop" in e and "reconcile_executor_locked_body" in e for e in errors), errors
+
+
+def test_autonomous_candidate_generic_binding_requires_native_source_retention(tmp_path: Path) -> None:
+    """Exercise the actual generic consumer against the current Native producer."""
+    module = load_checker()
+    models = copy_autonomous_terminal_recovery_fixture(tmp_path, module)
+    copy_reviewed_source_fixture_with_includes(
+        tmp_path, module, {Path("crates/iroha_core/src/sumeragi/v2_runner.rs")}
+    )
+    model = next(m for m in models if m["module"] == "SumeragiV2AutonomousReservationCarrier")
+    model["production_symbols"] = [s for s in model["production_symbols"] if s["symbol"] == "schedule_local_proposal"]
+    assert len(model["production_symbols"]) == 1
+    def validate():
+        errors = []
+        with module._reviewed_rust_source_cache():
+            module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors)
+        return errors
+    assert validate() == []
+    replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn schedule_local_proposal(",
+        "native.retain_candidate_source(source);",
+        "drop(source);",
+    )
+    errors = validate()
+    assert len(errors) == 1 and "native.retain_candidate_source(source);" in errors[0], errors

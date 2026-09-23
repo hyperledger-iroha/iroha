@@ -6,7 +6,7 @@ use crate::{
 };
 
 /// Original service identity, not a drain assertion or publication permit.
-/// Currently constructed only by publication tests pending Apply integration.
+/// Constructed from the actual Apply service; wire data cannot mint this owner.
 pub(crate) struct OriginalCarrierQueue<'service> {
     state: &'service State,
     queue: &'service Queue,
@@ -16,6 +16,14 @@ impl<'service> OriginalCarrierQueue<'service> {
     #[cfg(test)]
     pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self {
         Self { state, queue }
+    }
+
+    /// Borrow only the actual immutable Apply service's State/Queue pair.
+    pub(super) fn from_service(service: &'service super::V2ApplyService) -> Self {
+        Self {
+            state: &service.state,
+            queue: &service.queue,
+        }
     }
 
     /// Reject a substituted State before probing the original Queue owner.

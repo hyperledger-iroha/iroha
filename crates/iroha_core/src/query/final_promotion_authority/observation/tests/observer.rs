@@ -99,7 +99,9 @@ fn receipt_current_check_requires_the_pinned_operator_registered_and_authorized(
 fn receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied_cut() {
     for change in ["role_permission", "assigned_role", "account"] {
         for same_block in [true, false] {
-            let mut f = Fixture::new();
+            let mut f = Fixture::with_observer_permissions([
+                iroha_executor_data_model::permission::role::CanManageRoles.into(),
+            ]);
             let observer = AccountId::new(key(3).public_key().clone());
             let permission: Permission = CanCheckSorafsFinalPromotion {
                 deployment_id: DEPLOYMENT.into(),

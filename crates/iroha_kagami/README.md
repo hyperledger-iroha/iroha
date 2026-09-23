@@ -108,33 +108,17 @@ into the output directory.
   verified immutable artifacts without these grants and deploy under an owned
   namespace. Operator grants are not assigned to onboarding signers, validators,
   or public sample accounts.
-- Each generated validator has an independent private mint-finality seed,
-  retained in an owner-only runtime sidecar. `start.sh` requires Python 3 and
-  stages a fresh, consumed descriptor 199 on every start while retaining the
-  source for restart. Taira also stages its Soracloud signer at descriptor 198
-  and requires runtime output outside a Git checkout. The daemon binds the seed
-  to the authenticated genesis and matching authority generations. Private
-  signing material never belongs in source or public artifacts.
-- `kagemusha derive-mint-finality-candidate-v1` provisions one independent
-  candidate's public Pasta keys and paired possession proof for an explicit
-  network and key generation. It consumes exactly one 32-byte nonzero seed from
-  an inherited read pipe, plus the matching canonical BLS peer private key from
-  a separate `--peer-private-key-fd` pipe. It signs peer consent over the complete
-  publication and wipes private input before emitting canonical
-  `ValidatorCandidateKeysV1` public JSON.
-- `kagemusha prove-committee-seat-readiness-v1` consumes the exact public committee
-  status and two inherited pipes: a 32-byte generation seed and 96-byte actual
-  beacon share. It verifies both custody proofs for the frozen seat and emits
-  `AdmitValidatorCommitteeSeatV1`. The submitting CLI must independently verify
-  finality again. Proof production does not install credentials in a daemon.
-- `kagemusha derive-mint-finality-authority-generation-v1` provisions an ordered
-  exact `3f + 1` authority (4–31 validators) and corresponding candidate proofs.
-  Supply `--network-id`, `--generation`, one `--validator` per ordered peer, and
-  `--seed-fd` carrying one independent 32-byte seed per peer followed by EOF.
-  Generation zero provisions genesis; a later generation requires an authenticated
-  committee transition. Neither command authorizes an epoch, submits transactions,
-  establishes election eligibility, or proves possession of beacon shares.
-  Retained authority keys do not require per-epoch reprovisioning.
+- Taira generation requires runtime output outside a Git checkout. Each validator
+  has an independent private mint-finality seed, retained in an owner-only runtime
+  sidecar. The launcher stages consumed descriptor 199 alongside the Soracloud
+  signer at descriptor 198; the daemon binds it to the authenticated genesis and
+  matching epoch rosters. Private signing material never belongs in source or
+  public artifacts.
+- Scheduling epochs retain the exact authenticated mint-finality authority
+  generation and installed beacon binding through incumbent-certified epoch
+  authorizations. Per-epoch key schedules are not a provisioning interface.
+  TODO: expose prepared generation activation only after consensus owns the
+  frozen target, all-seat custody readiness, and authenticated beacon transition.
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generic generated stop scripts validate pidfiles against the expected peer

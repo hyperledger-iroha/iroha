@@ -1026,7 +1026,14 @@ mod tests {
                     response: [u8::try_from(dealer_index).expect("fixture value fits u8") + 0x40;
                         32],
                 },
-                signature: Signature::from_bytes(&[]),
+                signature: Signature::new(
+                    KeyPair::from_seed(
+                        vec![u8::try_from(dealer_index).expect("fixture value fits u8"); 32],
+                        Algorithm::Ed25519,
+                    )
+                    .private_key(),
+                    &session_id,
+                ),
             })
             .collect();
         GlobalThresholdBeaconKeySessionV1 {

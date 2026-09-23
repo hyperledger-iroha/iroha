@@ -2,8 +2,8 @@
 
 #[path = "taira_public_reset_beacon.rs"]
 pub(super) mod beacon;
-#[path = "taira_public_reset_deployment.rs"]
-mod deployment;
+#[path = "taira_public_reset_deployment_lifecycle.rs"]
+pub(super) mod deployment_lifecycle;
 #[path = "taira_public_reset_dispatcher_transition.rs"]
 pub(super) mod dispatcher_transition;
 
@@ -704,7 +704,6 @@ impl HostAction {
             Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
                 inventory.timeouts.install_secs
             }
-
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
@@ -861,63 +860,54 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
         ));
     }
     let _action_lock = lock_host_action(&admitted)?;
-    let _deployment_lock = deployment::lock(&admitted)?;
     ensure_host_lease(&admitted, action)?;
-    deployment::admit_owner(&admitted, action)?;
-    let result = (|| -> Result<HostReceiptV1> {
-        if action == HostAction::MutationReserve {
+    let deployment = deployment_lifecycle::acquire(&admitted, action)?;
+    let result = dispatch_locked_host_request(&admitted, action, body);
+    if let Some(guard) = deployment.as_ref() {
+        guard.revalidate()?;
+        if result.as_ref().is_ok_and(|receipt| receipt.status == "ok") {
             let progress = load_or_create_host_progress(&admitted)?;
-            return coordinate_prepared_mutation(&admitted, &progress);
+            deployment_lifecycle::finish(&admitted, action, &progress, guard)?;
         }
+    }
+    result
+}
 
-        let mut progress = load_or_create_host_progress(&admitted)?;
-        let progress_decision = admit_host_action_progress(&admitted, action, &progress)?;
-        let receipt_name = host_receipt_name(action, &admitted.request.artifact_role)?;
-        let receipt_dir = ensure_host_receipt_dir(&admitted)?;
-
-        if admitted.request.recovery_only {
-            if action == HostAction::BeaconActivate {
-                return beacon::recover_provider_host(
-                    &admitted,
-                    &receipt_dir,
-                    &receipt_name,
-                    &mut progress,
-                    progress_decision,
-                );
-            }
-            return recover_submitted_restart(
-                &admitted,
+fn dispatch_locked_host_request(
+    admitted: &HostAdmission,
+    action: HostAction,
+    body: &mut impl Read,
+) -> Result<HostReceiptV1> {
+    if action == HostAction::MutationReserve {
+        let progress = load_or_create_host_progress(admitted)?;
+        return coordinate_prepared_mutation(admitted, &progress);
+    }
+    let mut progress = load_or_create_host_progress(admitted)?;
+    let progress_decision = admit_host_action_progress(admitted, action, &progress)?;
+    let receipt_name = host_receipt_name(action, &admitted.request.artifact_role)?;
+    let receipt_dir = ensure_host_receipt_dir(admitted)?;
+    if admitted.request.recovery_only {
+        if action == HostAction::BeaconActivate {
+            return beacon::recover_provider_host(
+                admitted,
                 &receipt_dir,
                 &receipt_name,
                 &mut progress,
                 progress_decision,
             );
         }
-        if progress_decision == HostProgressDecision::AbsentNoOp {
-            verify_conservative_rollback_absence(&admitted)?;
-            if let Some(mut receipt) =
-                read_existing_host_receipt(&receipt_dir, &receipt_name, &admitted, action)?
-            {
-                receipt.idempotent = true;
-                return Ok(receipt);
-            }
-            progress.rolling_back = true;
-            progress.prepared_action = None;
-            replace_host_progress(&admitted, &progress)?;
-            let receipt = host_receipt(
-                &admitted,
-                action,
-                true,
-                0,
-                0,
-                "conservative rollback target proved absent from live state",
-            );
-            publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
-            return Ok(receipt);
-        }
-        ensure_vacant_original_state_before_touch(&admitted, &progress)?;
+        return recover_submitted_restart(
+            admitted,
+            &receipt_dir,
+            &receipt_name,
+            &mut progress,
+            progress_decision,
+        );
+    }
+    if progress_decision == HostProgressDecision::AbsentNoOp {
+        verify_conservative_rollback_absence(admitted)?;
         if let Some(mut receipt) =
-            read_existing_host_receipt(&receipt_dir, &receipt_name, &admitted, action)?
+            read_existing_host_receipt(&receipt_dir, &receipt_name, admitted, action)?
         {
             match action {
                 HostAction::Upload => verify_upload_body(&admitted, body, None)?,
@@ -949,85 +939,124 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
             receipt.idempotent = true;
             return Ok(receipt);
         }
-        if progress_decision == HostProgressDecision::Replay {
-            return Err(eyre!(
-                "host progress records a completed action without its immutable receipt"
-            ));
-        }
-        if progress.prepared_action.as_ref() == Some(&host_action_key(&admitted, action))
-            && !matches!(
-                action,
-                HostAction::Cleanup
-                    | HostAction::Restart
-                    | HostAction::EdgeCutover
-                    | HostAction::Rollback
-            )
-            && revalidate_cached_action_postcondition(&admitted, action).is_ok()
-        {
-            match action {
-                HostAction::Upload => verify_upload_body(&admitted, body, None)?,
-                HostAction::InrouStageUpload => {
-                    verify_inrou_stage_upload_body(&admitted, body, false)?
-                }
-                _ => {}
-            }
-            let receipt = host_receipt(
-                &admitted,
-                action,
-                true,
-                0,
-                0,
-                "host action recovered from its durable intent and exact postcondition",
-            );
-            publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
-            advance_host_progress(&admitted, action, &mut progress)?;
-            return Ok(receipt);
-        }
-        if admitted.execution_expired
-            && !matches!(
-                action,
-                HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
-            )
-        {
-            return Err(eyre!(
-                "expired execution authorization permits only exact receipt/postcondition reconciliation, seal, cleanup, or rollback"
-            ));
-        }
-        prepare_host_progress(&admitted, action, &mut progress)?;
-        if action == HostAction::Restart {
-            match prepare_or_recover_restart_intent(&receipt_dir, &admitted)? {
-                RestartIntentDecision::SubmitNew => {}
-                RestartIntentDecision::Recovered => {
-                    let receipt = host_receipt(
-                        &admitted,
-                        action,
-                        true,
-                        0,
-                        0,
-                        "validator restart recovered from durable invocation evidence",
-                    );
-                    publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
-                    advance_host_progress(&admitted, action, &mut progress)?;
-                    return Ok(receipt);
-                }
-                RestartIntentDecision::Pending => {
-                    return Err(LocalMutationRecoveryPending {
-                        action: "validator_restart",
-                    }
-                    .into());
-                }
-            }
-        }
-        let (before, after, detail) = execute_host_action(&admitted, action, body)?;
-        let receipt = host_receipt(&admitted, action, false, before, after, &detail);
+        progress.rolling_back = true;
+        progress.prepared_action = None;
+        replace_host_progress(admitted, &progress)?;
+        let receipt = host_receipt(
+            admitted,
+            action,
+            true,
+            0,
+            0,
+            "conservative rollback target proved absent from live state",
+        );
         publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
-        advance_host_progress(&admitted, action, &mut progress)?;
-        Ok(receipt)
-    })();
-    if result.is_ok() {
-        deployment::finish_terminal(&admitted)?;
+        return Ok(receipt);
     }
-    result
+    ensure_vacant_original_state_before_touch(admitted, &progress)?;
+    if let Some(mut receipt) =
+        read_existing_host_receipt(&receipt_dir, &receipt_name, admitted, action)?
+    {
+        match action {
+            HostAction::Upload => verify_upload_body(admitted, body, None)?,
+            HostAction::InrouStageUpload => verify_inrou_stage_upload_body(admitted, body, false)?,
+            _ => {}
+        }
+        if action == HostAction::Cleanup {
+            verify_completed_cleanup_plan(admitted, Some(&receipt))?;
+        }
+        match progress_decision {
+            HostProgressDecision::Advance if action != HostAction::Cleanup => {
+                revalidate_cached_action_postcondition(admitted, action)?;
+            }
+            HostProgressDecision::Replay if action != HostAction::Cleanup => {
+                if action == HostAction::Rollback {
+                    revalidate_cached_action_postcondition(admitted, HostAction::Rollback)?;
+                } else {
+                    revalidate_current_target_postcondition(admitted, &progress)?;
+                }
+            }
+            HostProgressDecision::Advance | HostProgressDecision::Replay => {}
+            HostProgressDecision::AbsentNoOp => unreachable!("handled before receipt replay"),
+        }
+        if progress_decision == HostProgressDecision::Advance {
+            advance_host_progress(admitted, action, &mut progress)?;
+        }
+        receipt.idempotent = true;
+        return Ok(receipt);
+    }
+    if progress_decision == HostProgressDecision::Replay {
+        return Err(eyre!(
+            "host progress records a completed action without its immutable receipt"
+        ));
+    }
+    if progress.prepared_action.as_ref() == Some(&host_action_key(admitted, action))
+        && !matches!(
+            action,
+            HostAction::Cleanup
+                | HostAction::Restart
+                | HostAction::EdgeCutover
+                | HostAction::Rollback
+        )
+        && revalidate_cached_action_postcondition(admitted, action).is_ok()
+    {
+        match action {
+            HostAction::Upload => verify_upload_body(admitted, body, None)?,
+            HostAction::InrouStageUpload => verify_inrou_stage_upload_body(admitted, body, false)?,
+            _ => {}
+        }
+        let receipt = host_receipt(
+            admitted,
+            action,
+            true,
+            0,
+            0,
+            "host action recovered from its durable intent and exact postcondition",
+        );
+        publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
+        advance_host_progress(admitted, action, &mut progress)?;
+        return Ok(receipt);
+    }
+    if admitted.execution_expired
+        && !matches!(
+            action,
+            HostAction::Rollback | HostAction::Seal | HostAction::Cleanup
+        )
+    {
+        return Err(eyre!(
+            "expired execution authorization permits only exact receipt/postcondition reconciliation, seal, cleanup, or rollback"
+        ));
+    }
+    prepare_host_progress(admitted, action, &mut progress)?;
+    if action == HostAction::Restart {
+        match prepare_or_recover_restart_intent(&receipt_dir, admitted)? {
+            RestartIntentDecision::SubmitNew => {}
+            RestartIntentDecision::Recovered => {
+                let receipt = host_receipt(
+                    admitted,
+                    action,
+                    true,
+                    0,
+                    0,
+                    "validator restart recovered from durable invocation evidence",
+                );
+                publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
+                advance_host_progress(admitted, action, &mut progress)?;
+                return Ok(receipt);
+            }
+            RestartIntentDecision::Pending => {
+                return Err(LocalMutationRecoveryPending {
+                    action: "validator_restart",
+                }
+                .into());
+            }
+        }
+    }
+    let (before, after, detail) = execute_host_action(admitted, action, body)?;
+    let receipt = host_receipt(admitted, action, false, before, after, &detail);
+    publish_host_receipt(&receipt_dir, &receipt_name, &receipt)?;
+    advance_host_progress(admitted, action, &mut progress)?;
+    Ok(receipt)
 }
 
 fn coordinate_prepared_mutation(
@@ -4836,7 +4865,6 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
-
     for action in [HostAction::Stop, HostAction::Install, HostAction::Reset] {
         for validator in &validators {
             plan.push(HostActionKeyV1 {
@@ -4871,7 +4899,6 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
-
     for validator in admitted
         .inventory
         .qualification_scope
@@ -13947,7 +13974,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     frame,
                 )
             }
-
             None if action != HostAction::Upload => (
                 String::new(),
                 String::new(),
@@ -14048,7 +14074,6 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             HostAction::Restart | HostAction::BeaconActivate | HostAction::MutationReserve
         ) && !recovery_only;
         let process_result = self.runner.run(&spec);
-
         let process = match process_result {
             Ok(process) => process,
             Err(error) if ambiguous_recoverable => {
@@ -16148,7 +16173,6 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     super::recovery_ready_to_resume_beacon_activation(intent, step),
                     deadline,
                 )?;
-
                 for (index, kind) in inventory
                     .qualification_scope
                     .canary_kinds()
@@ -24128,6 +24152,48 @@ time.sleep(30)
     }
 
     #[test]
+    fn host_frontier_preserves_four_beacon_activations_before_restart() {
+        let admitted = progress_admission();
+        let plan = host_forward_plan(&admitted);
+        let positions = |action: HostAction| {
+            plan.iter()
+                .enumerate()
+                .filter_map(|(index, key)| (key.action == action.label()).then_some(index))
+                .collect::<Vec<_>>()
+        };
+        let activations = positions(HostAction::BeaconActivate);
+        assert_eq!(activations.len(), 4);
+        assert!(
+            positions(HostAction::Start)
+                .iter()
+                .all(|i| *i < activations[0])
+        );
+        assert!(
+            positions(HostAction::Restart)
+                .iter()
+                .all(|i| *i > activations[3])
+        );
+        for action in [
+            "epoch_supervisor_pause",
+            "epoch_supervisor_start",
+            "epoch_supervisor_rollback_pause",
+            "epoch_supervisor_rollback_restore",
+        ] {
+            assert!(HostAction::parse(action).is_err());
+            assert!(!plan.iter().any(|key| key.action == action));
+        }
+        let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary).unwrap();
+        assert_eq!(canary.mutations[7].kind, "beacon_provider_4");
+        assert_eq!(canary.mutations[8].kind, "inrou_bundle_pin");
+        assert!(
+            canary
+                .mutations
+                .iter()
+                .all(|mutation| mutation.phase == "pre_edge")
+        );
+    }
+
+    #[test]
     fn recovery_intent_exposes_every_ordered_child_mutation() {
         let inventory = super::super::sample_inventory_fixture();
         let canary = build_recovery_intent(&inventory, ExecutionStep::Canary)
@@ -24239,7 +24305,7 @@ time.sleep(30)
                 "beacon_provider_1",
                 "beacon_provider_2",
                 "beacon_provider_3",
-                "beacon_provider_4",
+                "beacon_provider_4"
             ]
         );
         assert!(!recovery_intent_identity_matches(&canary, &full_canary));
@@ -24312,7 +24378,7 @@ time.sleep(30)
             .filter(|mutation| mutation.kind != "host_restart")
             .count();
         assert_eq!(
-            envelopes, 15,
+            envelopes, 14,
             "initial beacon install, four providers, single postrestart, and public-edge workflows retain immutable recovery evidence"
         );
         admitted.request.mutation_kind = "write_canary".to_owned();
@@ -24852,10 +24918,9 @@ time.sleep(30)
                 .position(|key| key.action == HostAction::BeaconActivate.label())
                 .expect("first provider activation");
             assert_eq!(plan[first_beacon - 1].action, HostAction::Start.label());
-            let provider_end = first_beacon + 4;
-            assert_eq!(first_restart, provider_end);
+            assert_eq!(first_restart, first_beacon + 4);
             assert_eq!(
-                plan[first_beacon..provider_end]
+                plan[first_beacon..first_restart]
                     .iter()
                     .map(|key| (key.action.as_str(), key.host_slug.as_str()))
                     .collect::<Vec<_>>(),
@@ -25339,6 +25404,71 @@ time.sleep(30)
         assert!(require_cleanup_release_not_prior(&admitted, "release", prior).is_err());
         require_cleanup_release_not_prior(&admitted, "release", Path::new("/srv/taira/unrelated"))
             .expect("other release is checked by the remaining cleanup admission rules");
+    }
+
+    #[test]
+    fn cleanup_preserves_prior_release_during_discovery_and_replay() {
+        let admitted = progress_admission();
+        let root = admitted
+            .target
+            .admitted_release_root()
+            .unwrap()
+            .to_path_buf();
+        let original_name = root.file_name().unwrap().to_str().unwrap().to_owned();
+        assert!(occupied::protects_prior_artifact(&admitted.target, &root));
+        assert!(
+            cleanup_protects_prior_release(&admitted, &root).unwrap(),
+            "discovery protects the independently admitted prior release"
+        );
+        assert!(require_cleanup_release_not_prior(&admitted, "release", &root).is_err());
+
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.into(),
+            kind: "release".into(),
+            host_slug: admitted.target.slug().into(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            revision: original_name.clone(),
+            created_at_unix_ms: 1,
+        };
+        let entry = CleanupPlanEntryV1 {
+            kind: "release".into(),
+            original_name,
+            original_path: root.display().to_string(),
+            marker_sha256: sha256_hex(json::to_json(&marker).unwrap().as_bytes()),
+            marker,
+            directory_device: 1,
+            directory_inode: 1,
+            initial_bytes: 1,
+        };
+        let plan = CleanupPlanV1 {
+            schema: CLEANUP_PLAN_SCHEMA_V1.into(),
+            action: HostAction::Cleanup.label().into(),
+            host_slug: admitted.target.slug().into(),
+            request_sha256: admitted.request_sha256.clone(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            max_reclaim_bytes: physical_host_cleanup_reclaim_limit(&admitted).unwrap(),
+            bytes_before: 1,
+            entries: vec![entry],
+        };
+        let replay: CleanupPlanV1 =
+            json::from_slice(json::to_json(&plan).unwrap().as_bytes()).unwrap();
+        assert!(
+            validate_cleanup_plan(&admitted, &replay)
+                .unwrap_err()
+                .to_string()
+                .contains("preserve the exact admitted prior release")
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            open_cleanup_plan_entry(&admitted, &replay.entries[0])
+                .err()
+                .expect("execution must refuse before opening the release")
+                .to_string()
+                .contains("preserve the exact admitted prior release")
+        );
     }
 
     #[cfg(unix)]

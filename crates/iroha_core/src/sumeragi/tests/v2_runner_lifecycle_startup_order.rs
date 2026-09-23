@@ -33,9 +33,7 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         "plan_lane_reservation_ownership(",
         "let summary = apply_lane_reservation_reconciliation_plan(",
         "reservation_reconciliation_pending = false;",
-        "construct_after_pending_tip_application_recovery(",
-        "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
-        "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+        "reconcile_executor_locked_body(executor, services)?",
         "initialize_recovered_local_proposal(setup_runner)",
         "let height_started_at = Instant::now();",
         "preactivation.activate(height_started_at, local_proposal)",
@@ -62,9 +60,9 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
         "if queue.lane_reservation_startup_reconciliation_pending() {",
         "return Err(V2RunnerError::Service(",
         "false\n    };",
-        "pending.prepare_lane_recovery(",
+        "pending.prepare_lane_recovery::<V2RunnerError>(",
         "run_pending_active_height(",
-        "let (successor, retained_merge_sidecars) = match completed",
+        "let successor = match completed",
         "context.height != u64::MAX",
         "startup_recovery.ready();",
         "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
@@ -95,7 +93,7 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
 }
 
 #[test]
-fn fresh_proposal_refreshes_merge_certification_before_freezing_attachments() {
+fn fresh_proposal_captures_native_decisions_before_worker_assembly() {
     let source = include_str!("../v2_runner.rs");
     let start = source
         .find("fn schedule_local_proposal(")
@@ -105,34 +103,50 @@ fn fresh_proposal_refreshes_merge_certification_before_freezing_attachments() {
         .map(|offset| start + offset)
         .expect("fresh proposal scheduler remains independently bounded");
     let scheduler = &source[start..end];
-    let refresh = scheduler
-        .find("lane_work.refresh_merge_candidates(directive.tag().view())?")
-        .expect("the current-round merge quorum is refreshed");
-    let admissions = scheduler[refresh..]
-        .find("lane_work.reconcile_pending_queue_plan_admissions(")
-        .map(|offset| refresh + offset)
-        .expect("QueuePlan controls are reconciled after merge refresh");
-    let refresh_continuation = scheduler[refresh..admissions]
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        refresh_continuation.contains(
-            "== super::v2_lane_work::MergeRefreshOutcome::Deferred { \
-             proposal_state.defer_candidate_snapshot(owner, Instant::now()); return Ok(()); }"
-        ),
-        "a deferred merge frontier must stop before control reconciliation, \
-         attachment selection, and assembly without arming a non-empty retry"
-    );
-    let attachments = scheduler[admissions..]
-        .find("let attachments = candidate_attachments(")
-        .map(|offset| admissions + offset)
-        .expect("candidate attachments are frozen after control reconciliation");
-    let assembly = scheduler[attachments..]
-        .find("let assembly = assembler.assemble(")
-        .map(|offset| attachments + offset)
-        .expect("candidate assembly consumes the frozen attachments");
-    assert!(refresh < admissions && admissions < attachments && attachments < assembly);
+    let mut remainder = scheduler;
+    for anchor in [
+        "let queue_plan_admissions = queue_plan.reconcile(directive.tag().view())?;",
+        "let attachments = candidate_attachments(",
+        "let Some(assembly) = native.assemble_candidate(",
+        "proposal_state.defer_candidate_snapshot(owner, Instant::now());",
+        "return Ok(());",
+        "NativeCandidateAssembly { source, outcome } = assembly;",
+        "native.retain_candidate_source(source);",
+        "let assembly = outcome?;",
+    ] {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("fresh proposal lost original Native source custody: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
+    for retired in ["lane_work.", "refresh_merge_candidates(", "assembler.assemble("] {
+        assert!(
+            !scheduler.contains(retired),
+            "fresh proposals cannot reactivate the retired lane owner: {retired}"
+        );
+    }
+
+    // Capture the exact current Decisions before starting the finite worker;
+    // preserve its preparation even when a completed candidate is superseded.
+    let worker = include_str!("../v2_runner/native_candidate.rs");
+    let mut remainder = worker;
+    for anchor in [
+        "if let Some(completed) = self.candidate_result.take()",
+        "self.retain_candidate_source(assembly.source);",
+        "if self.candidate_job.is_some()",
+        "let Some(decisions) = self.capture_decisions()?",
+        "decisions.with_recovered_sources(self.recovered_sources.clone())",
+        "mpsc::sync_channel(1)",
+        ".spawn(move ||",
+        "assembler.assemble_native(CandidateRequest",
+        "work_provider: &decisions,",
+        "send.send(result)",
+    ] {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("Native candidate lost bounded source handoff: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
 }
 
 #[test]

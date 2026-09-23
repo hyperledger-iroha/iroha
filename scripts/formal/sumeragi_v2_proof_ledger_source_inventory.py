@@ -96,6 +96,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/autonomous_application_evidence.rs",
     "kura/sidecar_physical_resource_accounting.rs",
     "kura/indexed_sidecar_io.rs",
+    "kura/receipt_namespace_durability.rs",
     "kura/consensus_storage_reads.rs",
     "kura/indexed_sidecar_rewrite.rs",
     "kura/lane_history_compaction.rs",
@@ -231,6 +232,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/07m_canonical_autonomous_replica_tests.rs',
         'kura/tests/08_lane_receipts_and_artifacts.rs',
         'kura/tests/08a_certified_lane_block_read_tests.rs',
+        'kura/tests/08b_receipt_namespace_durability_tests.rs',
         'kura/tests/08b_lane_history_compaction_capacity_tests.rs',
         'kura/tests/09_lane_artifacts_and_fastpq.rs',
         'kura/tests/10_native_amx_and_roster.rs',
@@ -377,6 +379,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'snapshot/support_policy_tests.rs',
         'snapshot/write_roundtrip_tests.rs',
         'snapshot/reconciliation_generation_tests.rs',
+        'snapshot/read_buffer_custody_tests.rs',
     ),
     'crates/iroha_core/src/sumeragi/evidence.rs': (
         'evidence/missing_signer_pop_test.rs',
@@ -591,6 +594,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs': (
         'v2_worker/pending_kura_apply_io_snapshot.rs',
+        'v2_worker/retained_apply.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
         'v2_worker/production_services_drop_impl.rs',
         'v2_worker/effect_services_impl.rs',
@@ -668,7 +672,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
         'v2_lane_work/canonical_executed_block_application_repair.rs',
-        'v2_lane_work/queue_plan_admission_handoff.rs',
         'v2_lane_work/signing_authority_tests.rs',
         'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
         'v2_lane_work/typed_finality_handoff_tests.rs',
@@ -686,6 +689,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work_autonomous_ready_durability_tests.rs',
         'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
         'v2_lane_work/queue_plan_admission_handoff_tests.rs',
+        'v2_lane_work/queue_plan_owner_tests.rs',
         'tests/v2_lane_work_ordinary_dispatch.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
@@ -695,6 +699,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'sumeragi_v2_runner/prepare_qc_split_tests.rs',
         'sumeragi_v2_runner/status_validation_helpers.rs',
         'sumeragi_v2_runner/status_set_validation.rs',
+        'sumeragi_v2_runner/native_silent_author_tests.rs',
     ),
     'integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs': (
         'restart_timing_test.rs',
@@ -768,5 +773,21 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/state/runtime_catalog.rs': (
         'runtime_catalog_tests.rs',
+    ),
+    'crates/iroha_core/src/state/runtime_configuration.rs': (
+        'runtime_configuration_tests.rs',
+    ),
+    'crates/iroha_core/src/state/deserialize_world.rs': (
+        'private_settlement_snapshot_predecessor_tests.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_runtime_main_04.rs': (
+        'v2_runtime_proposal_fetch_store_refinement.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_lane_work_native_body_recovery.rs': (
+        'v2_lane_work_native_repair_admission.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/v2_lane_work_autonomous_ready_durability_tests.rs': (
+        'v2_lane_work_terminal_ingress_tests.rs',
+        'tests/v2_lane_work_initial_author_loss_counterexample.rs',
     ),
 }

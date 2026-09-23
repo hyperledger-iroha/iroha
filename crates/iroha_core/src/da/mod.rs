@@ -27,6 +27,7 @@ use iroha_data_model::{
             DaCommitmentBundle, DaCommitmentKey, DaCommitmentRecord, DaProofPolicyBundle,
             DaProofScheme,
         },
+        pin_intent::MAX_DA_PIN_INTENT_ALIAS_BYTES,
         prelude::DaProofPolicy,
     },
     nexus::{
@@ -49,8 +50,6 @@ pub use shard_cursor::{
 };
 use std::collections::BTreeSet;
 use thiserror::Error;
-/// Maximum UTF-8 byte length admitted for a DA pin-intent alias.
-pub const MAX_DA_PIN_INTENT_ALIAS_BYTES: usize = 256;
 /// Errors returned when a DA commitment violates the configured lane proof policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DaProofPolicyError {

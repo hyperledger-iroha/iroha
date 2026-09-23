@@ -596,7 +596,7 @@ fn load_manifest_from_spool_rejects_manifest_shaped_directory() {
         .expect_err("manifest-shaped directory must fail closed");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("is not a regular file"),
+        err.to_string().contains("is not a direct regular file"),
         "unexpected error: {err}"
     );
 }
@@ -699,7 +699,7 @@ fn load_pdp_commitment_from_spool_rejects_commitment_shaped_directory() {
         .expect_err("PDP-shaped directory must fail closed");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        err.to_string().contains("is not a regular file"),
+        err.to_string().contains("is not a direct regular file"),
         "unexpected error: {err}"
     );
 }

@@ -319,8 +319,8 @@ fn authorization_cannot_extend_the_bounded_plan() {
         canary_secs: 193,
         restart_secs: 1,
         edge_secs: 1,
-        cleanup_secs: 4,
-        rollback_secs: 1,
+        cleanup_secs: 3,
+        rollback_secs: 2,
     };
     validate_timeouts(&inventory.timeouts).expect("every individual timeout is legal");
     let bytes = canonical_inventory_bytes(&inventory).unwrap();
@@ -484,7 +484,6 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
             .map(|slug| absent.join(format!("{slug}.beacon.service")))
             .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
-
         validator_client_config: VALIDATOR_SLUGS
             .iter()
             .map(|slug| absent.join(format!("{slug}.toml")))
@@ -827,22 +826,35 @@ fn native_context_rejects_scope_before_opening_actual_inputs() {
 }
 
 #[test]
-fn retired_worker_authorization_and_inventory_fields_are_rejected() {
+fn authorization_rejects_retired_supervisor_fields() {
     let inventory = sample_inventory_fixture();
     let (key, trusted) = owner();
     let bytes = canonical_inventory_bytes(&inventory).unwrap();
     let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, 1_000_000).unwrap();
+    verify_authorization(
+        &inventory,
+        &sha256_hex(&bytes),
+        &envelope,
+        &trusted,
+        1_000_000,
+    )
+    .unwrap();
+    let canonical = json::to_value(&envelope.claims).unwrap();
     for field in [
         "epoch_supervisor_authorization",
         "epoch_supervisor_policy_sha256",
         "maintenance_admin_config_sha256",
         "maintenance_admin_identity",
     ] {
-        let mut value = json::to_value(&envelope.claims).unwrap();
-        value
+        assert!(canonical.get(field).is_none());
+        let mut retired = canonical.clone();
+        retired
             .as_object_mut()
             .unwrap()
             .insert(field.into(), json::Value::Null);
-        assert!(json::from_value::<AuthorizationClaimsV1>(value).is_err());
+        assert!(
+            json::from_value::<AuthorizationClaimsV1>(retired).is_err(),
+            "{field}"
+        );
     }
 }

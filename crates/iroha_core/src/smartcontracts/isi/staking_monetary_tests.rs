@@ -83,7 +83,7 @@ fn registration_monetary_plan_rejects_every_changed_effect_before_custody_writes
             2 => plan.amount = 999_u64.into(),
             3 => {
                 plan.precondition = PublicLaneMonetaryPreconditionV1::Registration(
-                    iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                    iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
                         activation_height: 2,
                     },
                 )
@@ -132,7 +132,7 @@ fn reward_claim_rejects_skips_forged_records_accruals_payouts_and_oversized_pref
             .execute(&sink, &mut stx)
             .unwrap();
     }
-    let plan = fixture_claim_plan(&stx, lane, &recipient, None);
+    let plan = fixture_reward_claim_plan(&stx, lane, &recipient, None);
     for change in 0..7 {
         let mut invalid = plan.clone();
         match change {
@@ -194,7 +194,7 @@ fn reward_claim_processes_more_than_sixty_four_dust_records_without_forfeiture()
         (1, 64, 127, 0, 128),
         (2, 2, 129, 2, 128),
     ] {
-        let plan = fixture_claim_plan(&stx, lane, &recipient, None);
+        let plan = fixture_reward_claim_plan(&stx, lane, &recipient, None);
         assert_eq!(plan.records.len(), expected_records);
         ClaimPublicLaneRewards {
             lane_id: lane,
@@ -233,7 +233,7 @@ fn reward_claim_processes_more_than_sixty_four_dust_records_without_forfeiture()
         );
     }
     stx.nexus.staking.reward_dust_threshold = Quantity::zero();
-    let plan = fixture_claim_plan(&stx, lane, &recipient, None);
+    let plan = fixture_reward_claim_plan(&stx, lane, &recipient, None);
     assert!(plan.records.is_empty());
     ClaimPublicLaneRewards {
         lane_id: lane,
@@ -264,7 +264,7 @@ fn reward_claim_zero_entitlements_advance_without_creating_accrual() {
         .execute(&sink, &mut stx)
         .unwrap();
     let recipient = ALICE_ID.clone();
-    let plan = fixture_claim_plan(&stx, lane, &recipient, None);
+    let plan = fixture_reward_claim_plan(&stx, lane, &recipient, None);
     assert_eq!(plan.sources.len(), 1);
     assert!(plan.sources[0].payout.is_zero());
     ClaimPublicLaneRewards {
@@ -397,7 +397,7 @@ fn final_unbond_rejects_changed_signed_request_without_releasing_custody() {
     );
     let mut wrong = good.clone();
     wrong.precondition = PublicLaneMonetaryPreconditionV1::Unbond(
-        iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 {
+        iroha_data_model::nexus::PublicLaneMonetaryUnbondV1 {
             activation_height: 1,
             request_hash: Hash::new(b"different request state"),
         },

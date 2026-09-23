@@ -558,3 +558,12 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
 include!("lane_driver_tests.rs");
 
 include!("lane_transport_tests.rs");
+
+impl State {
+    /// Actual authenticated admission fixture shared by Native ingress/actor tests.
+    /// This transfers the original State/Kura owner and its frozen validator keys.
+    pub(crate) fn native_dispatch_source_fixture_for_test() -> (Arc<State>, Vec<KeyPair>) {
+        let fixture = native_process_three_route_source_fixture();
+        (fixture.state, fixture.keys)
+    }
+}

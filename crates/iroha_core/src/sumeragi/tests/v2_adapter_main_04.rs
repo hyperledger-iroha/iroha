@@ -1319,13 +1319,21 @@ mod kagemusha_finality_boundary {
             context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
             let next_roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
                 context.network_id,
-                context.epoch + 1,
+                context.kagemusha_mint_finality_authority.generation + 1,
                 &context.roster,
             );
+            let next_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &context.kagemusha_mint_finality_authorization,
+            &next_roster,
+            context.height + 100,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
+        );
             context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
                 committee_preparation: None,
                 epoch: context.epoch + 1,
-                kagemusha_mint_finality_authorization: crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(&context.kagemusha_mint_finality_authorization, &next_roster, context.height + 100, iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate),
+                kagemusha_mint_finality_authorization: next_authorization,
                 kagemusha_mint_finality_authority: next_roster,
                 epoch_end_height: context.height + 100,
                 mode: context.mode,
@@ -1623,12 +1631,29 @@ mod kagemusha_finality_boundary {
         message: &KagemushaMintFinalitySealMessageV1,
     ) -> Vec<(&'static str, KagemushaMintFinalitySealMessageV1)> {
         let changes: [(&str, fn(&mut KagemushaMintFinalitySealMessageV1)); 11] = [
-            ("finality epoch", |m| {
-                m.epoch_authorization.authority_id[0] ^= 1
+            ("finality authority", |m| {
+                m.epoch_authorization.authority_id[0] ^= 1;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed authorization identity");
+                }
             }),
             ("validator count", |m| m.validator_count = 7),
-            ("network", |m| m.network_id = test_network_id(0xD3)),
-            ("height", |m| m.block_height += 1),
+            ("network", |m| {
+                m.network_id = test_network_id(0xD3);
+                m.epoch_authorization.network_id = m.network_id;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.network_id = m.network_id;
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed network authorization");
+                }
+            }),
+            ("height", |m| {
+                m.block_height += 1;
+                m.epoch_authorization.last_height += 1;
+                if let Some(next) = &mut m.next_epoch_authorization {
+                    next.first_height += 1;
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed height authorization");
+                }
+            }),
             ("context", |m| {
                 m.height_context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
                     Hash::new(b"other seal context"),
@@ -1643,10 +1668,7 @@ mod kagemusha_finality_boundary {
             }),
             ("top-up count", |m| m.kagemusha_top_up_count += 1),
             ("next epoch", |m| {
-                m.next_epoch_authorization
-                    .as_mut()
-                    .expect("next epoch")
-                    .transition_id[0] ^= 1
+                m.next_epoch_authorization.as_mut().expect("boundary successor").last_height += 1
             }),
             ("missing next epoch", |m| m.next_epoch_authorization = None),
         ];
@@ -1655,20 +1677,11 @@ mod kagemusha_finality_boundary {
             .map(|(label, change)| {
                 let mut changed = message.clone();
                 change(&mut changed);
-                changed.epoch_authorization.network_id = changed.network_id;
-                if changed.next_epoch_authorization.is_some() {
-                    changed.epoch_authorization.last_height = changed.block_height;
-                    let previous_id = changed
+                if let Some(next) = &mut changed.next_epoch_authorization {
+                    next.previous_authorization_id = changed
                         .epoch_authorization
                         .authorization_id()
-                        .expect("current authorization");
-                    let next = changed
-                        .next_epoch_authorization
-                        .as_mut()
-                        .expect("next authorization");
-                    next.network_id = changed.network_id;
-                    next.first_height = changed.block_height + 1;
-                    next.previous_authorization_id = previous_id;
+                        .expect("substituted predecessor remains canonical");
                 }
                 changed
                     .validate()

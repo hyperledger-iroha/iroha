@@ -864,7 +864,7 @@ impl Kura {
         marker_stable_growth_bytes: u64,
     ) -> Result<KuraPruneCapacityAdmissionV3> {
         let used = self.kura_disk_usage_bytes()?;
-        let post_wsv = self.lane_publication_budget_reserved_bytes()?;
+        let post_wsv = self.all_publication_budget_reserved_bytes()?;
         let certified_bundles = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminals = self.autonomous_global_terminal_outcome_reserved_bytes()?;
         Ok(KuraPruneCapacityAdmissionV3 {

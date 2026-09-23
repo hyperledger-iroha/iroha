@@ -8,31 +8,6 @@ fn network_id(seed: u8) -> NetworkId {
         Hash::prehashed([seed; Hash::LENGTH]),
     ))
 }
-fn mint_finality_roster(
-    network_id: NetworkId,
-    epoch: u64,
-    roster: &[ValidatorPower],
-) -> crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
-    use crate::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityValidatorKeysV1,
-    };
-
-    KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        generation: epoch,
-        validators: roster
-            .iter()
-            .enumerate()
-            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                validator: validator.validator.clone(),
-                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
-                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
-            })
-            .collect(),
-    }
-}
 #[test]
 fn consensus_modes_project_canonical_protocol_identities() {
     assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
@@ -478,16 +453,19 @@ fn roster(powers: &[u64]) -> Vec<ValidatorPower> {
 fn context(powers: &[u64]) -> HeightContext {
     let roster = roster(powers);
     let network_id = network_id(0xA1);
-    let mint_finality_roster = mint_finality_roster(network_id, 0, &roster);
-    let mint_finality_authorization =
-        test_kagemusha_mint_finality_authorization(&mint_finality_roster, 0, 1, 100);
+    let authority = test_kagemusha_mint_finality_authority(network_id, 0, &roster);
+    let authorization =
+        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &authority, 100,
+        )
+        .expect("valid fixture genesis authorization");
     HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_authorization: mint_finality_authorization,
-        kagemusha_mint_finality_authority: mint_finality_roster,
+        kagemusha_mint_finality_authorization: authorization,
+        kagemusha_mint_finality_authority: authority,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -1126,9 +1104,9 @@ fn non_boundary_height_context_id_is_pinned() {
     assert_eq!(
         *context.id().0.as_ref(),
         [
-            0xfc, 0x5e, 0x84, 0x52, 0x9f, 0x0b, 0x03, 0x30, 0x2e, 0x01, 0x77, 0x4a, 0x89, 0x57,
-            0xf6, 0x51, 0x8e, 0x67, 0xb7, 0xfe, 0xd3, 0x4b, 0xf2, 0x88, 0x79, 0x73, 0x3a, 0x71,
-            0x8b, 0xbc, 0x45, 0x29,
+            0xc5, 0x2b, 0x81, 0xde, 0xc6, 0xb2, 0xca, 0xd3, 0x11, 0x46, 0xc6, 0x2f, 0x54, 0xf8,
+            0x04, 0xbb, 0xd3, 0x53, 0x0e, 0x86, 0xbb, 0x30, 0x94, 0x86, 0x3c, 0xad, 0x56, 0x1a,
+            0x7d, 0xf2, 0xd8, 0x11,
         ],
         "intentional identity-projection changes require updating this golden"
     );
@@ -1136,22 +1114,54 @@ fn non_boundary_height_context_id_is_pinned() {
 #[test]
 fn boundary_height_context_id_pins_the_complete_transition() {
     let mut context = context(&[1, 1, 1, 1]);
+    use crate::isi::kagemusha_v1::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+    };
     context.epoch_end_height = context.height;
-    context.kagemusha_mint_finality_authorization.last_height = context.height;
+    context.kagemusha_mint_finality_authorization =
+        KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &context.kagemusha_mint_finality_authority,
+            context.epoch_end_height,
+        )
+        .expect("genesis authorization ends at the boundary");
     let next_roster = roster(&[1, 1, 1, 1]);
-    let next_mint_finality_roster =
-        mint_finality_roster(context.network_id, context.epoch + 1, &next_roster);
-    let next_mint_finality_authorization = test_kagemusha_mint_finality_successor_authorization(
-        &context.kagemusha_mint_finality_authorization,
-        &next_mint_finality_roster,
-        41,
-        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+    // Scheduling advances while this exact validator/key generation is retained.
+    let next_authority = context.kagemusha_mint_finality_authority.clone();
+    let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        epoch: 1,
+        first_height: 2,
+        last_height: 41,
+        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id: [7; 32],
+            transcript_hash: [8; 32],
+        }),
+        previous_authorization_id: context
+            .kagemusha_mint_finality_authorization
+            .authorization_id()
+            .unwrap(),
+        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        ..context.kagemusha_mint_finality_authorization
+    };
+    next_authorization
+        .validate_successor(&context.kagemusha_mint_finality_authorization)
+        .unwrap();
+    assert_eq!(next_authority, context.kagemusha_mint_finality_authority);
+    assert_eq!(next_authority.generation, 0);
+    assert_eq!(next_authorization.epoch, 1);
+    assert_ne!(
+        next_authorization.authorization_id().unwrap(),
+        context
+            .kagemusha_mint_finality_authorization
+            .authorization_id()
+            .unwrap(),
+        "retention preserves key generation while advancing the certified schedule"
     );
     context.next_epoch_snapshot = Some(finality::FinalizedNextEpochSnapshot {
         committee_preparation: None,
         epoch: context.epoch + 1,
-        kagemusha_mint_finality_authorization: next_mint_finality_authorization,
-        kagemusha_mint_finality_authority: next_mint_finality_roster,
+        kagemusha_mint_finality_authorization: next_authorization,
+        kagemusha_mint_finality_authority: next_authority,
         epoch_end_height: 41,
         mode: context.mode,
         quorum: DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
@@ -1163,9 +1173,9 @@ fn boundary_height_context_id_pins_the_complete_transition() {
     assert_eq!(
         *context.id().0.as_ref(),
         [
-            0x6c, 0xa6, 0xe7, 0x06, 0x1c, 0x2d, 0x85, 0xb5, 0x6b, 0x95, 0x6e, 0xe4, 0x75, 0x38,
-            0x12, 0xde, 0x85, 0xcd, 0x4b, 0xcf, 0x48, 0xfd, 0x0b, 0x5d, 0xbf, 0x3e, 0x11, 0x5d,
-            0xc2, 0x9f, 0xbd, 0xef,
+            0xc5, 0x2c, 0x01, 0xb4, 0x53, 0xcd, 0xf0, 0x1d, 0x0c, 0x78, 0xa1, 0xb7, 0x5f, 0xb7,
+            0xf8, 0x91, 0x98, 0x76, 0x68, 0x3b, 0x84, 0x44, 0x5c, 0x6f, 0xfa, 0xbd, 0xa8, 0x79,
+            0x49, 0x5d, 0x14, 0x27,
         ],
         "intentional transition-identity changes require updating this golden"
     );

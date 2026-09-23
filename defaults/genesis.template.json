@@ -96,7 +96,17 @@
           ]
         },
         "block": {
-          "max_transactions": 512
+          "max_transactions": 512,
+          "max_time_trigger_invocations": 512,
+          "execution_output": {
+            "max_outputs": 65536,
+            "max_output_bytes": 1048576,
+            "max_total_output_bytes": 67108864,
+            "max_executed_wire_bytes": 268435456,
+            "max_pipeline_triggers": 256,
+            "max_time_triggers": 4096,
+            "max_time_invocations": 512
+          }
         },
         "transaction": {
           "max_signatures": 16,
@@ -157,6 +167,7 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
+              "xor_asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
               "max_validators": 31,
               "min_self_bond": "1000",

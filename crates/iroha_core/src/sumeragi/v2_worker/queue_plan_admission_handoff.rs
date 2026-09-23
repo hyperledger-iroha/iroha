@@ -140,20 +140,23 @@ fn rotating_current_archive_targets(
 }
 
 impl ProductionV2Services {
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn queue_plan_test_kura(&self) -> &Kura {
-        &self.kura
+    /// Require the original global admission resources before accepting output custody.
+    pub(in crate::sumeragi) fn matches_queue_plan_admission_owner(
+        &self,
+        owner: &super::v2_queue_plan_admission::QueuePlanAdmissionOwner,
+    ) -> bool {
+        owner.matches_lifecycle_dependencies(
+            &self.context,
+            &self.state,
+            &self.kura,
+            &self.output_guard,
+            &self.local_peer,
+        )
     }
 
     #[cfg(test)]
-    pub(in crate::sumeragi) fn queue_plan_test_route(
-        &self,
-        view: wire::View,
-    ) -> (NetworkId, PeerId) {
-        let peer = self.context.roster[usize::try_from(self.context.leader(view)).unwrap()]
-            .validator
-            .clone();
-        (self.context.network_id.clone(), peer)
+    pub(in crate::sumeragi) fn queue_plan_test_kura(&self) -> &Kura {
+        &self.kura
     }
 
     pub(crate) fn queue_plan_admission_batch_sources(

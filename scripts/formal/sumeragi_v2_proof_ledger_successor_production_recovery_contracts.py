@@ -115,7 +115,8 @@ _CERTIFIED_SERVE_DIRECTORY_OWNER_RELATIONS = (
         "if storage.context_id != context.id() || storage.height != context.height || !body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
         "if !self.adapter.wal.matches_path(&storage.wal_path)",
         "if !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
-        "body_store .into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)",
+        "let replay_context = VerifiedHeightContext { context: self.adapter.wire_context.clone(), proofs_of_possession: self.adapter.proofs_of_possession.clone(), parent_verification: self.adapter.parent_verification.clone(), };",
+        "let (body_store, apply_service) = body_store .into_revalidated_lifecycle_startup(apply_service, replay_context, validation_authority)",
         "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage;",
         "self.open_production_lifecycle_owner_v1_at_authenticated_roots( config, reply_route_source_capacity, &lifecycle_root, CertifiedServePayloadStoreStartupTargetV1::Kura { kura: kura.as_ref(), authority: serve_payload_directory_authority, }, body_store, &local_signer, pending_kura, )?;",
         "owner .authenticate_recovered_successor_floor(floor)",
@@ -846,31 +847,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "#[allow(clippy::result_large_err, clippy::too_many_arguments)]",
                 ),
             )
-            require_order(
-                adapter_path,
-                "canonical Kura-bound lifecycle-owner factory",
-                owner_factory_item.source if owner_factory_item is not None else "",
-                (
-                    "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
-                    "body_store: super::v2_body_store::QuarantinedV2BodyStore",
-                    "if !self.effects.is_empty()",
-                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, local_signer, } = factory_inputs",
-                    "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
-                    "storage.context_id != context.id() || storage.height != context.height",
-                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
-                    "self.adapter.wal.matches_path(&storage.wal_path)",
-                    "let apply_service = super::v2_apply::V2ApplyService::new(",
-                    "storage.genesis_account.clone()",
-                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
-                    "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage",
-                    "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
-                    "let owner = match successor_floor",
-                    "owner.authenticate_recovered_successor_floor(floor)",
-                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, local_signer: Some(local_signer.public_key().clone()), }",
-                    "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
-                ),
-            )
+            errors.extend(_retained_replay_factory_errors(adapter_path, adapter_source))
             reject_tokens(
                 adapter_path,
                 "canonical Kura-bound lifecycle-owner factory",
@@ -1064,12 +1041,12 @@ def _successor_production_recovery_source_fidelity_errors(
                         "BlockSignaturePolicy::GenesisAuthority(",
                         "WalRecordV2::Decision(decision.clone())",
                         "let owner = result.unwrap_or_else",
-                        "let mut lane_work = super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(",
+                        "let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard)",
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
                         "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(",
-                        "launched.drive_completion_turn_for_test(runner, &mut lane_work)",
+                        "launched.drive_completion_turn_for_test(runner)",
                         "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
                         "ProductionCompletionDispatchV1::ApplyQueued",
                         "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
@@ -1088,12 +1065,11 @@ def _successor_production_recovery_source_fidelity_errors(
                         "ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted",
                         "!selected.restart_required()",
                         "let mut runner = super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test()",
-                        "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
+                        "settle_terminal_fixture_runner_handoff(&mut activated, &mut runner, &mut native, output_guard.as_ref(),)",
+                        "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(activated, &mut runner, &mut native, 64, &mut cleanup_supervisor,",
                         "assert_eq!(receipt.context_id(), recovered_context.id())",
                         "assert_eq!(artifact.subject, subject)",
-                        ".retain_merge_sidecars_for_global_view(",
                         "successor.parent_commit_qc = Some(artifact.commit_qc.clone())",
-                        "drop(retained_sidecars)",
                         "outcome.cleanup().warnings().is_empty()",
                     ),
                 )
@@ -1215,20 +1191,9 @@ def _successor_production_recovery_source_fidelity_errors(
                 "impl QuarantinedV2BodyStore {",
                 "impl RevalidatedV2BodyStore {",
             )
-            require_order(
-                body_store_path,
-                "fixed quarantined recovered marker replay",
-                quarantine,
-                (
-                    "fn into_revalidated_lifecycle_startup(",
-                    "apply_service.recovered_finality_subject(context)",
-                    "self.0.retain_recovered_markers_for_subject(subject)",
-                    "self.0.retain_recovered_markers_for_authority(validation_authority)",
-                    "self.0.revalidate_recovered_markers(|body|",
-                    "apply_service.revalidate_recovered_candidate(context, body)",
-                    "self.0.into_revalidated_startup()",
-                ),
-            )
+            errors.extend(_quarantined_retained_marker_replay_errors(
+                body_store_path, body_store_source,
+            ))
             reject_tokens(
                 body_store_path,
                 "fixed quarantined recovered marker replay",
@@ -2151,7 +2116,7 @@ self.io.is_some()
                 owner_source,
                 (
                     "kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>",
-                    "apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>",
+                    "apply_service: Option<crate::sumeragi::v2_apply::NativeApplyService>",
                     "fn with_recovered_kura_binding_and_apply_service(",
                     "assert!(self.kura_binding.is_none())",
                     "assert!(self.apply_service.is_none())",
@@ -2314,50 +2279,8 @@ self.io.is_some()
                     "fn outbound_payload(",
                 ),
             )
-            parked_sign_completion = region(
-                worker_path,
-                worker_source,
-                "parked recovered Sign completion",
-                "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
-                "/// Result of atomically returning one guarded missing-sidecar Apply",
-            )
-            reject_tokens(
-                worker_path,
-                "parked recovered Sign completion",
-                parked_sign_completion,
-                (
-                    "fn into_parts(",
-                    "fn into_result(",
-                    "fn into_task(",
-                    "fn request(",
-                    "fn prepared_candidate(",
-                    "fn result(",
-                    "fn acknowledgement(",
-                    "fn acknowledge(",
-                    "fn signature(",
-                    "fn outbound_payload(",
-                    "fn settle(",
-                ),
-            )
-            require_tokens(
-                worker_path,
-                "adapter-private recovered Sign completion projection",
-                parked_sign_completion,
-                (
-                    "fn project_adapter_completion_authority(",
-                    "result.is_exact()",
-                    "RecoveredLifecycleSignAdapterCompletionAuthorityV1 {",
-                ),
-            )
-            require_tokens(
-                worker_path,
-                "post-publication recovered Sign completion acknowledgement",
-                parked_sign_completion,
-                (
-                    "fn acknowledge_after_publication(self)",
-                    "self.queue.acknowledge_recovered_lifecycle_sign(key)",
-                    "self.guarded.acknowledge_after_publication()",
-                ),
+            errors.extend(
+                _parked_recovered_sign_completion_owner_errors(worker_path, worker_source)
             )
             recovered_sign_preview = region(
                 adapter_path,

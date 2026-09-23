@@ -1480,11 +1480,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let network_id = test_network_id(b"sumeragi-v2-evidence-genesis");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -1528,28 +1525,16 @@ mod tests {
             }
         }
         fn for_epoch(epoch: u64) -> Self {
-            let mut fixture = if epoch == 0 {
-                Self::new()
-            } else {
-                Self::for_height(2)
-            };
+            // Positive scheduling epochs require actual predecessor heights.
+            let first_height = epoch.checked_add(1).expect("fixture epoch fits height");
+            let mut fixture = Self::for_height(first_height);
             fixture.context.epoch = epoch;
             (
                 fixture.context.kagemusha_mint_finality_authorization,
                 fixture.context.kagemusha_mint_finality_authority,
-            ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
                 fixture.context.network_id,
-                fixture.context.kagemusha_mint_finality_authority.generation,
                 epoch,
-                if epoch == 0 {
-                    1
-                } else {
-                    fixture
-                        .context
-                        .kagemusha_mint_finality_authorization
-                        .first_height
-                        .max(2)
-                },
                 fixture.context.epoch_end_height,
                 &fixture.context.roster,
             );
@@ -1568,9 +1553,10 @@ mod tests {
             fixture.context.height = height;
             fixture.context.snapshot_bootstrap = Some(wire_v2::SnapshotBootstrapAnchor {
                 snapshot_height,
-                snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(
-                    b"v2 evidence snapshot block",
-                )),
+                snapshot_block_hash: evidence_fixture_prefix(&fixture)
+                    .get(usize::try_from(snapshot_height - 1).expect("fixture height fits usize"))
+                    .expect("actual fixture predecessor")
+                    .hash(),
                 snapshot_block_creation_time_ms: snapshot_height.saturating_mul(1_000),
                 snapshot_state_hash: Hash::new(b"v2 evidence snapshot state"),
             });
@@ -1711,12 +1697,17 @@ mod tests {
             }
         }
     }
-    fn install_v2_finality_for_fixture(state: &State, fixture: &V2EvidenceFixture) {
+    fn evidence_fixture_block(
+        fixture: &V2EvidenceFixture,
+        height: u64,
+        parent: Option<HashOf<iroha_data_model::block::BlockHeader>>,
+    ) -> std::sync::Arc<iroha_data_model::block::SignedBlock> {
         let committed = crate::block::ValidBlock::new_dummy_and_modify_header(
             fixture.keys[0].private_key(),
             |header| {
-                header.set_height(core::num::NonZeroU64::new(1).expect("non-zero height"));
-                header.set_prev_block_hash(None);
+                header.set_height(core::num::NonZeroU64::new(height).expect("non-zero height"));
+                header.set_prev_block_hash(parent);
+                header.creation_time_ms = height.saturating_mul(1_000);
                 header.merkle_root = None;
             },
         )
@@ -1743,13 +1734,35 @@ mod tests {
             )
         }
         .expect("attach deterministic v2 evidence fixture results");
-        let block = std::sync::Arc::new(executed_block);
+        std::sync::Arc::new(executed_block)
+    }
+    fn evidence_fixture_prefix(
+        fixture: &V2EvidenceFixture,
+    ) -> Vec<std::sync::Arc<iroha_data_model::block::SignedBlock>> {
+        let mut blocks = Vec::new();
+        let mut parent = None;
+        for height in 1..=fixture.context.height {
+            let block = evidence_fixture_block(fixture, height, parent);
+            parent = Some(block.hash());
+            blocks.push(block);
+        }
+        blocks
+    }
+    fn install_v2_finality_for_fixture(state: &State, fixture: &V2EvidenceFixture) {
+        let mut blocks = evidence_fixture_prefix(fixture);
+        let block = blocks.pop().expect("fixture has a positive height");
+        for predecessor in blocks {
+            state
+                .kura()
+                .store_block(predecessor)
+                .expect("store actual fixture predecessor");
+        }
         state
             .kura()
             .store_block(std::sync::Arc::clone(&block))
             .expect("store canonical v2 evidence fixture block");
         let subject = wire_v2::BlockSubject {
-            parent_block_hash: None,
+            parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
             payload_hash: block
                 .canonical_proposal_wire_hash()
@@ -1915,16 +1928,24 @@ mod tests {
         state: &State,
         evidence: SumeragiV2EquivocationEvidence,
     ) -> Hash {
+        let recorded_at_height = evidence
+            .context
+            .height
+            .checked_add(1)
+            .expect("fixture admission follows evidence height");
         let key = v2_evidence_admission_key(&evidence);
+        let recorded_height = evidence.context.height + 1;
         let mut records = state.world.consensus_evidence.block();
         records.insert(
             key,
             EvidenceRecord {
                 evidence: canonical_v2_evidence(&evidence),
-                recorded_at_height: 2,
+                recorded_at_height: recorded_height,
                 recorded_at_view: 0,
                 recorded_at_ms: 20,
-                penalty_status: EvidencePenaltyStatus::Applied { height: 2 },
+                penalty_status: EvidencePenaltyStatus::Applied {
+                    height: recorded_height,
+                },
             },
         );
         records.commit();
@@ -2401,7 +2422,7 @@ mod tests {
 
         let state = test_state_for_v2_fixture(&second_fixture);
         insert_terminal_v2_evidence_for_test(&state, first);
-        validate_v2_evidence_admissions(&state, 3, &[second])
+        validate_v2_evidence_admissions(&state, second_fixture.context.height + 1, &[second])
             .expect("a retained proof from another frozen epoch must not suppress admission");
     }
     #[test]

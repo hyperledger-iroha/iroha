@@ -2134,8 +2134,11 @@ mod tests {
             dataspace_catalog,
             ..Default::default()
         };
+        let escrow_account_id = AccountId::parse_encoded(&nexus.staking.stake_escrow_account_id)
+            .expect("configured staking escrow");
         let post_topology_transactions = vec![vec![
             Register::domain(Domain::new(nexus_domain.clone())).into(),
+            Register::account(Account::new(escrow_account_id.clone())).into(),
             Register::account(Account::new(validator_id.clone())).into(),
             Register::asset_definition({
                 let __asset_definition_id = stake_asset_id.clone();
@@ -2161,14 +2164,7 @@ mod tests {
                 Metadata::default(),
                 iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                    AssetId::new(
-                        stake_asset_id.clone(),
-                        AccountId::parse_encoded(
-                            &defaults::nexus::staking::stake_escrow_account_id(),
-                        )
-                        .expect("default escrow")
-                        .into_account_id(),
-                    ),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id),
                     Quantity::from(10_u32),
                 ),
             )

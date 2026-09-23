@@ -39,6 +39,14 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
     inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
     validate_inventory_structure(&inventory)
         .expect("original target keeps the full first-release structural contract");
+    let mut wrong_release = inventory.clone();
+    wrong_release.validators[0].endpoint.remote_cli =
+        fixture.validators[0].endpoint.remote_cli.clone();
+    wrong_release.artifact_closure_sha256 = artifact_closure_sha256(&wrong_release);
+    assert!(
+        validate_inventory_structure(&wrong_release).is_err(),
+        "original target must reject a dispatcher from another revision"
+    );
     let Some(compiled) = compiled else {
         for admission in [
             ControllerAdmission::CurrentExecutable,

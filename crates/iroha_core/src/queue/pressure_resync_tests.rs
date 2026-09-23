@@ -505,6 +505,7 @@ async fn push_tx_already_in_blockchain() {
     state_block
         .transactions
         .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
+    state_block.block_hashes.push(unverified_block.hash());
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     assert!(matches!(
@@ -622,6 +623,7 @@ async fn push_requeued_with_routing_plan_rejects_committed_transaction() {
     state_block
         .transactions
         .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
+    state_block.block_hashes.push(unverified_block.hash());
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
@@ -684,6 +686,7 @@ async fn push_expired_tx_already_in_blockchain() {
     state_block
         .transactions
         .insert_block_with_single_tx(tx.as_ref().hash_as_entrypoint(), block_height);
+    state_block.block_hashes.push(unverified_block.hash());
     state_block.commit().unwrap();
     let queue = Queue::test(config_factory(), &time_source);
     time_handle.advance(Duration::from_secs(100));
@@ -723,6 +726,7 @@ async fn get_tx_drop_if_in_blockchain() {
     state_block
         .transactions
         .insert_block_with_single_tx(tx_hash, block_height);
+    state_block.block_hashes.push(unverified_block.hash());
     state_block.commit().unwrap();
     assert_eq!(
         queue

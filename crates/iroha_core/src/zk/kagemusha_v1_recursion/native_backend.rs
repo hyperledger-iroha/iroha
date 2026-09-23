@@ -317,7 +317,7 @@ pub struct KagemushaRecursiveVerifierProfileV1 {
     pub mint_hash_claim_eq_protocol_digest: [u8; 32],
     /// Actual compiled Ep ordered mint-hash claim protocol identity.
     pub mint_hash_claim_ep_protocol_digest: [u8; 32],
-    /// Release-pinned genesis mint-finality roster identifier.
+    /// Release-pinned genesis mint-finality authorization identifier.
     pub mint_genesis_authorization_id: [u8; 32],
 }
 
@@ -1192,7 +1192,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         self.mint_ep_protocol_digest
     }
 
-    /// Return the release-pinned genesis mint-finality roster identifier.
+    /// Return the release-pinned genesis mint-finality authorization identifier.
     #[must_use]
     pub const fn mint_genesis_authorization_id(&self) -> [u8; 32] {
         self.mint_genesis_authorization_id

@@ -274,7 +274,12 @@ BINDINGS = tuple(
 )
 
 # Existing registry bindings retain this owner's full persistence obligations.
-EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))
+EXTRA_ITEMS = (
+    (TORII, "fn", PERSIST),
+    (TORII, "fn", AGGREGATOR),
+    (RUNNER, "fn", "candidate_attachments"),
+    (CANDIDATE, "method", "V2CandidateAssembler::assemble_native"),
+)
 SOURCE_RELATIVES = (
     *(Path(p) for p in sorted({p for p, _, _, _ in BINDINGS})),
     Path("scripts/formal/sumeragi_v2_multilane_admission_capacity_contract.py"),
@@ -318,10 +323,12 @@ def validate_owners(root, models, errors, rust_binding_item):
                 errors.append(f"Admission capacity {symbol} missing relation {token!r}")
         if (path, kind, symbol) == QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]:
             validate_queue_plan_proxy_deadline_owner(raw, errors)
+    extra_raw = {}
     for path, kind, symbol in EXTRA_ITEMS:
         raw = rust_binding_item(root, path, kind, symbol, "Admission capacity", errors)
         if raw is not None:
             items[symbol] = _code(raw)
+            extra_raw[symbol] = raw
 
     validate_aggregator_callers((root / TORII).read_text(), items, errors)
 
@@ -330,17 +337,25 @@ def validate_owners(root, models, errors, rust_binding_item):
     prefix = items.get("npos_effects_prefix", "")
     if any(token in prefix for token in ("penalty_actions", "finalized_global_beacon_pulse")):
         errors.append("Admission capacity evidence selection edits mandatory effects")
-    merge = items.get("candidate_attachments", "")
+    attachments = items.get("candidate_attachments", "")
+    native = items.get("V2CandidateAssembler::assemble_native", "")
     for token in (
-        "super::v2_candidate::candidate_economic_work_first(context.height)",
-        "&& effects.penalty_actions.is_empty() && queue_plan_admissions.is_empty()",
-        ".filter(|(_, entry, _)| entry.execution_batch.is_some())",
-        "if preferred_merge_entry.is_some() { effects.v2_evidence_admissions.clear(); }",
-        "let selected_merge_entry = if preferred_merge_entry.is_some() { preferred_merge_entry }",
-        "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+        "let npos_consensus_effects = (!effects.is_empty()).then_some(effects)",
+        "queue_plan_admissions,",
+        "required_beacon_pulse_pending,",
     ):
-        if _code(token) not in merge:
-            errors.append(f"Admission capacity merge opportunity lost {token!r}")
+        if _code(token) not in attachments:
+            errors.append(f"Admission capacity candidate attachment lost {token!r}")
+    for token in (
+        "request.attachments.certified_merge_entry.is_some()",
+        "request.attachments.certified_merge_carrier_header.is_some()",
+        "self.assemble(CandidateRequest {",
+    ):
+        if _code(token) not in native:
+            errors.append(f"Admission capacity Native candidate boundary lost {token!r}")
+    refusal = "Native candidate cannot retain a retired certified merge attachment"
+    if refusal not in extra_raw.get("V2CandidateAssembler::assemble_native", ""):
+        errors.append(f"Admission capacity Native candidate boundary lost {refusal!r}")
 
     def ordered(symbol, *relations):
         item = items.get(symbol, "")
@@ -355,8 +370,9 @@ def validate_owners(root, models, errors, rust_binding_item):
     ordered("V2CandidateAssembler::assemble", "let original_npos_effects =", "fit_evidence_prefix(",
             "let mut builder = self.prepare_block_builder(", "let (fitted, count) = fit_evidence_prefix(",
             "report.evidence_deferred =", "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()")
-    ordered("candidate_attachments", "let preferred_merge_entry =", "effects.v2_evidence_admissions.clear()",
-            "let npos_consensus_effects =", "let merge_selection =", "let selected_merge_entry =")
+    ordered("candidate_attachments", "let mut effects =", "attach_candidate_effects(",
+            "let npos_consensus_effects =", "validate_candidate_context(context)",
+            "Ok(CandidateAttachments")
     ordered("publish_authenticated_capacity", "capacity.check_payload_size(",
             "require_local_payload_capacity(capacity.layout, config)?", "slot.set(capacity)")
     ordered("run_inner", "terminal.verified_context(), &shared_config,)",

@@ -904,7 +904,7 @@ impl Kura {
         }
         let used = self.kura_disk_usage_bytes()?;
         let pending = self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let lane = self.lane_publication_budget_reserved_bytes()?;
+        let lane = self.all_publication_budget_reserved_bytes()?;
         let certified = self.certified_bundle_capacity_reserved_bytes()?;
         let terminal = self.autonomous_global_terminal_outcome_reserved_bytes()?;
         let required = [

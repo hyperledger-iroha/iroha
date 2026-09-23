@@ -60,9 +60,11 @@ request records diagnostic options, not the inherited environment or credentials
 `--focus-regression`, `--native-check-scope`, `--native-linker` and the existing
 warm-lane selection work the same way in background mode.
 
-`check-status` prints JSON and starts no work. Exit status is 0 for `passed`, 2
-for `running`, and 1 for `failed` or `incomplete`. Running means the worker or an
-inherited child still holds the session lock. A missing final result after all
+`check-status` prints compact JSON and starts no work. `request_path` points to
+the immutable full request, and `focused_regression_count` reports the number of
+explicit selectors (zero for an unfocused check); the selector list is not repeated.
+Exit status is 0 for `passed`, 2 for `running`, and 1 for `failed` or `incomplete`.
+Running means the worker or an inherited child still holds the session lock. A missing final result after all
 holders exit means incomplete, including worker interruption; a recorded PID
 never decides status. The existing Cargo lane lock remains inherited throughout
 native work. No status command kills, restarts or resumes a process. Inspect the
@@ -417,7 +419,7 @@ public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
 `canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
 mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
 the native consensus genesis hash from the signed wire's SHA256. An incomplete
-four-file bundle is rejected; prepare a fresh complete output. Repeating an
+five-file bundle is rejected; prepare a fresh complete output. Repeating an
 identical complete request verifies the retained bundle without replacing it.
 The explicit `--canary-public-key PATH` alternative is mutually exclusive with
 `--intent` and reads only that public key.
@@ -437,27 +439,30 @@ the exact native `credential_path` with `--global-beacon-credential` and
 the pinned renderer and initial units before rendering these four final mode0644
 units. The native request is not hand-authored JSON.
 
-`public-reset assemble --intent PATH` and `authorize` require the same public
-bundle, runtime client, four validator client configs, operator key, onboarding
-token, initial validator units, edge unit and known-hosts paths. Full scope also
-requires its Inrou stage. Include the native beacon inputs and four rendered
-final beacon units. Native assembly rederives the context, request and seat map
-before signing. Apply receives only its runtime inputs.
+`public-reset assemble --intent PATH` and `authorize` require the same
+`--public-inputs DIR`, `--beacon-inputs PATH`, four ordered
+`--beacon-validator-unit` paths, runtime client, four validator client configs,
+operator key, onboarding token, initial validator units, edge unit, and known
+hosts. Full scope also requires its Inrou stage. Native assembly independently
+rederives the source, credential joins, signed genesis, beacon request, and seat
+map before signing. Apply receives only admitted runtime inputs.
 
-The same-release artifact closure includes Kagami. Execution, source, config,
-canary and authorization checks remain required. Reset does not install an epoch
-maintenance worker. Old worker state or service files reject host preflight.
-Candidate key publication and committee readiness belong to the frozen,
-incumbent-certified transition protocol; provisioning keys alone establishes
-neither election nor readiness. See the [maintained retry caller](taira_retry.md)
-for the current path records and preparation order.
+The same-release artifact closure includes Kagami. Reset installs no epoch
+maintenance worker; old worker state or service files reject host preflight.
+The current production epoch boundary retains the incumbent authority.
+See the [maintained retry caller](taira_retry.md) for the current path records
+and preparation order.
 
 The signed genesis must leave room for onboarding, funding, the canary's real
-QueuePlan admission and execution carriers, and certificate installation before
-the first mandatory pulse. Finalization uses the authenticated observed height.
-The sole threshold-key certificate uses signed Ordinary admission, retaining its
-exact next-height and current-roster quorum checks; other public transactions
-continue to use QueuePlanSynced admission.
+QueuePlan admission and execution carriers, real DKG completion, and the
+certificate installation before the first mandatory beacon pulse. Finalization
+uses the authenticated observed height. The sole threshold-key certificate uses
+signed Ordinary admission with exact next-height and current-roster quorum
+checks; other public transactions continue to use QueuePlanSynced admission.
+The certificate must be committed on all four validators, followed by all four
+`BeaconActivate` provider installations before restart proof. Epoch retention
+observes complete authenticated Retain transitions on finalized workload
+blocks; it never creates empty blocks.
 
 Public validator client settings can reference the native-generated
 `runtime/taira-runtime-signers/peerN.private_key` sidecar through
@@ -490,10 +495,9 @@ active-state loss. Rollback before deployment proof restores the old unit,
 selector and retained state. Running mode proves the restored old process;
 stopped mode stays stopped and proves absence, without claiming recovery or
 health. Cached and conservative rollback use the same signed state. Cleanup
-protects the selected prior configuration release, every admitted runtime artifact
-root. Malformed or inconsistent prior state cannot authorize cleanup. Proven
-deployments cannot roll back
-through this workflow, and ambiguous writes require their retained recovery path.
+protects the selected prior configuration release and every admitted runtime
+artifact root using authenticated occupied-target records. Malformed or
+inconsistent prior state cannot authorize cleanup. Proven deployments cannot roll backthrough this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently
@@ -504,9 +508,11 @@ provisioned trusted host dispatcher and reset guard remain prerequisites for
 
 `scripts/taira_update.py` updates an existing four-validator deployment from a
 completed maintained artifact preparation. Its deployment record binds the
-approved SSH routes and host-key pins, network, retained directories and completed
-predecessor receipts. Keep that record outside Git and use one explicit fresh
-`update-<32hex>` operation for artifact preparation and apply.
+approved SSH routes and host-key pins, network, retained directories and
+completed predecessor receipts. Keep that record outside Git and use one
+explicit fresh `update-<32hex>` operation for artifact preparation and apply.
+The update preserves validator signing custody. Scheduling epochs retain the
+incumbent authenticated authority; no separate key-renewal worker is required.
 
 Prepare the exact same-release daemon, CLI and Kagami at the operation's immutable
 release path:
@@ -518,8 +524,8 @@ release path:
       --operation update-0123456789abcdef0123456789abcdef \
       --output /absolute/owner-private/taira/artifact-output
 
-Review the deployment plan with `--plan-only`, then apply using the same operation
-and a fresh output path:
+Review the deployment plan with `--plan-only`, then apply using the same
+operation and a fresh output path:
 
     python3 scripts/taira_update.py \
       --deployment /absolute/owner-private/taira/deployment.json \
@@ -527,35 +533,35 @@ and a fresh output path:
       --operation update-0123456789abcdef0123456789abcdef \
       --output /absolute/owner-private/taira/update-output
 
-`--plan-only` contacts no host. Apply requires all three prepared binaries and
-rechecks their exact native digests, sizes, source and root-owned mode0755 custody;
-it never creates missing binaries or invokes Cargo. Configuration, validator
-credentials and ledger state remain under their existing native owners. The
-updater does not submit transactions or provision epoch worker credentials.
-Retired worker plan fields and receipts are rejected.
+`--plan-only` writes the concrete plan locally without contacting the host.
+Artifact preparation creates the exact same-release daemon, CLI and Kagami
+without overwriting existing files. Apply requires all three prepared binaries
+and rechecks their native digests, sizes, source and root-owned mode0755
+custody. It never creates missing binaries or invokes Cargo. Configuration,
+validator credentials and ledger state remain under their native owners. The
+updater submits no transactions and accepts no retired worker plan fields.
 
 Artifact transfer, admission and apply share the existing root-owned, mode0600,
-empty, single-link `/var/lib/taira/.deployment.lock` with reset and retry. The
-containing directory must be root-owned without group or world write permission;
-mode0755 is permitted. A missing lock is an error. While holding it, the updater
-rejects any retained `/var/lib/taira/.reset-owner.json`, any
-`/var/lib/taira-epoch-supervisor` path, and any
-`/etc/systemd/system/iroha-taira-epoch-supervisor.service` path, including dangling
-links. It does not decode, remove, stop, pause or restart the retired worker.
-Retained reset ownership and obsolete worker state require explicit operator
-reconciliation before another deployment.
+empty, single-link `/var/lib/taira-deployment/.deployment.lock` with reset and
+retry. The containing directory has root ownership and mode0700; a missing lock
+is an error. While holding it, the updater rejects a retained
+`.reset-owner.json`, any `/var/lib/taira-epoch-supervisor` path, and any
+`/etc/systemd/system/iroha-taira-epoch-supervisor.service` path, including
+dangling links. It does not decode or run the retired worker. Retained reset
+ownership and obsolete worker state require operator reconciliation.
 
 All four validators must prove the candidate identity and restore their own
 stopped retained tips. Every overlapping stopped prefix is checked before
 startup. Two fresh samples must each contain at least three Ready validators
-agreeing on the stopped cohort's highest committed block hash; stale observations
-never contribute to quorum. After the public health check, the updater repeats
-both quorum samples and verifies all four unchanged processes. Identity, hash,
-malformed response and process failures stop immediately; only declared startup
-transport failures and HTTP503 are polled. An idle chain need not create another
-block. An ambiguous validator stop admits read-only reconciliation. A failure
-before candidate startup restores the previous units and leaves them stopped;
-after startup, failure stops the candidate cohort without reverting execution
+agreeing on the stopped cohort's highest committed block hash. Each sample
+attempts all four validators and records missing, unready and lagging peers;
+stale observations never contribute to quorum. After the public health check,
+the updater repeats both quorum samples and checks all four unchanged
+processes. Identity, hash, malformed response and process failures stop
+immediately; only declared startup transport failures and HTTP 503 are polled.
+An idle chain need not create another block. An ambiguous stop admits read-only
+reconciliation. A pre-start failure leaves the previous cohort stopped; after
+candidate startup, failure contains that cohort without reverting execution
 rules, even if failure-receipt publication fails.
 
 After all four stopped checkpoints are recorded, the matching candidate CLI runs

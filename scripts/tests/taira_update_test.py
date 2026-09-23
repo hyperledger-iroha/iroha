@@ -185,6 +185,39 @@ def cli_argv(deployment_path,build_path,output):
             '--plan-only']
 
 
+class CanonicalUpdateContractTests(unittest.TestCase):
+    def test_retired_supervisor_option_is_rejected_before_observation_or_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, descriptor, result = local_inputs(directory)
+            with patch.object(sys, 'argv', cli_argv(descriptor, result, descriptor.parent/'out')
+                              + ['--supervisor-plan', '/retired.json']), \
+                 patch.object(runner.subprocess, 'check_output') as observation, \
+                 patch.object(runner.subprocess, 'run') as dispatch, \
+                 patch.object(runner, 'read_public') as read, \
+                 __import__('contextlib').redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    runner.main()
+                self.assertEqual(error.exception.code, 2)
+                observation.assert_not_called(); dispatch.assert_not_called(); read.assert_not_called()
+
+    def test_update_contract_rejects_retired_and_unknown_fields_before_guest_action(self):
+        plan = plan_for()
+        for field in ('epoch_supervisor', 'epoch_supervisor_installed',
+                      'epoch_supervisor_renderer_sha256', 'maintenance_admin_identity', 'unknown'):
+            value = dict(plan, **{field: {}})
+            observer = fresh_guest()
+            with self.subTest(field=field), patch.object(observer, 'configure') as configure, \
+                 patch.object(observer, 'storage_capacity') as capacity:
+                with self.assertRaisesRegex(RuntimeError, 'canonical contract'):
+                    observer.apply(value, CAPACITY_SOURCE)
+                configure.assert_not_called(); capacity.assert_not_called()
+        for field in ('secret_contents_read', 'transaction_submission', 'python_transaction_submission'):
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'custody claims'):
+                runner.validate_update_plan_shape(dict(plan, **{field: True}))
+        self.assertFalse(plan['transaction_submission'])
+        self.assertEqual(set(plan) & {'epoch_supervisor', 'epoch_supervisor_installed'}, set())
+
+
 class CoordinatorTests(unittest.TestCase):
     def setUp(self):
         plan_for()
@@ -372,7 +405,7 @@ class CoordinatorTests(unittest.TestCase):
             def root_stamp(path,directory=False):
                 value=Path(path).lstat()
                 return [value.st_dev,value.st_ino,value.st_mode,0,0,value.st_nlink]
-            guest.DEPLOYMENT_STATE_ROOT=root/'state'
+            guest.DEPLOYMENT_STATE_ROOT=root/'deployment'
             guest.DEPLOYMENT_STATE_ROOT.mkdir(mode=0o700)
             (guest.DEPLOYMENT_STATE_ROOT/'.deployment.lock').touch(mode=0o600)
             held=os.open(path,os.O_RDWR|os.O_CREAT,0o600)
@@ -1320,6 +1353,12 @@ class CoordinatorTests(unittest.TestCase):
                 for row in plan['units']:
                     self.assertEqual(units[row['role']], base64.b64decode(row['before']))
 
+    def test_failure_record_io_never_suppresses_failed_cohort_containment(self):
+        events, records, _, _ = self.simulate('failure-record')
+        self.assertIn('failed-start-stop', events)
+        self.assertNotIn('rollback-start', events)
+        self.assertNotIn('result.json', records)
+
 
 class CohortProgressTests(unittest.TestCase):
     def setUp(self):
@@ -2101,14 +2140,88 @@ class KagamiArtifactAdmissionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): runner.transfer_code('../kagami', False, plan, admission_for(plan))
 
 
-class DeploymentExclusionTests(unittest.TestCase):
+class DeploymentLockTests(unittest.TestCase):
+    def test_missing_lifecycle_lock_is_not_created_and_existing_lock_spans_apply(self):
+        observer = fresh_guest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            runtime = root/'runtime'; runtime.mkdir(mode=0o700)
+            state = root/'deployment'; state.mkdir(mode=0o700)
+            observer.DEPLOYMENT_STATE_ROOT = state
+            plan = {'deployment': {'runtime_root': str(runtime)}}
+            real_fstat = os.fstat
+            def owned(fd):
+                value = real_fstat(fd)
+                return SimpleNamespace(st_mode=value.st_mode, st_uid=0, st_gid=0,
+                    st_nlink=value.st_nlink, st_dev=value.st_dev, st_ino=value.st_ino,
+                    st_size=value.st_size)
+            def stamped(path, directory=False):
+                value = Path(path).lstat()
+                return [value.st_dev, value.st_ino, value.st_mode, 0, 0, value.st_nlink]
+            lock = state/'.deployment.lock'
+            with patch.object(observer.os, 'fstat', side_effect=owned), \
+                 patch.object(observer, 'stamp', side_effect=stamped), \
+                 patch.object(observer, 'apply') as apply:
+                with self.assertRaises(FileNotFoundError):
+                    observer.apply_locked(plan, CAPACITY_SOURCE)
+                self.assertFalse(lock.exists()); apply.assert_not_called()
+                self.assertIsNone(observer.DEPLOYMENT_LOCK_FD)
+                lock.touch(mode=0o600)
+                def check_held(*args):
+                    descriptor = os.open(lock, os.O_RDWR)
+                    try:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        self.assertIsNotNone(observer.DEPLOYMENT_LOCK_FD)
+                    finally:
+                        os.close(descriptor)
+                apply.side_effect = check_held
+                observer.apply_locked(plan, CAPACITY_SOURCE)
+                apply.assert_called_once_with(plan, CAPACITY_SOURCE)
+                self.assertIsNone(observer.DEPLOYMENT_LOCK_FD)
+                descriptor = os.open(lock, os.O_RDWR)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(descriptor)
+
+    def test_native_transfer_requires_existing_lock_and_refuses_any_reset_marker(self):
+        plan = plan_for()
+        tree = ast.parse(runner.transfer_code('iroha', False, plan, admission_for(plan)))
+        begin = next(index for index, item in enumerate(tree.body)
+                     if isinstance(item, ast.Assign) and ast.unparse(item.targets[0]) == 'lock_path')
+        end = next(index for index, item in enumerate(tree.body)
+                   if isinstance(item, ast.Assign) and ast.unparse(item.targets[0]) == 'capacity_source')
+        probe = compile(ast.Module(body=tree.body[begin:end], type_ignores=[]), '<transfer-lock>', 'exec')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory).resolve()
+            scope = dict(os=os, stat=stat, fcntl=fcntl, state=state)
+            lock = state/'.deployment.lock'
+            with self.assertRaises(FileNotFoundError):
+                exec(probe, scope)
+            self.assertFalse(lock.exists())
+            lock.touch(mode=0o600)
+            (state/'.reset-owner.json').symlink_to(state/'missing')
+            real_fstat = os.fstat
+            def owned(fd):
+                value = real_fstat(fd)
+                return SimpleNamespace(st_mode=value.st_mode, st_uid=0, st_gid=0,
+                    st_nlink=value.st_nlink, st_dev=value.st_dev, st_ino=value.st_ino)
+            with patch.object(os, 'fstat', side_effect=owned):
+                try:
+                    with self.assertRaises(AssertionError):
+                        exec(probe, scope)
+                finally:
+                    os.close(scope['lock'])
+            self.assertTrue((state/'.reset-owner.json').is_symlink())
+
     def test_shared_deployment_lock_and_any_reset_marker_block_before_apply(self):
         guest = fresh_guest()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = root/'runtime'; runtime.mkdir()
-            state = root/'state'; state.mkdir(mode=0o755); state.chmod(0o755)
-            guest.DEPLOYMENT_STATE_ROOT = state
+            deployment_state = root/'deployment'; deployment_state.mkdir(mode=0o700)
+            guest.DEPLOYMENT_STATE_ROOT = deployment_state
             plan = {'deployment': {'runtime_root': str(runtime)}}
             real_fstat = os.fstat
             def owned(fd):
@@ -2120,14 +2233,14 @@ class DeploymentExclusionTests(unittest.TestCase):
                 return [info.st_dev, info.st_ino, info.st_mode, 0, 0, info.st_nlink]
             with patch.object(guest.os, 'fstat', side_effect=owned), \
                  patch.object(guest, 'stamp', side_effect=stamped), patch.object(guest, 'apply') as apply:
-                fd = os.open(state/'.deployment.lock', os.O_RDWR|os.O_CREAT, 0o600)
+                fd = os.open(deployment_state/'.deployment.lock', os.O_RDWR|os.O_CREAT, 0o600)
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)
                     with self.assertRaises(BlockingIOError): guest.apply_locked(plan, CAPACITY_SOURCE)
                 finally:
                     os.close(fd)
-                marker = state/'.reset-owner.json'
-                marker.symlink_to(state/'missing')
+                marker = deployment_state/'.reset-owner.json'
+                marker.symlink_to(deployment_state/'missing')
                 with self.assertRaisesRegex(RuntimeError, 'retained reset owner'):
                     guest.apply_locked(plan, CAPACITY_SOURCE)
                 self.assertTrue(marker.is_symlink())
@@ -2239,7 +2352,7 @@ class DeploymentExclusionTests(unittest.TestCase):
                 self.assertNotIn(retired, text)
         plan = plan_for()
         source = runner.transfer_code('iroha', False, plan, admission_for(plan))
-        self.assertIn("state=Path('/var/lib/taira')", source)
+        self.assertIn("state=Path('/var/lib/taira-deployment')", source)
         self.assertIn('lock=os.open(lock_path,os.O_RDWR|os.O_NOFOLLOW)', source)
         self.assertLess(source.index('fcntl.flock('), source.index("state/'.reset-owner.json'"))
         self.assertLess(source.index('retired epoch worker service'), source.index('release=base/'))
@@ -2254,8 +2367,7 @@ class ArtifactPreparationPhaseTests(unittest.TestCase):
             _, _, descriptor, result = local_inputs(directory)
             args = cli_argv(descriptor, result, descriptor.parent/'output')
             for invalid in (args + ['--prepare-artifacts'],
-                            [value for value in args if value != '--plan-only'] +
-                            ['--prepare-artifacts', '--failed-start-chain', str(descriptor)]):
+                            [value for value in args if value != '--plan-only'] + ['--prepare-artifacts', '--failed-start-chain', '/unused']):
                 with patch.object(sys, 'argv', invalid), patch.object(runner.subprocess, 'run') as remote, \
                      patch.object(runner.subprocess, 'check_output') as observation:
                     with self.assertRaisesRegex(RuntimeError, 'prepare-artifacts is separate'):
@@ -2277,7 +2389,7 @@ class ArtifactPreparationPhaseTests(unittest.TestCase):
         plan = plan_for()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            state = root/'state'; state.mkdir(mode=0o755); state.chmod(0o755)
+            state = root/'deployment'; state.mkdir(mode=0o700)
             (state/'.deployment.lock').touch(mode=0o600)
             runtime = root/'runtime'; runtime.mkdir(mode=0o700)
             plan['deployment']['runtime_root'] = str(runtime)
@@ -2364,9 +2476,9 @@ class StorageAdmissionTests(unittest.TestCase):
                  '/etc/systemd/system', self.plan['deployment']['state_root'])
         separate = admission_for(self.plan, 'apply', inspect=lambda path:
                                  self.filesystem(path, device=paths.index(str(path)) + 1))
-        self.assertEqual(len(separate['guest_capacity']['filesystems']), 3)
+        self.assertEqual(len(separate['guest_capacity']['filesystems']), len(paths))
         self.assertEqual(sum(row['label'] == 'guest filesystem headroom'
-                             for row in separate['guest_plan']['allocations']), 3)
+                             for row in separate['guest_plan']['allocations']), len(paths))
 
     def test_full_state_filesystem_and_inode_exhaustion_refuse_despite_free_runtime(self):
         def inspect(path):
@@ -2426,17 +2538,17 @@ class StorageAdmissionTests(unittest.TestCase):
             if failed_phase.startswith('backing-capacity-before'):
                 self.assertEqual(len(calls), 1)
 
-    def test_preparation_requires_existing_coordination_root_and_probes_under_lock(self):
+    def test_preparation_uses_existing_coordination_root_under_locked_probe(self):
         observer = fresh_guest()
         with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory).resolve() / 'state'
-            state.mkdir(mode=0o755); state.chmod(0o755)
+            state = Path(directory).resolve() / 'deployment'
+            state.mkdir(mode=0o700)
             events = []
             @__import__('contextlib').contextmanager
             def held(plan):
                 self.assertEqual(plan, self.plan)
                 self.assertTrue(state.is_dir())
-                self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o755)
+                self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o700)
                 events.append('locked')
                 yield
                 events.append('unlocked')

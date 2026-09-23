@@ -6080,11 +6080,19 @@ mod stark_backend_tag_tests {
                     "unregistered Halo2 near miss {near_miss:?} must fail closed"
                 );
                 assert!(
-                    stark_open_verify_circuit_id_matches_backend(
+                    !stark_open_verify_circuit_id_matches_backend(
                         ZK_BACKEND_STARK_FRI_V1,
                         &near_miss,
                     ),
-                    "portable STARK near miss {near_miss:?} must remain available"
+                    "unqualified STARK circuit {near_miss:?} must fail closed"
+                );
+                let circuit_id = format!("{ZK_BACKEND_STARK_FRI_V1}:{near_miss}");
+                assert!(
+                    stark_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_STARK_FRI_V1,
+                        &circuit_id,
+                    ),
+                    "canonical STARK near miss {circuit_id:?} must remain available"
                 );
             }
         }

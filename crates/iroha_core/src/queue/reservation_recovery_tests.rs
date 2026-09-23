@@ -2306,6 +2306,7 @@ fn unmarked_commit_without_live_or_retained_v1_tombstone_fails_closed() {
     state_block
         .transactions
         .insert_block(HashSet::from([key.entrypoint_hash]), nonzero!(1_usize));
+    state_block.block_hashes.push(block_header.hash());
     state_block
         .commit()
         .expect("commit exact transaction identity");

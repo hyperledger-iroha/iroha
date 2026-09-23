@@ -506,9 +506,9 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
         "method",
-        "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+        "ProductionV2Services::handoff_applied_height_output_inner",
         (
             "let retired_kura_replica_advert_heights =",
             "pending.pending_kura_replica_advert_heights()?",

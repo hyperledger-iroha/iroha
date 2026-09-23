@@ -284,3 +284,33 @@ artifact. All other input changes require a native rebuild. Ordinary `swift test
 then links the real binary target, and `NativeBridge` validates the symbols from
 the executable/`RTLD_DEFAULT`; no replacement loader or projected Swift package is
 used. Physical-device qualification remains separate from these host unit tests.
+
+## Canonical Android output and runtime inventory
+
+The Kotlin build, Android artifact checker, and package owner use the same
+`MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/<module>` outputs.
+An explicit external root must already exist, be absolute/canonical, and lie
+outside the reviewed source tree. Missing external outputs never fall back to
+old `kotlin/*/build` artifacts. Ordinary local checks retain source-tree outputs
+only when the external variable is absent. The checker rejects ambiguous core
+runtime JARs and symlinked or hard-linked selected artifacts.
+
+The mobile workflow explicitly runs `:core-jvm:test` before publication and
+creates per-module runtime CycloneDX reports for `core-jvm`, `client-android`,
+and `kagemusha-wallet-android`. Version, group and module identity are checked
+before the complete three-report inventory is collected into a new external
+directory. The `kotlin-runtime-sbom-*` CI artifact is separate from the mobile
+release publisher; it is not a signed release attestation or a native Rust SBOM.
+Retired Java and sample reports cannot satisfy the Kotlin publication inventory.
+
+For an operator-authorized signed inventory, `scripts/android_sbom_provenance.sh
+<version>` requires `MOBILE_SDK_ANDROID_ARTIFACT_DIR` and a new absolute external
+`MOBILE_SDK_SBOM_OUTPUT_DIR` whose parent exists. It uses the Kotlin wrapper and
+an external project cache, tests the canonical SDK, generates its three reports,
+and invokes keyless cosign signing. Do not run that command as a read-only check.
+Sourceable `collect_sbom_reports` performs collection only and does not sign.
+
+Focused tests: `python3.12 -I -S -B scripts/tests/mobile_sdk_android_artifacts_test.py`
+and `python3 -m pytest pytests/scripts/bash_3_portability_test.py`. Full native,
+Android device/R8/16KiB, clean release build and signed artifact qualification
+remain separate requirements.

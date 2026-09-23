@@ -430,22 +430,34 @@ fn add(left: u64, right: u64) -> u64 {
 
 #[inline]
 fn multiply(left: u64, right: u64) -> u64 {
+    const EPSILON: u64 = 0xffff_ffff;
     let product = u128::from(left) * u128::from(right);
     let low = u64::try_from(product & u128::from(u64::MAX)).expect("masked product word");
     let high = u64::try_from(product >> 64).expect("high product word");
-    let high_low = i128::from(high & 0xffff_ffff);
-    let high_high = i128::from(high >> 32);
-    let mut reduced = i128::from(low) + (high_low << 32) - high_low - high_high;
-    let modulus = i128::from(FIELD_MODULUS);
-    // Exact Goldilocks reduction: -(2^32-1) <= reduced <= 2p-2, so one
-    // correction in each direction suffices, as in the canonical implementation.
-    if reduced < 0 {
-        reduced += modulus;
+    // Unsigned fold shared with fastpq_prover/metal/kernels/field.metal.
+    // For B = 2^32, epsilon = B - 1 and p = B^2 - B + 1, the identities
+    // B^2 ≡ epsilon and B^3 ≡ -1 (mod p) give
+    // low + high_low * epsilon - high_high.
+    let (low, borrowed) = low.overflowing_sub(high >> 32);
+    // If borrowed, low >= 2^64 - epsilon, so this correction cannot underflow.
+    let low = if borrowed {
+        low.wrapping_sub(EPSILON)
+    } else {
+        low
+    };
+    let (folded, carried) = low.overflowing_add((high & EPSILON) * EPSILON);
+    // If carried, folded <= epsilon^2 - 1, so adding epsilon cannot overflow.
+    let folded = if carried {
+        folded.wrapping_add(EPSILON)
+    } else {
+        folded
+    };
+    // The corrected value fits u64 (< 2p), including for noncanonical inputs.
+    if folded >= FIELD_MODULUS {
+        folded - FIELD_MODULUS
+    } else {
+        folded
     }
-    if reduced >= modulus {
-        reduced -= modulus;
-    }
-    u64::try_from(reduced).expect("canonical Goldilocks product")
 }
 
 #[inline]
@@ -757,6 +769,88 @@ mod tests {
             cache.hash(&[b"after errors"]),
             hash_bytes_384_v1(domain(), &[b"after errors"])
         );
+    }
+
+    #[test]
+    fn multiplication_matches_modulus_across_field_and_machine_boundaries() {
+        let values = [
+            0,
+            1,
+            2,
+            3,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            1 << 32,
+            (1 << 32) + 1,
+            1 << 48,
+            (1 << 63) - 1,
+            1 << 63,
+            (1 << 63) + 1,
+            FIELD_MODULUS - 2,
+            FIELD_MODULUS - 1,
+            FIELD_MODULUS,
+            FIELD_MODULUS + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        for left in values {
+            for right in values {
+                let actual = multiply(left, right);
+                assert!(actual < FIELD_MODULUS);
+                assert_eq!(
+                    u128::from(actual),
+                    u128::from(left) * u128::from(right) % u128::from(FIELD_MODULUS),
+                    "left={left:#018x}, right={right:#018x}"
+                );
+            }
+        }
+        // Include all four carry/borrow paths, not just typical random products.
+        for (left, right, expected_borrow, expected_carry) in [
+            (0, 0, false, false),
+            (2, u64::MAX - 1, false, true),
+            ((1 << 63) - 1, (1 << 63) - 1, true, true),
+            (1 << 63, 1 << 63, true, false),
+        ] {
+            let product = u128::from(left) * u128::from(right);
+            let low = u64::try_from(product & u128::from(u64::MAX)).unwrap();
+            let high = u64::try_from(product >> 64).unwrap();
+            let (folded_low, borrowed) = low.overflowing_sub(high >> 32);
+            let corrected = if borrowed {
+                folded_low - u64::from(u32::MAX)
+            } else {
+                folded_low
+            };
+            let carry = u128::from(corrected)
+                + u128::from(high & u64::from(u32::MAX)) * u128::from(u32::MAX)
+                > u128::from(u64::MAX);
+            assert_eq!((borrowed, carry), (expected_borrow, expected_carry));
+            assert_eq!(
+                u128::from(multiply(left, right)),
+                product % u128::from(FIELD_MODULUS)
+            );
+        }
+    }
+
+    #[test]
+    fn multiplication_matches_modulus_for_deterministic_full_width_products() {
+        let mut state = 0xd9b4_671a_31dc_8507_u64;
+        for _ in 0..65_536 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let left = state;
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let right = state;
+            let actual = multiply(left, right);
+            assert!(actual < FIELD_MODULUS);
+            assert_eq!(
+                u128::from(actual),
+                u128::from(left) * u128::from(right) % u128::from(FIELD_MODULUS),
+                "left={left:#018x}, right={right:#018x}"
+            );
+        }
     }
 
     #[test]

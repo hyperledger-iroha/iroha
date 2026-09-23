@@ -24,6 +24,8 @@ use iroha_data_model::{
         ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
     },
     level::Level,
+    nexus::PublicLaneMonetaryPlanV1,
+    parameter::{Parameter, system::SumeragiNposParameters},
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
     sns::{NameControllerV1, NameRecordV1},
@@ -219,6 +221,13 @@ fn build_onboarding_test_context_at(
         assets,
         [],
     );
+    {
+        let mut block = world.block();
+        block.parameters.get_mut().set_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        block.commit();
+    }
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
     world.account_permissions_mut_for_testing().insert(
@@ -264,6 +273,11 @@ fn build_onboarding_test_context_at(
                 stake_account: validator.clone(),
                 initial_stake: Quantity::from(1_000_u32),
                 metadata: Default::default(),
+                monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
+                    Quantity::from(1_000_u32),
+                ),
             }
             .into(),
         );

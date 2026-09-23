@@ -516,7 +516,6 @@ fn complete_test_genesis_builder_for_topology(
                     generation: 0,
                     validators,
                 },
-
         };
     parameters
         .validate()

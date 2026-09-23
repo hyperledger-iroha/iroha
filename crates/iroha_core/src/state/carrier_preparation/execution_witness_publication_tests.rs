@@ -25,12 +25,16 @@ impl Drop for Reservation {
     }
 }
 
-type Decision = DecisionBoundCarrierJournals<
-    Reservation,
-    Reservation,
-    DetachedCarrierComponents,
-    KuraWsvCheckpointReceipt,
->;
+type Decision =
+    DecisionBoundCarrierJournals<Reservation, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
+
+fn publish_execution_witness_for_test(
+    decision: &mut Decision,
+) -> Result<(), CarrierExecutionWitnessPublicationError> {
+    let kura = Arc::clone(&decision.journals.kura);
+    let lease = kura.try_publication_lease().expect("isolated phase lease");
+    decision.publish_execution_witness(&lease)
+}
 
 struct Fixture {
     decision: Decision,
@@ -68,9 +72,7 @@ fn witness_fixture(foreign: bool) -> Box<Fixture> {
         0,
     );
     let decision = journals
-        .bind_decision(finality, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&released)))
-        })
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("actual original decision: {:?}", refusal.error));
     state.kura.store_block(decision.block().clone()).unwrap();
     let finality = state
@@ -242,12 +244,12 @@ fn original_witness_promotes_staged_only_proof_and_exact_retry_keeps_final_objec
         fixture.check_final().is_err(),
         "staged-only proof is not final durability"
     );
-    fixture.decision.publish_execution_witness().unwrap();
+    publish_execution_witness_for_test(&mut fixture.decision).unwrap();
     fixture.check_final().unwrap();
     assert!(!fixture.proof_path(true).exists());
     let final_file = image(&fixture.proof_path(false));
     let before_retry = tree(&fixture.state.kura.store_root());
-    fixture.decision.publish_execution_witness().unwrap();
+    publish_execution_witness_for_test(&mut fixture.decision).unwrap();
     fixture.check_final().unwrap();
     assert_eq!(image(&fixture.proof_path(false)), final_file);
     assert_eq!(tree(&fixture.state.kura.store_root()), before_retry);
@@ -267,15 +269,15 @@ fn original_witness_promotes_staged_only_proof_and_exact_retry_keeps_final_objec
     fixture.assert_unpublished();
     let released = Arc::clone(&fixture.released);
     drop(fixture);
-    assert_eq!(released.load(Ordering::SeqCst), 2);
+    assert_eq!(released.load(Ordering::SeqCst), 1);
 }
 
 #[test]
 fn tampered_or_foreign_final_proof_refuses_without_state_or_custody_changes() {
     let mut fixture = witness_fixture(false);
     let mut foreign = witness_fixture(true);
-    fixture.decision.publish_execution_witness().unwrap();
-    foreign.decision.publish_execution_witness().unwrap();
+    publish_execution_witness_for_test(&mut fixture.decision).unwrap();
+    publish_execution_witness_for_test(&mut foreign.decision).unwrap();
     let original = Original::capture(&fixture.decision);
     let final_path = fixture.proof_path(false);
     let original_bytes = fs::read(&final_path).unwrap();
@@ -289,14 +291,14 @@ fn tampered_or_foreign_final_proof_refuses_without_state_or_custody_changes() {
         let before = tree(&fixture.state.kura.store_root());
         assert!(fixture.check_final().is_err());
         assert!(matches!(
-            fixture.decision.publish_execution_witness(),
+            publish_execution_witness_for_test(&mut fixture.decision),
             Err(CarrierExecutionWitnessPublicationError::Witness(_))
         ));
         assert_eq!(tree(&fixture.state.kura.store_root()), before);
         original.assert_retained(&fixture.decision);
         fixture.assert_unpublished();
         fs::write(&final_path, &original_bytes).unwrap();
-        fixture.decision.publish_execution_witness().unwrap();
+        publish_execution_witness_for_test(&mut fixture.decision).unwrap();
         fixture.check_final().unwrap();
         assert!(!fixture.proof_path(true).exists());
         original.assert_retained(&fixture.decision);
@@ -318,11 +320,10 @@ fn witness_kura_busy_waits_for_original_release_before_any_persistence() {
     let original = Original::capture(&fixture.decision);
     let before = tree(&fixture.state.kura.store_root());
     let held = fixture.state.kura.canonical_publication_lease();
-    let wait = match fixture.decision.publish_execution_witness() {
-        Err(CarrierExecutionWitnessPublicationError::Kura(
-            KuraPublicationPreparationError::Busy { wait, .. },
-        )) => wait,
-        result => panic!("actual owner must refuse before persistence: {result:?}"),
+    let wait = match fixture.state.kura.try_publication_lease() {
+        Err(crate::kura::KuraPublicationPreparationError::Busy { wait, .. }) => wait,
+        Err(error) => panic!("expected contention on original Kura: {error:?}"),
+        Ok(_) => panic!("original Kura must refuse before persistence"),
     };
     let mut wait = wait.wait_for_release();
     let wakes = Arc::new(WakeCount::default());
@@ -334,7 +335,7 @@ fn witness_kura_busy_waits_for_original_release_before_any_persistence() {
     drop(held);
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Ready(()));
-    fixture.decision.publish_execution_witness().unwrap();
+    publish_execution_witness_for_test(&mut fixture.decision).unwrap();
     fixture.check_final().unwrap();
     fixture.assert_unpublished();
 }
@@ -350,7 +351,7 @@ fn foreign_checkpoint_refuses_before_materializing_original_witness() {
         &mut foreign.decision.checkpoint,
     );
     assert!(matches!(
-        fixture.decision.publish_execution_witness(),
+        publish_execution_witness_for_test(&mut fixture.decision),
         Err(CarrierExecutionWitnessPublicationError::Checkpoint(_))
     ));
     assert_eq!(tree(&fixture.state.kura.store_root()), before);
@@ -360,7 +361,7 @@ fn foreign_checkpoint_refuses_before_materializing_original_witness() {
         &mut fixture.decision.checkpoint,
         &mut foreign.decision.checkpoint,
     );
-    fixture.decision.publish_execution_witness().unwrap();
+    publish_execution_witness_for_test(&mut fixture.decision).unwrap();
     fixture.check_final().unwrap();
     fixture.assert_unpublished();
 }

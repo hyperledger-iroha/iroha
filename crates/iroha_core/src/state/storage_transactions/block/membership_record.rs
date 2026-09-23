@@ -6,7 +6,7 @@
 //! TODO: integrate the original funded append batch, segment leases and durable
 //! publication owner before using these records as a production membership store.
 
-use std::{io::Write, num::NonZeroU64, ops::Range};
+use std::{alloc::Layout, io::Write, num::NonZeroU64, ops::Range};
 
 use iroha_crypto::{Hash, MerkleMapNode, MerkleMapNodeRef, MerkleMapValueRef};
 use norito::core::{Encoder, FixedFrameLayout, Header, SerializePayload};
@@ -20,6 +20,7 @@ const VERSION: u8 = 1;
 const LEAF: u8 = 1;
 const BRANCH: u8 = 2;
 const HEIGHT: u8 = 3;
+const SCHEMA_NAME: &str = "iroha_core::state::membership::RecordV1";
 
 /// An aligned record offset in one explicitly retained storage generation.
 /// Offsets are relative to the beginning of that owner's record area.
@@ -103,9 +104,13 @@ pub(in crate::state) enum RecordError {
 
 /// Exact raw-byte payload declaration, distinct from Norito array encoding.
 #[repr(transparent)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::membership::RecordV1")]
 struct MembershipRecordPayload([u8; PAYLOAD_BYTES]);
+
+impl norito::schema::identity::NoritoSchema for MembershipRecordPayload {
+    fn nominal_name() -> String {
+        SCHEMA_NAME.to_owned()
+    }
+}
 
 impl SerializePayload for MembershipRecordPayload {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::Error> {
@@ -131,6 +136,13 @@ pub(in crate::state) struct MembershipRecordCodec {
 }
 
 impl MembershipRecordCodec {
+    /// Exact temporary schema-name allocation made during construction.
+    /// Its charge may be released when `new` returns: the cached layout contains
+    /// only the digest and fixed metadata, and retains no name allocation.
+    pub(super) fn construction_scratch_layout() -> Layout {
+        Layout::new::<[u8; SCHEMA_NAME.len()]>()
+    }
+
     /// Construct the single schema, zero-flags, uncompressed physical layout.
     pub(in crate::state) fn new() -> Result<Self, RecordError> {
         let layout = FixedFrameLayout::new(PAYLOAD_BYTES, 0)?;

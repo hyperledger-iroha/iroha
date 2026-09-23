@@ -1973,19 +1973,19 @@ def test_release_inventory_constants_match_current_source_seal(
             "9700af71a07b9b6e8c935f44e6e447c3d2087f89508733c6f124a3d4beedce51"
         ),
         "height::drain_lifecycle_v2_ingress": (
-            "9c5e311adff6cb0bad70ecec5b233f59b6a304786fbca1c3abe79bd276acc511"
+            "e5d7110c850bf8e7c4b344312f65c92a1145c7aa6750d184472682c7b32a916b"
         ),
         "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign": (
-            "dd96ca9fb8271e423099f6a019259cbfa524d73d86f07d1afdd377aa80dc8e76"
+            "bf2f86df209bbe4d217d835d4781544680995c3540e56f6b3435aede4dba895a"
         ),
         "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
-            "0fabc0723a3288b463bf55b2cc7a02638cb1627967ba717b169520b7bee3eaf2"
+            "6ed5f8bb9cd1a436766ba64ef70255a62fa23ea646bf8a6477987a7045629b1b"
         ),
         "driver::LaunchedProductionLifecycleV1::drive_completion_pre_gate_inner": (
-            "f10f0a6f3b6824d8f264dc9bf30538ad1563d8121c75c14d26d37bbea30c5cb4"
+            "6f7e6c4677b9cbc9a5d78b18f7c479e6deee5ba869682f56605185e7aa4698fc"
         ),
         "driver::ActivatedProductionLifecycleV1::drive_completion_pre_gate_with_ready_proposal_sign_preemption": (
-            "bb485fa1d93cd1748cd6d8f0c7152c4afb78b7bdcbdb5423aa22eb2c55129b77"
+            "597168831680ae44c855ff0983c4722ad427d56fc3a19fc8973bb400de3eb986"
         ),
         "worker_test::LifecyclePlannerIoFixture::publish_auxiliary_completion_fixture": (
             "c3b5921a9f581e7ad7bbb44e93ad42de8ec1fa6eb8bd62aaa49cdbefa70327c4"
@@ -2000,7 +2000,7 @@ def test_release_inventory_constants_match_current_source_seal(
             "edeec434ad30fb28ddc4cb526096bafa6d6f8bd8e8df92995e5350c0f95111db"
         ),
         "dispatch_test::local_proposal_intent_live_wal_sign_fixture": (
-            "14ec208611139775c959d7cc44d718925d179c7d822c1cb92bea3018f6215489"
+            "3c243a42d2017f2fe065b9c2e795fe1d33609598fa1a8915e127414c00d5ae40"
         ),
         "wal_test::ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier": (
             "c4b40eb74bfcafcbe413991d85044ad6c857d1faf1a5294944705449a13f269b"

@@ -495,7 +495,7 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     assert!(format!("{count_error}").contains("at most 4 pending"));
 }
 #[test]
-fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
+fn native_contract_upload_allows_registered_owner_without_code_management_permission() {
     use iroha_core::smartcontracts::Execute;
     use iroha_data_model::{
         isi::smart_contract_code::{
@@ -520,56 +520,93 @@ fn native_contract_upload_authorizes_deploy_steps_but_not_owner_cleanup() {
         iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let permission: Permission =
-        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
-    let code_hash = iroha_crypto::Hash::new(b"authorization-owned-upload");
+    let code = minimal_ivm_program(1);
+    let code_hash = ivm::contract_code_hash(&code);
+    let code_size = u64::try_from(code.len()).expect("test artifact size fits u64");
     let upload = UploadSmartContractCodeChunk {
         code_hash,
-        total_size: 1,
+        total_size: code_size,
         chunk_index: 0,
         chunk_count: 1,
-        chunk: vec![0],
+        chunk: code.clone(),
     };
+    let unregistered = AccountId::of(checked_random_contract_code_keypair().public_key().clone());
     let upload_error = upload
         .clone()
-        .execute(&auth, &mut stx)
-        .expect_err("upload requires deployment authorization");
-    assert!(format!("{upload_error}").contains("not permitted"));
+        .execute(&unregistered, &mut stx)
+        .expect_err("an unregistered account cannot stage an upload");
+    assert!(matches!(
+        upload_error,
+        InstructionExecutionError::Find(iroha_data_model::query::error::FindError::Account(
+            missing
+        )) if missing == unregistered
+    ));
     assert!(
         stx.world()
-            .contract_code_upload_progress(&auth, &code_hash)
+            .contract_code_upload_progress(&unregistered, &code_hash)
             .is_none(),
         "rejected upload must not create staging"
     );
-    Grant::account_permission(permission.clone(), auth.clone())
-        .execute(&auth, &mut stx)
-        .expect("grant contract lifecycle authority");
     upload
         .execute(&auth, &mut stx)
-        .expect("authorized upload stages its chunk");
-    Revoke::account_permission(permission, auth.clone())
-        .execute(&auth, &mut stx)
-        .expect("revoke contract lifecycle authority");
+        .expect("registered account stages code without management permission");
     let finalize_error = FinalizeSmartContractCodeUpload {
         code_hash,
-        total_size: 1,
+        total_size: code_size,
         chunk_count: 1,
     }
-    .execute(&auth, &mut stx)
-    .expect_err("finalization requires deployment authorization");
-    assert!(format!("{finalize_error}").contains("not permitted"));
+    .execute(&unregistered, &mut stx)
+    .expect_err("an unregistered account cannot finalize another account's upload");
+    assert!(matches!(
+        finalize_error,
+        InstructionExecutionError::Find(iroha_data_model::query::error::FindError::Account(
+            missing
+        )) if missing == unregistered
+    ));
     assert!(
         stx.world()
             .contract_code_upload_progress(&auth, &code_hash)
             .is_some(),
-        "rejected finalization must retain owner staging"
+        "rejected finalization must retain the owner's staging"
     );
-    CancelSmartContractCodeUpload { code_hash }
-        .execute(&auth, &mut stx)
-        .expect("owner cleanup does not require deployment authorization");
+    FinalizeSmartContractCodeUpload {
+        code_hash,
+        total_size: code_size,
+        chunk_count: 1,
+    }
+    .execute(&auth, &mut stx)
+    .expect("registered owner finalizes a verified artifact without management permission");
+    assert_eq!(
+        stx.world()
+            .contract_code()
+            .get(&code_hash)
+            .map(Vec::as_slice),
+        Some(code.as_slice())
+    );
     assert!(
         stx.world()
             .contract_code_upload_progress(&auth, &code_hash)
+            .is_none(),
+        "successful finalization clears staging"
+    );
+    let pending_hash = iroha_crypto::Hash::new(b"owner-cleanup-upload");
+    UploadSmartContractCodeChunk {
+        code_hash: pending_hash,
+        total_size: 1,
+        chunk_index: 0,
+        chunk_count: 1,
+        chunk: vec![0],
+    }
+    .execute(&auth, &mut stx)
+    .expect("registered owner stages a second upload");
+    CancelSmartContractCodeUpload {
+        code_hash: pending_hash,
+    }
+    .execute(&auth, &mut stx)
+    .expect("owner cleanup does not require management permission");
+    assert!(
+        stx.world()
+            .contract_code_upload_progress(&auth, &pending_hash)
             .is_none()
     );
 }

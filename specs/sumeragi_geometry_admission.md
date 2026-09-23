@@ -1,10 +1,12 @@
 # Geometry admission and immutable lane storage
 
 Selected first-release design, 2026-09-18. The isolated candidate separates
-canonical-chain storage from lane aliases. Immutable lane incarnations, Native
-carrier bundles and the consuming State publisher remain **unimplemented and
-unqualified**. Replace the layout directly; do not add a compatibility resolver
-or alternate production path.
+canonical-chain storage from lane aliases. Immutable lane incarnations and Native
+carrier bundles remain unimplemented and unqualified. The consuming State publisher
+and retained production-adapter candidate now exist; live integration and network
+qualification remain open. Their scoped memory admission is described below and
+does not complete this storage cutover. Replace the layout directly; do not add a
+compatibility resolver or alternate production path.
 
 ## Decision and cause
 
@@ -68,9 +70,12 @@ retain their original locks. The remaining autonomous evidence reader still
 synchronizes files. These separations support maintenance/GC; they do not
 qualify pure aggregate admission or a consensus reservation.
 
-Production Apply still captures archives after finality, repeats retirement
-checks and uses the local Queue veto. Keep raw State publication guards until
-the entire consuming path below is connected. Removing guards alone is unsafe.
+The legacy Apply path captures archives after finality, repeats retirement checks
+and uses the local Queue veto. The retained candidate captures original archive
+owners and consumes the exact executed carrier through its State/Kura/Queue pair.
+Keep raw State publication guards until that consuming path replaces its callers
+and is qualified. This does not remove the remaining immutable-storage and
+historical-completion obligations below; removing guards alone is unsafe.
 
 ## Authority and ownership
 
@@ -159,8 +164,26 @@ pending-work admission/closure join remains a distinct implementation gate.
    under a local deletion fence. Concurrent historical readers/writers pin that
    exact instance; reference admission and deletion cannot race.
 
-Admit all retained instance bytes, candidate directories, temporary publication
-peaks and recovery records under enforced capacity. Preserve separate certified,
+Current production-adapter admission covers bounded candidate descriptor slots,
+two concrete World journal shell sets, the retained effects `Box` and the candidate
+phase `Box`, charged to a finite shared pool. The original shell/effects reservation
+moves with the actual executed carrier through capture, decision binding, physical
+refusal, publication and final destruction. Descriptor and phase charges follow
+their actual lifetimes. There are no artificial decision-binding or installation
+admission callbacks. Publication still requires exact source/execution/finality
+and the original State/Kura/Queue owners; a local retry never reruns execution.
+
+Complete process-memory accounting remains an outstanding goal. Nested map/value
+and execution/event allocations, current/undo COW, tiered snapshots, geometry and
+archive projections, wire encoding and decoding are not prepaid by that shell
+pool. Account for them at their actual allocation and release boundaries, including
+publication peaks and delayed reclamation, before claiming a complete bound.
+Neither the scoped pool nor the consuming facade establishes live activation or
+network qualification.
+
+The immutable-store capacity goal is separate: admit all retained instance bytes,
+candidate directories, temporary publication peaks and recovery records under
+enforced capacity. Preserve separate certified,
 post-WSV and Native reservations without double charging. Competing writers
 cannot spend reserved capacity; abandoned candidates cannot leave unbounded
 orphans. Resource refusal before decision is typed local deferral with a bounded
@@ -188,22 +211,26 @@ released. Admission includes this amplification, complete old/new roots and
 temporary publication peaks. GC releases the bundle only after its last exact
 owner, never by subtracting fractional per-route bytes.
 
-The current validator computes the full participant manifest in
-`PreparedCarrier::prepare`, but `V2ApplyService::validate_candidate` returns only
-its execution commitment and drops the owner. BodyStore's existing validated
-marker and exact-body reproposal shortcut can skip the validator entirely.
-Adding a reservation field to that discarded object does not fix publication.
-The worker/result handoff, cached validation, recovered markers and finality
-consumer must all retain or rejoin the same admitted resources before votes are
-authorized. Preserve the exact manifest, candidate and predecessor identity.
+The scalar validation path computes the participant manifest in
+`PreparedCarrier::prepare`, returns an execution commitment and drops the owner;
+its marker/reproposal shortcuts are insufficient publication authority. The retained
+production-adapter candidate replaces that loss with actual carrier custody in
+bounded slots, including capturing, validated, decided and checkpointed phases.
+Its consuming facade returns the same carrier and phase on local refusal. The
+worker/result handoff, cached validation, recovered markers and finality consumer
+must all use that original owner before votes are authorized, preserving the exact
+manifest, candidate and predecessor. An equal execution hash, a reservation field
+on a discarded object or a second execution cannot replace this join.
 The local Queue veto now retains its original Validate dispatch, acknowledgement
 and exact route-release observation without writing a `Rejected` marker. Storage
 and drain-observation failures retain typed local recovery provenance through
 block validation and emit no rejection event. The exact sample survives an
 autoscale retry; evaluation is complete only after the fallible lifecycle step
-succeeds. These paths pass the 76-test DPN development build19 selection. They do
-not yet retain the complete executed carrier through Validate and Apply; that
-ownership, aggregate admission and consuming publication remain required.
+succeeds. These paths pass the historical 76-test DPN development build19 selection;
+that result does not qualify the new retained adapter or consuming facade. Complete
+runtime handoff, original Apply settlement, cold recovery and network qualification
+remain required. Full process-memory admission is a separate outstanding goal;
+the current ownership path supplies only the scoped allocation charges above.
 
 ## Ordered implementation and acceptance gates
 

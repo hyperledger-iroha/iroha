@@ -14,7 +14,7 @@ pub(super) fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return Some(core::any::type_name::<$ty>());
+                return iroha_data_model::isi::instruction_wire_id(instruction);
             }
         )+};
     }
@@ -39,9 +39,7 @@ fn registration_plan(
         && plan.amount == registration.initial_stake
         && matches!(
             plan.precondition,
-            PublicLaneMonetaryPreconditionV1::Registration(
-                iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { .. }
-            )
+            PublicLaneMonetaryPreconditionV1::Registration(_)
         ))
     .then_some(plan)
 }
@@ -52,7 +50,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         .downcast_ref::<RegisterPublicLaneCandidate>()
     {
         let plan = registration_plan(&candidate.registration)?;
-        return matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration (iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height }) if activation_height == candidate.activation_height).then_some(plan);
+        return matches!(&plan.precondition, PublicLaneMonetaryPreconditionV1::Registration(value) if value.activation_height == candidate.activation_height).then_some(plan);
     }
     if let Some(registration) = instruction
         .as_any()
@@ -65,12 +63,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         return (plan.has_canonical_shape()
             && plan.source_asset.account() == &bond.staker
             && plan.amount == bond.amount
-            && matches!(
-                plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Bond(
-                    iroha_data_model::nexus::PublicLaneBondPreconditionV1 { .. }
-                )
-            ))
+            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Bond(_)))
         .then_some(plan);
     }
     if let Some(unbond) = instruction
@@ -82,9 +75,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
             && plan.destination_asset.account() == &unbond.staker
             && matches!(
                 plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Unbond(
-                    iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 { .. }
-                )
+                PublicLaneMonetaryPreconditionV1::Unbond(_)
             ))
         .then_some(plan);
     }
@@ -97,9 +88,7 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
             && plan.amount == slash.amount
             && matches!(
                 plan.precondition,
-                PublicLaneMonetaryPreconditionV1::Slash(
-                    iroha_data_model::nexus::PublicLaneSlashPreconditionV1 { .. }
-                )
+                PublicLaneMonetaryPreconditionV1::Slash(_)
             ))
         .then_some(plan);
     }
@@ -176,4 +165,77 @@ pub(super) fn collect_signed_staking_effects(
     let plan = transfer_plan(instruction).ok_or_else(invalid)?;
     append(0, &plan.source_asset, &plan.destination_asset, &plan.amount);
     Ok(())
+}
+
+/// Opaque code cannot create signed staking authority by manufacturing a plan at runtime.
+/// This also covers reserve-only reward recording and zero-payout accrual processing.
+pub(super) fn opaque_staking_policy_asset_effect(
+    instruction: &InstructionBox,
+    fee_asset: &AssetDefinitionId,
+) -> Option<&'static str> {
+    let wire_id = monetary_staking_wire_id(instruction)?;
+    let touches = if let Some(rewards) = instruction
+        .as_any()
+        .downcast_ref::<RecordPublicLaneRewards>()
+    {
+        rewards.reward_asset.definition() == fee_asset
+    } else if let Some(claim) = instruction
+        .as_any()
+        .downcast_ref::<ClaimPublicLaneRewards>()
+    {
+        claim
+            .claim_plan
+            .sources
+            .iter()
+            .any(|source| source.source_asset.definition() == fee_asset)
+    } else {
+        transfer_plan(instruction).is_some_and(|plan| plan.source_asset.definition() == fee_asset)
+    };
+    touches.then_some(wire_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn staking_wire_ids_match_the_canonical_registry() {
+        let registry = iroha_data_model::instruction_registry::default();
+        macro_rules! check {
+            ($($ty:ty => $wire_id:literal),+ $(,)?) => {$(
+                assert_eq!(registry.wire_id(core::any::type_name::<$ty>()), Some($wire_id));
+            )+};
+        }
+        check!(
+            RegisterPublicLaneCandidate => "iroha.staking.register_public_lane_candidate",
+            RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
+            BondPublicLaneStake => "iroha.instruction.v1::staking::BondPublicLaneStake",
+            FinalizePublicLaneUnbond => "iroha.instruction.v1::staking::FinalizePublicLaneUnbond",
+            SlashPublicLaneValidator => "iroha.instruction.v1::staking::SlashPublicLaneValidator",
+            RecordPublicLaneRewards => "iroha.instruction.v1::staking::RecordPublicLaneRewards",
+            ClaimPublicLaneRewards => "iroha.instruction.v1::staking::ClaimPublicLaneRewards",
+        );
+
+        let reward_asset = AssetId::of(
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
+                    .expect("test domain"),
+                "xor".parse().expect("test asset name"),
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let instruction: InstructionBox = RecordPublicLaneRewards {
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
+            epoch: 0,
+            reward_asset,
+            total_reward: Quantity::zero(),
+            shares: Vec::new(),
+            metadata: iroha_model_base::metadata::Metadata::default(),
+        }
+        .into();
+        assert_eq!(
+            monetary_staking_wire_id(&instruction),
+            Some("iroha.instruction.v1::staking::RecordPublicLaneRewards")
+        );
+    }
 }

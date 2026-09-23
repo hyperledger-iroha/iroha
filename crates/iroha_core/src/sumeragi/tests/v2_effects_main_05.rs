@@ -610,7 +610,7 @@ fn lifecycle_apply_dispatch_waits_for_exact_runner_decision_cleanup() {
 
 #[cfg(feature = "bls")]
 #[test]
-fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
+fn apply_barrier_handoff_retires_exact_live_proposal_without_lane_adapter_authority() {
     let mut fixture = ProductionTransportFixture::new();
     let started = Instant::now();
     fixture
@@ -636,7 +636,7 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
             pre_decision_directive,
         );
     assert!(local_proposal.already_attempted(pre_decision_directive));
-    let mut lane_work =
+    let lane_work =
         super::super::v2_lane_work::tests::runner_handoff_losing_merge_fixture_for_test();
     assert_eq!(
         super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
@@ -694,7 +694,6 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
         &mut fixture.executor,
         &mut services,
         &mut local_proposal,
-        &mut lane_work,
         output_guard.as_ref(),
         &permit,
     )
@@ -708,7 +707,8 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
     assert!(!local_proposal.already_attempted(pre_decision_directive));
     assert_eq!(
         super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
-        (0, 0)
+        (1, 1),
+        "the global Decision handoff has no authority over the retired lane adapter"
     );
     assert!(!output_guard.restart_required());
 }
@@ -6673,18 +6673,9 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     (
         foreign_context.kagemusha_mint_finality_authorization,
         foreign_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         foreign_context.network_id,
-        foreign_context.kagemusha_mint_finality_authority.generation,
         foreign_context.epoch,
-        if foreign_context.epoch == 0 {
-            1
-        } else {
-            foreign_context
-                .kagemusha_mint_finality_authorization
-                .first_height
-                .max(2)
-        },
         foreign_context.epoch_end_height,
         &foreign_context.roster,
     );

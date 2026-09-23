@@ -98,7 +98,7 @@ fn committee_restore_beacon_matches_both_sides_of_activation_cut() {
 #[test]
 fn committee_restore_bootstrap_permits_only_finalized_next_height_custody() {
     let fixture = fixture(4);
-    let authorization = mint_finality_authorization(&fixture.incumbent, 0, 1, 10);
+    let authorization = mint_finality_genesis_for_authority(&fixture.incumbent, 10);
     validate_current_beacon(&fixture.world.view(), &fixture.incumbent, &authorization, 4)
         .expect("the bootstrap ceremony finalized at four and activates at five");
     assert!(

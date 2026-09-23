@@ -4686,27 +4686,29 @@ fn replayed_proposal_signature_restores_exact_durable_payload() {
 }
 
 #[test]
-fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
+fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
     let (service, keys) = fixture();
     let mut context = service.context.clone();
     context.epoch_end_height = context.height;
     context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
-    let next_mint_roster = fixture_kagemusha_mint_finality_roster(
+    let next_mint_roster = fixture_kagemusha_mint_finality_authority(
         context.network_id,
-        context.epoch + 1,
+        context.kagemusha_mint_finality_authority.generation + 1,
         &context.roster,
         0xC0,
     );
-    let next_mint_id = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-        &context.kagemusha_mint_finality_authorization,
-        &next_mint_roster,
-        context.height + 8,
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
-    );
+    let next_mint_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &context.kagemusha_mint_finality_authorization,
+            &next_mint_roster,
+            context.height + 8,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
+        );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         committee_preparation: None,
         epoch: context.epoch + 1,
-        kagemusha_mint_finality_authorization: next_mint_id,
+        kagemusha_mint_finality_authorization: next_mint_authorization.clone(),
         kagemusha_mint_finality_authority: next_mint_roster,
         epoch_end_height: context.height + 8,
         mode: context.mode,
@@ -4772,14 +4774,14 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
     )
     .expect("decode boundary seal share");
     assert_eq!(share.message.kagemusha_top_up_count, 0);
-    assert_eq!(share.message.next_epoch_authorization, Some(next_mint_id));
+    assert_eq!(share.message.next_epoch_authorization, Some(next_mint_authorization));
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
         &context.kagemusha_mint_finality_authority,
         &context,
         &vote,
         &share,
     )
-    .expect("old epoch authorizes the next Pasta roster");
+    .expect("incumbent authority signs the full successor authorization");
 }
 include!("v2_worker_nonzero_view_restart.rs");
 #[test]

@@ -221,6 +221,7 @@ fn kura_bench_config(dir: &tempfile::TempDir, blocks_in_memory: NonZeroUsize) ->
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -275,6 +276,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };

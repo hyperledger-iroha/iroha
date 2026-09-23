@@ -1337,20 +1337,19 @@ impl NativePublicationFixture {
 
     /// Move the same State family into the actual process-lived driver after
     /// borrowed preparation has released every writer into owned journals.
-    pub(super) fn into_shared_runtime(
+    pub(super) fn into_shared_driver(
         self: Box<Self>,
     ) -> (
         Arc<State>,
-        crate::sumeragi::v2_runner::native_lane_runtime::NativeLaneRuntime,
+        crate::sumeragi::v2_lane_driver::NativeLaneDriver,
     ) {
         let key = self.original.economic.native.validators[0].clone();
         let state: Arc<State> = Arc::from(self.original.economic.native.state);
-        let driver = crate::sumeragi::v2_runner::native_lane_runtime::NativeLaneRuntime::new(
+        let driver = crate::sumeragi::v2_lane_driver::NativeLaneDriver::new(
             Arc::clone(&state),
             crate::sumeragi::output_guard::ConsensusOutputGuard::isolated(),
             key,
             native_driver_limits_for_test(),
-            nonzero!(32_usize),
         )
         .unwrap();
         (state, driver)

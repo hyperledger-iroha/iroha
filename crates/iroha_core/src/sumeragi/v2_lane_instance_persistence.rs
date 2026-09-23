@@ -103,7 +103,7 @@ impl LanePersistenceJob {
 
 impl Drop for LaneInstance {
     fn drop(&mut self) {
-        if self.persistence.is_some() {
+        if self.persistence.is_some() || self.retirement_cleanup.is_some() {
             // Dropping the table owner cannot orphan an admitted physical job
             // while another owner continues signing under the process guard.
             self.output_guard.close_admission_for_restart();

@@ -24,9 +24,10 @@ use iroha_data_model::{
         staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
     },
     nexus::{
-        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
-        PublicLaneRegistrationPreconditionV1, ValidatorCommitteeCredentialsV1,
-        ValidatorCommitteePreparationV1, ValidatorCommitteeTransitionV1,
+        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+        ValidatorCommitteeCredentialsV1, ValidatorCommitteePreparationV1,
+        ValidatorCommitteeTransitionV1,
     },
     parameter::system::SumeragiNposParameters,
 };
@@ -236,7 +237,7 @@ fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
         destination_asset: AssetId::new(xor, custody),
         amount: Quantity::from(1000_u64),
         precondition: PublicLaneMonetaryPreconditionV1::Registration(
-            PublicLaneRegistrationPreconditionV1 {
+            PublicLaneMonetaryRegistrationV1 {
                 activation_height: 201,
             },
         ),

@@ -27,12 +27,13 @@ passes can be reused. Network checks run again after partial failure; changed
 inputs cannot inherit the checkpoint. Completed preparation remains a separate
 receipt and does not establish deployment readiness.
 
-Retirement joins the existing native locks in order: coordinator, host action,
-then `/var/lib/taira/.deployment.lock`. The last lock must already
-exist with exact root custody. A held lock, missing lock or retained
-`.reset-owner.json` stops retirement without creating or removing authority.
-The shared lock remains held through rechecks, control archival and public
-artifact cleanup so an ordinary updater cannot interleave after rollback.
+Retirement joins the coordinator and host-action locks, then the shared
+`/var/lib/taira-deployment/.deployment.lock`. The root-owned mode0600 lock must
+already exist under a mode0700 root. A held or missing lock, retained
+`.reset-owner.json`, or retired epoch-worker state or service stops retirement
+without creating or removing authority. Locks remain held through rechecks,
+control archival and public artifact cleanup so reset or updater work cannot
+interleave after rollback.
 
 After an operator has prepared one owner-only runtime plan, each retry is:
 
@@ -120,22 +121,27 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply runs the prepared application canary and its fresh beacon ceremony
-before readiness-dependent four-peer convergence, then qualifies prepared application mutations
-and one validator restart for signed `core_testnet` scope. The `full_inrou` scope
-also requires Inrou runtime health and all four ordered restart waves through
-these direct endpoints before staging or switching the public edge. The same retained
-mutations and restart evidence flow into the release proof. After cutover,
-`EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
-remain before public cutover; a failed rollback remains resumable and must be
-verified complete before another attempt is admitted.
+Native apply runs the prepared application canary and real four-validator DKG
+ceremony before readiness-dependent four-peer convergence. The committed
+certificate is installed, then all four `BeaconActivate` actions install the
+matching provider custody before restart proof. Scheduling epochs retain the
+incumbent authenticated authority generation. `core_testnet` qualifies prepared
+application mutations and one validator restart. `full_inrou` also requires
+Inrou runtime health and four ordered restart waves through direct endpoints
+before staging or switching the public edge. The same retained mutation and
+restart evidence flows into the release proof. After cutover, `EdgeVerify`
+proves public HTTPS, discovery and doctor checks. Candidate failures remain
+before public cutover; failed rollback remains resumable and must be verified
+complete before another attempt.
 
-The preceding assembly's `native-local-args.json` is a closed, ordered path list:
-`--public-inputs`, `--runtime-client-config`, `--validator-client-config` (four
-paths), `--validator-operator-key`, `--onboarding-token`, optional
-`--inrou-stage-dir` for full scope, `--validator-unit` (four paths), `--edge-unit`,
-and `--known-hosts`. Retired epoch worker plans, administrator flags and separate
-seed batches are rejected.
+The preceding assembly's `native-local-args.json` is a closed, ordered path
+list: `--public-inputs`, `--runtime-client-config`, four
+`--validator-client-config` paths, `--validator-operator-key`,
+`--onboarding-token`, optional `--inrou-stage-dir` for full scope, four
+`--validator-unit` paths, `--edge-unit`, and `--known-hosts`. The public bundle
+remains `<prep>/public-inputs`. Retired epoch worker plans, administrator flags,
+and separate seed batches are rejected. Validator signer custody stays protected
+through retry and public-import cleanup.
 
 Each attempt projects the closed topology intent, derives the native public
 genesis bundle, and prepares beacon inputs. It checks the nonce and exact seat
@@ -143,14 +149,29 @@ census, then renders the four final FD200 units from the pinned initial units.
 Native `assemble` and `authorize` consume the same derived arguments and verify
 all context and credential bindings before signing.
 
-`native-retained-args.json` and `native-local-args.json` preserve the original
-preparation paths. `native-assembly-args.json` selects the fresh public bundle,
-beacon request and final units. Apply receives only runtime paths. Python reads
-public intent and unit bytes; native code owns credential admission. Missing
-inputs or failed preparation stops before authorization or apply. The shared
-deployment lock and durable reset owner prevent daemon updates between reset
-calls. Existing retired worker state or service files must be reconciled before
-retirement; this workflow neither decodes nor runs that worker.
+1. Project `topology-intent.json` using only the closed native
+   `iroha.taira.public-reset.topology-intent.v1` fields. It contains no computed
+   release, artifact or config hashes, fingerprints, or generated beacon plan.
+2. Run `prepare-public-inputs --localnet-dir <prep>/network --intent
+   <attempt>/assembly/topology-intent.json --output-dir
+   <attempt>/assembly/public-inputs`.
+3. Run `prepare-beacon-inputs --intent ... --public-inputs ... --output ...`.
+   Check its nonce and four-seat census, then use the pinned renderer and
+   separately authenticated retained unit hashes to produce four mode0644
+   FD200 units selecting `beacon.toml`.
+4. Run `assemble --intent ...`, then `authorize` with identical current assembly
+   arguments. Native assembly rederives the context, beacon plan and credential
+   joins before signing authority is opened.
+
+`native-retained-args.json` preserves the prior path record;
+`native-local-args.json` preserves original preparation paths. The separate
+`native-assembly-args.json` selects the fresh public bundle, beacon request and
+four final units. Apply receives actual runtime paths without generated-plan,
+public-bundle or unit flags. Python reads public intent and unit bytes; native
+code owns credential and signer custody admission. Missing current inputs or
+failed preparation stops before authorization or apply. The shared deployment
+lock and durable reset owner prevent updates between reset calls. Existing
+retired worker state or service files require reconciliation before retirement.
 
 After apply, seed continuity and boot checks first require the exact native
 completed and deployment-proven receipts. They bind each owner-only beacon
@@ -164,9 +185,9 @@ both `inrou_canary` and `inrou_stage_tree_sha256`. `full_inrou` requires the sta
 argument and the complete matching native stage object and hash. The old `inrou`
 spelling is rejected.
 
-The signed scope also selects the native journal sequence: core has 15 steps and
-no Preseed step; full has 16. Both include `EpochSupervisorPause` after Stage and
-before Stop. The durable Seal cursor is 13 for core and 14 for full. Reopening and completed-receipt checks use the same immutable scope;
+The signed scope also selects the native journal sequence: core has 14 steps and
+no Preseed step; full has 15. The durable Seal cursor is 12 for core and 13 for
+full. Reopening and completed-receipt checks use the same immutable scope;
 indices from another scope cannot be reused as recovery authority.
 
 Read-only admission measures the complete native artifact closure, including

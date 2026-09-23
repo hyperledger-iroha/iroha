@@ -7996,6 +7996,15 @@ mod tests {
     }
 
     #[test]
+    fn retired_epoch_maintenance_commands_are_rejected() {
+        for retired in ["epoch-maintenance", "epoch-supervisor"] {
+            let error = TestTairaCli::try_parse_from(["taira-test", retired])
+                .expect_err("retired authority writers must not remain CLI commands");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
     fn write_canary_parser_accepts_only_one_exact_child_action() {
         let nonce = "n".repeat(32);
         let phase = "pre_edge";

@@ -1,198 +1,226 @@
+// These retained test names now exercise the production Native ingress tail,
+// physical process, and actor transport. Native signing is asynchronous: the
+// fixture waits for actual WAL/body completions before servicing a bounded send.
+// No retired lane signer or global-height service participates in this path.
 struct OrdinaryLaneDispatchFixture {
-    lane_work: V2LaneWorkAdapter,
-    executor: crate::sumeragi::v2_effects::V2EffectExecutor<
-        crate::sumeragi::v2_runtime::SerializedV2Runtime,
-    >,
-    services: crate::sumeragi::v2_worker::ProductionV2Services,
+    state: Arc<State>,
+    observed: crate::state::VerifiedLaneContexts,
+    driver: Option<crate::sumeragi::v2_lane_driver::NativeLaneDriver>,
+    transport: crate::sumeragi::v2_lane_transport::NativeLaneTransport,
+    guard: Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
     ingress: Arc<crate::sumeragi::FairV2Ingress>,
+    network: crate::IrohaNetwork,
     actor: Option<iroha_p2p::network::NetworkActorAdmissionTestFixture<crate::NetworkMessage>>,
-    proposal: LaneBlockProposalV1,
-    prepare_qc: LaneBlockQcV1,
-    expected_commit: LaneBlockVoteV1,
+    expected_commit: iroha_data_model::block::lane_consensus::LaneMessageEnvelopeV1,
+    prepare_qc: iroha_data_model::block::lane_consensus::LaneMessageEnvelopeV1,
     second_message: BlockMessage,
     second_sender: PeerId,
+    targets: BTreeSet<PeerId>,
     parent_hash: HashOf<BlockHeader>,
     initial_kura_count: usize,
     initial_state_height: usize,
-    _directory: tempfile::TempDir,
+    now: Instant,
 }
 
 impl OrdinaryLaneDispatchFixture {
     fn new(actor_capacity: usize) -> Self {
         use crate::sumeragi::{
-            v2::{
-                AdapterFingerprints, DeferredAdmissionOrdinalSource, SumeragiV2Adapter,
-                VerifiedHeightContext,
-            },
-            v2_core::Generation,
-            v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
+            output_guard::ConsensusOutputGuard,
+            v2_lane_driver::{NativeLaneDriver, NativeLaneDriverLimits},
+            v2_lane_instance::LaneProcessLimits,
+            v2_lane_transport::NativeLaneTransport,
         };
-        let (mut lane_work, keys) =
-            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
-        let (parent, parent_receipt) = lane_work
-            .kura
-            .v2_finality_artifact_with_receipt(1)
-            .expect("read authenticated ordinary fixture parent")
-            .expect("durable parent is present");
-        let parent_hash = parent.block_hash;
-        let initial_kura_count = lane_work.kura.blocks_count();
-        let initial_state_height = lane_work.state.committed_height();
-        assert_eq!(initial_kura_count, 1);
-        assert_eq!(initial_state_height, 1);
-        assert_eq!(
-            lane_work.state.committed_block_hash_at_height(1),
-            Some(parent_hash)
-        );
-        let (block, proposal) = planned_lane_candidate_block_at_view(&lane_work, &keys, 0);
-        let _ = mark_global_body_locked_for_block(&mut lane_work, &block);
-        assert_ne!(
-            lane_work.bind_locked_global_body(&block),
-            V2LaneIngressOutcome::Rejected
-        );
-        // Establish the candidate and local Prepare outside the regression.
-        // The tested input is the valid remote Prepare QC which enables Commit.
-        let initial = lane_work.drain_effects(usize::MAX);
-        assert!(initial.iter().any(|effect| matches!(effect,
-                V2LaneWorkEffect::PostLaneBlock { message: BlockMessage::LaneBlockVote(vote), .. }
-                    if vote.body.phase == CertPhase::Prepare)));
-        assert_eq!(lane_work.effect_count(), 0);
-        assert!(!lane_work.output_guard.restart_required());
-        let context = lane_work.context.clone();
-        let local_validator = context
-            .roster
+        use iroha_data_model::block::lane_consensus::{
+            LANE_MESSAGE_VERSION_V1, LaneMessageEnvelopeV1, LaneMessageV1, LanePhaseV1, LaneQcV1,
+            LaneSignatureShareV1, LaneVoteStatementV1, LaneVoteV1,
+        };
+        let (state, keys) = State::native_dispatch_source_fixture_for_test();
+        let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
+        let lane = &observed.contexts()[0];
+        let id = lane.instance_id();
+        let local = lane
+            .reducer_context()
+            .roster()
             .iter()
-            .position(|entry| entry.validator == lane_work.local_peer)
-            .and_then(|index| u32::try_from(index).ok())
-            .expect("local roster index");
-        let proofs = keys
-            .iter()
-            .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("fixture PoP"))
-            .collect();
-        let verified = VerifiedHeightContext::successor(
-            context.clone(),
-            proofs,
-            &parent,
-            &parent_receipt,
-            &parent.validator_set_pops,
-        )
-        .expect("verified exact ordinary successor context");
-        let directory = tempfile::TempDir::new().expect("ordinary dispatch WAL directory");
-        let (adapter, startup) = SumeragiV2Adapter::open(
-            directory.path().join("ordinary-dispatch.wal"),
-            verified,
-            Some(local_validator),
-            Generation::INITIAL,
-            [0x63; 32],
-            AdapterFingerprints {
-                node: Hash::new(b"ordinary dispatch node"),
-                build: Hash::new(b"ordinary dispatch build"),
-                config: Hash::new(b"ordinary dispatch config"),
+            .position(|entry| entry.id() == lane.reducer_context().leader(0))
+            .expect("actual Native initial author");
+        let key_for = |index: usize| {
+            keys.iter()
+                .find(|key| key.public_key() == lane.frozen().committee[index].public_key())
+                .expect("frozen committee key")
+        };
+        let local_peer = lane.frozen().committee[local].clone();
+        let guard = ConsensusOutputGuard::isolated();
+        let mut driver = NativeLaneDriver::new(
+            Arc::clone(&state),
+            Arc::clone(&guard),
+            key_for(local).clone(),
+            NativeLaneDriverLimits {
+                voting_enabled: true,
+                process: LaneProcessLimits {
+                    instances: NonZeroUsize::MIN,
+                    workers_per_class: NonZeroUsize::MIN,
+                    queued_per_class: NonZeroUsize::MIN,
+                    completed: NonZeroUsize::MIN,
+                    effect_limit: 3 * crate::sumeragi::v2_core::MAX_EFFECTS_PER_STEP,
+                    base_timeout: Duration::from_secs(10),
+                    retransmit: Duration::from_secs(1),
+                },
+                ingress: NonZeroUsize::MIN,
+                outbound: NonZeroUsize::new(8).unwrap(),
+                maximum_message_bytes: NonZeroUsize::new(8 * 1024 * 1024).unwrap(),
             },
-            DeferredAdmissionOrdinalSource::new(0),
         )
-        .expect("real safety-WAL adapter");
-        assert!(startup.is_empty());
-        let (runtime, startup) = SerializedV2Runtime::new_with_lifecycle_ordinals(
-            adapter,
-            startup,
-            Instant::now(),
-            Duration::from_secs(10),
-            RuntimeQueueConfig::default(),
-            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
-        )
-        .expect("real serialized runtime");
-        assert!(startup.is_empty());
-        let executor =
-            crate::sumeragi::v2_effects::V2EffectExecutor::ordinary_dispatch_executor_for_test(
-                runtime,
-                context.clone(),
-                lane_work.local_peer.clone(),
-                Some(local_validator),
-                Arc::clone(&lane_work.output_guard),
+        .expect("original Native physical process");
+        let now = Instant::now();
+        let until = now + Duration::from_secs(20);
+        let mut proposal = None;
+        let mut prepare = None;
+        loop {
+            driver
+                .poll(&observed, now)
+                .expect("actual opening/body/WAL progress");
+            while let Some(packet) = driver.take_outbound().unwrap() {
+                assert_eq!(
+                    packet.canonical_bytes,
+                    norito::encode_canonical(&packet.envelope).unwrap()
+                );
+                match packet.envelope.message {
+                    LaneMessageV1::Proposal(value) => {
+                        assert!(
+                            proposal.replace(value).is_none(),
+                            "one initial native proposal"
+                        );
+                    }
+                    LaneMessageV1::Vote(value) if value.statement.phase == LanePhaseV1::Prepare => {
+                        assert!(
+                            prepare.replace(value).is_none(),
+                            "one durable initial Prepare"
+                        );
+                    }
+                    other => panic!("unexpected initialization output: {other:?}"),
+                }
+            }
+            if proposal.is_some()
+                && prepare.is_some()
+                && driver
+                    .process()
+                    .instance(id)
+                    .unwrap()
+                    .held_effects()
+                    .next()
+                    .is_none()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "real Native initial proposal and Prepare deadline"
             );
-        let mut services = crate::sumeragi::v2_worker::tests::ordinary_dispatch_services_for_test(
-            Arc::clone(&lane_work.kura),
-            context.clone(),
-            &keys,
-            local_validator,
-            Arc::clone(&lane_work.state),
-            Arc::clone(&lane_work.output_guard),
-            executor.current_tag(),
-        );
-        let targets = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .filter(|peer| peer != &lane_work.local_peer)
-            .collect();
-        let (network, actor) = crate::IrohaNetwork::actor_admission_for_tests(
-            lane_work.local_peer.clone(),
-            targets,
-            NonZeroUsize::new(actor_capacity).expect("positive actor capacity"),
-        );
-        crate::sumeragi::v2_worker::tests::install_network_for_test(&mut services, network);
-        let ingress_capacity =
-            crate::sumeragi::fair_v2_ingress_required_capacity(context.roster.len(), None)
-                .expect("fixture roster ingress capacity fits usize");
-        let ingress = Arc::new(
-            crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-                ingress_capacity,
-                512 * 1024 * 1024,
-                64 * 1024 * 1024,
-                crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-                8 * 1024 * 1024,
-                8 * 1024 * 1024,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                None,
-            ),
-        );
-        ingress
-            .configure_roster_for_context(
-                context.roster.iter().map(|entry| entry.validator.clone()),
-                &context.network_id,
-                context.da_layout,
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let proposal = proposal.unwrap();
+        let prepare = prepare.unwrap();
+        assert_eq!(prepare.statement.value, proposal.body.manifest.value);
+        assert_eq!(prepare.share.signer, local as u32);
+        let sign = |index: usize, statement: &LaneVoteStatementV1| LaneSignatureShareV1 {
+            signer: index as u32,
+            signature: Signature::try_new(
+                key_for(index).private_key(),
+                &statement.signature_preimage().unwrap(),
             )
-            .expect("exact roster and lane ingress ownership");
-        ingress
-            .open()
-            .expect("open configured ordinary lane ingress");
-        let sender_key = keys
+            .unwrap()
+            .payload()
+            .to_vec(),
+        };
+        let remote = (0..keys.len()).find(|index| *index != local).unwrap();
+        let prepare_qc = LaneMessageEnvelopeV1 {
+            version: LANE_MESSAGE_VERSION_V1,
+            message: LaneMessageV1::QuorumCertificate(LaneQcV1 {
+                statement: prepare.statement,
+                shares: (0..3)
+                    .map(|index| sign(index, &prepare.statement))
+                    .collect(),
+            }),
+        };
+        let commit_statement = LaneVoteStatementV1 {
+            phase: LanePhaseV1::Commit,
+            ..prepare.statement
+        };
+        let expected_commit = LaneMessageEnvelopeV1 {
+            version: LANE_MESSAGE_VERSION_V1,
+            message: LaneMessageV1::Vote(LaneVoteV1 {
+                statement: commit_statement,
+                share: sign(local, &commit_statement),
+            }),
+        };
+        let second_message = BlockMessage::NativeLane(LaneMessageEnvelopeV1 {
+            version: LANE_MESSAGE_VERSION_V1,
+            message: LaneMessageV1::Vote(LaneVoteV1 {
+                statement: prepare.statement,
+                share: sign(remote, &prepare.statement),
+            }),
+        });
+        let second_sender = lane.frozen().committee[remote].clone();
+        let targets = lane
+            .frozen()
+            .committee
             .iter()
-            .find(|key| key.public_key() != lane_work.key_pair.public_key())
-            .expect("remote authenticated validator");
-        let sender = PeerId::new(sender_key.public_key().clone());
-        let prepare_qc = lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare);
-        let expected_commit = signed_lane_vote(&proposal, CertPhase::Commit, &lane_work.key_pair);
-        let second_message = BlockMessage::LaneBlockVote(signed_lane_vote(
-            &proposal,
-            CertPhase::Prepare,
-            sender_key,
+            .filter(|peer| **peer != local_peer)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let (network, actor) = crate::IrohaNetwork::actor_admission_for_tests(
+            local_peer.clone(),
+            targets.iter().cloned().collect(),
+            NonZeroUsize::new(actor_capacity).unwrap(),
+        );
+        let ingress = Arc::new(crate::sumeragi::FairV2Ingress::new(
+            8,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            0,
+            0,
         ));
+        ingress
+            .configure_roster(lane.frozen().committee.iter().cloned())
+            .unwrap();
+        ingress.open().unwrap();
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-                BlockMessage::LaneBlockQc(prepare_qc.clone()),
-                sender.clone(),
+                BlockMessage::NativeLane(prepare_qc.clone()),
+                second_sender.clone(),
             )),
             Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
         ));
+        let initial_kura_count = state.kura().blocks_count();
+        let initial_state_height = state.committed_height();
+        let parent_hash = state
+            .committed_block_hash_at_height(initial_state_height as u64)
+            .unwrap();
+        let transport = NativeLaneTransport::new(
+            Arc::clone(&state),
+            Arc::clone(&guard),
+            local_peer,
+            NonZeroUsize::MIN,
+        );
         Self {
-            lane_work,
-            executor,
-            services,
+            state,
+            observed,
+            driver: Some(driver),
+            transport,
+            guard,
             ingress,
+            network,
             actor: Some(actor),
-            proposal,
-            prepare_qc,
             expected_commit,
+            prepare_qc,
             second_message,
-            second_sender: sender,
+            second_sender,
+            targets,
             parent_hash,
             initial_kura_count,
             initial_state_height,
-            _directory: directory,
+            now,
         }
     }
 
@@ -202,23 +230,11 @@ impl OrdinaryLaneDispatchFixture {
         crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1,
         u64,
     ) {
-        use crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1;
-        let inbound = self
-            .ingress
-            .try_recv_if_checked(|_| true)
-            .expect("checked physical dequeue")
-            .expect("first QC");
+        let inbound = self.ingress.try_recv_if_checked(|_| true).unwrap().unwrap();
         assert!(
-            matches!(inbound.message(), BlockMessage::LaneBlockQc(qc) if qc == &self.prepare_qc)
+            matches!(inbound.message(), BlockMessage::NativeLane(exact) if exact == &self.prepare_qc)
         );
-        let prepared = PreparedDequeuedV2IngressV1::new(
-            Arc::clone(&self.ingress),
-            inbound,
-            crate::sumeragi::FairV2IngressDequeueDisposition::Admit,
-            None,
-            None,
-            Arc::clone(&self.lane_work.output_guard),
-        );
+        let prepared = self.prepare(inbound);
         let first = prepared.physical_ordinal_for_test();
         assert!(matches!(
             self.ingress
@@ -231,6 +247,20 @@ impl OrdinaryLaneDispatchFixture {
         let second = self.ingress.state.lock().last_admission_ordinal;
         assert!(second > first);
         (prepared, second)
+    }
+
+    fn prepare(
+        &self,
+        inbound: InboundBlockMessage,
+    ) -> crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1 {
+        crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1::new(
+            Arc::clone(&self.ingress),
+            inbound,
+            crate::sumeragi::FairV2IngressDequeueDisposition::Admit,
+            None,
+            None,
+            Arc::clone(&self.guard),
+        )
     }
 
     fn queued_ordinals(&self) -> Vec<u64> {
@@ -246,217 +276,221 @@ impl OrdinaryLaneDispatchFixture {
     fn consume(
         &mut self,
         prepared: crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1,
-        limit: usize,
-    ) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
-        use crate::sumeragi::v2_runner::ordinary_ingress_consumer::{
-            ProductionPreparedOrdinaryIngressConsumptionV1, consume_prepared_dequeued_v2_ingress,
-        };
-        let context = self.lane_work.context.clone();
-        let kura = Arc::clone(&self.lane_work.kura);
-        let key = self.lane_work.key_pair.clone();
-        let mut server =
-            crate::sumeragi::v2_block_sync::V2BlockSyncServer::new(context.network_id, 16)
-                .expect("block sync server");
-        let mut discovery = crate::sumeragi::v2_block_sync::V2BlockSyncDiscovery::new(
-            context.clone(),
-            self.lane_work.local_peer.clone(),
-            16,
-        )
-        .expect("block sync discovery");
-        let mut request = None;
-        let mut beacon = crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle::open(
-            &context,
-            self.lane_work.state.as_ref(),
-            None,
-            None,
-        )
-        .expect("inactive global beacon");
-        let outcome = consume_prepared_dequeued_v2_ingress(
-            prepared,
-            self.ingress.as_ref(),
-            &mut self.executor,
-            &mut self.services,
-            &mut self.lane_work,
-            kura.as_ref(),
-            &key,
-            &mut server,
-            &mut discovery,
-            &mut request,
-            &mut beacon,
-            limit,
-        )?;
-        assert_eq!(
-            outcome,
-            ProductionPreparedOrdinaryIngressConsumptionV1::Continue
+    ) {
+        let retained =
+            crate::sumeragi::v2_runner::ordinary_ingress_consumer::consume_prepared_native_ingress(
+                prepared,
+                self.ingress.as_ref(),
+                self.driver.as_mut().unwrap(),
+            )
+            .expect("current exact Native ingress tail");
+        assert!(
+            retained.is_none(),
+            "empty driver transfers this physical occurrence exactly once"
         );
-        Ok(())
     }
 
-    fn drain_actor(&mut self, seen: &mut Vec<(PeerId, BlockMessage)>) -> usize {
-        let expected_commit = self.expected_commit.clone();
-        let prepare_qc = self.prepare_qc.clone();
-        self.actor
-            .as_mut()
-            .expect("retained actor receiver")
-            .drain_posts(|post| {
-                let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
-                    panic!("only lane outputs belong to this actor fixture")
-                };
-                let message = envelope.as_message();
-                assert!(
-                    matches!(message, BlockMessage::LaneBlockVote(vote) if vote == &expected_commit)
-                        || matches!(message, BlockMessage::LaneBlockQc(qc) if qc == &prepare_qc),
-                    "no changed body, extra voting phase or unrelated output"
+    fn await_commit(&mut self) {
+        use crate::sumeragi::v2_lane_transport::NativeTransportAdmission;
+        let until = Instant::now() + Duration::from_secs(20);
+        loop {
+            let driver = self.driver.as_mut().unwrap();
+            driver.poll(&self.observed, self.now).unwrap();
+            if let Some(packet) = driver.take_outbound().unwrap() {
+                assert_eq!(
+                    packet.envelope, self.expected_commit,
+                    "the actual durable Commit keeps the exact native body and signer"
                 );
-                assert!(
-                    !seen.iter().any(|(peer, previous)| peer == &post.peer_id
-                        && std::mem::discriminant(previous) == std::mem::discriminant(message)),
-                    "the same exact output must not be admitted twice"
+                assert_eq!(
+                    packet.canonical_bytes,
+                    norito::encode_canonical(&packet.envelope).unwrap()
                 );
-                seen.push((post.peer_id.clone(), message.clone()));
-            })
+                assert!(matches!(
+                    self.transport.retain(&self.observed, packet),
+                    NativeTransportAdmission::Retained
+                ));
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "real Commit WAL/signing completion deadline"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!self.guard.restart_required());
+        self.assert_candidate_not_applied();
     }
 
-    fn finish_outputs(&mut self, seen: &mut Vec<(PeerId, BlockMessage)>) {
+    fn poll_transport(
+        &mut self,
+    ) -> Result<crate::sumeragi::v2_lane_transport::NativeTransportProgress, String> {
+        self.transport.poll(&self.observed, None, &self.network)
+    }
+
+    fn drain_actor(
+        &mut self,
+        seen: &mut BTreeSet<PeerId>,
+        original_frame: &mut Option<Arc<crate::sumeragi::message::BlockMessageWire>>,
+    ) -> usize {
+        let expected = &self.expected_commit;
+        self.actor.as_mut().expect("retained actor receiver").drain_posts(|post| {
+            let crate::NetworkMessage::SumeragiBlock(frame) = &post.data else {
+                panic!("only actual Native outputs belong to this actor")
+            };
+            assert!(matches!(frame.as_message(), BlockMessage::NativeLane(exact) if exact == expected));
+            assert!(seen.insert(post.peer_id.clone()), "no duplicate actor admission for a destination");
+            if let Some(original) = original_frame {
+                assert!(Arc::ptr_eq(original, frame), "pressure retains the original exact wire allocation");
+            } else {
+                *original_frame = Some(Arc::clone(frame));
+            }
+        })
+    }
+
+    fn assert_transport_retains_commit(&mut self) {
+        use crate::sumeragi::{
+            v2_lane_instance::LaneOutbound, v2_lane_transport::NativeTransportAdmission,
+        };
+        // Capacity is exactly one. A second valid occurrence must be returned
+        // intact while any destination of the original fanout remains owned.
+        let packet = LaneOutbound {
+            canonical_bytes: norito::encode_canonical(&self.expected_commit).unwrap(),
+            envelope: self.expected_commit.clone(),
+            destinations: self.observed.contexts()[0].frozen().committee.clone(),
+        };
+        let NativeTransportAdmission::Retry(returned) =
+            self.transport.retain(&self.observed, packet)
+        else {
+            panic!("the original unfinished Commit fanout lost its bounded custody")
+        };
+        assert_eq!(returned.envelope, self.expected_commit);
+        assert_eq!(
+            returned.canonical_bytes,
+            norito::encode_canonical(&self.expected_commit).unwrap()
+        );
+    }
+
+    fn finish_outputs(
+        &mut self,
+        seen: &mut BTreeSet<PeerId>,
+        frame: &mut Option<Arc<crate::sumeragi::message::BlockMessageWire>>,
+    ) {
+        use crate::sumeragi::v2_lane_transport::NativeTransportProgress;
         for _ in 0..16 {
-            self.drain_actor(seen);
-            let _ = self
-                .services
-                .retry_pending_exact_output()
-                .expect("bounded exact output retry");
-            self.drain_actor(seen);
-            if self.lane_work.effect_count() == 0
-                && !self
-                    .services
-                    .has_pending_exact_output()
-                    .expect("pending exact ownership")
-            {
+            self.drain_actor(seen, frame);
+            if self.poll_transport().unwrap() == NativeTransportProgress::Idle {
                 break;
             }
         }
-        assert_eq!(self.lane_work.effect_count(), 0);
-        assert!(
-            !self
-                .services
-                .has_pending_exact_output()
-                .expect("exact output drained")
-        );
-        let actual: BTreeSet<_> = seen.iter().filter_map(|(peer, message)|
-                matches!(message, BlockMessage::LaneBlockVote(vote) if vote == &self.expected_commit)
-                    .then_some(peer.clone())).collect();
-        let expected: BTreeSet<_> = self
-            .proposal
-            .descriptor
-            .validator_set
-            .iter()
-            .filter(|peer| *peer != &self.lane_work.local_peer)
-            .cloned()
-            .collect();
+        self.drain_actor(seen, frame);
         assert_eq!(
-            actual, expected,
-            "one exact local Commit reaches every remote actor target"
+            self.poll_transport().unwrap(),
+            NativeTransportProgress::Idle
         );
-        assert!(!self.lane_work.output_guard.restart_required());
+        assert_eq!(
+            *seen, self.targets,
+            "one exact local Commit reaches each remote actor target"
+        );
+        assert!(!self.guard.restart_required());
         self.assert_candidate_not_applied();
     }
 
     fn assert_candidate_not_applied(&self) {
-        assert_eq!(self.lane_work.kura.blocks_count(), self.initial_kura_count);
+        assert_eq!(self.state.kura().blocks_count(), self.initial_kura_count);
+        assert_eq!(self.state.committed_height(), self.initial_state_height);
         assert_eq!(
-            self.lane_work.state.committed_height(),
-            self.initial_state_height
+            self.state
+                .committed_block_hash_at_height(self.initial_state_height as u64),
+            Some(self.parent_hash)
         );
         assert_eq!(
-            self.lane_work.state.committed_block_hash_at_height(1),
-            Some(self.parent_hash),
-            "transport servicing must preserve the exact durable parent"
-        );
-        assert_eq!(
-            self.lane_work
-                .state
-                .committed_block_hash_at_height(self.lane_work.context.height),
+            self.state
+                .committed_block_hash_at_height(self.initial_state_height as u64 + 1),
             None,
-            "transport servicing must not economically apply the candidate"
+            "physical Native control/actor progress cannot economically apply a candidate"
         );
+    }
+}
+
+impl Drop for OrdinaryLaneDispatchFixture {
+    fn drop(&mut self) {
+        if let Some(driver) = self.driver.take() {
+            driver
+                .shutdown()
+                .join()
+                .expect("join actual Native physical workers");
+        }
     }
 }
 
 #[test]
 fn ordinary_lane_consumer_admits_bounded_commit_before_next_physical_ingress() {
+    use crate::sumeragi::v2_lane_transport::NativeTransportProgress;
     let mut fixture = OrdinaryLaneDispatchFixture::new(16);
     let (prepared, second) = fixture.prepare_first_and_queue_second();
-    fixture
-        .consume(prepared, 1)
-        .expect("first exact ordinary consumer");
+    fixture.consume(prepared);
+    fixture.await_commit();
     assert_eq!(fixture.queued_ordinals(), vec![second]);
-    let mut seen = Vec::new();
+    assert!(matches!(
+        fixture.poll_transport().unwrap(),
+        NativeTransportProgress::Admitted { .. }
+    ));
+    let mut seen = BTreeSet::new();
+    let mut frame = None;
     assert_eq!(
-        fixture.drain_actor(&mut seen),
+        fixture.drain_actor(&mut seen, &mut frame),
         1,
-        "one real actor post must precede the next dequeue; effect creation alone is insufficient"
+        "a bounded transport turn admits one real actor post, not just an effect"
     );
-    assert!(
-        matches!(&seen[0].1, BlockMessage::LaneBlockVote(vote) if vote == &fixture.expected_commit)
-    );
-    assert!(
-        fixture.lane_work.effect_count() >= 2,
-        "the output bound retains the remaining fanout"
-    );
+    fixture.assert_transport_retains_commit();
     let inbound = fixture
         .ingress
         .try_recv_if_checked(|_| true)
-        .expect("second checked dequeue")
-        .expect("second retained occurrence");
+        .unwrap()
+        .unwrap();
     assert!(matches!((inbound.message(), &fixture.second_message),
-            (BlockMessage::LaneBlockVote(actual), BlockMessage::LaneBlockVote(expected)) if actual == expected));
-    let prepared =
-        crate::sumeragi::v2_runner::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1::new(
-            Arc::clone(&fixture.ingress),
-            inbound,
-            crate::sumeragi::FairV2IngressDequeueDisposition::Admit,
-            None,
-            None,
-            Arc::clone(&fixture.lane_work.output_guard),
-        );
+        (BlockMessage::NativeLane(actual), BlockMessage::NativeLane(expected)) if actual == expected));
+    let prepared = fixture.prepare(inbound);
     assert_eq!(prepared.physical_ordinal_for_test(), second);
-    fixture
-        .consume(prepared, 16)
-        .expect("second exact ordinary consumer");
+    fixture.consume(prepared);
     assert!(fixture.queued_ordinals().is_empty());
-    fixture.finish_outputs(&mut seen);
+    fixture.finish_outputs(&mut seen, &mut frame);
 }
 
 #[test]
 fn ordinary_lane_consumer_retains_exact_commit_under_real_actor_backpressure() {
+    use crate::sumeragi::v2_lane_transport::NativeTransportProgress;
     let mut fixture = OrdinaryLaneDispatchFixture::new(1);
     let (prepared, second) = fixture.prepare_first_and_queue_second();
-    fixture
-        .consume(prepared, 16)
-        .expect("network pressure is retained, not discarded or fatal");
+    fixture.consume(prepared);
+    fixture.await_commit();
+    assert!(matches!(
+        fixture.poll_transport().unwrap(),
+        NativeTransportProgress::Admitted { .. }
+    ));
+    // Real capacity-one actor pressure assigns FIFO tickets; repeated attempts
+    // retain rank one instead of creating a new wait occurrence.
+    for _ in 0..3 {
+        assert!(matches!(
+            fixture.poll_transport().unwrap(),
+            NativeTransportProgress::Backpressured { rank: 1, .. }
+        ));
+    }
     assert_eq!(fixture.queued_ordinals(), vec![second]);
+    fixture.assert_transport_retains_commit();
+    assert!(!fixture.guard.restart_required());
+    let mut seen = BTreeSet::new();
+    let mut frame = None;
     assert_eq!(
-        fixture.lane_work.effect_count(),
-        0,
-        "the bounded fanout must transfer into the worker before retrying it"
-    );
-    assert!(
-        fixture
-            .services
-            .has_pending_exact_output()
-            .expect("worker owns blocked output")
-    );
-    assert!(!fixture.lane_work.output_guard.restart_required());
-    let mut seen = Vec::new();
-    assert_eq!(
-        fixture.drain_actor(&mut seen),
+        fixture.drain_actor(&mut seen, &mut frame),
         1,
-        "capacity-one actor is actually saturated"
+        "the actual actor is saturated"
     );
-    fixture.finish_outputs(&mut seen);
+    fixture.finish_outputs(&mut seen, &mut frame);
     assert_eq!(
         fixture.queued_ordinals(),
         vec![second],
-        "output retry cannot consume later ingress"
+        "output retry cannot consume later physical ingress"
     );
 }
 
@@ -464,32 +498,22 @@ fn ordinary_lane_consumer_retains_exact_commit_under_real_actor_backpressure() {
 fn ordinary_lane_consumer_actor_closure_fails_stop_before_next_ingress() {
     let mut fixture = OrdinaryLaneDispatchFixture::new(1);
     let (prepared, second) = fixture.prepare_first_and_queue_second();
+    fixture.consume(prepared);
+    fixture.await_commit();
     drop(
         fixture
             .actor
             .take()
-            .expect("close the real retained actor receiver"),
+            .expect("close the actual actor receiver"),
     );
     let error = fixture
-        .consume(prepared, 16)
-        .expect_err("actor loss must escape the consumer");
-    assert!(
-        matches!(error, crate::sumeragi::v2_runner::V2RunnerError::Service(ref message)
-            if message.contains("network actor closed")),
-        "{error:?}"
-    );
-    assert!(fixture.lane_work.output_guard.restart_required());
-    assert!(fixture.lane_work.output_guard.acquire().is_none());
+        .poll_transport()
+        .expect_err("actor loss must escape the Native transport");
+    assert!(error.contains("closed"), "{error}");
+    assert!(fixture.guard.restart_required());
+    assert!(fixture.guard.acquire().is_none());
     assert_eq!(fixture.queued_ordinals(), vec![second]);
-    assert!(
-        fixture.lane_work.effect_count() != 0,
-        "unacknowledged source effect is retained"
-    );
-    assert!(
-        fixture
-            .services
-            .has_pending_exact_output()
-            .expect("returned actor message retained")
-    );
+    fixture.assert_transport_retains_commit();
+    assert!(fixture.poll_transport().unwrap_err().contains("restart"));
     fixture.assert_candidate_not_applied();
 }

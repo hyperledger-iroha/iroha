@@ -134,8 +134,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    252, 238, 165, 67, 6, 187, 192, 204, 100, 65, 162, 170, 111, 109, 245, 238, 230, 164, 4, 4, 1,
-    15, 225, 229, 13, 73, 186, 219, 203, 11, 169, 39,
+    91, 38, 248, 103, 86, 84, 235, 0, 186, 36, 255, 38, 66, 136, 73, 143, 217, 61, 247, 57, 245,
+    196, 18, 254, 31, 190, 33, 199, 229, 145, 52, 179,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -4720,7 +4720,7 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 pub(crate) fn test_kagemusha_mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
 ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
     use crate::isi::kagemusha_v1::{
@@ -4731,7 +4731,7 @@ pub(crate) fn test_kagemusha_mint_finality_authority(
     KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        generation: epoch,
+        generation,
         validators: roster
             .iter()
             .enumerate()
@@ -4742,87 +4742,6 @@ pub(crate) fn test_kagemusha_mint_finality_authority(
             })
             .collect(),
     }
-}
-
-/// Build an explicit standalone scheduling authorization for a unit-test context.
-#[cfg(test)]
-pub(crate) fn test_kagemusha_mint_finality_authorization(
-    authority: &crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-    epoch: u64,
-    first_height: u64,
-    last_height: u64,
-) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-    use crate::isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
-    };
-    let genesis = epoch == 0;
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id: authority.network_id,
-        epoch,
-        first_height,
-        last_height,
-        authority_generation: authority.generation,
-        authority_id: authority
-            .authority_id()
-            .expect("fixture authority identity"),
-        beacon: if genesis {
-            BeaconEpochBindingV1::Bootstrap
-        } else {
-            BeaconEpochBindingV1::Installed(
-                crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                    session_id: [0x71; 32],
-                    transcript_hash: [0x72; 32],
-                },
-            )
-        },
-        previous_authorization_id: if genesis { [0; 32] } else { [0x73; 32] },
-        transition_id: if genesis { [0; 32] } else { [0x74; 32] },
-        decision: if genesis {
-            KagemushaMintFinalityEpochDecisionV1::Genesis
-        } else {
-            KagemushaMintFinalityEpochDecisionV1::Activate
-        },
-    };
-    authorization
-        .validate_against_authority(authority)
-        .expect("valid standalone scheduling fixture");
-    authorization
-}
-
-/// Build the exact contiguous authorization certified by a unit-test boundary context.
-#[cfg(test)]
-pub(crate) fn test_kagemusha_mint_finality_successor_authorization(
-    previous: &crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
-    authority: &crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
-    last_height: u64,
-    decision: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
-) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-    use crate::isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1};
-    let mut successor = test_kagemusha_mint_finality_authorization(
-        authority,
-        previous.epoch.checked_add(1).unwrap(),
-        previous.last_height.checked_add(1).unwrap(),
-        last_height,
-    );
-    successor.previous_authorization_id = previous.authorization_id().unwrap();
-    successor.decision = decision;
-    if decision == KagemushaMintFinalityEpochDecisionV1::Retain {
-        successor.transition_id = [0; 32];
-    }
-    if matches!(
-        decision,
-        KagemushaMintFinalityEpochDecisionV1::Retain
-            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
-    ) && previous.beacon != BeaconEpochBindingV1::Bootstrap
-    {
-        successor.beacon = previous.beacon;
-    }
-    successor
-        .validate_successor(previous)
-        .expect("valid scheduling successor fixture");
-    successor
 }
 
 /// Build deterministic signed-genesis context parameters for unit tests.
@@ -4917,19 +4836,18 @@ mod terminal_height_context_tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"terminal-height genesis")),
         );
-        let mint_finality_roster =
-            test_kagemusha_mint_finality_authority(network_id, u64::MAX, &roster);
-        let mint_finality_authorization = test_kagemusha_mint_finality_authorization(
-            &mint_finality_roster,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-        );
+        let mint_finality_roster = test_kagemusha_mint_finality_authority(network_id, 0, &roster);
+        let mint_finality_authorization =
+            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint_finality_roster,
+                u64::MAX,
+            )
+            .expect("valid terminal mint-finality authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: u64::MAX,
-            epoch: u64::MAX,
+            epoch: 0,
             kagemusha_mint_finality_authorization: mint_finality_authorization,
             kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: u64::MAX,
@@ -4961,6 +4879,9 @@ mod terminal_height_context_tests {
         let mut nonterminal_boundary = terminal;
         nonterminal_boundary.height = u64::MAX - 1;
         nonterminal_boundary.epoch_end_height = u64::MAX - 1;
+        nonterminal_boundary
+            .kagemusha_mint_finality_authorization
+            .last_height = u64::MAX - 1;
         let parent = nonterminal_boundary
             .parent_commit_qc
             .as_mut()

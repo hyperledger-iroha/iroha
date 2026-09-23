@@ -1901,7 +1901,7 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(network_id, epoch, epoch, if epoch == 0 { 1 } else { 2 }, carrier_hint.proposal_height.saturating_add(100), &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, epoch, carrier_hint.proposal_height.saturating_add(100), &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

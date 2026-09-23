@@ -55,7 +55,7 @@ use iroha_data_model::{
     nexus::{
         FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorNativeInstructionSelector,
         FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, FeeSponsorRule,
-        FeeSponsorRuleEffect, FeeSponsorRuleSelector,
+        FeeSponsorRuleEffect, FeeSponsorRuleSelector, PublicLaneMonetaryPlanV1,
     },
     parameter::{
         custom::{CustomParameter, CustomParameterId},
@@ -4442,8 +4442,9 @@ fn append_localnet_npos_bootstrap(
         builder,
         peers,
         &public_validator_lanes,
-        stake_amount,
+        &stake_asset_id,
         gas_account_id,
+        stake_amount,
         taira,
     )
     .build_raw()
@@ -4492,8 +4493,9 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
         builder,
         peers,
         &[LaneId::SINGLE],
-        stake_amount,
+        &stake_asset_id,
         escrow_account_id,
+        stake_amount,
         taira,
     )
     .build_raw()
@@ -4502,8 +4504,9 @@ fn append_public_lane_validator_registrations(
     mut builder: GenesisBuilder,
     peers: &[Peer],
     lanes: &[LaneId],
-    stake_amount: &Quantity,
+    stake_asset_id: &AssetDefinitionId,
     escrow_account_id: &AccountId,
+    stake_amount: &Quantity,
     taira: bool,
 ) -> GenesisBuilder {
     for &lane_id in lanes {
@@ -4517,15 +4520,11 @@ fn append_public_lane_validator_registrations(
                 stake_account: validator_id.clone(),
                 initial_stake: stake_amount.clone(),
                 metadata: Metadata::default(),
-                monetary_plan:
-                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
-                        AssetId::new(localnet_xor_asset_definition_id(), validator_id.clone()),
-                        AssetId::new(
-                            localnet_xor_asset_definition_id(),
-                            escrow_account_id.clone(),
-                        ),
-                        stake_amount.clone(),
-                    ),
+                monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                    stake_amount.clone(),
+                ),
             });
             builder = builder.append_instruction(ActivatePublicLaneValidator {
                 lane_id,
@@ -6740,6 +6739,9 @@ mod tests {
         assert_eq!(actual_topology, expected_topology);
         assert_eq!(actual_topology.len(), 4);
         assert_eq!(parameters.authority_generation.generation, 0);
+        let encoded =
+            norito::json::to_value(&parameters).expect("encode current genesis authority");
+        assert!(encoded.get("next_epoch_roster").is_none());
         assert_eq!(
             parameters,
             localnet_kagemusha_mint_finality_genesis_parameters(&peers)
@@ -9416,6 +9418,22 @@ mod tests {
             .get("staking")
             .and_then(toml::Value::as_table)
             .expect("nexus staking table");
+        let escrow_literal = staking
+            .get("stake_escrow_account_id")
+            .and_then(toml::Value::as_str)
+            .expect("staking escrow literal");
+        let escrow = AccountId::parse_encoded(escrow_literal).expect("configured escrow identity");
+        for registration in &validators {
+            assert_eq!(
+                registration.monetary_plan,
+                PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), registration.stake_account.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow.clone()),
+                    registration.initial_stake.clone(),
+                ),
+                "genesis consent must match the custody configured for the generated node",
+            );
+        }
         for key in ["stake_escrow_account_id", "slash_sink_account_id"] {
             let literal = staking
                 .get(key)
@@ -9430,6 +9448,23 @@ mod tests {
             staking.get("stake_asset_id").and_then(toml::Value::as_str),
             Some(localnet_xor_asset_literal().as_str())
         );
+        let escrow_account_id = AccountId::parse_encoded(
+            staking
+                .get("stake_escrow_account_id")
+                .and_then(toml::Value::as_str)
+                .expect("configured permissioned staking escrow"),
+        )
+        .expect("canonical permissioned staking escrow");
+        for register in &validators {
+            assert_eq!(
+                register.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), register.stake_account.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                    register.initial_stake.clone(),
+                ),
+            );
+        }
         assert!(!nexus.contains_key("fees"));
         assert!(!nexus.contains_key("storage"));
         assert!(
@@ -9591,6 +9626,29 @@ mod tests {
             .map(|register| register.validator.clone())
             .collect();
         assert_eq!(actual, expected, "validator roster should match peers");
+        let staking = &peer_cfg["nexus"]["staking"];
+        let stake_asset_id = AssetDefinitionId::parse_address_literal(
+            staking["stake_asset_id"]
+                .as_str()
+                .expect("configured stake asset"),
+        )
+        .expect("canonical stake asset");
+        let escrow_account_id = AccountId::parse_encoded(
+            staking["stake_escrow_account_id"]
+                .as_str()
+                .expect("configured stake escrow"),
+        )
+        .expect("canonical stake escrow");
+        for register in &validators {
+            assert_eq!(
+                register.monetary_plan,
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), register.stake_account.clone()),
+                    AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                    register.initial_stake.clone(),
+                ),
+            );
+        }
         assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
     }
     #[test]

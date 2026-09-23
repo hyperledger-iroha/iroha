@@ -45,9 +45,9 @@ use super::{
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
         CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,
-        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
-        EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
-        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
+        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
+        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
         PreparedLifecycleDecisionApplyExecutorDispatchV1, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
@@ -59,7 +59,7 @@ use super::{
         AuthenticatedSchedulerInputsFactory, CertifiedFetchBodyPersistenceCompletion,
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         CertifiedServeTerminalReplayAuthorizationV1, ClaimedCertifiedServeDispatchV1,
-        DeferredDurableValidateDispatch, DurableValidateDispatch, ExecutedDurableValidateDispatch,
+        DurableValidateDispatch, ExecutedDurableValidateDispatch,
         LifecycleDecisionApplyDispatchKeyV1, LifecycleIngressIoTargetKind,
         LifecycleIngressIoTargetSeal, LifecycleValidateDispatchKeyV1,
         PreparedLifecycleDecisionApplyDispatchV1, PreparedLifecycleIngressSelector,
@@ -838,6 +838,11 @@ enum V2IoCommand {
     PersistCertifiedFetchBody(CertifiedFetchBodyPersistenceTask),
     PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1),
     LifecycleValidate(LifecycleValidateTaskV1),
+    CompleteNativeSource {
+        subject: wire::BlockSubject,
+        request: super::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: super::v2_transport::AuthenticatedCertifiedBodyResponse,
+    },
     Apply(ApplyTask),
     LifecycleDecisionApply(LifecycleDecisionApplyTaskV1),
     RecoveredLifecycleSign(RecoveredLifecycleSignTaskV1),
@@ -870,6 +875,7 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
             | Self::LifecycleDecisionApply(_)
@@ -890,6 +896,7 @@ impl V2IoCommand {
             Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
@@ -914,7 +921,8 @@ impl V2IoCommand {
             Self::LifecycleCertifiedServe(task) => Some(task.lifecycle_ordinal()),
             #[cfg(test)]
             Self::LifecycleDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
-            Self::PersistCertifiedFetchBody(_)
+            Self::CompleteNativeSource { .. }
+            | Self::PersistCertifiedFetchBody(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
@@ -927,6 +935,7 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
             | Self::LifecycleDecisionApply(_)
@@ -947,6 +956,7 @@ impl V2IoCommand {
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
@@ -997,6 +1007,7 @@ impl V2IoCommand {
             Self::LifecycleDecisionApply(_)
             | Self::RecoveredLifecycleSign(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::LifecycleCertifiedServe(_)
             | Self::LoadCandidate { .. }
@@ -1015,6 +1026,7 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
             | Self::RecoveredLifecycleSign(_)
@@ -1031,6 +1043,7 @@ impl V2IoCommand {
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
             | Self::LifecycleDecisionApply(_)
@@ -1048,6 +1061,7 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::CompleteNativeSource { .. }
             | Self::LifecycleValidate(_)
             | Self::Apply(_)
             | Self::LifecycleDecisionApply(_)
@@ -1063,7 +1077,8 @@ impl V2IoCommand {
     const fn lifecycle_validate_key(&self) -> Option<LifecycleValidateDispatchKeyV1> {
         match self {
             Self::LifecycleValidate(task) => Some(task.key),
-            Self::Sign { .. }
+            Self::CompleteNativeSource { .. }
+            | Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
             | Self::PersistRecoveredDecisionFetchBody(_)

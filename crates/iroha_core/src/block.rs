@@ -3244,6 +3244,115 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
     }
     Ok(())
 }
+/// Canonical millisecond time strictly after every timed execution input.
+/// Admission controls are not execution inputs and do not advance this clock.
+fn creation_time_after_inputs<'a>(
+    minimum: Duration,
+    inputs: impl IntoIterator<Item = &'a TransactionEntrypoint>,
+) -> Option<Duration> {
+    let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
+    for input in inputs {
+        if let Some(created) = input.creation_time_ms() {
+            milliseconds = milliseconds.max(created.checked_add(1)?);
+        }
+    }
+    Some(Duration::from_millis(milliseconds))
+}
+
+#[cfg(test)]
+mod input_clock_tests {
+    use super::*;
+    use iroha_data_model::transaction::{
+        TransactionBuilder,
+        signed::{
+            SealedTransactionCommitmentPayload, SealedTransactionReveal,
+            SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
+        },
+    };
+
+    fn timed_input(milliseconds: u64) -> (SignedTransaction, KeyPair) {
+        let key = KeyPair::from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519);
+        let mut builder = TransactionBuilder::new(
+            crate::sumeragi::synthetic_network_id("input-clock"),
+            AccountId::new(key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(milliseconds));
+        (
+            builder
+                .with_instructions(Vec::<InstructionBox>::new())
+                .sign(key.private_key()),
+            key,
+        )
+    }
+
+    #[test]
+    fn input_clock_covers_external_and_sealed_inputs_without_timing_commitments() {
+        let (transaction, key) = timed_input(10_000);
+        let network_id = *transaction.network_id().unwrap();
+        let commitment =
+            compute_sealed_transaction_commitment(&network_id, &transaction, [0x92; 32], 100);
+        let external = TransactionEntrypoint::External(transaction.clone());
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment,
+            transaction.clone(),
+            [0x92; 32],
+        ));
+        let sealed =
+            TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+                SealedTransactionCommitmentPayload {
+                    network_id,
+                    authority: transaction.authority().clone(),
+                    commitment,
+                    reveal_after_height: 1,
+                    reveal_deadline_height: 100,
+                    nonce: None,
+                },
+                key.private_key(),
+            ));
+        for input in [&external, &reveal] {
+            assert_eq!(
+                creation_time_after_inputs(Duration::from_millis(1), [input]),
+                Some(Duration::from_millis(10_001))
+            );
+        }
+        assert_eq!(
+            creation_time_after_inputs(Duration::from_millis(1), [&sealed]),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            creation_time_after_inputs(
+                Duration::from_millis(20_000),
+                [&external, &reveal, &sealed]
+            ),
+            Some(Duration::from_millis(20_000))
+        );
+    }
+
+    #[test]
+    fn input_clock_rejects_unrepresentable_input_successor_and_baseline() {
+        let (transaction, _) = timed_input(u64::MAX);
+        assert!(
+            creation_time_after_inputs(
+                Duration::ZERO,
+                [&TransactionEntrypoint::External(transaction)]
+            )
+            .is_none()
+        );
+        assert!(
+            creation_time_after_inputs(
+                Duration::from_millis(u64::MAX) + Duration::from_millis(1),
+                std::iter::empty()
+            )
+            .is_none()
+        );
+        assert_eq!(
+            creation_time_after_inputs(Duration::from_millis(u64::MAX), std::iter::empty()),
+            Some(Duration::from_millis(u64::MAX))
+        );
+    }
+}
+
 /// Builder for blocks
 #[derive(Debug, Clone)]
 pub struct BlockBuilder<B>(B);
@@ -3498,6 +3607,27 @@ mod chained {
         #[must_use]
         pub fn creation_time(&self) -> Duration {
             self.0.header.creation_time()
+        }
+        /// Derive the clock from the exact retained ordinary and Native inputs.
+        /// Call again after removing Native groups with the original baseline,
+        /// so deferred inputs cannot advance the signed carrier's timestamp.
+        pub(crate) fn with_network_input_time_floor(mut self, minimum: Duration) -> Option<Self> {
+            let inputs = self
+                .0
+                .transactions
+                .iter()
+                .map(AcceptedTransaction::entrypoint)
+                .chain(
+                    self.0
+                        .execution_context
+                        .iter()
+                        .filter_map(|context| context.native_lane_decisions.as_ref())
+                        .flat_map(|batch| batch.groups.iter())
+                        .map(|group| &group.payload.input.entrypoint),
+                );
+            let time = creation_time_after_inputs(minimum, inputs)?;
+            self.0.header.creation_time_ms = u64::try_from(time.as_millis()).ok()?;
+            Some(self)
         }
         /// Header context selected for this proposal before payload/result roots are finalized.
         ///
@@ -7890,19 +8020,11 @@ pub(crate) mod valid {
             parent_creation_time: Duration,
             block_cadence: Duration,
         ) -> Result<Duration, BlockValidationError> {
-            let mut expected = parent_creation_time
+            let minimum = parent_creation_time
                 .checked_add(block_cadence)
                 .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
-            for transaction in block.external_transactions() {
-                let transaction_floor = transaction
-                    .creation_time()
-                    .checked_add(Duration::from_millis(1))
-                    .ok_or(BlockValidationError::V2BlockTimeOverflow)?;
-                expected = expected.max(transaction_floor);
-            }
-            let expected_ms = u64::try_from(expected.as_millis())
-                .map_err(|_| BlockValidationError::V2BlockTimeOverflow)?;
-            Ok(Duration::from_millis(expected_ms))
+            creation_time_after_inputs(minimum, block.network_entrypoints())
+                .ok_or(BlockValidationError::V2BlockTimeOverflow)
         }
         #[allow(
             clippy::too_many_arguments,
@@ -12282,17 +12404,11 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-                state.network_id,
-                0,
-                &roster,
-            );
-            let mint_finality_epoch_id =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
-                    &mint_finality_roster,
-                    0,
-                    1,
+            let (mint_finality_authorization, mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                    state.network_id,
                     u64::MAX,
+                    &roster,
                 );
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let mut parent_context = wire::HeightContext {
@@ -12300,8 +12416,8 @@ pub(crate) mod valid {
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
-                kagemusha_mint_finality_authorization: mint_finality_epoch_id,
-                kagemusha_mint_finality_authority: mint_finality_roster,
+                kagemusha_mint_finality_authorization: mint_finality_authorization,
+                kagemusha_mint_finality_authority: mint_finality_authority,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -12752,11 +12868,8 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    7,
-                    7,
-                    2,
                     u64::MAX,
                     &roster,
                 );
@@ -12764,7 +12877,7 @@ pub(crate) mod valid {
                 network_id,
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height: block.header().height().get(),
-                epoch: 7,
+                epoch: 0,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
@@ -14024,11 +14137,8 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     state.network_id,
-                    0,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -14986,11 +15096,8 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -19597,11 +19704,8 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );

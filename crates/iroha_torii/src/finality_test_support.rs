@@ -95,13 +95,11 @@ pub(crate) fn torii_proof_finality_for_block_with_context(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
-            version: 1, network_id, epoch: 0, first_height: 1, last_height: 100,
-            authority_generation: 0, authority_id: epoch.authority_id().unwrap(),
-            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32], transition_id: [0; 32],
-            decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-        },
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &epoch, 100,
+            )
+            .unwrap(),
         kagemusha_mint_finality_authority: epoch,
         nexus_amx_context_hash: Hash::new(b"Torii exact proof test context"),
         execution_policy_hash: Hash::new(b"Torii exact proof test execution policy"),

@@ -4093,7 +4093,7 @@ fn existing_ticket_artifact_dir(
         let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
+            Err(err) => return Err(map_spool_dir_open_error(path, err)),
         };
         validate_spool_dir_metadata(path, &metadata)?;
     }

@@ -435,6 +435,16 @@ mod tests {
         wire::HeightContext,
         FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     ) {
+        fixture_with_epoch_end_height(42)
+    }
+
+    fn fixture_with_epoch_end_height(
+        epoch_end_height: u64,
+    ) -> (
+        State,
+        wire::HeightContext,
+        FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    ) {
         let (keys, session) = &*FIXTURE;
         let parent_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"readiness parent"));
@@ -442,6 +452,7 @@ mod tests {
             keys,
             session.record().network_id,
             parent_hash,
+            epoch_end_height,
         );
         let mut record =
             FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(session.record().clone())
@@ -505,7 +516,7 @@ mod tests {
 
     #[test]
     fn readiness_reuses_only_exact_authenticated_transcripts_across_heights() {
-        let (mut state, mut context, mut record) = fixture();
+        let (mut state, mut context, mut record) = fixture_with_epoch_end_height(80);
         let readiness = GlobalBeaconReadinessV1::default();
         let provider = CapabilityProvider::exact();
         publish(&readiness, &context, &state, Some(&provider));
@@ -514,8 +525,6 @@ mod tests {
             HashOf::from_untyped_unchecked(Hash::new(b"new readiness committed height"));
         state.push_block_hash_for_testing(next_hash);
         context.height += 1;
-        context.epoch_end_height = 80;
-        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         let parent = context
             .parent_commit_qc
             .as_mut()
@@ -550,9 +559,7 @@ mod tests {
 
     #[test]
     fn readiness_requires_pending_session_to_cover_the_mandatory_pulse() {
-        let (state, mut context, mut record) = fixture();
-        context.epoch_end_height = 80;
-        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
+        let (state, context, mut record) = fixture_with_epoch_end_height(80);
         context.validate().expect("valid later NPoS boundary");
         record.activated_at_height = Some(50);
         install(&state, &record);
@@ -587,9 +594,7 @@ mod tests {
 
     #[test]
     fn readiness_requires_both_current_parliament_and_future_npos_pulses() {
-        let (state, mut context, mut record) = fixture();
-        context.epoch_end_height = 80;
-        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
+        let (state, context, mut record) = fixture_with_epoch_end_height(80);
         context.validate().expect("valid later NPoS boundary");
         {
             let mut world = state.world.block();

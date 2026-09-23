@@ -253,22 +253,39 @@ isi! {
         pub monetary_plan: PublicLaneMonetaryPlanV1,
     }
 }
-/// Deterministic exact self-custody plan for model-only codec fixtures.
+/// Construct an explicit network-bound transfer for codec and dispatch fixtures.
 #[cfg(test)]
-pub(crate) fn monetary_registration_fixture(
-    account: &AccountId,
+pub(crate) fn test_monetary_transfer_plan(
+    source_asset: AssetId,
+    destination_asset: AssetId,
     amount: Quantity,
+    precondition: crate::nexus::PublicLaneMonetaryPreconditionV1,
 ) -> PublicLaneMonetaryPlanV1 {
-    let definition =
-        crate::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id;
-    let asset = AssetId::new(definition, account.clone());
-    PublicLaneMonetaryPlanV1::genesis_registration(asset.clone(), asset, amount)
+    PublicLaneMonetaryPlanV1 {
+        network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"staking instruction codec fixture network"),
+            )),
+        ),
+        valid_until_height: 20,
+        source_asset,
+        destination_asset,
+        amount,
+        precondition,
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{AccountId, Algorithm, KeyPair};
+    use crate::{
+        asset::AssetDefinitionId,
+        nexus::{
+            PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
+            PublicLaneMonetaryScopeV1, PublicLaneRewardClaimSourceV1, PublicLaneRewardClaimStateV1,
+            PublicLaneRewardRecordRefV1,
+        },
+        prelude::{AccountId, Algorithm, KeyPair},
+    };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::PeerId;
     fn sample_account() -> AccountId {
@@ -282,15 +299,27 @@ mod tests {
             .expect("derive checked staking fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
-    #[test]
-    fn monetary_registration_fixture_uses_genesis_pinned_xor() {
-        let account = sample_account();
-        let plan = monetary_registration_fixture(&account, Quantity::from(1000_u64));
-        let xor =
-            crate::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id;
-        let asset = AssetId::new(xor, account);
-        assert_eq!(plan.source_asset, asset);
-        assert_eq!(plan.destination_asset, asset);
+    fn registration_plan(
+        network: crate::NetworkId,
+        amount: Quantity,
+        activation_height: u64,
+    ) -> PublicLaneMonetaryPlanV1 {
+        let definition = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("canonical fixture asset definition");
+        let escrow = AccountId::new(sample_peer_id().public_key().clone());
+        PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(network),
+            valid_until_height: activation_height,
+            source_asset: AssetId::new(definition.clone(), sample_account()),
+            destination_asset: AssetId::new(definition, escrow),
+            amount,
+            precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                PublicLaneMonetaryRegistrationV1 { activation_height },
+            ),
+        }
     }
     fn candidate_fixture() -> (RegisterPublicLaneCandidate, crate::NetworkId) {
         let network_id = crate::NetworkId::from_genesis_hash(
@@ -298,27 +327,15 @@ mod tests {
         );
         let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal)
             .expect("BLS candidate key");
-        let mut registration = RegisterPublicLaneValidator::new(
+        let registration = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             sample_account(),
             PeerId::new(key.public_key().clone()),
             sample_account(),
             Quantity::from(1000_u64),
             Metadata::default(),
-            crate::isi::staking::monetary_registration_fixture(
-                &(sample_account()),
-                Quantity::from(1000_u64),
-            ),
+            registration_plan(network_id, Quantity::from(1000_u64), 13),
         );
-        registration.monetary_plan.network_scope =
-            crate::nexus::PublicLaneMonetaryScopeV1::Network(network_id);
-        registration.monetary_plan.valid_until_height = 13;
-        registration.monetary_plan.precondition =
-            crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                crate::nexus::PublicLaneRegistrationPreconditionV1 {
-                    activation_height: 13,
-                },
-            );
         let authorization =
             PublicLaneCandidateAuthorization::new(network_id, registration.clone(), 13);
         (
@@ -345,7 +362,8 @@ mod tests {
             .peer_signature
             .verify(candidate.registration.peer_id.public_key(), &payload)
             .expect("valid consent");
-        let mut alternatives = vec![payload.clone(); 5];
+        assert!(payload.registration.monetary_plan.has_canonical_shape());
+        let mut alternatives = vec![payload.clone(); 11];
         alternatives[0].network_id = crate::NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other-network")),
         );
@@ -354,6 +372,21 @@ mod tests {
         alternatives[2].registration.lane_id = LaneId::new(7);
         alternatives[3].registration.initial_stake = Quantity::from(999_u64);
         alternatives[4].activation_height += 1;
+        alternatives[5].registration.monetary_plan.network_scope =
+            PublicLaneMonetaryScopeV1::Genesis;
+        alternatives[6]
+            .registration
+            .monetary_plan
+            .valid_until_height += 1;
+        alternatives[7].registration.monetary_plan.source_asset =
+            payload.registration.monetary_plan.destination_asset.clone();
+        alternatives[8].registration.monetary_plan.destination_asset =
+            payload.registration.monetary_plan.source_asset.clone();
+        alternatives[9].registration.monetary_plan.amount = Quantity::from(999_u64);
+        alternatives[10].registration.monetary_plan.precondition =
+            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+                activation_height: 14,
+            });
         for changed in alternatives {
             assert!(
                 candidate
@@ -402,54 +435,10 @@ mod tests {
             SignatureOf::try_new(peer_key.private_key(), &consent)
                 .expect("fixture rebind signature"),
         );
-        let second_peer_key =
-            KeyPair::try_from_seed(vec![0x32; 32], Algorithm::BlsNormal).expect("second fixture peer");
-        let second_peer = PeerId::new(second_peer_key.public_key().clone());
-        let second_consent = PublicLanePeerBindingAuthorization::new(
-            network_id,
-            candidate.registration.lane_id,
-            candidate.registration.validator.clone(),
-            second_peer.clone(),
-            13,
-            sample_peer_id(),
-        );
-        let second_rebind = RebindPublicLaneValidatorPeer::new(
-            candidate.registration.lane_id,
-            candidate.registration.validator.clone(),
-            second_peer,
-            SignatureOf::try_new(second_peer_key.private_key(), &second_consent)
-                .expect("second fixture rebind signature"),
-        );
         let mut rows = vec![
             crate::isi::generated_record_identity_tests::capture(candidate.registration.clone()),
-            crate::isi::generated_record_identity_tests::capture(ClaimPublicLaneRewards {
-                lane_id: candidate.registration.lane_id,
-                account: candidate.registration.validator.clone(),
-                claim_plan: PublicLaneRewardClaimPlanV1 {
-                    network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Network(network_id),
-                    valid_until_height: 13,
-                    expected_state: Some(crate::nexus::PublicLaneRewardClaimStateV1 {
-                        through_epoch: Some(0),
-                    }),
-                    records: vec![],
-                    sources: vec![crate::nexus::PublicLaneRewardClaimSourceV1 {
-                        source_asset: candidate.registration.monetary_plan.source_asset.clone(),
-                        destination_asset: candidate
-                            .registration
-                            .monetary_plan
-                            .source_asset
-                            .clone(),
-                        expected_accrued: Some(Quantity::from(2_u64)),
-                        payout: Quantity::from(2_u64),
-                    }],
-                },
-            }),
             crate::isi::generated_record_identity_tests::capture(candidate),
             crate::isi::generated_record_identity_tests::capture(rebind),
-            crate::isi::generated_record_identity_tests::capture(second_rebind),
-            crate::isi::generated_record_identity_tests::capture(CancelConsensusEvidencePenalty {
-                evidence: super::slice_tests::sample_evidence(),
-            }),
         ];
         rows.extend(crate::isi::generated_record_identity_tests::staking_monetary_fixture_rows());
         println!(
@@ -469,6 +458,8 @@ mod tests {
         let validator = sample_account();
         let peer_id = sample_peer_id();
         let metadata = Metadata::default();
+        let (_, network) = candidate_fixture();
+        let monetary_plan = registration_plan(network, Quantity::from(10_u64), 13);
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             validator.clone(),
@@ -476,10 +467,7 @@ mod tests {
             validator.clone(),
             Quantity::from(10_u64),
             metadata.clone(),
-            crate::isi::staking::monetary_registration_fixture(
-                &(validator.clone()),
-                Quantity::from(10_u64),
-            ),
+            monetary_plan.clone(),
         );
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
@@ -487,6 +475,116 @@ mod tests {
         assert_eq!(instruction.stake_account(), &validator);
         assert_eq!(instruction.initial_stake(), &Quantity::from(10_u64));
         assert_eq!(instruction.metadata(), &metadata);
+        assert_eq!(instruction.monetary_plan(), &monetary_plan);
+    }
+    fn assert_closed_claim_json<T>(value: &T)
+    where
+        T: norito::json::JsonSerialize + norito::json::JsonDeserialize,
+    {
+        let canonical = norito::json::to_value(value).expect("claim JSON");
+        let object = canonical.as_object().expect("claim record object");
+        let mut malformed = Vec::new();
+        for field in object.keys() {
+            let mut missing = object.clone();
+            missing.remove(field);
+            malformed.push(norito::json::Value::Object(missing));
+        }
+        for field in ["unknown_field", "upto_epoch"] {
+            let mut unknown = object.clone();
+            unknown.insert(field.into(), norito::json::Value::Null);
+            malformed.push(norito::json::Value::Object(unknown));
+        }
+        for invalid in malformed {
+            let text = norito::json::to_json(&invalid).expect("malformed claim JSON");
+            assert!(
+                norito::json::from_str::<T>(&text).is_err(),
+                "accepted {text}"
+            );
+            assert!(
+                norito::json::from_value::<T>(invalid).is_err(),
+                "accepted {text}"
+            );
+        }
+    }
+    fn reward_claim_fixture() -> ClaimPublicLaneRewards {
+        let (_, network) = candidate_fixture();
+        let transfer = registration_plan(network, Quantity::from(10_u64), 13);
+        let state = PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(11),
+        };
+        let record = PublicLaneRewardRecordRefV1 {
+            epoch: 12,
+            record_hash: Hash::new(b"immutable reward fixture"),
+        };
+        let source = PublicLaneRewardClaimSourceV1 {
+            source_asset: transfer.destination_asset,
+            destination_asset: transfer.source_asset,
+            expected_accrued: Some(Quantity::from(2_u64)),
+            payout: Quantity::from(12_u64),
+        };
+        let plan = PublicLaneRewardClaimPlanV1 {
+            network_scope: transfer.network_scope,
+            valid_until_height: 13,
+            expected_state: Some(state),
+            records: vec![record],
+            sources: vec![source.clone()],
+        };
+        assert!(plan.has_canonical_shape(&sample_account()));
+        ClaimPublicLaneRewards {
+            lane_id: LaneId::SINGLE,
+            account: sample_account(),
+            claim_plan: plan,
+        }
+    }
+    #[test]
+    #[ignore = "explicit maintenance command prints the canonical complete reward claim record"]
+    fn print_staking_reward_claim_fixture_row() {
+        let row = crate::isi::generated_record_identity_tests::capture(reward_claim_fixture());
+        println!(
+            "STAKING_CLAIM_FIXTURE_ROW={}",
+            norito::json::to_json(&row).expect("canonical complete reward claim row")
+        );
+    }
+    #[test]
+    fn reward_claim_records_require_closed_complete_json_and_roundtrip() {
+        let instruction = reward_claim_fixture();
+        assert_closed_claim_json(&instruction.claim_plan.expected_state.unwrap());
+        assert_closed_claim_json(&instruction.claim_plan.records[0]);
+        assert_closed_claim_json(&instruction.claim_plan.sources[0]);
+        assert_closed_claim_json(&instruction.claim_plan);
+        let boxed = crate::isi::InstructionBox::from(instruction.clone());
+        let bytes = norito::encode_canonical(&boxed).expect("canonical claim instruction frame");
+        let decoded_box: crate::isi::InstructionBox =
+            norito::decode_canonical(&bytes).expect("registered claim instruction decode");
+        assert_eq!(decoded_box, boxed);
+        let json = norito::json::to_json(&instruction).expect("claim instruction JSON");
+        let decoded: ClaimPublicLaneRewards = norito::json::from_str(&json).expect("claim decode");
+        assert_eq!(decoded, instruction);
+
+        let mut no_prior_state = instruction.claim_plan;
+        no_prior_state.expected_state = None;
+        no_prior_state.sources[0].expected_accrued = None;
+        let value = norito::json::to_value(&no_prior_state).expect("explicit absence JSON");
+        assert_eq!(
+            value.get("expected_state"),
+            Some(&norito::json::Value::Null)
+        );
+        assert_eq!(
+            norito::json::from_value::<PublicLaneRewardClaimPlanV1>(value)
+                .expect("explicit absence"),
+            no_prior_state
+        );
+        assert_closed_claim_json(&no_prior_state);
+        assert_closed_claim_json(&PublicLaneRewardClaimStateV1 {
+            through_epoch: None,
+        });
+        assert_closed_claim_json(&no_prior_state.sources[0]);
+    }
+    #[test]
+    fn reward_claim_rejects_retired_bound_only_layout() {
+        for json in [r#"{"upto_epoch":null}"#, r#"{"upto_epoch":12}"#] {
+            assert!(norito::json::from_str::<PublicLaneRewardClaimPlanV1>(json).is_err());
+        }
     }
     #[test]
     fn rebind_public_lane_validator_peer_new_sets_fields() {
@@ -895,7 +993,46 @@ mod slice_tests {
         );
         SignatureOf::try_new(key_pair.private_key(), &consent).expect("rebind peer signature")
     }
-    pub(super) fn sample_evidence() -> Evidence {
+    fn transfer_plan(staker: AccountId, amount: Quantity, bond: bool) -> PublicLaneMonetaryPlanV1 {
+        use crate::nexus::{
+            PublicLaneMonetaryBondV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryRegistrationV1,
+        };
+        let definition = crate::asset::AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .expect("fixture asset definition");
+        let precondition = if bond {
+            PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: 1,
+                peer_id: peer(0x12),
+            })
+        } else {
+            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+                activation_height: 1,
+            })
+        };
+        super::test_monetary_transfer_plan(
+            AssetId::new(definition.clone(), staker),
+            AssetId::new(definition, account(0x55)),
+            amount,
+            precondition,
+        )
+    }
+    #[test]
+    #[ignore = "explicit maintenance command prints the canonical evidence cancellation record"]
+    fn print_staking_evidence_cancellation_fixture_row() {
+        let row =
+            crate::isi::generated_record_identity_tests::capture(CancelConsensusEvidencePenalty {
+                evidence: sample_evidence(),
+            });
+        println!(
+            "STAKING_CANCELLATION_FIXTURE_ROW={}",
+            norito::json::to_json(&row).expect("canonical evidence cancellation row")
+        );
+    }
+
+    fn sample_evidence() -> Evidence {
         let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
         peers.sort();
         let roster = peers
@@ -908,25 +1045,22 @@ mod slice_tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let mint_finality_authority =
-            crate::block::consensus_v2::test_kagemusha_mint_finality_authority(
-                network_id, 0, &roster,
-            );
-        let mint_finality_authorization =
-            crate::block::consensus_v2::test_kagemusha_mint_finality_authorization(
-                &mint_finality_authority,
-                0,
-                1,
-                1,
-            );
+        let authority = crate::block::consensus_v2::test_kagemusha_mint_finality_authority(
+            network_id, 0, &roster,
+        );
+        let authorization =
+            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &authority, 2,
+            )
+            .expect("valid fixture genesis scheduling authorization");
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            kagemusha_mint_finality_authority: mint_finality_authority,
-            kagemusha_mint_finality_authorization: mint_finality_authorization,
-            epoch_end_height: 1,
+            kagemusha_mint_finality_authorization: authorization,
+            kagemusha_mint_finality_authority: authority,
+            epoch_end_height: 2,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
@@ -945,6 +1079,9 @@ mod slice_tests {
             },
             leader_seed: [0xA5; 32],
         };
+        context
+            .validate()
+            .expect("canonical non-boundary evidence fixture");
         let round = ConsensusRound {
             context_id: context.id(),
             height: context.height,
@@ -974,16 +1111,13 @@ mod slice_tests {
     #[test]
     fn staking_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterPublicLaneValidator {
-            monetary_plan: crate::isi::staking::monetary_registration_fixture(
-                &(account(0x13)),
-                Quantity::from(10_u64),
-            ),
             lane_id: LaneId::SINGLE,
             validator: account(0x11),
             peer_id: peer(0x12),
             stake_account: account(0x13),
             initial_stake: Quantity::from(10_u64),
             metadata: Metadata::default(),
+            monetary_plan: transfer_plan(account(0x13), Quantity::from(10_u64), false),
         });
         assert_slice_roundtrip(RebindPublicLaneValidatorPeer {
             lane_id: LaneId::SINGLE,
@@ -1026,16 +1160,13 @@ mod slice_tests {
             &registry,
             "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
             RegisterPublicLaneValidator {
-                monetary_plan: crate::isi::staking::monetary_registration_fixture(
-                    &(account(0x13)),
-                    Quantity::from(10_u64),
-                ),
                 lane_id: LaneId::SINGLE,
                 validator: account(0x11),
                 peer_id: peer(0x12),
                 stake_account: account(0x13),
                 initial_stake: Quantity::from(10_u64),
                 metadata: Metadata::default(),
+                monetary_plan: transfer_plan(account(0x13), Quantity::from(10_u64), false),
             },
         );
         assert_registry_decodes(
@@ -1084,76 +1215,58 @@ mod slice_tests {
     }
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_staking_instructions() {
-        let forged_registration = ForgedRegisterPublicLaneValidator {
-            monetary_plan: crate::isi::staking::monetary_registration_fixture(
-                &(account(0x33)),
-                Quantity::from(1_u64),
-            ),
+        let mut forged_registration = ForgedRegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: account(0x31),
             peer_id: peer(0x32),
             stake_account: account(0x33),
             initial_stake: Numeric::new(-1_i32, 0),
             metadata: Metadata::default(),
+            monetary_plan: transfer_plan(account(0x33), Quantity::from(1_u64), false),
         };
         let encoded = norito::codec::Encode::encode(&forged_registration);
         assert!(
             RegisterPublicLaneValidator::decode_from_slice(&encoded).is_err(),
             "a negative signed payload must not decode as validator initial stake"
         );
-        let forged_bond = ForgedBondPublicLaneStake {
-            monetary_plan: {
-                let mut plan = crate::isi::staking::monetary_registration_fixture(
-                    &(account(0x35)),
-                    Quantity::from(1_u64),
-                );
-                plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
-                    crate::nexus::PublicLaneBondPreconditionV1 {
-                        activation_height: 1,
-                        peer_id: iroha_model_base::peer::PeerId::new(
-                            (account(0x34)).expect_single_signatory().clone(),
-                        ),
-                    },
-                );
-                plan
-            },
+        forged_registration.initial_stake = Numeric::from(1_u64);
+        let positive = norito::codec::Encode::encode(&forged_registration);
+        let (decoded, consumed) = RegisterPublicLaneValidator::decode_from_slice(&positive)
+            .expect("same complete layout with a positive quantity decodes");
+        assert_eq!(consumed, positive.len());
+        assert_eq!(decoded.initial_stake, Quantity::from(1_u64));
+        assert_eq!(decoded.monetary_plan, forged_registration.monetary_plan);
+        let mut forged_bond = ForgedBondPublicLaneStake {
             lane_id: LaneId::SINGLE,
             validator: account(0x34),
             staker: account(0x35),
             amount: Numeric::new(-1_i32, 0),
             metadata: Metadata::default(),
+            monetary_plan: transfer_plan(account(0x35), Quantity::from(1_u64), true),
         };
         let encoded = norito::codec::Encode::encode(&forged_bond);
         assert!(
             BondPublicLaneStake::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as bonded stake"
         );
+        forged_bond.amount = Numeric::from(1_u64);
+        let positive = norito::codec::Encode::encode(&forged_bond);
+        let decoded = BondPublicLaneStake::decode(&mut positive.as_slice())
+            .expect("same complete bond layout with a positive quantity decodes");
+        assert_eq!(decoded.amount, Quantity::from(1_u64));
+        assert_eq!(decoded.monetary_plan, forged_bond.monetary_plan);
     }
     #[test]
     fn forged_bond_lane_id_packed_layout_is_rejected_without_unwind() {
         const WIRE_ID: &str = "iroha.instruction.v1::staking::BondPublicLaneStake";
 
         let bond = BondPublicLaneStake {
-            monetary_plan: {
-                let mut plan = crate::isi::staking::monetary_registration_fixture(
-                    &(account(0x42)),
-                    Quantity::from(10_u64),
-                );
-                plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
-                    crate::nexus::PublicLaneBondPreconditionV1 {
-                        activation_height: 1,
-                        peer_id: iroha_model_base::peer::PeerId::new(
-                            (account(0x41)).expect_single_signatory().clone(),
-                        ),
-                    },
-                );
-                plan
-            },
             lane_id: LaneId::SINGLE,
             validator: account(0x41),
             staker: account(0x42),
             amount: Quantity::from(10_u64),
             metadata: Metadata::default(),
+            monetary_plan: transfer_plan(account(0x42), Quantity::from(10_u64), true),
         };
         let flags =
             header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
@@ -1246,6 +1359,10 @@ mod json_tests {
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::new(peer_key.public_key().clone());
         let stake_account = AccountId::new(stake_key.public_key().clone());
+        let definition = crate::asset::AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .expect("fixture definition");
         let isi = RegisterPublicLaneValidator::new(
             LaneId::new(1),
             validator.clone(),
@@ -1253,9 +1370,15 @@ mod json_tests {
             stake_account.clone(),
             Quantity::from(42u32),
             Metadata::default(),
-            crate::isi::staking::monetary_registration_fixture(
-                &(stake_account.clone()),
-                Quantity::from(42u32),
+            super::test_monetary_transfer_plan(
+                crate::asset::AssetId::new(definition.clone(), stake_account),
+                crate::asset::AssetId::new(definition, validator.clone()),
+                Quantity::from(42_u32),
+                crate::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                    crate::nexus::PublicLaneMonetaryRegistrationV1 {
+                        activation_height: 1,
+                    },
+                ),
             ),
         );
         let encoded = to_value(&isi).expect("encode RegisterPublicLaneValidator");

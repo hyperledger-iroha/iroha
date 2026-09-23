@@ -21,6 +21,7 @@ then mandatory configuration and remaining selected harnesses in the same warm
 lane. Both phases must pass. Optional --session-dir creates a fresh private
 background diagnostic with durable request/log/result records; check-status reads
 its inherited flock and completion record after the launching terminal exits.
+Status includes the immutable request path and explicit focus count, not the selector list.
 No session is resumed or restarted automatically. It writes no qualification checkpoint and cannot
 be selected by prepare.
 Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
@@ -1170,8 +1171,10 @@ def development_check_status(session: Path) -> dict[str, object]:
         state = "running" if active else (
             "incomplete" if result is None else "passed" if result["exit_code"] == 0 else "failed")
         return {"schema": CHECK_SESSION_SCHEMA, "session_id": request["session_id"],
-                "state": state, "request": request, "result": result,
-                "log": str(session / "check.log"), "release_qualified": False}
+                "state": state, "request_path": str(session / "request.json"),
+                "focused_regression_count": len(request["focused_regressions"] or []),
+                "result": result, "log": str(session / "check.log"),
+                "release_qualified": False}
     finally:
         os.close(fd)
 

@@ -1737,82 +1737,7 @@ mod tests {
         );
     }
     #[test]
-    fn profile_xor_allocations_are_explicit_exact_and_network_bound() {
-        use iroha_data_model::{isi::MintBox, parameter::system::SumeragiNposParameters};
-        let spec = &PROFILES[0];
-        let peers = build_peers(spec).expect("fixture peers");
-        let directory = tempdir().expect("allocation input directory");
-        assert!(load_profile_xor_allocations(spec, &peers, directory.path(), None).is_err());
-        let mut entries = peers
-            .iter()
-            .map(|peer| ProfileXorAllocationV1 {
-                account: AccountId::new(peer.peer_id.public_key().clone()),
-                amount: "10000.000000001".parse().unwrap(),
-            })
-            .collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.account.cmp(&right.account));
-        let allocations = ProfileXorAllocationsV1 {
-            version: 1,
-            asset_definition_id: SumeragiNposParameters::default().xor_asset_definition_id,
-            allocations: entries,
-        };
-        let path = directory.path().join(format!("{}.json", spec.slug));
-        fs::write(&path, json::to_vec(&allocations).unwrap()).unwrap();
-        let loaded = load_profile_xor_allocations(spec, &peers, directory.path(), None)
-            .expect("explicit input");
-        let manifest = stub_genesis()
-            .into_builder()
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .build_raw()
-            .unwrap()
-            .with_consensus_mode(SumeragiConsensusMode::Npos);
-        let funded = apply_explicit_xor_allocations(manifest.clone(), &loaded)
-            .expect("apply exact allocations");
-        let minted = funded
-            .instructions()
-            .filter_map(
-                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
-                    Some(MintBox::Asset(mint)) => {
-                        Some((mint.destination.account().clone(), mint.object.clone()))
-                    }
-                    _ => None,
-                },
-            )
-            .collect::<Vec<_>>();
-        assert_eq!(minted.len(), peers.len());
-        for (account, amount) in minted {
-            let supplied = loaded
-                .allocations
-                .iter()
-                .find(|entry| entry.account == account)
-                .unwrap();
-            assert_eq!(amount, supplied.amount);
-        }
-        for invalid in 0..3 {
-            let mut bad = allocations.clone();
-            if invalid == 0 {
-                bad.allocations.pop();
-            }
-            if invalid == 1 {
-                bad.allocations[0].amount = 9_999_u32.into();
-            }
-            if invalid == 2 {
-                bad.allocations.swap(0, 1);
-            }
-            fs::write(&path, json::to_vec(&bad).unwrap()).unwrap();
-            assert!(load_profile_xor_allocations(spec, &peers, directory.path(), None).is_err());
-        }
-        let mut foreign = allocations;
-        foreign.asset_definition_id = AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::parse_fully_qualified("foreign.universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        assert!(apply_explicit_xor_allocations(manifest, &foreign).is_err());
-    }
-    #[test]
-    fn profile_authority_requires_genesis_generation_zero() {
+    fn profile_authority_rejects_nonzero_genesis_generation() {
         let profile = PROFILES[0];
         let peers = build_peers(&profile).expect("build deterministic profile peers");
         let mut parameters = stub_genesis()
@@ -1828,8 +1753,12 @@ mod tests {
 
         let error =
             load_profile_kagemusha_mint_finality_parameters(&profile, &peers, directory.path())
-                .expect_err("genesis must reject a nonzero authority generation");
-        assert!(error.to_string().contains("genesis.authority_generation"));
+                .expect_err("genesis authority generation must be zero");
+        assert!(
+            error
+                .to_string()
+                .contains("mint_finality.genesis.authority_generation")
+        );
     }
     #[test]
     fn profile_peer_builder_rejects_non_committee_sizes() {

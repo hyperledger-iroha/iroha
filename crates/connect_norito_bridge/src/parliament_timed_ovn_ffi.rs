@@ -1061,19 +1061,8 @@ mod tests {
                     })
                     .collect(),
             };
-        let kagemusha_mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
- version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
- network_id: network_id,
- epoch: 0,
- first_height: 1,
- last_height: 100,
- authority_generation: kagemusha_mint_finality_authority.generation,
- authority_id: kagemusha_mint_finality_authority.authority_id().expect("canonical fixture authority"),
- beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
- previous_authorization_id: [0; 32],
- transition_id: [0; 32],
- decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
-};
+        let kagemusha_mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&kagemusha_mint_finality_authority, 100)
+            .expect("derive mint-finality fixture roster ID");
         let pops = keys
             .iter()
             .map(|key| {

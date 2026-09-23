@@ -1392,7 +1392,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "let finalization_ready =",
             "activated.ready_for_finalized_rollover(&mut active_runner)?",
             "let rollover_ready = if finalization_ready",
-            "preflight_finalized_lane_rollover(",
+            "preflight_finalized_native_rollover(",
             "if finalization_ready && !rollover_ready",
             fenced_rollover,
             "close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)",
@@ -1604,7 +1604,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
-            ".retain_merge_sidecars_for_global_view(",
             "assert!(outcome.cleanup().warnings().is_empty())",
             "assert!(outcome.wal_retirement_warning().is_none())",
         ],
@@ -2220,7 +2219,7 @@ fn live_terminal_height_authenticates_after_closed_drain_without_a_successor() {
     let terminal = source_region(
         source,
         fenced_rollover,
-        "let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height",
+        "let (prepared_successor, cleanup) = finalize_lifecycle_height",
     );
     assert_source_tokens_in_order(
         terminal,

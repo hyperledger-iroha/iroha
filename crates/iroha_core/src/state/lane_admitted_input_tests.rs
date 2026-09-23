@@ -26,6 +26,26 @@ fn first_lane_input_fixture(seed: u8) -> (Box<LaneContextVerifiedFixture>, Vec<u
     )
 }
 
+/// Build a lifecycle test source through the same finalized State and Kura
+/// authentication path used by native input preparation.
+pub(crate) fn authenticated_native_source_for_lifecycle_fixture(
+) -> Arc<super::AuthenticatedLaneAdmittedInputSourceV1> {
+    let (fixture, _) = first_lane_input_fixture(0x7B);
+    let state = &fixture.state;
+    let observed = state
+        .verified_lane_consensus_contexts()
+        .expect("finalized fixture contexts are valid")
+        .expect("fixture publishes a lane");
+    let lane = observed.contexts().first().expect("fixture has one lane");
+    let super::FirstLaneAdmittedInputReadV1::Ready(input) = state
+        .first_lane_admitted_input(&observed, lane)
+        .expect("fixture first admission is authenticated")
+    else {
+        panic!("fixture has a locally available finalized first carrier");
+    };
+    Arc::new(input.source().clone())
+}
+
 // Keep the admission overlay and finality temporaries outside State/genesis
 // construction's call stack. The completed fixture also stays on the heap when
 // a reader test retains more than one independent State.
