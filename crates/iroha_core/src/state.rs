@@ -63290,10 +63290,9 @@ fn replay_blocks_from_kura_range_inner(
             state.sumeragi_block_cadence(),
             state,
             &mut voting_block,
-        )
-        .unpack(|_| {});
+        );
         replay_timing.validation += validation_start.elapsed();
-        let (valid_block, mut state_block) = match validation {
+        let mut replay = match validation {
             Ok(ok) => ok,
             Err((failed_block, err)) => {
                 let sig_indices: Vec<u32> = failed_block
@@ -63324,7 +63323,7 @@ fn replay_blocks_from_kura_range_inner(
         if signed_block.header().is_genesis() {
             crate::sumeragi::v2_context::validate_staged_genesis_v2_authority(
                 &iroha_genesis::GenesisBlock(signed_block.clone()),
-                &state_block,
+                &replay.state,
                 &finality.height_context,
                 &finality.validator_set_pops,
             )
@@ -63334,19 +63333,32 @@ fn replay_blocks_from_kura_range_inner(
                 )
             })?;
         }
-        let witness = state_block.take_exec_witness().ok_or_else(|| {
+        let has_native_inputs = signed_block
+            .execution_context()
+            .is_some_and(|bundle| bundle.native_lane_decisions.is_some());
+        if replay.native.is_some() != has_native_inputs
+            || replay.native.as_ref().is_some_and(|native| {
+                !native.retains_state(&replay.state)
+                    || !native.retains_carrier(replay.valid.as_ref(), &finality.height_context)
+            })
+        {
+            return Err(eyre!(
+                "replayed Native block #{height} lost its original execution custody"
+            ));
+        }
+        let witness = replay.state.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
         let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-            valid_block.as_ref(),
-            state_block.staged_merge_entry(),
+            replay.valid.as_ref(),
+            replay.state.staged_merge_entry(),
         )
         .map_err(|error| {
             eyre!("failed to derive replayed block #{height} Native AMX manifest: {error}")
         })?;
         let lane_finality_manifest =
             crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(
-                valid_block.as_ref(),
+                replay.valid.as_ref(),
             )
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} lane-finality manifest: {error}")
@@ -63356,7 +63368,7 @@ fn replay_blocks_from_kura_range_inner(
                 &witness,
                 &native_amx_manifest,
                 &lane_finality_manifest,
-                valid_block.as_ref(),
+                replay.valid.as_ref(),
             )
             .map_err(|error| {
                 eyre!("failed to derive replayed block #{height} execution commitment: {error}")
@@ -63367,10 +63379,11 @@ fn replay_blocks_from_kura_range_inner(
                 finality.commit_qc.execution_commitment
             ));
         }
-        if let Some(pending) = state_block.pending_autoscale_lifecycle.as_ref() {
+        if let Some(pending) = replay.state.pending_autoscale_lifecycle.as_ref() {
             geometry.push(pending.clone());
         }
-        let committed_block = valid_block
+        let committed_block = replay
+            .valid
             .commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)
             .unpack(|_| {})
             .map_err(|(_block, error)| eyre!(error))
@@ -63397,14 +63410,16 @@ fn replay_blocks_from_kura_range_inner(
             });
         }
         log_replayed_signed_sources(height, committed_block.as_ref())?;
-        state_block
+        replay
+            .state
             .authorize_execution_output_publication(&committed_block, &witness)
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| {
                 format!("failed to authorize replayed execution at block #{height}")
             })?;
         let apply_without_execution_start = Instant::now();
-        let _ = state_block
+        let _ = replay
+            .state
             .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)
             .map_err(|err| {
                 eyre!(err).wrap_err(format!(
@@ -63412,15 +63427,16 @@ fn replay_blocks_from_kura_range_inner(
                 ))
             })?;
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
-        let staged_merge_entry = state_block.staged_merge_entry().cloned();
-        state_block
+        let staged_merge_entry = replay.state.staged_merge_entry().cloned();
+        replay
+            .state
             .prepare_replay_checkpoint_preview()
             .map_err(|error| eyre!(error))
             .wrap_err_with(|| {
                 format!("unsafe lifecycle checkpoint preview for replayed block #{height}")
             })?;
         let checkpoint_hash_start = Instant::now();
-        let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+        let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&replay.state);
         replay_timing.checkpoint_hash += checkpoint_hash_start.elapsed();
         if actual != wsv_checkpoint.state_hash() {
             return Err(eyre!(
@@ -63428,10 +63444,22 @@ fn replay_blocks_from_kura_range_inner(
                 wsv_checkpoint.state_hash()
             ));
         }
+        if replay.native.is_some() != has_native_inputs
+            || replay.native.as_ref().is_some_and(|native| {
+                !native.retains_state(&replay.state)
+                    || !native.retains_carrier(committed_block.as_ref(), &finality.height_context)
+            })
+        {
+            return Err(eyre!(
+                "replayed Native block #{height} changed custody before State publication"
+            ));
+        }
         let commit_start = Instant::now();
-        state_block.commit().map_err(|err| {
+        replay.state.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
+        // The original source/Decision owner outlives every execution writer.
+        drop(replay.native);
         if let Some(entry) = staged_merge_entry {
             state
                 .record_globally_committed_merge_entry(&entry, MergeLedgerPublicationMode::Replay)

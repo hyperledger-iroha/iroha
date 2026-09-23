@@ -606,9 +606,24 @@ sole input on all three survivors and authenticate its later-view Native quorum.
 Restart of the stopped author then fails at genesis: the retained publisher wrote
 finality without the checkpoint-bound commit manifest required by strict recovery.
 The correction writes the original captured checkpoint and authenticated manifest
-before finality, preserving the existing interrupted-tip recovery cuts. Current
-Rust and crash-cut validation, plus a complete unchanged outage/restart run,
-remain in progress. Evidence belongs in the
+before finality, preserving the existing interrupted-tip recovery cuts. All 530
+Core63 controls pass on an unchanged final source/artifact join. Matching
+daemon64/harness65 clear strict Kura replay, then expose a nonempty signed-genesis
+lifecycle frame incorrectly excluded from physical predecessor retirement. The
+correction admits that exact authenticated physical frame under genesis
+policy while retaining the full owner/Serve census and strict missing-frame
+exception. All 574 Core66 controls pass with an unchanged final source/binary/Git
+join. Matching daemon67/harness68 pass the four-validator silent-author,
+sole-input and genesis-restart diagnostic in 115.45 seconds. Seven-validator
+two-restart validation fails after successful Native execution because historical
+replay still selects the generic Native-rejecting validator. The current repair
+shares Native source-owned preflight and recorded execution with historical
+replay, preserving its isolated-State finality/wire/checkpoint tail. All six
+new publication/replay and snapshot controls pass within unchanged Core75's full
+580-control selection. Matching daemon73/harness74 fail earlier at height rollover:
+a whole-process ingress cut rejects process-lived Native custody. The separate
+authenticated closed-global cut is under validation; strict full-drain semantics,
+network qualification and the complete fault matrix remain required. Evidence belongs in the
 [epoch-authority record](../docs/history/2026-09-22/epoch-authority-cutover.md).
 
 ## Required invariants

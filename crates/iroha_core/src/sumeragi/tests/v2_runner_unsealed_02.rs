@@ -859,7 +859,7 @@ fn pending_kura_finalization_closes_and_drains_before_rollover() {
         "drain_finalized_lane_relay_prefix(",
         "if !drained_terminal_ingress && !drained_terminal_relay",
         "break;",
-        "ensure_closed_drained_cut()",
+        "ensure_closed_global_drained_cut()",
         "activated.into_finalized_rollover(&mut active_runner)",
     ] {
         let offset = finalization[cursor..]

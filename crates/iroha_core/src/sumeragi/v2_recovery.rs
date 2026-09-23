@@ -1621,13 +1621,13 @@ impl RecoveredCompleteTipActivationAuthority {
                 apply,
             )
     }
-    /// Return whether height-one CompleteTip may retire an empty genesis ledger.
+    /// Authenticate the exact lifecycle context governed by signed genesis.
     ///
-    /// Signed genesis uses the authenticated bootstrap rather than the ordinary
-    /// Decision body lifecycle, so its canonical height-one ledger is empty.
-    /// The exception remains bound to the Kura-authenticated genesis artifact,
-    /// genesis body-signature policy, and exact lifecycle context.
-    pub(in crate::sumeragi) fn authorizes_empty_genesis_lifecycle(
+    /// This predicate authenticates context and signature policy, not ledger
+    /// emptiness. Live signed-genesis consensus may retain height-local work.
+    /// A missing genesis frame requires a separate empty-ledger check; retiring
+    /// existing work always requires its store-minted physical-frame proof.
+    pub(in crate::sumeragi) fn authenticates_genesis_lifecycle_context(
         &self,
         context: LifecycleContext,
     ) -> bool {
@@ -1644,27 +1644,27 @@ impl RecoveredCompleteTipActivationAuthority {
             && context.height() == 1
             && context.id().as_bytes() == self.artifact.context_id().0.as_ref()
     }
-    /// Return whether an exact physically present non-genesis frame may be
-    /// retired behind this canonical CompleteTip.
+    /// Return whether an exact physically present frame may be retired behind
+    /// this canonical CompleteTip, under that height's actual signature policy.
     ///
-    /// A canonical-sync node can retain unrelated height-local work without
-    /// ever owning the Decision Apply path for the block that finalized. Unlike
-    /// signed genesis, this path requires rotating-leader finality and is useful
-    /// only together with the store-minted physical-frame capability retained by
-    /// the lifecycle ledger. A missing path therefore cannot borrow this Kura
-    /// authority.
+    /// Both signed-genesis consensus and canonical sync may retain local work
+    /// without the ordinary Decision Apply lineage. This predicate is useful
+    /// only with the store-minted physical-frame capability and complete owner
+    /// retirement census. A missing path cannot borrow this Kura authority.
     pub(in crate::sumeragi) fn authorizes_retired_lifecycle(
         &self,
         context: LifecycleContext,
     ) -> bool {
         let verified = self.verified_predecessor.context();
-        self.artifact.height > 1
+        let policy_matches_height = match &self.predecessor_signature_policy {
+            BlockSignaturePolicy::GenesisAuthority(_) => {
+                self.authenticates_genesis_lifecycle_context(context)
+            }
+            BlockSignaturePolicy::RotatingLeader => self.artifact.height > 1,
+        };
+        policy_matches_height
             && self.artifact.height_context == *verified
             && verified.height == self.artifact.height
-            && matches!(
-                &self.predecessor_signature_policy,
-                BlockSignaturePolicy::RotatingLeader
-            )
             && DurableV2PredecessorIdentity::authenticate(&self.artifact, &self.receipt)
                 .is_ok_and(|predecessor| predecessor == self.activation.predecessor())
             && context.height() == self.artifact.height

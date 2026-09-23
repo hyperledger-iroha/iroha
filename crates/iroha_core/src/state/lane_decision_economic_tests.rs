@@ -341,7 +341,15 @@ fn native_economic_fixture_from_state_with_initializer(
     {
         install_native_runtime_startup_registry(&state, &validators);
     }
-    configure_commit_topology_preserving_world_peers(&state, 1);
+    // The State prefix and its frozen global finality must use the same exact
+    // four-validator roster. A random one-member metadata topology cannot be
+    // authenticated as the first context of a restored snapshot.
+    let mut global_validators = (0xD3_u8..=0xD6)
+        .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+        .collect::<Vec<_>>();
+    global_validators.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    set_commit_topology_from_keypairs(&state, &global_validators);
+    seed_consensus_keys_with_pops(&state, &global_validators);
     // The fixture starts with live asset definitions before executing genesis
     // instructions. Seed their real genesis incarnations while the parent history
     // is still empty, using the production finalizer at this exact header.

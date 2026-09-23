@@ -92,7 +92,9 @@ impl RecoveryFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id(network);
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2508,7 +2510,8 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
     let rotating_kura = Kura::blank_kura_for_testing();
     let rotating =
         complete_tip_for_terminal_decision_on_kura(&fixture, &projection, rotating_kura.as_ref());
-    assert!(!rotating.authorizes_empty_genesis_lifecycle(fixture.lifecycle_context()));
+    assert!(!rotating.authenticates_genesis_lifecycle_context(fixture.lifecycle_context()));
+    assert!(!rotating.authorizes_retired_lifecycle(fixture.lifecycle_context()));
 
     let genesis_kura = Kura::blank_kura_for_testing();
     let genesis = complete_tip_for_terminal_decision_on_kura_with_policy(
@@ -2520,13 +2523,13 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
         ),
     );
     assert!(
-        !genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+        !genesis.authenticates_genesis_lifecycle_context(LifecycleContext::new(
             fixture.lifecycle_context().id(),
             2,
         ))
     );
     assert!(
-        !genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+        !genesis.authenticates_genesis_lifecycle_context(LifecycleContext::new(
             LifecycleDigest::new([0xFF; 32]),
             1,
         ))
@@ -2538,8 +2541,8 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
         .join(hex::encode(fixture.verified.context().id().0.as_ref()));
     let (store, empty) =
         LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
-            .expect("open malformed genesis predecessor store");
-    let malformed = LifecycleLedgerV1::new(
+            .expect("open nonempty genesis predecessor store");
+    let nonempty = LifecycleLedgerV1::new(
         fixture.lifecycle_context(),
         1,
         vec![unrelated_live_record(
@@ -2552,14 +2555,15 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
     )
     .expect("construct valid but nonempty genesis lifecycle ledger");
     store
-        .persist_exact_successor(&empty, &malformed)
+        .persist_exact_successor(&empty, &nonempty)
         .expect("persist nonempty genesis lifecycle ledger");
     assert!(
-        genesis
-            .into_canonical_predecessor_storage(&fixture.keys[0])
+        nonempty
+            .stage_complete_tip_terminal_apply_recovery(&genesis, None)
             .is_err(),
-        "empty-genesis authority must not retire any nonempty malformed ledger"
+        "signed-genesis context cannot retire nonempty work without physical-frame authority"
     );
+    assert_eq!(store.load().unwrap(), nonempty);
 }
 
 #[test]
@@ -2677,7 +2681,23 @@ fn empty_retired_frame_authority_rejects_foreign_path_context_and_digest_drift()
 
 #[test]
 fn canonical_complete_tip_retires_physical_nonempty_predecessor_without_apply() {
-    let fixture = height_three_recovery_fixture("empty-retired-nonempty-negative", 0xA6);
+    exercise_complete_tip_physical_nonempty_retirement(
+        height_three_recovery_fixture("physical-nonempty-retirement", 0xA6),
+        BlockSignaturePolicy::RotatingLeader,
+    );
+}
+
+#[test]
+fn canonical_complete_tip_retires_physical_genesis_predecessor_without_apply() {
+    let fixture = RecoveryFixture::new("physical-genesis-retirement", 0xB6);
+    let policy = BlockSignaturePolicy::GenesisAuthority(fixture.keys[0].public_key().clone());
+    exercise_complete_tip_physical_nonempty_retirement(fixture, policy);
+}
+
+fn exercise_complete_tip_physical_nonempty_retirement(
+    fixture: RecoveryFixture,
+    policy: BlockSignaturePolicy,
+) {
     let (_, projection) = terminal_decision_chain_fixture(&fixture);
     let kura = Kura::blank_kura_for_testing();
     let predecessor_root = kura
@@ -2686,7 +2706,7 @@ fn canonical_complete_tip_retires_physical_nonempty_predecessor_without_apply() 
         .join(hex::encode(fixture.verified.context().id().0.as_ref()));
     let (store, empty) =
         LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
-            .expect("open nonempty predecessor-negative store");
+            .expect("open actual nonempty predecessor store");
     let unrelated_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xA7; 32])), 1);
     let unrelated = LifecycleLedgerV1::new(
         fixture.lifecycle_context(),
@@ -2702,9 +2722,37 @@ fn canonical_complete_tip_retires_physical_nonempty_predecessor_without_apply() 
     .expect("construct nonempty predecessor without Decision Apply");
     store
         .persist_exact_successor(&empty, &unrelated)
-        .expect("persist nonempty predecessor negative fixture");
+        .expect("persist actual nonempty predecessor frame");
     let before = fs::read(predecessor_root.join(LEDGER_FILE)).expect("read nonempty predecessor");
-    let retired = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+    let complete_tip = complete_tip_for_terminal_decision_on_kura_with_policy(
+        &fixture,
+        &projection,
+        kura.as_ref(),
+        policy,
+    );
+    assert!(
+        unrelated
+            .authenticate_complete_tip_terminal_apply(&complete_tip)
+            .is_err()
+    );
+    assert!(
+        unrelated
+            .stage_complete_tip_terminal_apply_recovery(&complete_tip, None)
+            .is_err()
+    );
+    let present = store
+        .authenticate_present_frame(&unrelated)
+        .unwrap()
+        .unwrap();
+    let (_, changed, evidence) = unrelated
+        .stage_complete_tip_terminal_apply_recovery(&complete_tip, Some(present))
+        .expect("only original physical-frame authority can retire this predecessor");
+    assert!(!changed);
+    assert!(matches!(
+        evidence,
+        CompleteTipPredecessorLifecycleEvidenceV1::CanonicalFrame(_)
+    ));
+    let retired = complete_tip
         .into_canonical_predecessor_storage(&fixture.keys[0])
         .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
         .expect("canonical finality retires physically present unrelated local work");
