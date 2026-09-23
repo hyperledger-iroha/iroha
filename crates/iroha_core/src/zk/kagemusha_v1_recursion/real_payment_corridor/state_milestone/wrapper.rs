@@ -4,8 +4,8 @@
 //! reports the full compiled wrapper structure against the incoming State seed without changing
 //! the candidate's already-bound wrapper identities. No release is admitted, no Core journal is
 //! advanced, and the native monetary gates remain closed.
-//! TODO: converge the incoming wrapper structures and re-prove the complete chain under final
-//! identities before attempting Core payment finalization or a ReceiveFold handoff.
+//! TODO: qualify the sender's hardware commit and complete Core payment finalization before a
+//! ReceiveFold handoff; a diagnostic proof alone cannot authorize money.
 
 use super::terminal::{ProvenSenderTerminalV1, instance_digest, terminal_public};
 use super::*;
@@ -14,7 +14,8 @@ use crate::zk::kagemusha_v1_recursion::{
     generation::{
         KagemushaCommitWrapperEpGenerationWitnessV1, KagemushaCommitWrapperEqGenerationWitnessV1,
         KagemushaCommitWrapperGenerationWitnessV1, KagemushaGeneratedCommitWrapperArtifactsV1,
-        KagemushaLoadedEpCommitWrapperArtifactsV1, KagemushaLoadedEqCommitWrapperArtifactsV1,
+        KagemushaGeneratedPaymentProofV1, KagemushaLoadedEpCommitWrapperArtifactsV1,
+        KagemushaLoadedEqCommitWrapperArtifactsV1,
         KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
         generate_kagemusha_commit_wrapper_artifacts_v1, prove_kagemusha_commit_wrapper_v1,
     },
@@ -68,6 +69,39 @@ fn validate_wrapper_projection<F: KagemushaPoseidonFieldV1>(
     // Audits and histories belong to their respective proofs. The caller verifies the full
     // columns, independently decides both histories, and checks the actual new history fold.
     Ok(())
+}
+
+// This identity check is necessary before a proved wrapper can replace the inactive incoming
+// slot. It never verifies a proof or grants a receiver credit; the caller separately verifies the
+// actual paired wrapper proof and its histories before reaching this check.
+pub(super) fn require_release_pinned_incoming_identity(
+    pinned: [DigestV1; 2],
+    proved: [DigestV1; 2],
+) -> Result<(), String> {
+    ensure(
+        !pinned.contains(&[0; 32])
+            && !proved.contains(&[0; 32])
+            && pinned[0] != pinned[1]
+            && proved[0] != proved[1]
+            && pinned == proved,
+        "genuine incoming CommitWrapper identity is not pinned by the already proved State release",
+    )
+}
+
+#[test]
+fn incoming_identity_guard_requires_exact_distinct_nonzero_roles() {
+    let pinned = [
+        digest(b"incoming-eq-seed", 1),
+        digest(b"incoming-ep-seed", 1),
+    ];
+    let proved = [
+        digest(b"proved-eq-wrapper", 1),
+        digest(b"proved-ep-wrapper", 1),
+    ];
+    assert!(require_release_pinned_incoming_identity(pinned, pinned).is_ok());
+    assert!(require_release_pinned_incoming_identity(pinned, proved).is_err());
+    assert!(require_release_pinned_incoming_identity([[0; 32], pinned[1]], proved).is_err());
+    assert!(require_release_pinned_incoming_identity(pinned, [proved[0]; 2]).is_err());
 }
 
 #[test]
@@ -298,13 +332,23 @@ fn diagnostic_wrapper_keys(
     (eq, ep)
 }
 
-/// Return actual proved wrapper protocols as the next nonauthorizing graph-construction seed.
+/// Retained genuine wrapper proof and exact sender projection for graph closure only.
+pub(super) struct ProvenSenderWrapperV1 {
+    pub(super) eq_protocol: PlonkProtocol<EqAffine>,
+    pub(super) ep_protocol: PlonkProtocol<EpAffine>,
+    pub(super) payment: KagemushaGeneratedPaymentProofV1,
+    pub(super) committed: CommittedOutgoingCandidateV1,
+    /// Decided proof material for a later receiver witness, never an admitted payment.
+    pub(super) incoming: IncomingStateProofMaterial,
+}
+
+/// Return a genuine proved wrapper as the next nonauthorizing graph-construction seed.
 pub(super) fn prove_sender_wrapper(
     funded: &RealFundedPrerequisite,
     artifacts: KagemushaRecursionArtifactsV1,
     incoming_seed: &IncomingStateProofMaterial,
     terminal: ProvenSenderTerminalV1,
-) -> (PlonkProtocol<EqAffine>, PlonkProtocol<EpAffine>) {
+) -> ProvenSenderWrapperV1 {
     let started = std::time::Instant::now();
     let original_core = terminal
         .committed
@@ -650,7 +694,7 @@ pub(super) fn prove_sender_wrapper(
         terminal.public.semantic_digest
     );
     eprintln!(
-        "KAGEMUSHA diagnostic wrapper structure: Eq seed={} actual={} match={}; Ep seed={} actual={} match={}; full identities match={}; final graph re-proving has not run",
+        "KAGEMUSHA diagnostic wrapper structure: Eq incoming={} actual={} match={}; Ep incoming={} actual={} match={}; full identities match={}",
         hex::encode(eq_seed_structure),
         hex::encode(eq_wrapper_structure),
         eq_seed_structure == eq_wrapper_structure,
@@ -666,5 +710,24 @@ pub(super) fn prove_sender_wrapper(
         wire.ep_proof.len(),
         encoded.len()
     );
-    (eq_wrapper_protocol, ep_wrapper_protocol)
+    // The caller must independently require exact release identity before treating the retained
+    // proof as incoming sender evidence. This function only proves and decides the bytes.
+    ProvenSenderWrapperV1 {
+        incoming: IncomingStateProofMaterial {
+            eq_protocol: eq_wrapper_protocol.clone(),
+            ep_protocol: ep_wrapper_protocol.clone(),
+            eq_instances: vec![generated_payment.eq_public_instances.clone()],
+            ep_instances: vec![generated_payment.ep_public_instances.clone()],
+            eq_proof: wire.eq_proof.clone(),
+            ep_proof: wire.ep_proof.clone(),
+            eq_history,
+            ep_history,
+            eq_current: Some(generated_payment.eq_current_accumulator.clone()),
+            ep_current: Some(generated_payment.ep_current_accumulator.clone()),
+        },
+        eq_protocol: eq_wrapper_protocol,
+        ep_protocol: ep_wrapper_protocol,
+        payment: generated_payment,
+        committed: terminal.committed,
+    }
 }

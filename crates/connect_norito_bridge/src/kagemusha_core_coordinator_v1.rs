@@ -2064,6 +2064,42 @@ mod tests {
         );
         assert_eq!(handle, 0);
 
+        // BeginObservation is a canonical device-read command, not the paired State-proof
+        // observer. Even a well-formed device read cannot acquire a native session or verifier
+        // from this stock bridge: a release-authenticated Rust owner must be installed first.
+        let observation_method = KagemushaCoreCoordinatorMethodV1::BeginObservation;
+        let observation_request =
+            kagemusha_core_coordinator_encode_request_v1(&observation_request_fields(21))
+                .expect("canonical device observation request");
+        assert_eq!(
+            archive_boundary::validate_request(observation_method, &observation_request),
+            Ok(())
+        );
+        let mut observation_output = core::ptr::null_mut();
+        let mut observation_output_len = usize::MAX;
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                    7,
+                    observation_method.code(),
+                    observation_request.as_ptr(),
+                    observation_request.len(),
+                    &mut observation_output,
+                    &mut observation_output_len,
+                )
+            },
+            crate::ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        );
+        assert!(observation_output.is_null());
+        assert_eq!(observation_output_len, 0);
+        let mut forged_proof_slot = observation_request_fields(21);
+        forged_proof_slot[1] = b"paired-state-proof".to_vec();
+        let forged_proof_request = kagemusha_core_coordinator_encode_request_v1(&forged_proof_slot)
+            .expect("bounded forged request");
+        assert!(
+            archive_boundary::validate_request(observation_method, &forged_proof_request).is_err()
+        );
+
         // Transport-shaped opaque selectors must fail before either dispatch or unavailable.
         let mut preparation_fields = vec![b"opaque-preparation".to_vec(), b"reply".to_vec()];
         let mut output_ptr = core::ptr::null_mut();

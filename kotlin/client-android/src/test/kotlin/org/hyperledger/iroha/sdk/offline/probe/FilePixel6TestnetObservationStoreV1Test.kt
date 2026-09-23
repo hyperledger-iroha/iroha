@@ -5,8 +5,15 @@ package org.hyperledger.iroha.sdk.offline.probe
 
 import java.io.File
 import java.nio.file.Files
+import java.security.KeyFactory
 import java.security.MessageDigest
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.security.spec.PKCS8EncodedKeySpec
+import java.util.Base64
 import kotlin.test.assertContentEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import org.junit.jupiter.api.Test
 
@@ -34,6 +41,13 @@ class FilePixel6TestnetObservationStoreV1Test {
     private val before = ByteArray(16)
     private val after = byteArrayOf(1) + ByteArray(15)
     private val nonce = ByteArray(32) { 4 }
+    private val certificate = Base64.getDecoder().decode(TEST_CERTIFICATE_DER)
+    private val privateKey = KeyFactory.getInstance("EC")
+        .generatePrivate(PKCS8EncodedKeySpec(Base64.getDecoder().decode(TEST_PRIVATE_KEY_PKCS8)))
+    private val publicKey = uncompressedP256Sec1V1(
+        (CertificateFactory.getInstance("X.509")
+            .generateCertificate(certificate.inputStream()) as X509Certificate).publicKey,
+    )
     private val frame = ByteArray(460).also {
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
             .toByteArray(Charsets.US_ASCII)
@@ -77,10 +91,18 @@ class FilePixel6TestnetObservationStoreV1Test {
             store.reserve(slot, intent)
             assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
 
+            val unsigned = Pixel6TestnetObservationResultV1.Evidence(
+                network, release, frame, lane, before, after, nonce, challenge,
+                publicKey, listOf(certificate), byteArrayOf(0x30, 0), false,
+            )
+            val signature = Signature.getInstance("SHA256withECDSA").run {
+                initSign(privateKey)
+                update(unsigned.signedMessage())
+                sign()
+            }
             val evidence = Pixel6TestnetObservationResultV1.Evidence(
                 network, release, frame, lane, before, after, nonce, challenge,
-                byteArrayOf(0x04) + ByteArray(64) { 5 }, listOf(byteArrayOf(1, 2, 3)),
-                byteArrayOf(0x30, 0x01), false,
+                publicKey, listOf(certificate), signature, false,
             )
             store.persist(slot, intent, evidence)
             val recovered = assertIs<Pixel6TestnetObservationLookupV1.Recovered>(
@@ -88,13 +110,41 @@ class FilePixel6TestnetObservationStoreV1Test {
             )
             assertContentEquals(frame, recovered.evidence.canonicalSelectionFrame())
             assertContentEquals(challenge, recovered.evidence.attestationChallenge())
+            assertFalse(recovered.evidence.hardwareOneUseQualified)
             assertIs<Pixel6TestnetObservationLookupV1.Frozen>(
                 store.lookup(slot, ByteArray(32) { 9 }),
             )
 
             val evidenceFile = File(directory, "kagemusha-pixel6-testnet-$slot.evidence")
-            val stored = requireNotNull(io.files[evidenceFile.absolutePath])
-            stored[0] = 0
+            val original = requireNotNull(io.files[evidenceFile.absolutePath]).copyOf()
+            val keyOffset = original.indexOf(publicKey)
+            val certificateOffset = original.indexOf(certificate)
+            val signatureOffset = original.size - signature.size
+            check(keyOffset >= 0 && certificateOffset > keyOffset && signatureOffset > certificateOffset)
+
+            // The signed frame and reservation still match in these cases. Only the recovered
+            // key material or signature changed, so cryptographic recovery must reject them.
+            io.files[evidenceFile.absolutePath] = original.copyOf().also {
+                it[it.lastIndex] = (it.last().toInt() xor 1).toByte()
+            }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+            io.files[evidenceFile.absolutePath] = original.copyOf().also {
+                it[keyOffset + 1] = (it[keyOffset + 1].toInt() xor 1).toByte()
+            }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+            io.files[evidenceFile.absolutePath] = original.copyOf().also {
+                it[certificateOffset] = 0x31
+            }
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+
+            // A BER long-form length for a short ECDSA signature is not canonical DER.
+            val noncanonical = original.copyOfRange(0, signatureOffset) +
+                byteArrayOf(0x30, 0x81.toByte(), signature[1]) + signature.copyOfRange(2, signature.size)
+            noncanonical[signatureOffset - 1] = (signature.size + 1).toByte()
+            io.files[evidenceFile.absolutePath] = noncanonical
+            assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
+
+            io.files[evidenceFile.absolutePath] = original.copyOf().also { it[0] = 0 }
             assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
             io.files.remove(File(directory, "kagemusha-pixel6-testnet-$slot.intent").absolutePath)
             assertIs<Pixel6TestnetObservationLookupV1.Frozen>(store.lookup(slot, digest))
@@ -105,4 +155,27 @@ class FilePixel6TestnetObservationStoreV1Test {
 
     private fun sha256(bytes: ByteArray): ByteArray =
         MessageDigest.getInstance("SHA-256").digest(bytes)
+
+    private fun ByteArray.indexOf(needle: ByteArray): Int =
+        (0..size - needle.size).firstOrNull { offset ->
+            copyOfRange(offset, offset + needle.size).contentEquals(needle)
+        } ?: -1
+
+    companion object {
+        // Disposable P-256 self-signed fixture. Its root is deliberately not a trusted
+        // attestation anchor; this test checks recovery integrity only.
+        private const val TEST_CERTIFICATE_DER =
+            "MIIBmDCCAT+gAwIBAgIULAE4QMrizh16uZ4LA56kjbMRZfswCgYIKoZIzj0EAwIwIjEgMB4GA1UEAwwX" +
+                "UGl4ZWw2IFRlc3QgT2JzZXJ2YXRpb24wHhcNMjYwOTIzMTU1NjQ2WhcNMzYwOTIwMTU1NjQ2WjAi" +
+                "MSAwHgYDVQQDDBdQaXhlbDYgVGVzdCBPYnNlcnZhdGlvbjBZMBMGByqGSM49AgEGCCqGSM49AwEH" +
+                "A0IABN73yR6FEJ11TDyKRgdKA9ghlWth5MkcSbQo0KVcsiZwRif6y4604+X23/cM4yXzwWa8iyty" +
+                "aS/VHIZrEnnACm6jUzBRMB0GA1UdDgQWBBSBr5A0TKEfPa9vWiIiJFQDgZ+71zAfBgNVHSMEGDAW" +
+                "gBSBr5A0TKEfPa9vWiIiJFQDgZ+71zAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0cAMEQC" +
+                "IHiVMxE0ZA+faRAWymb5yxPKH+VPA9ne452xD6doq1yrAiBzLMkaZhteB/2VAJk602DqGn345OVY" +
+                "sqpffzeQnqpLTw=="
+        private const val TEST_PRIVATE_KEY_PKCS8 =
+            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIck5030gf9buTp1iyAeuQtrjcY1E" +
+                "18vjIQHuLZPcsL6hRANCAATe98kehRCddUw8ikYHSgPYIZVrYeTJHEm0KNClXLImcEYn+suOtOP" +
+                "l9t/3DOMl88FmvIsrcmkv1RyGaxJ5wApu"
+    }
 }

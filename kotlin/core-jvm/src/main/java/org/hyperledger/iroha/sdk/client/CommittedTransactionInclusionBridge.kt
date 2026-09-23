@@ -27,7 +27,16 @@ class VerifiedCommittedTransaction internal constructor(
     val canonicalRowBytes: ByteArray get() = row.copyOf()
     val outputHashBytes: ByteArray get() = output.copyOf()
     val blockHashBytes: ByteArray get() = block.copyOf()
-    val canonicalRowHex: String get() = row.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    val canonicalRowHex: String get() {
+        val alphabet = "0123456789abcdef"
+        val hex = CharArray(row.size * 2)
+        for (index in row.indices) {
+            val value = row[index].toInt() and 0xff
+            hex[index * 2] = alphabet[value ushr 4]
+            hex[index * 2 + 1] = alphabet[value and 0x0f]
+        }
+        return String(hex)
+    }
 }
 
 /** JNI projection of the current native four-validator inclusion verifier. */
@@ -48,6 +57,18 @@ class CommittedTransactionInclusionBridge private constructor() {
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
+
+        /** Null means a canonical empty page; a hash is only an untrusted routing hint. */
+        @JvmStatic
+        fun candidateBlockHash(responseBytes: ByteArray, transactionHash: ByteArray): ByteArray? {
+            require(responseBytes.isNotEmpty() && responseBytes.size <= 32 * 1024 * 1024)
+            require(transactionHash.size == 32 && (transactionHash[31].toInt() and 1) == 1)
+            check(nativeAvailable) { "$LIBRARY_NAME committed-inclusion verifier is unavailable" }
+            val hash = nativeCandidateBlockHash(responseBytes.copyOf(), transactionHash.copyOf())
+                ?: return null
+            require(hash.size == 32) { "native candidate block-hash has invalid length" }
+            return hash
+        }
 
         /** Exact prehash of one nonce-bound wallet-self committed-row query. */
         @JvmStatic
@@ -143,6 +164,10 @@ class CommittedTransactionInclusionBridge private constructor() {
 
         @JvmStatic private external fun nativeBridgeAbiVersion(): Int
         @JvmStatic private external fun nativeVerifierContractVersion(): Int
+        @JvmStatic private external fun nativeCandidateBlockHash(
+            responseBytes: ByteArray,
+            transactionHash: ByteArray,
+        ): ByteArray?
         @JvmStatic private external fun nativeCommittedTransactionQueryPayloadHash(
             networkId: ByteArray,
             walletAccountId: ByteArray,

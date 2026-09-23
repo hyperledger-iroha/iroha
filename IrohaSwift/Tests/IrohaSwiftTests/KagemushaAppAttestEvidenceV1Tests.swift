@@ -114,7 +114,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
       authenticatedAppReleaseDigest: digest)
   }
 
-  private func binding(_ body: Data = Data(repeating: 0x17, count: 192)) throws
+  private func binding(_ body: Data = Data(repeating: 0x17, count: 403)) throws
     -> KagemushaAppAttestTransitionBindingV1 {
     var signingBytes = Self.selectionDomain
     for shift in stride(from: 0, to: 64, by: 8) {
@@ -172,8 +172,9 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
 
   func testCanonicalCoreFrameAndEnrollmentAreDomainSeparated() throws {
     let selected = try binding()
+    XCTAssertEqual(selected.canonicalSelectionSigningBytes.count, 460)
     XCTAssertEqual(selected.clientDataHash, Data(SHA256.hash(data: selected.canonicalSelectionSigningBytes)))
-    var body = Data(repeating: 0x17, count: 192)
+    var body = Data(repeating: 0x17, count: 403)
     body[0] ^= 1
     XCTAssertNotEqual(try binding(body).clientDataHash, selected.clientDataHash)
     var wrongLength = selected.canonicalSelectionSigningBytes
@@ -182,6 +183,8 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     var wrongDomain = selected.canonicalSelectionSigningBytes
     wrongDomain[0] ^= 1
     XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: wrongDomain))
+    XCTAssertThrowsError(try binding(Data(repeating: 0x17, count: 402)))
+    XCTAssertThrowsError(try binding(Data(repeating: 0x17, count: 404)))
     XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(
       coreSelectionSigningBytes: Data(repeating: 1, count: 1_025)))
     let enrollment = try KagemushaAppAttestEnrollmentBindingV1(

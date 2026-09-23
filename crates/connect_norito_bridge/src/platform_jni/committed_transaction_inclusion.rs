@@ -12,7 +12,8 @@ use iroha_data_model::{
 use jni::{objects::JByteArray, sys::jobjectArray};
 
 use crate::committed_transaction_inclusion::{
-    MAX_CHAIN_JSON_BYTES, MAX_RESPONSE_BYTES, verify_committed_transaction_inclusion,
+    MAX_CHAIN_JSON_BYTES, MAX_RESPONSE_BYTES, candidate_block_hash,
+    verify_committed_transaction_inclusion,
 };
 use crate::committed_transaction_query::{exact_query_payload, finalize_query, query_payload_hash};
 
@@ -179,6 +180,63 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeCandidateBlockHash(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    response: JByteArray<'_>,
+    transaction_hash: JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let Some(response) = read_java_byte_array_bounded(
+        &mut env,
+        &response,
+        "committedTransactionResponse",
+        MAX_RESPONSE_BYTES,
+    ) else {
+        return std::ptr::null_mut();
+    };
+    let Some(transaction) =
+        read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
+    else {
+        return std::ptr::null_mut();
+    };
+    let Some(result) = catch_unwind_to_java(&mut env, "candidate block hash", || {
+        let transaction: [u8; 32] = transaction
+            .try_into()
+            .map_err(|_| "transactionHash must be exactly 32 bytes".to_owned())?;
+        if transaction[31] & 1 == 0 {
+            return Err("transactionHash must be a marked hash".into());
+        }
+        candidate_block_hash(
+            &response,
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(transaction)),
+        )
+    }) else {
+        return std::ptr::null_mut();
+    };
+    let hash = match result {
+        Ok(value) => value,
+        Err(error) => {
+            throw_java_illegal_argument(&mut env, error);
+            return std::ptr::null_mut();
+        }
+    };
+    let Some(hash) = hash else {
+        // A canonical, empty committed-transaction page is a pending read.
+        return std::ptr::null_mut();
+    };
+    match env.byte_array_from_slice(&hash) {
+        Ok(value) => value.into_raw(),
+        Err(error) => {
+            throw_java_illegal_state(
+                &mut env,
+                format!("candidate block-hash allocation failed: {error}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -1154,9 +1154,11 @@ fn one_thousand_twenty_four_handoffs_keep_fixed_public_and_wire_shapes() {
     const STATE_PUBLIC_INSTANCE_COUNT: usize =
         kagemusha_state_public_instance_v1::COMMIT_WRAPPER_EP_PROTOCOL_HI + 1;
     const RECURSIVE_PUBLIC_INSTANCE_COUNT: usize =
-        STATE_PUBLIC_INSTANCE_COUNT + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
+        kagemusha_state_public_instance_v1::TRANSITION_STATEMENT_HI
+            + 1
+            + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
     assert_eq!(STATE_PUBLIC_INSTANCE_COUNT, 85);
-    assert_eq!(RECURSIVE_PUBLIC_INSTANCE_COUNT, 119);
+    assert_eq!(RECURSIVE_PUBLIC_INSTANCE_COUNT, 121);
 
     let output = send_output();
     let reference = terminal_authorization_proof(&output, 256, 256);

@@ -143,13 +143,26 @@ int32_t connect_norito_verify_committed_transaction_inclusion_v1(
     uint64_t* out_block_height,
     uint8_t* out_result_ok);
 
+// Exact committed-row decoder returning an *untrusted routing hint* for locating
+// the carrier among consecutive finality bundles. Status 0 means one matching
+// row and writes its block hash; status 1 means a canonical empty committed-row
+// page and leaves output zeroed; -508 rejects malformed, foreign, multirow or
+// wrong-transaction evidence. A status-0 hint never authenticates the block or
+// output: verify it with connect_norito_verify_committed_transaction_inclusion_v1.
+int32_t connect_norito_committed_transaction_candidate_block_hash_v1(
+    const uint8_t* response,
+    unsigned long response_len,
+    const uint8_t* expected_transaction_hash,
+    unsigned long expected_transaction_hash_len,
+    uint8_t* out_block_hash_32);
+
 // Build the sole current wallet-self committed-transaction read: signed
 // FindTransactions with canonical AND(authority_eq, entry_eq), default selector
 // and params, a caller-supplied unique 32-byte nonce, and fixed 100-second TTL.
 // The external Ed25519 signer signs the returned exact 32-byte payload hash.
 // Both calls must receive identical arguments; finalization verifies the
 // signature against the authority's single controller. The signed query is
-// versioned Norito for one POST /query; Torii nonce replay rules prohibit retry.
+// versioned Norito for one POST /v1/query; Torii nonce replay rules prohibit retry.
 int32_t connect_norito_committed_transaction_query_payload_hash_v1(
     const uint8_t* network_id,
     unsigned long network_id_len,
@@ -564,6 +577,22 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DEVICE_OPERATION_COUNT_V1 UINT16_C(22)
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
   "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
+
+// Testnet-only paired State proof observation. A release-authenticated native
+// verifier and operator-pinned network/release must be installed from Rust.
+// Stock builds return DEVICE_UNAVAILABLE. The response is a canonical Norito
+// KagemushaTestnetStateObservationArchiveV1, with version, operation,
+// hardware_qualified=false, network/release/attestation digests, candidate
+// envelope digest, and successor state commitment. It is unsigned diagnostic
+// data and never grants hardware qualification or monetary authority. Supply
+// the full maximum output capacity before calling; shorter buffers are rejected
+// without consuming a proof, and output_length receives the actual byte count.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1 4096
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1 256
+int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
+    const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
+    const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
+    uint8_t* output_observation, size_t output_capacity, size_t* output_length);
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
 // returns the number of uint32_t words written (12) on success. It is an ABI

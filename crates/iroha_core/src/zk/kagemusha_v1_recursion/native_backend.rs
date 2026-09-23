@@ -68,7 +68,7 @@ use super::{
         KagemushaMintAuthorizationTransportEpCircuitV1,
         KagemushaMintAuthorizationTransportEqCircuitV1,
     },
-    state_relation::PUBLIC_INSTANCE_COUNT,
+    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
     terminal_authorization::{
         KagemushaCommitWrapperEpCircuitV1, KagemushaCommitWrapperEqCircuitV1,
         KagemushaTerminalAuthorizationEpCircuitV1, KagemushaTerminalAuthorizationEqCircuitV1,
@@ -86,7 +86,8 @@ use iroha_data_model::kagemusha::{
 };
 
 const RECURSIVE_PROFILE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:paired-recursive-circuit-profile";
-const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize = PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
+const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize =
+    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
 
 /// Check the fixed KAGEMUSHA layout and the actual `BaseConfig` allocation order.
 ///
@@ -1415,9 +1416,13 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
             .map_err(|error| error.to_string())?;
         let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&request.proof.ep_history)
             .map_err(|error| error.to_string())?;
-        let mut eq_instances = request.public_inputs.public_instances::<Fp>()?;
+        let mut eq_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fp>()?;
         eq_instances.extend(history_public_instances::<Fp>(eq_history.as_bytes()));
-        let mut ep_instances = request.public_inputs.public_instances::<Fq>()?;
+        let mut ep_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fq>()?;
         ep_instances.extend(history_public_instances::<Fq>(ep_history.as_bytes()));
         if eq_instances.len() != RECURSIVE_PUBLIC_INSTANCE_COUNT_V1
             || ep_instances.len() != RECURSIVE_PUBLIC_INSTANCE_COUNT_V1

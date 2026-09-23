@@ -103,7 +103,7 @@ public struct CommittedTransactionQueryV1: Sendable {
         #endif
     }
 
-    /// Versioned Norito `SignedQuery` for exactly one POST `/query` attempt.
+    /// Versioned Norito `SignedQuery` for exactly one POST `/v1/query` attempt.
     public func finalize(signature: Data) throws -> Data {
         guard signature.count == 64 else { throw CommittedTransactionInclusionErrorV1.invalidInput }
         #if canImport(Darwin)
@@ -150,6 +150,11 @@ public struct VerifiedCommittedTransactionV1: Sendable {
 /// height-context anchor and exact transaction hash through current finality.
 public enum CommittedTransactionInclusionV1 {
     #if canImport(Darwin)
+    private typealias CandidateFn = @convention(c) (
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UInt8>?
+    ) -> Int32
     private typealias VerifyFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -162,6 +167,38 @@ public enum CommittedTransactionInclusionV1 {
     ) -> Int32
     private typealias FreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
     #endif
+
+    /// An exact empty query page returns nil. A row yields only an untrusted
+    /// block-hash routing hint for locating consecutive bundles before `verify`.
+    public static func candidateBlockHash(response: Data, transactionHash: Data) throws -> Data? {
+        guard !response.isEmpty, response.count <= 32 * 1024 * 1024,
+              transactionHash.count == 32, transactionHash[31] & 1 == 1 else {
+            throw CommittedTransactionInclusionErrorV1.invalidInput
+        }
+        #if canImport(Darwin)
+        let bridge = NoritoNativeBridge.shared
+        guard bridge.isAvailable,
+              let function: CandidateFn = bridge.resolveNativeSymbol(
+                "connect_norito_committed_transaction_candidate_block_hash_v1", as: CandidateFn.self
+              ) else { throw CommittedTransactionInclusionErrorV1.bridgeUnavailable }
+        var hash = [UInt8](repeating: 0, count: 32)
+        let status = response.withUnsafeBytes { responseBuffer in
+            transactionHash.withUnsafeBytes { transactionBuffer in
+                hash.withUnsafeMutableBufferPointer { output in
+                    function(responseBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(response.count),
+                             transactionBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(transactionHash.count),
+                             output.baseAddress)
+                }
+            }
+        }
+        if status == 1 { return nil }
+        guard status == 0 else { throw CommittedTransactionInclusionErrorV1.nativeRejected(status) }
+        guard hash.contains(where: { $0 != 0 }) else { throw CommittedTransactionInclusionErrorV1.invalidNativeResult }
+        return Data(hash)
+        #else
+        throw CommittedTransactionInclusionErrorV1.bridgeUnavailable
+        #endif
+    }
 
     public static func verify(
         response: Data, finalityBundleChainJSON: Data,

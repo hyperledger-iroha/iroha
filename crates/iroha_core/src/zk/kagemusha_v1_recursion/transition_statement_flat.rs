@@ -22,6 +22,38 @@ const DOMAIN: &[u8] = b"iroha:kagemusha:v1:transition-statement\0";
 const ASSET_DOMAIN: &[u8] = b"iroha:kagemusha:v1:asset-identity";
 const ASSET_FRAME_BYTES: usize = 72;
 
+/// State-cell source of the canonical transition digest and exact journal revision.
+///
+/// Only `constrain_transition_statement_source_v1` constructs this from the SHA transcript.
+/// The recursive State column exports the digest for non-bootstrap operations. A terminal
+/// still needs an authenticated prepared-intent opening before it can grant outgoing authority.
+#[derive(Clone, Copy)]
+pub(in super::super) struct KagemushaDerivedTransitionStatementSourceV1<F: KagemushaPoseidonFieldV1>
+{
+    digest: [PastaSha256ByteV1<F>; 32],
+    journal_revision_after: AssignedValue<F>,
+}
+
+impl<F: KagemushaPoseidonFieldV1> KagemushaDerivedTransitionStatementSourceV1<F> {
+    /// Bind a proposed journal opening to the SHA-derived digest and State revision cells.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "verified prepared-intent proof is not installed")
+    )]
+    pub(in super::super) fn constrain_journal_opening_v1(
+        &self,
+        ctx: &mut Context<F>,
+        digest: [AssignedValue<F>; 2],
+        journal_revision_after: AssignedValue<F>,
+    ) {
+        let derived = super::super::guard_bundle::digest_limbs_assigned(ctx, &self.digest);
+        for (derived, claimed) in derived.into_iter().zip(digest) {
+            ctx.constrain_equal(&derived, &claimed);
+        }
+        ctx.constrain_equal(&self.journal_revision_after, &journal_revision_after);
+    }
+}
+
 fn uint_le<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -53,11 +85,10 @@ fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
     witness: &KagemushaStateRelationWitnessV1,
     expected: [AssignedValue<F>; 2],
 ) -> Result<(), String> {
-    let predecessor = witness
-        .predecessor
-        .as_ref()
-        .ok_or_else(|| "signed transition has no predecessor asset".to_owned())?;
-    let asset = &predecessor.lane.asset;
+    // Use the successor's typed asset for every operation so Bootstrap builds the
+    // same SHA circuit shape. The State relation constrains predecessor and
+    // successor asset identity to remain equal on non-bootstrap transitions.
+    let asset = &witness.successor.lane.asset;
     let uuid = super::super::guard_bundle::assign_bytes(ctx, range, asset.aid_bytes().as_ref());
     if uuid.len() != 16 {
         return Err("typed asset UUID width changed".to_owned());
@@ -106,22 +137,31 @@ fn bind_typed_asset_identity<F: KagemushaPoseidonFieldV1>(
 /// The witness supplies only a typed asset UUID for a canonical-frame hash preimage;
 /// its digest is constrained equal to the state asset identity. No statement field is
 /// copied directly from an unconstrained host witness into the final SHA transcript.
-#[allow(clippy::too_many_lines)]
+/// Bootstrap also computes a dummy transcript to keep the fixed circuit shape; callers
+/// must select zero for Bootstrap because it has no signed transition statement.
 pub(in super::super) fn constrain_transition_statement_digest_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     state: &KagemushaAssignedStateRelationV1<F>,
     witness: &KagemushaStateRelationWitnessV1,
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    if witness.operation == super::super::KagemushaOperationV1::Bootstrap {
-        return Err("bootstrap has no signed transition statement".to_owned());
-    }
+    Ok(constrain_transition_statement_source_v1(builder, jobs, state, witness)?.digest)
+}
+
+/// Export the canonical transition SHA result without reassigning host digest bytes.
+#[allow(clippy::too_many_lines)]
+pub(in super::super) fn constrain_transition_statement_source_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    state: &KagemushaAssignedStateRelationV1<F>,
+    witness: &KagemushaStateRelationWitnessV1,
+) -> Result<KagemushaDerivedTransitionStatementSourceV1<F>, String> {
     if DOMAIN.len() != 40 {
         return Err("transition statement domain width changed".to_owned());
     }
     let range = builder.range_chip();
     let ctx = builder.main(0);
-    bind_typed_asset_identity(ctx, &range, jobs, witness, state.predecessor.asset_id)?;
+    bind_typed_asset_identity(ctx, &range, jobs, witness, state.successor.asset_id)?;
     let before = &state.predecessor;
     let after = &state.successor;
     let mut body = Vec::with_capacity(KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1);
@@ -189,5 +229,63 @@ pub(in super::super) fn constrain_transition_statement_digest_v1<F: KagemushaPos
         &(body.len() as u64).to_be_bytes(),
     ));
     message.extend(body);
-    super::super::guard_bundle::hash(ctx, jobs, message)
+    let digest = super::super::guard_bundle::hash(ctx, jobs, message)?;
+    Ok(KagemushaDerivedTransitionStatementSourceV1 {
+        digest,
+        journal_revision_after: state.journal_revision_after,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zk::kagemusha_v1_recursion::guard_bundle::{assign_bytes, digest_limbs_assigned};
+    use halo2_proofs::{
+        dev::MockProver,
+        halo2curves::pasta::{Fp, Fq},
+    };
+
+    #[test]
+    fn derived_transition_source_binds_journal_digest_and_revision_in_both_parities() {
+        fn check<F: KagemushaPoseidonFieldV1>(mutation: usize) -> bool {
+            const K: u32 = 10;
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(K as usize)
+                .use_lookup_bits(9)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            // This isolated test checks the exported cells' equality binding. The production
+            // constructor obtains `digest` only from the constrained canonical SHA job above.
+            let digest: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &[0x5a; 32])
+                .try_into()
+                .expect("digest width");
+            let revision = ctx.load_witness(F::from(7));
+            let source = KagemushaDerivedTransitionStatementSourceV1 {
+                digest,
+                journal_revision_after: revision,
+            };
+            let mut claim = digest_limbs_assigned(ctx, &digest);
+            if mutation == 1 {
+                claim[0] = ctx.load_witness(*claim[0].value() + F::ONE);
+            }
+            if mutation == 2 {
+                claim[1] = ctx.load_witness(*claim[1].value() + F::ONE);
+            }
+            let revision_claim = ctx.load_witness(F::from(7 + u64::from(mutation == 3)));
+            source.constrain_journal_opening_v1(ctx, claim, revision_claim);
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(K, &builder, vec![Vec::new()])
+                .expect("transition source identity circuit")
+                .verify()
+                .is_ok()
+        }
+
+        for mutation in 0..=3 {
+            for pass in [check::<Fp>(mutation), check::<Fq>(mutation)] {
+                assert_eq!(pass, mutation == 0, "mutation {mutation}");
+            }
+        }
+    }
 }

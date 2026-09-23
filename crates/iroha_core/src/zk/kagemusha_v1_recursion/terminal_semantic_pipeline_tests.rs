@@ -216,7 +216,7 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    if candidate.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    if candidate.len() < state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
         || public_authorization.len() != TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1
     {
         return Err("terminal Guard candidate prefix is truncated".to_owned());
@@ -352,7 +352,7 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    if candidate.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    if candidate.len() < state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
         || public_authorization.len() != TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1
     {
         return Err("terminal authorization candidate projection is truncated".to_owned());
@@ -482,7 +482,7 @@ where
 
     let mut ctx = loader.ctx_mut();
     let mut message = constant_bytes(CANDIDATE_BINDING_DOMAIN_V1);
-    for (index, value) in candidate[..state_relation::PUBLIC_INSTANCE_COUNT]
+    for (index, value) in candidate[..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
         .iter()
         .enumerate()
     {
@@ -634,7 +634,8 @@ fn guard_cells<F: KagemushaPoseidonFieldV1>(
 
 fn projection_values<F: KagemushaPoseidonFieldV1>() -> (Vec<F>, Vec<F>) {
     // Independent projection fixture only: no funds, complete Guard relation or proof authority.
-    let mut candidate = (0..state_relation::PUBLIC_INSTANCE_COUNT + accumulator_limb_count())
+    let mut candidate = (0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+        + accumulator_limb_count())
         .map(|index| F::from(index as u64 + 1))
         .collect::<Vec<_>>();
     for (offset, digest) in [
@@ -723,7 +724,7 @@ fn projection_values<F: KagemushaPoseidonFieldV1>() -> (Vec<F>, Vec<F>) {
     }
     public[public_instance::TRANSITION_NULLIFIER_LO] = F::ONE;
     let digest = canonical_terminal_authorization_candidate_digest_v1(&[candidate
-        [..state_relation::PUBLIC_INSTANCE_COUNT]
+        [..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
         .to_vec()])
     .unwrap();
     public[public_instance::CANDIDATE_LO..public_instance::CANDIDATE_LO + 2]
@@ -856,7 +857,7 @@ where
     let messages = jobs.canonical_messages().unwrap();
     assert!(messages[0].starts_with(CANDIDATE_BINDING_DOMAIN_V1));
     let expected = canonical_terminal_authorization_candidate_digest_v1(&[original
-        [..state_relation::PUBLIC_INSTANCE_COUNT]
+        [..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
         .to_vec()])
     .unwrap();
     if mutation == 0 {
@@ -963,7 +964,8 @@ fn terminal_semantic_shape_requires_exact_candidate_and_guard_columns_in_both_fi
         C::Base: BigPrimeField,
         C::ScalarExt: KagemushaPoseidonFieldV1,
     {
-        let candidate_width = state_relation::PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
+        let candidate_width =
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
         let guard_width = GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1;
         let candidate_protocol = protocol::<C>(candidate_width);
         let guard_protocol = protocol::<C>(guard_width);

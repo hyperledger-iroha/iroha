@@ -18,6 +18,8 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
 
 /**
@@ -29,6 +31,20 @@ import java.security.spec.ECGenParameterSpec
  */
 object AndroidPixel6TestnetStrongBoxObservationV1 {
     const val PROFILE = "android-pixel6-strongbox-experimental-v1"
+
+    /** Validate an exact testnet selection before an app retains it or invokes StrongBox. */
+    @JvmStatic
+    fun requireCanonicalFrame(
+        networkId: ByteArray,
+        releaseId: ByteArray,
+        canonicalSelectionFrame: ByteArray,
+        laneCommitment: ByteArray,
+        secureIndexBeforeLittleEndian: ByteArray,
+        secureIndexAfterLittleEndian: ByteArray,
+    ) = requirePixel6CanonicalFrameV1(
+        canonicalSelectionFrame, networkId, releaseId, laneCommitment,
+        secureIndexBeforeLittleEndian, secureIndexAfterLittleEndian,
+    )
 
     @JvmStatic
     fun collect(
@@ -328,7 +344,8 @@ internal class FilePixel6TestnetObservationStoreV1(
                 !evidence.attestationChallenge().contentEquals(
                     pixel6TestnetAttestationChallengeV1(digest, evidence.attestationNonce())) ||
                 !pixel6HexV1(pixel6Sha256V1(evidence.laneCommitment() +
-                    evidence.secureIndexBeforeLittleEndian())).contentEquals(slot)) {
+                    evidence.secureIndexBeforeLittleEndian())).contentEquals(slot) ||
+                !pixel6RecoveredEvidenceSignatureValidV1(evidence)) {
                 Pixel6TestnetObservationLookupV1.Frozen
             } else {
                 Pixel6TestnetObservationLookupV1.Recovered(evidence)
@@ -431,6 +448,96 @@ internal class FilePixel6TestnetObservationStoreV1(
     }
 
     companion object { private const val MAX_EVIDENCE_BYTES = 256 * 1024 }
+}
+
+/** Checks recovered evidence self-consistency; its certificate root and device remain untrusted. */
+private fun pixel6RecoveredEvidenceSignatureValidV1(
+    evidence: Pixel6TestnetObservationResultV1.Evidence,
+): Boolean {
+    val chain = evidence.certificateChain()
+    require(chain.size in 1..8)
+    val certificates = chain.map { der ->
+        require(der.size in 1..16 * 1024)
+        val (contentStart, contentEnd) = pixel6CanonicalDerHeaderV1(der, 0, 0x30)
+        require(contentStart < contentEnd && contentEnd == der.size)
+        val input = ByteArrayInputStream(der)
+        val certificate = CertificateFactory.getInstance("X.509")
+            .generateCertificate(input) as X509Certificate
+        require(input.available() == 0 && certificate.encoded.contentEquals(der))
+        certificate
+    }
+    val leaf = certificates.first()
+    require(uncompressedP256Sec1V1(leaf.publicKey).contentEquals(evidence.publicKey()))
+    certificates.zipWithNext().forEach { (child, issuer) ->
+        require(child.issuerX500Principal == issuer.subjectX500Principal)
+        child.verify(issuer.publicKey)
+    }
+    // A self-issued tail must also have a valid self-signature. This authenticates its bytes,
+    // but does not make an app-supplied root trusted by KAGEMUSHA.
+    certificates.last().let { root ->
+        if (root.issuerX500Principal == root.subjectX500Principal) root.verify(root.publicKey)
+    }
+    val signature = evidence.signatureDer()
+    pixel6RequireCanonicalEcdsaDerV1(signature)
+    return Signature.getInstance("SHA256withECDSA").run {
+        initVerify(leaf.publicKey)
+        update(evidence.signedMessage())
+        verify(signature)
+    }
+}
+
+/** Returns the content interval of a short, definite, minimally encoded DER element. */
+private fun pixel6CanonicalDerHeaderV1(
+    bytes: ByteArray,
+    offset: Int,
+    expectedTag: Int,
+): Pair<Int, Int> {
+    require(offset >= 0 && offset + 2 <= bytes.size)
+    require((bytes[offset].toInt() and 0xff) == expectedTag)
+    val lengthByte = bytes[offset + 1].toInt() and 0xff
+    val headerLength: Int
+    val contentLength: Int
+    when {
+        lengthByte < 0x80 -> {
+            headerLength = 2
+            contentLength = lengthByte
+        }
+        lengthByte == 0x81 -> {
+            require(offset + 3 <= bytes.size)
+            headerLength = 3
+            contentLength = bytes[offset + 2].toInt() and 0xff
+            require(contentLength >= 0x80)
+        }
+        lengthByte == 0x82 -> {
+            require(offset + 4 <= bytes.size)
+            headerLength = 4
+            contentLength = ((bytes[offset + 2].toInt() and 0xff) shl 8) or
+                (bytes[offset + 3].toInt() and 0xff)
+            require(contentLength >= 0x100)
+        }
+        else -> throw IllegalArgumentException("noncanonical DER length")
+    }
+    val start = offset + headerLength
+    val end = start + contentLength
+    require(end <= bytes.size)
+    return start to end
+}
+
+private fun pixel6RequireCanonicalEcdsaDerV1(signature: ByteArray) {
+    require(signature.size in 8..72)
+    val (sequenceStart, sequenceEnd) = pixel6CanonicalDerHeaderV1(signature, 0, 0x30)
+    require(sequenceEnd == signature.size)
+    val (rStart, rEnd) = pixel6CanonicalDerHeaderV1(signature, sequenceStart, 0x02)
+    val (sStart, sEnd) = pixel6CanonicalDerHeaderV1(signature, rEnd, 0x02)
+    require(sEnd == sequenceEnd)
+    for ((start, end) in listOf(rStart to rEnd, sStart to sEnd)) {
+        require(end - start in 1..33)
+        val first = signature[start].toInt() and 0xff
+        require(first < 0x80)
+        require(end - start == 1 || first != 0 ||
+            (signature[start + 1].toInt() and 0x80) != 0)
+        require((start until end).any { signature[it] != 0.toByte() })
+    }
 }
 
 private fun pixel6TestnetContextV1(

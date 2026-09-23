@@ -12,6 +12,10 @@
 #[path = "transition_statement_flat.rs"]
 mod transition_statement_flat;
 pub(super) use transition_statement_flat::constrain_transition_statement_digest_v1;
+#[expect(unused_imports, reason = "prepared-intent proof is not installed")]
+pub(super) use transition_statement_flat::{
+    KagemushaDerivedTransitionStatementSourceV1, constrain_transition_statement_source_v1,
+};
 
 use core::marker::PhantomData;
 
@@ -40,10 +44,15 @@ use crate::zk::{
         KAGEMUSHA_STATE_DOMAIN_V1, KagemushaPoseidonChipV1, KagemushaPoseidonFieldV1, decode,
         digest_limbs, empty_replay_root, from_u128,
     },
-    kagemusha_v1_state::{DigestV1, KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1, KagemushaStateV1},
+    kagemusha_v1_state::{
+        DigestV1, KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1, KAGEMUSHA_STATE_VERSION_V1,
+        KagemushaStateV1, KagemushaTransitionKindV1, TransitionProofStatementV1,
+    },
 };
 
 pub(super) const PUBLIC_INSTANCE_COUNT: usize = 85;
+/// The recursive State proof additionally exposes the SHA-derived transition digest.
+pub(super) const RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT: usize = PUBLIC_INSTANCE_COUNT + 2;
 pub(super) const KAGEMUSHA_RECEIVE_FOLD_ARITY_V1: usize = 1;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 
@@ -219,6 +228,10 @@ pub mod public_instance {
     pub const COMMIT_WRAPPER_EP_PROTOCOL_LO: usize = 83;
     /// High 128 bits of the release-pinned Ep commit-wrapper protocol identity.
     pub const COMMIT_WRAPPER_EP_PROTOCOL_HI: usize = 84;
+    /// Low 128 bits of the canonical State transition statement digest in recursive proofs.
+    pub const TRANSITION_STATEMENT_LO: usize = super::PUBLIC_INSTANCE_COUNT;
+    /// High 128 bits of the canonical State transition statement digest in recursive proofs.
+    pub const TRANSITION_STATEMENT_HI: usize = TRANSITION_STATEMENT_LO + 1;
 }
 
 /// One private credit in the singular receive-fold relation.
@@ -253,7 +266,10 @@ pub struct KagemushaReceiveFoldCreditV1 {
 }
 
 /// Public values reconstructed by a verifier for one aggregate-state proof.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaStateRelationPublicInputsV1"
+)]
 pub struct KagemushaStateRelationPublicInputsV1 {
     /// Selected state transition.
     pub operation: KagemushaOperationV1,
@@ -623,10 +639,10 @@ impl KagemushaStateRelationWitnessV1 {
         KagemushaStateRelationPublicInputsV1::operation_tag(self.operation)
     }
 
-    /// Return one parity's exact public instance column.
-    pub fn public_instances<F: KagemushaPoseidonFieldV1>(&self) -> Result<Vec<F>, String> {
+    /// Reconstruct the public statement from validated private relation inputs.
+    pub(super) fn public_inputs_v1(&self) -> Result<KagemushaStateRelationPublicInputsV1, String> {
         self.validate()?;
-        KagemushaStateRelationPublicInputsV1 {
+        Ok(KagemushaStateRelationPublicInputsV1 {
             operation: self.operation,
             predecessor: self.predecessor.clone(),
             successor: self.successor.clone(),
@@ -657,12 +673,82 @@ impl KagemushaStateRelationWitnessV1 {
             guard_ep_credential_audit: self.guard_ep_credential_audit,
             eq_deferred_audit: self.eq_deferred_audit,
             ep_deferred_audit: self.ep_deferred_audit,
-        }
-        .public_instances::<F>()
+        })
+    }
+
+    /// Return one parity's exact 85-cell standalone relation column.
+    pub fn public_instances<F: KagemushaPoseidonFieldV1>(&self) -> Result<Vec<F>, String> {
+        self.public_inputs_v1()?.public_instances::<F>()
     }
 }
 
 impl KagemushaStateRelationPublicInputsV1 {
+    /// Reconstruct the sole canonical transition digest exposed by a recursive State proof.
+    /// Bootstrap has no signed transition statement and exposes two zero limbs instead.
+    pub(super) fn transition_statement_digest_v1(&self) -> Result<DigestV1, String> {
+        let kind = match self.operation {
+            KagemushaOperationV1::Bootstrap => return Ok([0; 32]),
+            KagemushaOperationV1::MintFold => KagemushaTransitionKindV1::MintFold,
+            KagemushaOperationV1::SendSplit => KagemushaTransitionKindV1::SendSplit,
+            KagemushaOperationV1::ReceiveFold => KagemushaTransitionKindV1::ReceiveFold,
+            KagemushaOperationV1::RedeemSplit => KagemushaTransitionKindV1::RedeemSplit,
+            KagemushaOperationV1::Rotate => KagemushaTransitionKindV1::Rotate,
+        };
+        let predecessor = self
+            .predecessor
+            .as_ref()
+            .ok_or_else(|| "signed transition has no predecessor state".to_owned())?;
+        TransitionProofStatementV1 {
+            version: KAGEMUSHA_STATE_VERSION_V1,
+            protocol_version: predecessor.protocol_version,
+            predecessor_suite_id: predecessor.suite_id,
+            predecessor_vk_digest: predecessor.vk_digest,
+            successor_suite_id: self.successor.suite_id,
+            successor_vk_digest: self.successor.vk_digest,
+            kind,
+            amount: self.amount,
+            mint_finality_semantic_digest: self.mint_finality_semantic_digest,
+            mint_finality_proof_binding_digest: self.mint_finality_proof_binding_digest,
+            peer_credit_id: self.peer_credit_id,
+            recipient_encryption_key_binding: self.recipient_encryption_key_binding,
+            lifecycle_binding_digest: self.lifecycle_binding_digest,
+            prepared_transition_binding_digest: self.prepared_transition_binding_digest,
+            receive_credit_binding_digest: self.receive_credit_binding_digest,
+            predecessor_release_id: predecessor.release_id,
+            release_id: self.successor.release_id,
+            asset_incarnation: predecessor.asset_incarnation,
+            liability_pool_id: predecessor.liability_pool_id,
+            hardware_profile_id: predecessor.hardware_profile_id,
+            policy_epoch: predecessor.policy_epoch,
+            lane: predecessor.lane.clone(),
+            predecessor_commitment: predecessor.state_commitment,
+            successor_commitment: self.successor.state_commitment,
+            predecessor_sequence: predecessor.logical_sequence,
+            successor_sequence: self.successor.logical_sequence,
+            predecessor_epoch: predecessor.hardware_epoch,
+            successor_epoch: self.successor.hardware_epoch,
+            predecessor_device_policy_binding: predecessor.device_policy_binding,
+            successor_device_policy_binding: self.successor.device_policy_binding,
+            predecessor_state_nonce_commitment: predecessor.state_nonce_commitment,
+            successor_state_nonce_commitment: self.successor.state_nonce_commitment,
+            journal_revision_before: self.journal_revision_before,
+            journal_revision_after: self.journal_revision_after,
+            effect_digest: self.transition_effect_digest,
+        }
+        .digest()
+        .map_err(|error| error.to_string())
+    }
+
+    /// Return the recursive semantic prefix with the transition digest in both parities.
+    pub(super) fn recursive_semantic_public_instances<F: KagemushaPoseidonFieldV1>(
+        &self,
+    ) -> Result<Vec<F>, String> {
+        let mut public = self.public_instances::<F>()?;
+        public.extend(digest_limbs::<F>(self.transition_statement_digest_v1()?));
+        debug_assert_eq!(public.len(), RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT);
+        Ok(public)
+    }
+
     fn operation_tag(operation: KagemushaOperationV1) -> u64 {
         match operation {
             KagemushaOperationV1::Bootstrap => 0,
@@ -2389,6 +2475,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_projection_archive_roundtrips_canonically() {
+        let public = public_projection_fixture();
+        let archive = norito::encode_canonical(&public).expect("canonical public inputs");
+        let decoded: KagemushaStateRelationPublicInputsV1 =
+            norito::decode_canonical(&archive).expect("exact public inputs");
+        assert_eq!(decoded, public);
+        let mut trailing = archive;
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical::<KagemushaStateRelationPublicInputsV1>(&trailing).is_err()
+        );
+    }
+
+    #[test]
+    fn recursive_transition_digest_projection_is_canonical_in_both_parities() {
+        let public = public_projection_fixture();
+        let digest = public
+            .transition_statement_digest_v1()
+            .expect("canonical flat transition statement");
+        let eq = public
+            .recursive_semantic_public_instances::<Fp>()
+            .expect("Eq recursive semantic projection");
+        let ep = public
+            .recursive_semantic_public_instances::<Fq>()
+            .expect("Ep recursive semantic projection");
+        assert_eq!(eq.len(), RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT);
+        assert_eq!(ep.len(), RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT);
+        assert_eq!(
+            eq[..PUBLIC_INSTANCE_COUNT].to_vec(),
+            public.public_instances::<Fp>().expect("Eq base projection")
+        );
+        assert_eq!(
+            ep[..PUBLIC_INSTANCE_COUNT].to_vec(),
+            public.public_instances::<Fq>().expect("Ep base projection")
+        );
+        assert_eq!(
+            &eq[public_instance::TRANSITION_STATEMENT_LO..],
+            &digest_limbs::<Fp>(digest)
+        );
+        assert_eq!(
+            &ep[public_instance::TRANSITION_STATEMENT_LO..],
+            &digest_limbs::<Fq>(digest)
+        );
+
+        let mut changed = public.clone();
+        changed.journal_revision_after += 1;
+        assert_ne!(
+            changed
+                .transition_statement_digest_v1()
+                .expect("changed revision"),
+            digest
+        );
+        let mut changed = public.clone();
+        changed.successor.state_commitment[0] ^= 1;
+        assert_ne!(
+            changed
+                .transition_statement_digest_v1()
+                .expect("changed successor"),
+            digest
+        );
+
+        let mut bootstrap = public.clone();
+        bootstrap.operation = KagemushaOperationV1::Bootstrap;
+        bootstrap.predecessor = None;
+        assert_eq!(bootstrap.transition_statement_digest_v1(), Ok([0; 32]));
+        assert_eq!(
+            &bootstrap
+                .recursive_semantic_public_instances::<Fp>()
+                .expect("Eq bootstrap projection")[public_instance::TRANSITION_STATEMENT_LO..],
+            &[Fp::ZERO; 2]
+        );
+        assert_eq!(
+            &bootstrap
+                .recursive_semantic_public_instances::<Fq>()
+                .expect("Ep bootstrap projection")[public_instance::TRANSITION_STATEMENT_LO..],
+            &[Fq::ZERO; 2]
+        );
+        bootstrap.operation = KagemushaOperationV1::SendSplit;
+        assert!(bootstrap.transition_statement_digest_v1().is_err());
+    }
+
     fn assert_public_projection<F: KagemushaPoseidonFieldV1>(
         public: &KagemushaStateRelationPublicInputsV1,
         operation_tag: u64,
@@ -2534,6 +2702,7 @@ mod tests {
     #[test]
     fn public_instance_abi_is_identical_across_parities() {
         assert_eq!(PUBLIC_INSTANCE_COUNT, 85);
+        assert_eq!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, 87);
         assert_eq!(public_instance::OPERATION, 0);
         assert_eq!(public_instance::AMOUNT, 1);
         assert_eq!(public_instance::SUCCESSOR_STATE, 31);
@@ -2548,6 +2717,8 @@ mod tests {
         assert_eq!(public_instance::ASSET_SCALE, 80);
         assert_eq!(public_instance::COMMIT_WRAPPER_EQ_PROTOCOL_LO, 81);
         assert_eq!(public_instance::COMMIT_WRAPPER_EP_PROTOCOL_HI, 84);
+        assert_eq!(public_instance::TRANSITION_STATEMENT_LO, 85);
+        assert_eq!(public_instance::TRANSITION_STATEMENT_HI, 86);
         // Both fields use the same semantic ordering and injective u128 digest limbs.
         assert_eq!(
             digest_limbs::<Fp>([7; 32]).len(),

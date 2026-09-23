@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
 
 class AndroidPixel6TestnetStrongBoxObservationV1Test {
@@ -130,9 +131,29 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         assertEquals(1, device.generated)
         assertEquals(1, device.signed)
         assertEquals(1, device.deleted)
+        val exported = pixel6TestnetObservationJsonV1(result)
+        assertTrue(exported.contains("\"profile\":\"android-pixel6-strongbox-experimental-v1\""))
+        assertTrue(exported.contains("\"hardware_one_use_qualified\":false"))
+        assertTrue(exported.contains("\"attestation_root_trusted\":false"))
+        assertTrue(exported.contains("\"monetary_authority\":false"))
+        assertTrue(exported.contains("\"recovered\":false"))
+        assertTrue(exported.contains("\"canonical_selection_frame_hex\":\""))
+        assertTrue(exported.contains("\"certificate_chain_der_hex\":[\"010203\"]"))
         val recovered = assertIs<Pixel6TestnetObservationResultV1.Evidence>(collect(device, store))
         assertContentEquals(result.signatureDer(), recovered.signatureDer())
         assertEquals(1, device.signed)
+    }
+
+    @Test fun appCanValidateTheExactFrameBeforeRetainingIt() {
+        AndroidPixel6TestnetStrongBoxObservationV1.requireCanonicalFrame(
+            network, release, frame, lane, before, after,
+        )
+        val changed = frame.copyOf().also { it[187] = 0 }
+        assertFailsWith<IllegalArgumentException> {
+            AndroidPixel6TestnetStrongBoxObservationV1.requireCanonicalFrame(
+                network, release, changed, lane, before, after,
+            )
+        }
     }
 
     @Test fun samePredecessorCannotBeReselectedForAnotherNetworkReleaseOrFrame() {

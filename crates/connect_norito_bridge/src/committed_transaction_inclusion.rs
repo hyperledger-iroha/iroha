@@ -30,26 +30,112 @@ pub(crate) struct VerifiedCommittedTransaction {
     pub result_ok: bool,
 }
 
-fn decode_single_response(response_bytes: &[u8]) -> Result<CommittedTransaction, String> {
-    let response: QueryResponse = norito::decode_from_bytes(response_bytes)
-        .map_err(|error| format!("invalid committed transaction query response: {error}"))?;
+fn decode_candidate_response(
+    response_bytes: &[u8],
+) -> Result<Option<CommittedTransaction>, String> {
+    let response: QueryResponse = norito::decode_canonical_with_limits(
+        response_bytes,
+        norito::canonical_decode_limits(response_bytes.len()),
+    )
+    .map_err(|error| format!("invalid committed transaction query response: {error}"))?;
     let QueryResponse::Iterable(output) = response else {
         return Err("committed transaction response must be iterable".into());
     };
-    if output.has_more || output.continue_cursor.is_some() {
+    if output.has_more
+        || output.continue_cursor.is_some()
+        || output
+            .remaining_items
+            .is_some_and(|remaining| remaining != 0)
+    {
         return Err("committed transaction response must contain exactly one page".into());
     }
     let mut rows = Vec::new();
+    let mut committed_batches = 0_usize;
     for batch in output.batch {
         let QueryOutputBatchBox::CommittedTransaction(mut batch) = batch else {
             return Err("committed transaction response has a foreign batch type".into());
         };
+        committed_batches += 1;
         rows.append(&mut batch);
     }
-    if rows.len() != 1 {
-        return Err("committed transaction response must contain exactly one row".into());
+    if committed_batches != 1 || rows.len() > 1 {
+        return Err("committed transaction response must contain zero or one exact row".into());
     }
-    Ok(rows.remove(0))
+    Ok(rows.pop())
+}
+
+fn decode_single_response(response_bytes: &[u8]) -> Result<CommittedTransaction, String> {
+    decode_candidate_response(response_bytes)?
+        .ok_or_else(|| "committed transaction response has no selected row".into())
+}
+
+/// Untrusted carrier block hash used only to locate consecutive finality
+/// bundles. It does not confer finality or authorize a transaction result.
+pub(crate) fn candidate_block_hash(
+    response_bytes: &[u8],
+    expected_transaction_hash: HashOf<TransactionEntrypoint>,
+) -> Result<Option<[u8; 32]>, String> {
+    if response_bytes.is_empty() || response_bytes.len() > MAX_RESPONSE_BYTES {
+        return Err("committed transaction response exceeds its bound".into());
+    }
+    let Some(row) = decode_candidate_response(response_bytes)? else {
+        return Ok(None);
+    };
+    if row.entrypoint_hash != expected_transaction_hash {
+        return Err("candidate row does not match requested transaction hash".into());
+    }
+    Ok(Some(*row.block_hash.as_ref()))
+}
+
+/// Decode only the exact untrusted carrier hash from a one-row response. A
+/// canonical empty committed-transaction page returns status 1 and zeroed
+/// output. This is a routing hint, never an authenticated proof. A caller must
+/// verify the finality chain and selected row with the verifier below before use.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_committed_transaction_candidate_block_hash_v1(
+    response_ptr: *const c_uchar,
+    response_len: c_ulong,
+    expected_transaction_hash_ptr: *const c_uchar,
+    expected_transaction_hash_len: c_ulong,
+    out_block_hash_32: *mut c_uchar,
+) -> c_int {
+    if !out_block_hash_32.is_null() {
+        unsafe { ptr::write_bytes(out_block_hash_32, 0, 32) };
+    }
+    let result = std::panic::catch_unwind(|| {
+        let response_len = usize::try_from(response_len)
+            .map_err(|_| "candidate response length exceeds platform size")?;
+        if response_ptr.is_null()
+            || expected_transaction_hash_ptr.is_null()
+            || out_block_hash_32.is_null()
+            || response_len == 0
+            || response_len > MAX_RESPONSE_BYTES
+            || expected_transaction_hash_len != 32
+        {
+            return Err("invalid candidate block-hash argument".to_owned());
+        }
+        let transaction_bytes: [u8; 32] = unsafe {
+            slice::from_raw_parts(expected_transaction_hash_ptr, 32)
+                .try_into()
+                .expect("fixed transaction hash length")
+        };
+        if transaction_bytes[31] & 1 == 0 {
+            return Err("unmarked transaction hash".to_owned());
+        }
+        candidate_block_hash(
+            unsafe { slice::from_raw_parts(response_ptr, response_len) },
+            HashOf::from_untyped_unchecked(Hash::prehashed(transaction_bytes)),
+        )
+    });
+    let Ok(Ok(candidate)) = result else {
+        return ERR_COMMITTED_INCLUSION;
+    };
+    if let Some(hash) = candidate {
+        unsafe { ptr::copy_nonoverlapping(hash.as_ptr(), out_block_hash_32, 32) };
+        0
+    } else {
+        1
+    }
 }
 
 pub(crate) fn verify_committed_transaction_inclusion(
@@ -236,3 +322,7 @@ pub unsafe extern "C" fn connect_norito_verify_committed_transaction_inclusion_v
     }
     0
 }
+
+#[cfg(test)]
+#[path = "committed_transaction_inclusion/tests.rs"]
+mod tests;

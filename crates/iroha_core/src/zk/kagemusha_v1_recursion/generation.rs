@@ -9503,7 +9503,8 @@ fn recursive_public_instances<F: KagemushaPoseidonFieldV1>(
     successor_history: &[u8; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
 ) -> Result<Vec<F>, KagemushaArtifactGenerationErrorV1> {
     let mut instances = state
-        .public_instances::<F>()
+        .public_inputs_v1()
+        .and_then(|public| public.recursive_semantic_public_instances::<F>())
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     instances.extend(successor_history.chunks_exact(16).map(|chunk| {
         from_u128::<F>(u128::from_le_bytes(
@@ -10626,7 +10627,8 @@ fn validate_transport_proof_profile(
 
 #[cfg(feature = "zk-halo2-ipa")]
 const fn recursive_public_instance_count() -> usize {
-    PUBLIC_INSTANCE_COUNT + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
+    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+        + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
 }
 
 fn ensure_embedded_vk<C>(
@@ -11065,10 +11067,10 @@ mod tests {
         macro_rules! check {
             ($curve:ty, $field:ty, $parity:expr) => {{
                 // Compiling an ordinary IPA protocol commits every public instance using a
-                // domain basis point. The recursive column has 85 semantic plus 34 history
+                // domain basis point. The recursive column has 87 semantic plus 34 history
                 // cells, so the unrelated k=6 recovery fixture's 64-point basis is too short.
                 const TEST_K: u32 = 8;
-                assert_eq!(recursive_public_instance_count(), 119);
+                assert_eq!(recursive_public_instance_count(), 121);
                 assert!(recursive_public_instance_count() <= (1_usize << TEST_K));
                 let parameters = ParamsIPA::<$curve>::new(TEST_K);
                 let circuit =
@@ -11893,7 +11895,7 @@ mod tests {
     #[test]
     fn recursive_public_shape_and_transport_bound_are_fixed() {
         assert_eq!(PUBLIC_INSTANCE_COUNT, 85);
-        assert_eq!(recursive_public_instance_count(), 119);
+        assert_eq!(recursive_public_instance_count(), 121);
         assert!(
             validate_recursive_proof_length(
                 KagemushaPastaParityV1::Eq,

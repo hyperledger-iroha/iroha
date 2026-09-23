@@ -27,7 +27,7 @@ use super::{
     decide_kagemusha_eq_accumulator_v1,
     deferred_parent::ordinary_ipa_proof_profile_v1,
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
-    state_relation::{PUBLIC_INSTANCE_COUNT, public_instance},
+    state_relation::{RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, public_instance},
     transport_decider::KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1,
     verify_kagemusha_state_proof_v1,
 };
@@ -495,9 +495,9 @@ fn column_with_history<F: KagemushaPoseidonFieldV1>(
         return Err(KagemushaStateCheckpointErrorV1::Shape);
     }
     let mut column = public
-        .public_instances::<F>()
+        .recursive_semantic_public_instances::<F>()
         .map_err(KagemushaStateCheckpointErrorV1::Proof)?;
-    if column.len() != PUBLIC_INSTANCE_COUNT {
+    if column.len() != RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
         return Err(KagemushaStateCheckpointErrorV1::Shape);
     }
     for bytes in history.chunks_exact(16) {

@@ -14,10 +14,10 @@ pub(super) fn validate_terminal_nested_public_shape_v1<C: CurveAffineExt>(
     terminal_guard_instances: &[Vec<C::ScalarExt>],
 ) -> Result<(), String> {
     if candidate_protocol.num_instance
-        != [state_relation::PUBLIC_INSTANCE_COUNT + accumulator_limb_count()]
+        != [state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()]
         || candidate_instances.len() != 1
         || candidate_instances[0].len()
-            != state_relation::PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
+            != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
         || terminal_guard_protocol.num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1]
         || terminal_guard_instances.len() != 1
         || terminal_guard_instances[0].len() != GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1
@@ -144,7 +144,7 @@ fn constrain_candidate_terminal_guard_cells_v1<F: KagemushaPoseidonFieldV1>(
     terminal_guard_eq_protocol_digest: DigestV1,
     terminal_guard_ep_protocol_digest: DigestV1,
 ) -> Result<(), String> {
-    if candidate.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    if candidate.len() < state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
         || public_authorization.len() != TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1
     {
         return Err("terminal Guard candidate prefix is truncated".to_owned());
@@ -266,7 +266,7 @@ fn constrain_candidate_projection_cells_v1<F: KagemushaPoseidonFieldV1>(
     parity: KagemushaPastaParityV1,
     sha_jobs: &mut PastaSha256JobsV1<F>,
 ) -> Result<(), String> {
-    if candidate.len() < state_relation::PUBLIC_INSTANCE_COUNT
+    if candidate.len() < state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
         || public_authorization.len() != TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1
     {
         return Err("terminal authorization candidate projection is truncated".to_owned());
@@ -388,7 +388,7 @@ fn constrain_candidate_projection_cells_v1<F: KagemushaPoseidonFieldV1>(
     }
 
     let mut message = constant_bytes(CANDIDATE_BINDING_DOMAIN_V1);
-    for (index, value) in candidate[..state_relation::PUBLIC_INSTANCE_COUNT]
+    for (index, value) in candidate[..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
         .iter()
         .enumerate()
     {
@@ -511,7 +511,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
             native_parent_protocol_digest_v1(parity_inputs.candidate_protocol, parity)?;
         let candidate = &parity_inputs.candidate_instances[0];
         let candidate_digest = canonical_terminal_authorization_candidate_digest_v1(&[candidate
-            [..state_relation::PUBLIC_INSTANCE_COUNT]
+            [..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
             .to_vec()])?;
         let protocol_offset = match parity {
             KagemushaPastaParityV1::Eq => state_relation::public_instance::EQ_PROTOCOL_LO,

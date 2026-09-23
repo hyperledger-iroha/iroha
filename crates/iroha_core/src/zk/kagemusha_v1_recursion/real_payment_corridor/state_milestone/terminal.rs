@@ -117,12 +117,12 @@ fn candidate_matches_core<F: KagemushaPoseidonFieldV1>(
     parity: KagemushaPastaParityV1,
 ) -> Result<(), String> {
     ensure(
-        expected_semantic.len() == state_relation::PUBLIC_INSTANCE_COUNT
+        expected_semantic.len() == state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
             && actual.len() == RECURSIVE_PUBLIC_INSTANCE_COUNT,
         "candidate is not the exact State transport column",
     )?;
     ensure(
-        actual[..state_relation::PUBLIC_INSTANCE_COUNT] == *expected_semantic,
+        actual[..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT] == *expected_semantic,
         "candidate semantic column differs from Core persistence",
     )?;
     let offset = match parity {
@@ -159,7 +159,7 @@ fn terminal_candidate_preflight_requires_exact_role_and_semantic_cells_in_both_f
             KagemushaPastaParityV1::Eq => eq_protocol,
             KagemushaPastaParityV1::Ep => ep_protocol,
         };
-        let mut semantic = vec![F::ZERO; state_relation::PUBLIC_INSTANCE_COUNT];
+        let mut semantic = vec![F::ZERO; state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT];
         for (offset, protocol) in [
             (state_relation::public_instance::EQ_PROTOCOL_LO, eq_protocol),
             (state_relation::public_instance::EP_PROTOCOL_LO, ep_protocol),
@@ -180,7 +180,7 @@ fn terminal_candidate_preflight_requires_exact_role_and_semantic_cells_in_both_f
         assert!(
             candidate_matches_core(&semantic, &complete, digest(b"other-role", 1), parity).is_err()
         );
-        for offset in 0..state_relation::PUBLIC_INSTANCE_COUNT {
+        for offset in 0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
             let mut changed = complete.clone();
             changed[offset] += F::ONE;
             assert!(
@@ -328,11 +328,11 @@ pub(super) fn prove_sender_terminal(
     terminally_verify_state_proof(state_keys, send);
     let seed = test_only_recovery_seed();
     assert_eq!(
-        &send.eq_public_instances[state_relation::PUBLIC_INSTANCE_COUNT..],
+        &send.eq_public_instances[state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         history_values::<Fp>(send.eq_history.as_bytes())
     );
     assert_eq!(
-        &send.ep_public_instances[state_relation::PUBLIC_INSTANCE_COUNT..],
+        &send.ep_public_instances[state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         history_values::<Fq>(send.ep_history.as_bytes())
     );
     for inner in [&send.eq_current_accumulator, &send.eq_history] {
@@ -366,8 +366,19 @@ pub(super) fn prove_sender_terminal(
     let core_public = candidate
         .candidate_public_inputs(artifacts, &send.proof)
         .unwrap();
-    let eq_expected = core_public.public_instances::<Fp>().unwrap();
-    let ep_expected = core_public.public_instances::<Fq>().unwrap();
+    let core_statement_digest = candidate.proof_statement.digest().unwrap();
+    assert_eq!(candidate.state_transition_digest, core_statement_digest);
+    assert_eq!(
+        core_public.transition_statement_digest_v1().unwrap(),
+        core_statement_digest,
+        "recursive State transition projection must equal Core's independently built statement"
+    );
+    let eq_expected = core_public
+        .recursive_semantic_public_instances::<Fp>()
+        .unwrap();
+    let ep_expected = core_public
+        .recursive_semantic_public_instances::<Fq>()
+        .unwrap();
     // StateKeys.eq_protocol/ep_protocol name INNER keys; select their explicit transport
     // counterparts here. GeneratedState's top-level instances/current/history are also INNER;
     // the transport columns and send.proof bytes/history below are the exact Core candidate.

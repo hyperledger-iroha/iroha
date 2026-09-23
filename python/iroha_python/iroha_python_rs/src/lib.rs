@@ -109,10 +109,10 @@ use iroha_data_model::{
         proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
     },
     query::{
-        CommittedTransaction, QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryResponse,
-        QueryWithParams, SingularQueryBox,
+        CommittedTransaction, CommittedTxFilters, QueryItemKind, QueryOutputBatchBox, QueryRequest,
+        QueryResponse, QueryWithParams, SingularQueryBox,
         block::prelude::FindBlocks,
-        dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
+        dsl::{CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
         parameters::QueryParams,
         transaction::prelude::FindTransactions,
@@ -11981,9 +11981,13 @@ fn build_find_committed_transaction_query_py(
 ) -> PyResult<Py<PyBytes>> {
     let transaction_hash =
         parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
-        CommittedTxPredicate::EntryEq(transaction_hash),
-    );
+    // First-release Torii permits the narrow wallet-self recovery scope only
+    // when the exact transaction authority and entrypoint hash are both bound.
+    let predicate = CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
+        authority_eq: Some(parse_account_id(authority)?),
+        entry_eq: Some(transaction_hash),
+        ..CommittedTxFilters::default()
+    });
     let request = QueryRequest::Start(QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindTransactions),

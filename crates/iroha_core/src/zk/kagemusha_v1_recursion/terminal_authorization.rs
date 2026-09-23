@@ -1126,27 +1126,25 @@ const CANDIDATE_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:terminal-authori
 
 /// Hash the parity-invariant candidate semantic cells bound by terminal authorization.
 ///
-/// The 85-cell state ABI contains two redundant parity-native state components at indices 30 and
+/// The 87-cell recursive State semantic prefix contains two redundant parity-native state components at indices 30 and
 /// 31. Their complete paired Eq/Ep values already occur as four canonical digest-limb pairs at
 /// indices 22 through 29. This transcript writes fixed zero markers for the two redundant cells
-/// so Eq and Ep derive one candidate identity, while retaining every one of the other 83 semantic
-/// cells. Every retained cell must have the ABI's canonical unsigned-128 representation.
+/// so Eq and Ep derive one candidate identity, while retaining every one of the other 85 semantic
+/// cells, including the SHA-derived transition-statement digest. Every retained cell must have
+/// the ABI's canonical unsigned-128 representation.
 /// This native helper accepts only that semantic column; recursive proof columns additionally
 /// contain history-accumulator limbs, whose shape and binding are checked by the recursive circuit.
 pub(crate) fn canonical_terminal_authorization_candidate_digest_v1<F: BigPrimeField>(
     candidate_instances: &[Vec<F>],
 ) -> Result<DigestV1, String> {
     if candidate_instances.len() != 1
-        || candidate_instances[0].len() != state_relation::PUBLIC_INSTANCE_COUNT
+        || candidate_instances[0].len() != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
     {
         return Err("terminal authorization candidate has wrong fixed public shape".to_owned());
     }
     let mut hasher = Sha256::new();
     hasher.update(CANDIDATE_BINDING_DOMAIN_V1);
-    for (index, value) in candidate_instances[0][..state_relation::PUBLIC_INSTANCE_COUNT]
-        .iter()
-        .enumerate()
-    {
+    for (index, value) in candidate_instances[0].iter().enumerate() {
         if matches!(
             index,
             state_relation::public_instance::PREDECESSOR_STATE
@@ -1173,8 +1171,10 @@ pub(crate) fn canonical_terminal_authorization_candidate_digest_v1<F: BigPrimeFi
 pub(crate) fn kagemusha_candidate_envelope_digest_v1(
     public_inputs: &KagemushaStateRelationPublicInputsV1,
 ) -> Result<DigestV1, String> {
-    let eq = public_inputs.public_instances::<halo2_proofs::halo2curves::pasta::Fp>()?;
-    let ep = public_inputs.public_instances::<halo2_proofs::halo2curves::pasta::Fq>()?;
+    let eq = public_inputs
+        .recursive_semantic_public_instances::<halo2_proofs::halo2curves::pasta::Fp>()?;
+    let ep = public_inputs
+        .recursive_semantic_public_instances::<halo2_proofs::halo2curves::pasta::Fq>()?;
     let eq_digest = canonical_terminal_authorization_candidate_digest_v1(&[eq])?;
     let ep_digest = canonical_terminal_authorization_candidate_digest_v1(&[ep])?;
     if eq_digest != ep_digest {
@@ -1185,7 +1185,7 @@ pub(crate) fn kagemusha_candidate_envelope_digest_v1(
 
 /// Hash the exact candidate envelope from already assigned state public cells.
 ///
-/// The caller must pass the recursive state relation's authenticated 85-cell public column.
+/// The caller must pass the recursive state relation's authenticated 87-cell semantic prefix.
 /// Each retained field is constrained to its canonical little-endian `u128` bytes before it
 /// enters the ordinary Pasta SHA job queue. The two parity-native state components use the
 /// same fixed zero markers as [`canonical_terminal_authorization_candidate_digest_v1`]. The
@@ -1197,13 +1197,13 @@ pub(crate) fn constrain_candidate_envelope_digest_v1<F: KagemushaPoseidonFieldV1
     jobs: &mut PastaSha256JobsV1<F>,
     public: &[AssignedValue<F>],
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
-    if public.len() != state_relation::PUBLIC_INSTANCE_COUNT {
-        return Err("candidate envelope requires the exact state public column".to_owned());
+    if public.len() != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
+        return Err("candidate envelope requires the exact recursive State semantic prefix".to_owned());
     }
     let range = builder.range_chip();
     let ctx = builder.main(0);
     let mut transcript = constant_bytes(CANDIDATE_BINDING_DOMAIN_V1);
-    transcript.reserve(state_relation::PUBLIC_INSTANCE_COUNT * 16);
+    transcript.reserve(state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT * 16);
     for (index, value) in public.iter().enumerate() {
         if matches!(
             index,
@@ -1676,7 +1676,7 @@ fn validate_candidate_guard_protocol_binding_v1<F: KagemushaPoseidonFieldV1>(
     let candidate = candidate_instances
         .first()
         .ok_or_else(|| "terminal authorization candidate public column is absent".to_owned())?;
-    if candidate.len() < state_relation::PUBLIC_INSTANCE_COUNT {
+    if candidate.len() < state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
         return Err("terminal authorization candidate public column is truncated".to_owned());
     }
     for (offset, digest) in [
@@ -2604,7 +2604,7 @@ where
         public_cells,
         history_cells,
         assigned_terminal_guard,
-        prepared_source_cells: _prepared_source_cells,
+        prepared_source_cells: mut prepared_source_cells,
         candidate_instances: assigned_candidate_instances,
         sha_jobs,
     } = terminal_semantic_pipeline::assign_terminal_semantic_pipeline_v1(
@@ -2657,7 +2657,7 @@ where
     let candidate_history = load_native_accumulator(&loader, witness.candidate_history)
         .map_err(|error| format!("terminal authorization candidate history failed: {error:?}"))?;
     let candidate_history_limbs = candidate_column
-        .get(state_relation::PUBLIC_INSTANCE_COUNT..)
+        .get(state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..)
         .ok_or_else(|| "terminal authorization candidate history is absent".to_owned())?
         .iter()
         .map(|value| *value.assigned())
@@ -2676,6 +2676,15 @@ where
     if candidate_end == 0 {
         return Err("terminal authorization candidate verifier emitted no equations".to_owned());
     }
+    // These two cells come from the authenticated State proof, not a terminal host witness.
+    // The remaining prepared-intent ID and sealed streams are still unavailable, so this
+    // retained source cannot open the outgoing durable journal on its own.
+    install_verified_candidate_transition_digest_v1(
+        &mut prepared_source_cells,
+        assigned_candidate_instances
+            .first()
+            .ok_or_else(|| "verified State candidate public column is absent".to_owned())?,
+    )?;
 
     let terminal_instances = assign_nested_instances_v1(&loader, witness.terminal_guard_instances);
     let terminal_column = terminal_instances.first().ok_or_else(|| {
@@ -3856,10 +3865,35 @@ pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFie
     pub(super) terminal_branch: AssignedValue<F>,
     /// Only a future recursively verified prepared-intent relation may populate this field.
     pub(super) verified_preparation_id: Option<[AssignedValue<F>; 2]>,
+    /// State's SHA-derived transition digest, installed only after the candidate proof and
+    /// its complete history have been recursively verified.
+    pub(super) verified_state_transition_digest: Option<[AssignedValue<F>; 2]>,
     pub(super) candidate_envelope_digest: [AssignedValue<F>; 2],
     pub(super) outbox_reservation_commitment: [AssignedValue<F>; 2],
     pub(super) prepared_one_use_authorization_digest: [PastaSha256ByteV1<F>; 32],
     pub(super) journal_revision_after: AssignedValue<F>,
+}
+
+/// Retain State's transition digest from the exact candidate column accepted by the recursive
+/// verifier. Call this only after verifying the candidate proof and binding its history.
+#[cfg(feature = "zk-halo2-ipa")]
+fn install_verified_candidate_transition_digest_v1<F: KagemushaPoseidonFieldV1>(
+    sources: &mut KagemushaTerminalPreparedSourceCellsV1<F>,
+    candidate: &[AssignedValue<F>],
+) -> Result<(), String> {
+    if candidate.len()
+        != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
+    {
+        return Err("verified State candidate has wrong fixed public shape".to_owned());
+    }
+    if sources.verified_state_transition_digest.is_some() {
+        return Err("verified State transition digest is already installed".to_owned());
+    }
+    sources.verified_state_transition_digest = Some([
+        candidate[state_relation::public_instance::TRANSITION_STATEMENT_LO],
+        candidate[state_relation::public_instance::TRANSITION_STATEMENT_HI],
+    ]);
+    Ok(())
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4576,8 +4610,9 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         // SHA over both private states, the transition digest and statement, operation projection,
         // reservation, this one-use authorization, both sealed streams, and the Guard digest.
         // Its exported ID must be linked to this verified candidate/Guard pair before `Some` is
-        // allowed. The current 85-cell candidate proof and terminal witness expose no such ID.
+        // allowed. The current 87-cell recursive State prefix and terminal witness expose no ID.
         verified_preparation_id: None,
+        verified_state_transition_digest: None,
         candidate_envelope_digest: [
             public[public_instance::CANDIDATE_LO],
             public[public_instance::CANDIDATE_LO + 1],
@@ -4817,12 +4852,71 @@ mod tests {
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
+    fn verified_state_transition_source_accepts_only_exact_candidate_column_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
+
+        fn check<F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>() {
+            let mut builder = BaseCircuitBuilder::<F>::new(false).use_k(9);
+            let ctx = builder.main(0);
+            let zero = ctx.load_constant(F::ZERO);
+            let digest = [zero; 2];
+            let mut sources = super::KagemushaTerminalPreparedSourceCellsV1 {
+                terminal_branch: zero,
+                verified_preparation_id: None,
+                verified_state_transition_digest: None,
+                candidate_envelope_digest: digest,
+                outbox_reservation_commitment: digest,
+                prepared_one_use_authorization_digest: super::constant_bytes(&[0; 32])
+                    .try_into()
+                    .expect("digest width"),
+                journal_revision_after: zero,
+            };
+            let width = state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+                + super::accumulator_limb_count();
+            let candidate = (0..width)
+                .map(|index| ctx.load_witness(F::from(index as u64 + 1)))
+                .collect::<Vec<_>>();
+            assert!(
+                super::install_verified_candidate_transition_digest_v1(
+                    &mut sources,
+                    &candidate[..width - 1],
+                )
+                .is_err()
+            );
+            assert!(sources.verified_state_transition_digest.is_none());
+            super::install_verified_candidate_transition_digest_v1(&mut sources, &candidate)
+                .expect("exact recursively verified candidate shape");
+            let installed = sources
+                .verified_state_transition_digest
+                .expect("State digest");
+            assert_eq!(
+                *installed[0].value(),
+                F::from((state_relation::public_instance::TRANSITION_STATEMENT_LO + 1) as u64)
+            );
+            assert_eq!(
+                *installed[1].value(),
+                F::from((state_relation::public_instance::TRANSITION_STATEMENT_HI + 1) as u64)
+            );
+            assert!(
+                super::install_verified_candidate_transition_digest_v1(&mut sources, &candidate)
+                    .is_err(),
+                "a second candidate may not replace an installed verified digest"
+            );
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
     fn candidate_guard_protocol_binding_rejects_eq_substitution() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
         let eq = crate::zk::kagemusha_v1_poseidon::encode(Fp::from(0x71));
         let ep = crate::zk::kagemusha_v1_poseidon::encode(Fq::from(0x72));
-        let mut column = vec![Fp::from(0); state_relation::PUBLIC_INSTANCE_COUNT];
+        let mut column =
+            vec![Fp::from(0); state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT];
         column[state_relation::public_instance::GUARD_EQ_PROTOCOL_LO
             ..state_relation::public_instance::GUARD_EQ_PROTOCOL_LO + 2]
             .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fp>(eq));
@@ -4842,7 +4936,8 @@ mod tests {
 
         let eq = crate::zk::kagemusha_v1_poseidon::encode(Fp::from(0x71));
         let ep = crate::zk::kagemusha_v1_poseidon::encode(Fq::from(0x72));
-        let mut column = vec![Fq::from(0); state_relation::PUBLIC_INSTANCE_COUNT];
+        let mut column =
+            vec![Fq::from(0); state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT];
         column[state_relation::public_instance::GUARD_EQ_PROTOCOL_LO
             ..state_relation::public_instance::GUARD_EQ_PROTOCOL_LO + 2]
             .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<Fq>(eq));
@@ -4859,10 +4954,10 @@ mod tests {
     fn candidate_binding_is_equal_across_parities_and_rejects_semantic_mutation() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
-        let mut eq = (0..state_relation::PUBLIC_INSTANCE_COUNT)
+        let mut eq = (0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT)
             .map(|value| Fp::from(value as u64 + 1))
             .collect::<Vec<_>>();
-        let mut ep = (0..state_relation::PUBLIC_INSTANCE_COUNT)
+        let mut ep = (0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT)
             .map(|value| Fq::from(value as u64 + 1))
             .collect::<Vec<_>>();
         eq[state_relation::public_instance::PREDECESSOR_STATE] = Fp::from(0xaaaa);
@@ -4878,7 +4973,7 @@ mod tests {
                 .expect("canonical Ep candidate")
         );
 
-        for index in 0..state_relation::PUBLIC_INSTANCE_COUNT {
+        for index in 0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
             if matches!(
                 index,
                 state_relation::public_instance::PREDECESSOR_STATE
@@ -4907,7 +5002,7 @@ mod tests {
     fn candidate_binding_requires_one_exact_semantic_column() {
         use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 
-        let semantic_count = state_relation::PUBLIC_INSTANCE_COUNT;
+        let semantic_count = state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT;
         let history_limb_count = super::super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
         let eq = vec![Fp::from(0); semantic_count];
         let ep = vec![Fq::from(0); semantic_count];
@@ -5053,7 +5148,8 @@ mod tests {
         assert_eq!(message.len(), 1);
         assert_eq!(
             message[0].len(),
-            super::CANDIDATE_BINDING_DOMAIN_V1.len() + state_relation::PUBLIC_INSTANCE_COUNT * 16
+            super::CANDIDATE_BINDING_DOMAIN_V1.len()
+                + state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT * 16
         );
         assert_eq!(
             &message[0][..super::CANDIDATE_BINDING_DOMAIN_V1.len()],
@@ -5072,7 +5168,7 @@ mod tests {
         };
 
         fn check<F: crate::zk::kagemusha_v1_poseidon::KagemushaPoseidonFieldV1>() {
-            let baseline = (0..state_relation::PUBLIC_INSTANCE_COUNT)
+            let baseline = (0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT)
                 .map(|index| F::from((index + 1) as u64))
                 .collect::<Vec<_>>();
             let expected =
@@ -5093,6 +5189,22 @@ mod tests {
                     .is_err(),
                 "changed authenticated state public cell preserved signed candidate digest"
             );
+
+            for transition_index in [
+                state_relation::public_instance::TRANSITION_STATEMENT_LO,
+                state_relation::public_instance::TRANSITION_STATEMENT_HI,
+            ] {
+                let mut changed = baseline.clone();
+                changed[transition_index] += F::from(1);
+                let invalid = candidate_digest_test_circuit_v1(changed, expected);
+                assert!(
+                    MockProver::run(16, &invalid, vec![])
+                        .expect("changed State transition digest circuit")
+                        .verify()
+                        .is_err(),
+                    "changed recursively verified transition digest preserved signed candidate"
+                );
+            }
 
             let mut parity_native = baseline;
             parity_native[state_relation::public_instance::PREDECESSOR_STATE] += F::from(1);
@@ -5119,8 +5231,8 @@ mod tests {
         let mut jobs = crate::zk::pasta_sha256::PastaSha256JobsV1::default();
         for length in [
             0,
-            state_relation::PUBLIC_INSTANCE_COUNT - 1,
-            state_relation::PUBLIC_INSTANCE_COUNT + 1,
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT - 1,
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + 1,
         ] {
             let public = builder.main(0).assign_witnesses(vec![Fp::from(0); length]);
             assert!(

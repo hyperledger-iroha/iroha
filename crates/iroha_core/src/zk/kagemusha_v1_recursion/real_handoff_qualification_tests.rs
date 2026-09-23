@@ -105,7 +105,7 @@ use super::{
     initial_kagemusha_ep_accumulator_v1, initial_kagemusha_eq_accumulator_v1,
     mint_authority::KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1,
     native_backend::{verify_ep_succinct_protocol, verify_eq_succinct_protocol},
-    state_relation::{PUBLIC_INSTANCE_COUNT, public_instance},
+    state_relation::{RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, public_instance},
     transport_decider::{
         KagemushaTransportDeciderEpCircuitV1, KagemushaTransportDeciderEqCircuitV1,
     },
@@ -126,7 +126,7 @@ const PROVIDER_AUTHORITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:provider-proof-aut
 const POLICY_LEAF_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-policy-leaf";
 const POLICY_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-policy-node";
 const RECURSIVE_PUBLIC_INSTANCE_COUNT: usize =
-    PUBLIC_INSTANCE_COUNT + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
+    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
 
 /// Compare generated structured-key bytes directly, without another artifact-sized allocation.
 struct GeneratedStructuredKeyBytesV1<'a> {
@@ -1830,8 +1830,14 @@ fn dummy_parent(
     ep_history: KagemushaEpAccumulatorV1,
 ) -> ParentProof {
     ParentProof {
-        eq_instances: history_instances(PUBLIC_INSTANCE_COUNT, eq_history.as_bytes()),
-        ep_instances: history_instances(PUBLIC_INSTANCE_COUNT, ep_history.as_bytes()),
+        eq_instances: history_instances(
+            RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
+            eq_history.as_bytes(),
+        ),
+        ep_instances: history_instances(
+            RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
+            ep_history.as_bytes(),
+        ),
         eq_proof: dummy_ordinary_proof(eq_protocol, EqAffine::generator()),
         ep_proof: dummy_ordinary_proof(ep_protocol, EpAffine::generator()),
         eq_history,
@@ -2128,11 +2134,13 @@ fn terminally_verify_state_proof(
         .expect("terminally decide Eq transport proof");
     let eq_terminal = KagemushaEqAccumulatorV1::try_from_bytes(&proof.proof.eq_history)
         .expect("decode exact Eq transported history");
-    let eq_terminal_instances =
-        history_instances::<Fp>(PUBLIC_INSTANCE_COUNT, eq_terminal.as_bytes());
+    let eq_terminal_instances = history_instances::<Fp>(
+        RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
+        eq_terminal.as_bytes(),
+    );
     assert_eq!(
-        &proof.eq_transport_public_instances[PUBLIC_INSTANCE_COUNT..],
-        &eq_terminal_instances[0][PUBLIC_INSTANCE_COUNT..],
+        &proof.eq_transport_public_instances[RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
+        &eq_terminal_instances[0][RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         "Eq wire history must be the history bound by the outer proof",
     );
     decide_kagemusha_eq_accumulator_v1(&state_keys.eq.parameters, &eq_terminal)
@@ -2163,11 +2171,13 @@ fn terminally_verify_state_proof(
         .expect("terminally decide Ep transport proof");
     let ep_terminal = KagemushaEpAccumulatorV1::try_from_bytes(&proof.proof.ep_history)
         .expect("decode exact Ep transported history");
-    let ep_terminal_instances =
-        history_instances::<Fq>(PUBLIC_INSTANCE_COUNT, ep_terminal.as_bytes());
+    let ep_terminal_instances = history_instances::<Fq>(
+        RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
+        ep_terminal.as_bytes(),
+    );
     assert_eq!(
-        &proof.ep_transport_public_instances[PUBLIC_INSTANCE_COUNT..],
-        &ep_terminal_instances[0][PUBLIC_INSTANCE_COUNT..],
+        &proof.ep_transport_public_instances[RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
+        &ep_terminal_instances[0][RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         "Ep wire history must be the history bound by the outer proof",
     );
     decide_kagemusha_ep_accumulator_v1(&state_keys.ep.parameters, &ep_terminal)
@@ -2186,7 +2196,7 @@ fn eq_transport_boundary_accepts(
     let Ok(history) = KagemushaEqAccumulatorV1::try_from_bytes(history) else {
         return false;
     };
-    let mut instances = semantic_instances[..PUBLIC_INSTANCE_COUNT].to_vec();
+    let mut instances = semantic_instances[..RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT].to_vec();
     instances.extend(history_instances::<Fp>(0, history.as_bytes()).remove(0));
     // Succinct verification only returns a deferred IPA equation. Monetary acceptance requires
     // deciding both that equation and the separately transported history, exactly as production.
@@ -2217,7 +2227,7 @@ fn ep_transport_boundary_accepts(
     let Ok(history) = KagemushaEpAccumulatorV1::try_from_bytes(history) else {
         return false;
     };
-    let mut instances = semantic_instances[..PUBLIC_INSTANCE_COUNT].to_vec();
+    let mut instances = semantic_instances[..RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT].to_vec();
     instances.extend(history_instances::<Fq>(0, history.as_bytes()).remove(0));
     // Do not mistake successful parsing/accumulation for proof acceptance; decision is authoritative.
     let Ok(current) = verify_ep_succinct_protocol(

@@ -249,6 +249,12 @@ hardware no-fork evidence. Its internal eSE is connected, but no access rule
 for the current applet was observed. An app-accessible, provisioned hardware
 counter/checkpoint profile or another physically proven no-fork primitive is
 required to support this device for production offline money.
+The connected Pixel 6 was rechecked on an Android 17 user build with locked,
+green verified boot. It still advertises neither hardware single-use nor
+limited-use Keystore support; `eSE1` is connected but has no observed access
+rule for the current applet AID. The earlier StrongBox attestation was collected
+on Android 16, so the Android 17 feature recheck does not replace a fresh
+attestation or an applet SELECT/recovery qualification.
 An experimental Pixel 6 StrongBox observation collector and testnet-only app
 entry point are source-staged with exact selection/network/release binding and
 local lost-result freezing. Four collector JVM tests and one physical device

@@ -1,7 +1,8 @@
 //! Assigned canonical openings of outgoing private journal and recovery commitments.
 //!
-//! The preparation ID and sealed recovery bytes still require an authenticated prepared-intent
-//! opening. These relations grant no outgoing monetary authority until that source is wired.
+//! The preparation ID, transition digest and sealed recovery bytes still require an authenticated
+//! prepared-intent opening. These relations grant no outgoing monetary authority until those
+//! sources are wired.
 
 use halo2_base::{
     AssignedValue, Context, QuantumCell,
@@ -154,6 +155,57 @@ pub(super) struct KagemushaAssignedTerminalRecoveryPreparedInputsV1<F: Kagemusha
     sealed_recovery_seeds: KagemushaBoundedByteStreamV1<F>,
 }
 
+/// Streams exported by a verified prepared-intent relation, including their fixed-capacity tails.
+///
+/// The current terminal fold has no such export. Supplying a second host copy of the prepared
+/// bytes would not authenticate them, so production construction remains unavailable.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "verified prepared-intent streams are not exported"
+    )
+)]
+pub(super) struct KagemushaVerifiedTerminalRecoveryStreamsV1<F: KagemushaPoseidonFieldV1> {
+    sealed_transition_inputs: KagemushaBoundedByteStreamV1<F>,
+    sealed_recovery_seeds: KagemushaBoundedByteStreamV1<F>,
+}
+
+fn constrain_terminal_recovery_stream_identity_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    prepared: &KagemushaAssignedTerminalRecoveryPreparedInputsV1<F>,
+    verified: Option<&KagemushaVerifiedTerminalRecoveryStreamsV1<F>>,
+) -> Result<(), String> {
+    let verified = verified.ok_or_else(|| {
+        "terminal recovery lacks recursively verified sealed stream sources".to_owned()
+    })?;
+    for (prepared, verified) in [
+        (
+            &prepared.sealed_transition_inputs,
+            &verified.sealed_transition_inputs,
+        ),
+        (
+            &prepared.sealed_recovery_seeds,
+            &verified.sealed_recovery_seeds,
+        ),
+    ] {
+        if prepared.bytes().len() != verified.bytes().len() {
+            return Err("terminal recovery verified stream capacity mismatch".to_owned());
+        }
+        ctx.constrain_equal(&prepared.actual_len(), &verified.actual_len());
+        for (prepared_byte, verified_byte) in prepared.bytes().iter().zip(verified.bytes()) {
+            let difference = range.gate().sub(
+                ctx,
+                prepared_byte.quantum_cell(),
+                verified_byte.quantum_cell(),
+            );
+            range.gate().assert_is_const(ctx, &difference, &F::ZERO);
+        }
+    }
+    Ok(())
+}
+
 fn fixed_stream_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -298,7 +350,8 @@ fn constrain_terminal_recovery_with_capacity_v1<F: KagemushaPoseidonFieldV1>(
 /// Constrain the exact canonical private-recovery commitment from authenticated prepared cells.
 ///
 /// Both sealed streams have the V1 maximum capacity regardless of their active lengths, so key
-/// shape cannot depend on a witness. Missing prepared-intent authority fails before proving.
+/// shape cannot depend on a witness. Both active lengths and all fixed-capacity bytes must match
+/// verified prepared-intent sources before the SHA job is queued. Missing authority fails closed.
 /// TODO: export the prepared-intent proof's exact ID, one-use digest and sealed byte streams
 /// into the recursive relation in both Pasta parities.
 pub(super) fn constrain_terminal_recovery_commitment_v1<F: KagemushaPoseidonFieldV1>(
@@ -306,11 +359,13 @@ pub(super) fn constrain_terminal_recovery_commitment_v1<F: KagemushaPoseidonFiel
     range: &RangeChip<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     prepared: Option<&KagemushaAssignedTerminalRecoveryPreparedInputsV1<F>>,
+    verified_streams: Option<&KagemushaVerifiedTerminalRecoveryStreamsV1<F>>,
     terminal_body_recovery_commitment: [AssignedValue<F>; 2],
 ) -> Result<(), String> {
     let prepared = prepared.ok_or_else(|| {
         "terminal recovery lacks an authenticated prepared-intent source".to_owned()
     })?;
+    constrain_terminal_recovery_stream_identity_v1(ctx, range, prepared, verified_streams)?;
     constrain_terminal_recovery_with_capacity_v1(
         ctx,
         range,
@@ -337,6 +392,8 @@ pub(super) struct KagemushaAuthenticatedTerminalRecoveryOpeningV1<F: KagemushaPo
     journal_prepared: KagemushaAssignedTerminalJournalPreparedInputsV1<F>,
     recovery_prepared: KagemushaAssignedTerminalRecoveryPreparedInputsV1<F>,
     prepared_sources: KagemushaTerminalPreparedSourceCellsV1<F>,
+    /// Both fixed-capacity streams from the same verified prepared-intent relation.
+    verified_recovery_streams: Option<KagemushaVerifiedTerminalRecoveryStreamsV1<F>>,
     body: KagemushaAssignedTerminalBodyFieldsV1<F>,
     prefix: KagemushaAuthenticatedTerminalBodyPrefixV1<F>,
     certificate_commitment: [AssignedValue<F>; 2],
@@ -348,12 +405,17 @@ fn constrain_terminal_prepared_opening_identity_v1<F: KagemushaPoseidonFieldV1>(
     preparation_ids: ([AssignedValue<F>; 2], [AssignedValue<F>; 2]),
     candidates: ([AssignedValue<F>; 2], [AssignedValue<F>; 2]),
     reservations: ([AssignedValue<F>; 2], [AssignedValue<F>; 2]),
+    journal_transition_digest: [AssignedValue<F>; 2],
     recovery_authorization: [AssignedValue<F>; 2],
     journal_revision_after: AssignedValue<F>,
 ) -> Result<(), String> {
     let verified_preparation_id = sources.verified_preparation_id.ok_or_else(|| {
         "terminal durable opening lacks a recursively verified preparation ID".to_owned()
     })?;
+    let verified_state_transition_digest =
+        sources.verified_state_transition_digest.ok_or_else(|| {
+            "terminal durable opening lacks a recursively verified transition digest".to_owned()
+        })?;
     let terminal = ctx.load_constant(F::ONE);
     ctx.constrain_equal(&sources.terminal_branch, &terminal);
     ctx.constrain_equal(&journal_revision_after, &sources.journal_revision_after);
@@ -364,6 +426,7 @@ fn constrain_terminal_prepared_opening_identity_v1<F: KagemushaPoseidonFieldV1>(
         (candidates.1, sources.candidate_envelope_digest),
         reservations,
         (reservations.1, sources.outbox_reservation_commitment),
+        (journal_transition_digest, verified_state_transition_digest),
         (
             recovery_authorization,
             digest_limbs_assigned(ctx, &sources.prepared_one_use_authorization_digest),
@@ -379,8 +442,9 @@ fn constrain_terminal_prepared_opening_identity_v1<F: KagemushaPoseidonFieldV1>(
 /// Require both durable openings and the entire signed canonical terminal-body SHA relation.
 ///
 /// The journal and recovery preparation IDs must be identical. The journal's candidate and
-/// reservation cells must match the terminal prefix. This helper remains outside the live
-/// experimental state builder until a verified prepared-intent proof exports every source cell.
+/// reservation cells must match the terminal prefix, and its transition digest must match the
+/// verified prepared intent. This helper remains outside the live experimental state builder
+/// until a verified prepared-intent proof exports every source cell.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "production prepared-intent fold remains closed")
@@ -394,6 +458,10 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
     let opening = opening.ok_or_else(|| {
         "outgoing terminal recovery lacks authenticated prepared-intent and body sources".to_owned()
     })?;
+    let verified_recovery_streams =
+        opening.verified_recovery_streams.as_ref().ok_or_else(|| {
+            "terminal recovery lacks recursively verified sealed stream sources".to_owned()
+        })?;
     constrain_terminal_prepared_opening_identity_v1(
         ctx,
         &opening.prepared_sources,
@@ -409,6 +477,7 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
             opening.journal_prepared.outbox_reservation_commitment,
             opening.prefix.derived_outbox_reservation_commitment,
         ),
+        opening.journal_prepared.state_transition_digest,
         opening
             .recovery_prepared
             .prepared_one_use_authorization_digest,
@@ -426,6 +495,7 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
         range,
         jobs,
         Some(&opening.recovery_prepared),
+        Some(verified_recovery_streams),
         opening.body.private_recovery_commitment,
     )?;
     let durable = KagemushaAuthenticatedTerminalBodyDurableSourcesV1 {
@@ -507,6 +577,16 @@ mod tests {
             let prefix_candidate = assign(ctx, [3 + u64::from(mutation == 2), 4]);
             let journal_reservation = assign(ctx, [5, 6]);
             let prefix_reservation = assign(ctx, [5 + u64::from(mutation == 3), 6]);
+            let journal_transition = assign(ctx, [11, 12]);
+            let verified_transition = (mutation != 11).then(|| {
+                assign(
+                    ctx,
+                    [
+                        11 + u64::from(mutation == 12),
+                        12 + u64::from(mutation == 13),
+                    ],
+                )
+            });
             let authorization_bytes: [PastaSha256ByteV1<F>; 32] =
                 constant_bytes(&[7; 32]).try_into().expect("digest width");
             let mut recovery_authorization = digest_limbs_assigned(ctx, &authorization_bytes);
@@ -519,6 +599,9 @@ mod tests {
             let sources = KagemushaTerminalPreparedSourceCellsV1 {
                 terminal_branch: ctx.load_witness(F::from(u64::from(mutation != 6))),
                 verified_preparation_id,
+                // The isolated equality test supplies synthetic verified cells; production
+                // installs these only from the recursively verified State candidate column.
+                verified_state_transition_digest: verified_transition,
                 candidate_envelope_digest: assign(ctx, [3 + u64::from(mutation == 7), 4]),
                 outbox_reservation_commitment: assign(ctx, [5 + u64::from(mutation == 8), 6]),
                 prepared_one_use_authorization_digest: authorization_bytes,
@@ -530,6 +613,7 @@ mod tests {
                 (journal_preparation, recovery_preparation),
                 (journal_candidate, prefix_candidate),
                 (journal_reservation, prefix_reservation),
+                journal_transition,
                 recovery_authorization,
                 journal_revision_after,
             );
@@ -537,6 +621,13 @@ mod tests {
                 assert_eq!(
                     result.expect_err("missing recursively verified ID must fail closed"),
                     "terminal durable opening lacks a recursively verified preparation ID"
+                );
+                return false;
+            }
+            if mutation == 11 {
+                assert_eq!(
+                    result.expect_err("missing verified transition digest must fail closed"),
+                    "terminal durable opening lacks a recursively verified transition digest"
                 );
                 return false;
             }
@@ -548,9 +639,121 @@ mod tests {
                 .verify()
                 .is_ok()
         }
-        for mutation in 0..=10 {
+        for mutation in 0..=13 {
             for pass in [check::<Fp>(mutation), check::<Fq>(mutation)] {
                 assert_eq!(pass, mutation == 0, "mutation {mutation}");
+            }
+        }
+    }
+
+    #[test]
+    fn verified_recovery_streams_bind_lengths_and_every_byte_in_both_parities() {
+        #[derive(Clone, Copy)]
+        enum Mutation {
+            None,
+            Missing,
+            TransitionLength,
+            TransitionByte,
+            SeedsLength,
+            SeedsByte,
+        }
+
+        fn check<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> bool {
+            const STREAM_K: u32 = 11;
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(STREAM_K as usize)
+                .use_lookup_bits(10)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let stream = |ctx: &mut Context<F>, bytes: &[u8], len: u64| {
+                let bytes = assign_bytes(ctx, &range, bytes);
+                let len = ctx.load_witness(F::from(len));
+                KagemushaBoundedByteStreamV1::constrain(ctx, &range, bytes, len)
+            };
+            let prepared = KagemushaAssignedTerminalRecoveryPreparedInputsV1 {
+                preparation_id: [ctx.load_witness(F::ONE), ctx.load_witness(F::ONE)],
+                prepared_one_use_authorization_digest: [
+                    ctx.load_witness(F::ONE),
+                    ctx.load_witness(F::ONE),
+                ],
+                sealed_transition_inputs: stream(ctx, &[0x11, 0, 0, 0], 2)
+                    .expect("prepared transition stream"),
+                sealed_recovery_seeds: stream(ctx, &[0x33, 0, 0, 0], 2)
+                    .expect("prepared seed stream"),
+            };
+            let transition_byte = if matches!(mutation, Mutation::TransitionByte) {
+                0x12
+            } else {
+                0x11
+            };
+            let seeds_byte = if matches!(mutation, Mutation::SeedsByte) {
+                0x34
+            } else {
+                0x33
+            };
+            let verified = KagemushaVerifiedTerminalRecoveryStreamsV1 {
+                sealed_transition_inputs: stream(
+                    ctx,
+                    &[transition_byte, 0, 0, 0],
+                    if matches!(mutation, Mutation::TransitionLength) {
+                        1
+                    } else {
+                        2
+                    },
+                )
+                .expect("verified transition stream"),
+                sealed_recovery_seeds: stream(
+                    ctx,
+                    &[seeds_byte, 0, 0, 0],
+                    if matches!(mutation, Mutation::SeedsLength) {
+                        1
+                    } else {
+                        2
+                    },
+                )
+                .expect("verified seed stream"),
+            };
+            let verified = (!matches!(mutation, Mutation::Missing)).then_some(&verified);
+            if matches!(mutation, Mutation::Missing) {
+                let mut jobs = PastaSha256JobsV1::default();
+                let expected = [ctx.load_witness(F::ONE), ctx.load_witness(F::ONE)];
+                let result = constrain_terminal_recovery_commitment_v1(
+                    ctx,
+                    &range,
+                    &mut jobs,
+                    Some(&prepared),
+                    verified,
+                    expected,
+                );
+                assert_eq!(
+                    result.expect_err("missing verified streams must fail before hashing"),
+                    "terminal recovery lacks recursively verified sealed stream sources"
+                );
+                assert_eq!(jobs.compression_blocks().expect("no SHA jobs"), 0);
+                return false;
+            }
+            let result =
+                constrain_terminal_recovery_stream_identity_v1(ctx, &range, &prepared, verified);
+            result.expect("both fixed-capacity verified stream sources are present");
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(UNUSABLE_ROWS));
+            MockProver::run(STREAM_K, &builder, vec![Vec::new()])
+                .expect("sealed stream identity circuit")
+                .verify()
+                .is_ok()
+        }
+
+        for mutation in [
+            Mutation::None,
+            Mutation::Missing,
+            Mutation::TransitionLength,
+            Mutation::TransitionByte,
+            Mutation::SeedsLength,
+            Mutation::SeedsByte,
+        ] {
+            for pass in [check::<Fp>(mutation), check::<Fq>(mutation)] {
+                assert_eq!(pass, matches!(mutation, Mutation::None));
             }
         }
     }
@@ -801,8 +1004,10 @@ mod tests {
         let mut jobs = PastaSha256JobsV1::default();
         if matches!(mutation, RecoveryMutation::Missing) {
             assert!(
-                constrain_terminal_recovery_commitment_v1(ctx, &range, &mut jobs, None, expected,)
-                    .is_err()
+                constrain_terminal_recovery_commitment_v1(
+                    ctx, &range, &mut jobs, None, None, expected,
+                )
+                .is_err()
             );
             return Err(
                 "terminal recovery lacks an authenticated prepared-intent source".to_owned(),

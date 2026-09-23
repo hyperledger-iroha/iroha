@@ -414,6 +414,13 @@ Pixel 6 needs a separately provisioned, app-accessible hardware counter or
 checkpoint service with signed original-result recovery, or a new physically
 verified primitive satisfying the same no-fork relation. An attested app and
 StrongBox key alone cannot be substituted for that relation.
+After the connected Pixel 6 moved to an Android 17 user build, it still
+advertised neither hardware single-use nor limited-use Keystore support.
+Its embedded `eSE1` reader was present, but no access rule for the current
+applet AID was observed. This recheck does not establish that an applet is
+installed or that this app can select it. The concrete internal eSE service
+and physical acceptance contract is in
+[`kagemusha_pixel6_ese_service_contract_v1.md`](kagemusha_pixel6_ese_service_contract_v1.md).
 
 On iPhone, an HCE entitlement permits app-hosted card emulation but does not
 grant the app access to implement the **checkpoint-service profile** in the
@@ -456,6 +463,12 @@ release; submitted operations must reach applied finality before counting as
 funded or redeemed. A testnet experimental device profile therefore needs
 explicit release/network-scoped proof and runtime installation, not a global
 hardware-admission bypass.
+The native testnet State observer now requires an operator-pinned network and
+authenticated release, verifies the actual paired State proof, and returns
+only an unqualified observation. A Rust-only owner retains that concrete
+verifier and one process-local lane lineage. No app-facing native installation
+or durable monetary capability exists yet; the terminal hardware fold and
+monetary admission remain separate.
 On Pixel 6, a source-staged experimental collector binds a StrongBox signature,
 attestation challenge and app-private intent journal to the canonical selection
 frame and exact network, release, lane and counter inputs. Its latest source

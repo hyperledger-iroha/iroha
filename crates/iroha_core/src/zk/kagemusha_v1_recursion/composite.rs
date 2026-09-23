@@ -1352,6 +1352,28 @@ where
     let assigned_guard =
         constrain_guard_bundle_semantics_v1(&mut builder, &mut sha_jobs, &guard_relation)?;
     constrain_state_guard_binding_v1(&mut builder, &assigned_state, &assigned_guard)?;
+    // Expose the exact SHA transcript derived from assigned State cells. Bootstrap
+    // runs the same SHA graph but has no signed transition statement, so its two
+    // public limbs are constrained to zero in both Pasta parities.
+    let transition_digest = state_relation::constrain_transition_statement_digest_v1(
+        &mut builder,
+        &mut sha_jobs,
+        &assigned_state,
+        &state,
+    )?;
+    let transition_limbs = {
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let is_bootstrap = range.gate().is_zero(ctx, assigned_state.operation);
+        let signed_transition = range.gate().not(ctx, is_bootstrap);
+        digest_limbs_assigned(ctx, &transition_digest)
+            .map(|limb| range.gate().mul(ctx, limb, signed_transition))
+    };
+    builder.assigned_instances[0].extend(transition_limbs);
+    debug_assert_eq!(
+        builder.assigned_instances[0].len(),
+        state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+    );
     // TODO: production hardware admission must consume the authenticated prepared-intent
     // and terminal-body openings in both parities. The experimental testnet state relation
     // remains available while the separate production qualifier is incomplete.
@@ -5787,13 +5809,21 @@ mod tests {
             )
             .is_ok()
         );
+        let state_proof_instances =
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
         assert!(
-            validate_incoming_authorization_proof_shape_v1(&[119], [authorization_proof_instances])
-                .is_err()
+            validate_incoming_authorization_proof_shape_v1(
+                &[state_proof_instances],
+                [authorization_proof_instances],
+            )
+            .is_err()
         );
         assert!(
-            validate_incoming_authorization_proof_shape_v1(&[authorization_proof_instances], [119])
-                .is_err()
+            validate_incoming_authorization_proof_shape_v1(
+                &[authorization_proof_instances],
+                [state_proof_instances],
+            )
+            .is_err()
         );
         assert_eq!(
             incoming_public_instance::HISTORY_START,

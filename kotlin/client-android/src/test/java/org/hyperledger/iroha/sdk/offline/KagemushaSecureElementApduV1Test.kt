@@ -52,6 +52,52 @@ class KagemushaSecureElementApduV1Test {
     }
 
     @Test
+    fun `oversized short APDU response is cleared and aborts transport`() {
+        val oversized = ByteArray(259) { 0x5a }
+        oversized[257] = 0x90.toByte()
+        oversized[258] = 0
+        var abortCount = 0
+        val channel = object : KagemushaSecureElementApduEndpointV1.Channel {
+            override fun transmit(command: ByteArray): ByteArray =
+                if (command[1] == 0x16.toByte()) {
+                    abortCount += 1
+                    byteArrayOf(0x90.toByte(), 0)
+                } else {
+                    oversized
+                }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaSecureElementApduEndpointV1(channel).execute(ByteArray(80))
+        }
+        assertTrue(oversized.all { it == 0.toByte() })
+        assertEquals(1, abortCount)
+    }
+
+    @Test
+    fun `closed secure-element channel rejects further probes and commands`() {
+        var closeCount = 0
+        var transmitCount = 0
+        val channel = object : KagemushaSecureElementApduEndpointV1.Channel {
+            override fun transmit(command: ByteArray): ByteArray {
+                transmitCount += 1
+                return byteArrayOf(0x90.toByte(), 0)
+            }
+
+            override fun close() {
+                closeCount += 1
+            }
+        }
+        val endpoint = KagemushaSecureElementApduEndpointV1(channel)
+        endpoint.close()
+        endpoint.close()
+        assertEquals(1, closeCount)
+        assertEquals(1, transmitCount) // one best-effort transport abort
+        assertFailsWith<IllegalStateException> { endpoint.capabilities() }
+        assertFailsWith<IllegalStateException> { endpoint.execute(ByteArray(80)) }
+        assertEquals(1, transmitCount)
+    }
+
+    @Test
     fun `foundation ODJ0 diagnostic cannot become an available provider`() {
         val channel = object : KagemushaSecureElementApduEndpointV1.Channel {
             override fun transmit(command: ByteArray): ByteArray =

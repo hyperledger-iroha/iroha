@@ -130,7 +130,10 @@ use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
 mod committed_transaction_inclusion;
-pub use committed_transaction_inclusion::connect_norito_verify_committed_transaction_inclusion_v1;
+pub use committed_transaction_inclusion::{
+    connect_norito_committed_transaction_candidate_block_hash_v1,
+    connect_norito_verify_committed_transaction_inclusion_v1,
+};
 mod committed_transaction_query;
 pub use committed_transaction_query::{
     connect_norito_committed_transaction_query_finalize_v1,
@@ -178,6 +181,14 @@ pub use kagemusha_core_coordinator_v1::{
 };
 mod kagemusha_device_bridge_v1;
 mod kagemusha_reserve_finality_v1;
+mod kagemusha_testnet_observation_v1;
+pub use kagemusha_testnet_observation_v1::{
+    KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+    KagemushaTestnetObservationInstallErrorV1, KagemushaTestnetStateObservationArchiveV1,
+    connect_norito_kagemusha_testnet_state_proof_observe_v1,
+    install_kagemusha_testnet_state_observation_owner_v1,
+    load_and_install_kagemusha_testnet_state_observation_owner_v1,
+};
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,

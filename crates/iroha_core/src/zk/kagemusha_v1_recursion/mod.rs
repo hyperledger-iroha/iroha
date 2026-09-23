@@ -43,13 +43,13 @@ mod relation;
 #[cfg(feature = "zk-halo2-ipa")]
 mod state_checkpoint;
 mod state_relation;
-#[cfg(feature = "zk-halo2-ipa")]
-mod testnet_observation;
 mod terminal_authorization;
 #[cfg(feature = "zk-halo2-ipa")]
 mod terminal_body_commitment;
 #[cfg(feature = "zk-halo2-ipa")]
 mod terminal_durable_commitments;
+#[cfg(feature = "zk-halo2-ipa")]
+mod testnet_observation;
 mod transport_decider;
 #[cfg(feature = "zk-halo2-ipa")]
 mod typed_sha_consumer;
@@ -199,11 +199,6 @@ pub use state_relation::{
     KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
     public_instance as kagemusha_state_public_instance_v1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
-pub use testnet_observation::{
-    KagemushaTestnetStateObservationScopeV1, KagemushaTestnetStateProofObservationV1,
-    observe_kagemusha_testnet_state_proof_v1,
-};
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 pub(crate) use terminal_authorization::public_instance as kagemusha_terminal_authorization_public_instance_v1;
 #[cfg(feature = "zk-halo2-ipa")]
@@ -223,6 +218,12 @@ pub(crate) use terminal_authorization::{
     KagemushaTerminalAuthorizationPublicInputsV1, TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
     canonical_prepared_transition_binding_digest_v1, canonical_terminal_send_output_binding_v1,
     kagemusha_candidate_envelope_digest_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use testnet_observation::{
+    KagemushaTestnetLineageTrialV1, KagemushaTestnetProofObservationOwnerV1,
+    KagemushaTestnetStateObservationScopeV1, KagemushaTestnetStateProofObservationV1,
+    observe_kagemusha_testnet_state_proof_v1,
 };
 
 use iroha_data_model::isi::KagemushaRedemptionRequestV1;
@@ -1734,7 +1735,8 @@ pub struct KagemushaParityVerificationRequestV1<'a> {
 /// verifier.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaStateProofVerificationRequestV1<'a> {
-    /// Verifier-reconstructed fixed 85-cell state relation projection.
+    /// Verifier-reconstructed 85-cell relation; recursive proof adds the two
+    /// canonical transition-digest limbs before its history accumulator.
     pub public_inputs: &'a KagemushaStateRelationPublicInputsV1,
     /// Paired recursive state proof and constant-size histories.
     pub proof: &'a KagemushaPairedProofV1,

@@ -114,6 +114,7 @@ enum NoritoBridgeLoader {
         "connect_norito_committed_transaction_query_payload_hash_v1",
         "connect_norito_committed_transaction_query_finalize_v1",
         "connect_norito_verify_committed_transaction_inclusion_v1",
+        "connect_norito_committed_transaction_candidate_block_hash_v1",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_validate_exact12_capability_manifest_v1",

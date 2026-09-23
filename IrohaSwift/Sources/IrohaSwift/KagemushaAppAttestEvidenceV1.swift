@@ -7,14 +7,15 @@ import Foundation
 /// This type checks only the outer frame before giving the exact bytes to App Attest.
 public struct KagemushaAppAttestTransitionBindingV1: Sendable {
   private static let signingDomain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
-  private static let maximumSigningBytes = 1_024
+  private static let bodyBytes = 403
+  private static let totalBytes = 460
 
   public let canonicalSelectionSigningBytes: Data
 
   public init(coreSelectionSigningBytes: Data) throws {
     let headerLength = Self.signingDomain.count + MemoryLayout<UInt64>.size
-    guard coreSelectionSigningBytes.count > headerLength,
-      coreSelectionSigningBytes.count <= Self.maximumSigningBytes,
+    guard coreSelectionSigningBytes.count == Self.totalBytes,
+      headerLength + Self.bodyBytes == Self.totalBytes,
       coreSelectionSigningBytes.starts(with: Self.signingDomain) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
@@ -22,7 +23,7 @@ public struct KagemushaAppAttestTransitionBindingV1: Sendable {
     for (offset, byte) in coreSelectionSigningBytes[Self.signingDomain.count..<headerLength].enumerated() {
       bodyLength |= UInt64(byte) << (offset * 8)
     }
-    guard bodyLength == UInt64(coreSelectionSigningBytes.count - headerLength) else {
+    guard bodyLength == UInt64(Self.bodyBytes) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
     canonicalSelectionSigningBytes = coreSelectionSigningBytes

@@ -24,8 +24,10 @@ internal class KagemushaSecureElementApduEndpointV1(
     }
 
     private val lock = Any()
+    private var closed = false
 
     override fun capabilities(): ByteArray = synchronized(lock) {
+        check(!closed) { "secure-element channel is closed" }
         exchange(
             shortCommand(INS_CAPABILITIES, expectedLength = CAPABILITY_BYTES),
             "capabilities",
@@ -37,6 +39,7 @@ internal class KagemushaSecureElementApduEndpointV1(
     }
 
     override fun execute(command: ByteArray): ByteArray = synchronized(lock) {
+        check(!closed) { "secure-element channel is closed" }
         require(command.size in MINIMUM_COMMAND_BYTES..MAXIMUM_COMMAND_BYTES) {
             "secure-element command is outside the ABI-23 bound"
         }
@@ -47,24 +50,29 @@ internal class KagemushaSecureElementApduEndpointV1(
             commandDigest.copyInto(begin, LENGTH_BYTES)
             requireEmptySuccess(exchange(shortCommand(INS_BEGIN_COMMAND, data = begin), "begin"), "begin")
 
-            command.asList().chunked(CHUNK_BYTES).forEachIndexed { index, chunk ->
-                val bytes = chunk.toByteArray()
+            var commandOffset = 0
+            var commandChunkIndex = 0
+            while (commandOffset < command.size) {
+                val end = minOf(commandOffset + CHUNK_BYTES, command.size)
+                val bytes = command.copyOfRange(commandOffset, end)
                 try {
                     requireEmptySuccess(
                         exchange(
                             shortCommand(
                                 INS_WRITE_COMMAND,
-                                p1 = index ushr 8,
-                                p2 = index,
+                                p1 = commandChunkIndex ushr 8,
+                                p2 = commandChunkIndex,
                                 data = bytes,
                             ),
-                            "write chunk $index",
+                            "write chunk $commandChunkIndex",
                         ),
-                        "write chunk $index",
+                        "write chunk $commandChunkIndex",
                     )
                 } finally {
                     bytes.fill(0)
                 }
+                commandOffset = end
+                commandChunkIndex += 1
             }
 
             val metadata = exchange(
@@ -122,6 +130,8 @@ internal class KagemushaSecureElementApduEndpointV1(
     }
 
     override fun close() = synchronized(lock) {
+        if (closed) return@synchronized
+        closed = true
         abortBestEffort()
         channel.close()
     }
@@ -132,7 +142,10 @@ internal class KagemushaSecureElementApduEndpointV1(
         } finally {
             command.fill(0)
         }
-        require(raw.size >= STATUS_BYTES) { "secure-element $label response omitted its status word" }
+        require(raw.size in STATUS_BYTES..MAXIMUM_APDU_RESPONSE_BYTES) {
+            raw.fill(0)
+            "secure-element $label response is outside the short-APDU bound"
+        }
         val status = ((raw[raw.lastIndex - 1].toInt() and 0xff) shl 8) or
             (raw[raw.lastIndex].toInt() and 0xff)
         if (status != SUCCESS_STATUS) {
@@ -201,6 +214,7 @@ internal class KagemushaSecureElementApduEndpointV1(
         private const val MINIMUM_RESPONSE_BYTES = 116
         private const val MAXIMUM_RESPONSE_BYTES = 116 + 64 * 1024 + 8 * 1024
         private const val STATUS_BYTES = 2
+        private const val MAXIMUM_APDU_RESPONSE_BYTES = 256 + STATUS_BYTES
         private const val SUCCESS_STATUS = 0x9000
 
         private fun sha256(bytes: ByteArray): ByteArray =
