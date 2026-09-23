@@ -3197,3 +3197,6 @@ fn retained_publication_orders_replay_metadata_before_finality_at_each_durable_c
 
 #[path = "captured_checkpoint_tests.rs"]
 mod captured_checkpoint_tests;
+
+#[path = "native_replay_tests.rs"]
+mod native_replay_tests;

@@ -1769,7 +1769,8 @@ pub(in crate::sumeragi) struct LifecycleLedgerV1 {
 /// CompleteTip, so a copied frame at a caller-selected root cannot enter this
 /// cut. It proves the terminal recovered-Decision body chain, the exact empty
 /// height-one ledger owned by authenticated signed genesis, or an exact
-/// physically present non-genesis frame superseded by canonical finality. It
+/// physically present frame superseded by canonical finality under its exact
+/// signed-genesis or rotating-leader policy. It
 /// does not publish the successor or claim that unrelated live
 /// rows, Serve payloads, leases, waits, debts, or capacity have been retired.
 /// The outer canonical predecessor-storage transaction supplies and discharges
@@ -1783,10 +1784,10 @@ struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
 }
 /// Closed durable lineage accepted for one CompleteTip predecessor.
 ///
-/// Non-genesis empty retirement is intentionally distinct from the genesis
+/// Physical-frame retirement remains distinct from the missing empty-genesis
 /// exception and retains the store-minted proof that the canonical frame was
-/// physically present. No raw boolean or caller-built empty ledger can enter
-/// this enum.
+/// physically present. No raw boolean or caller-built ledger can replace that
+/// original frame authority.
 #[allow(variant_size_differences)]
 enum CompleteTipPredecessorLifecycleEvidenceV1 {
     TerminalApply(u128),
@@ -1808,7 +1809,7 @@ impl CompleteTipPredecessorLifecycleEvidenceV1 {
                 ledger.high_water() == 0
                     && ledger.records().is_empty()
                     && ledger.producer_debts.is_empty()
-                    && complete_tip.authorizes_empty_genesis_lifecycle(ledger.context())
+                    && complete_tip.authenticates_genesis_lifecycle_context(ledger.context())
             }
             Self::CanonicalFrame(present) => {
                 present.authorizes_canonical_retired_predecessor(ledger, complete_tip)

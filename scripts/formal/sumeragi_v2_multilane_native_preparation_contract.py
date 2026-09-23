@@ -76,8 +76,8 @@ ORDINARY_ORDERED = (
     "Self::maximum_index_growth_for_unresolved_sidecar_write(",
     "Ok(total)",
 )
-# Recorded Native execution owns verified context and pristine controls, but
-# remains disposable: none of these relations opens the live ValidBlock gate.
+# Recorded Native execution owns verified context and pristine controls; live
+# preparation and authenticated historical replay share the same execution kernel.
 NATIVE_CONTROL_BINDINGS = (
     (BODY_STORE, "fn", "verify_origin_block_signature", (
         "context: &wire::HeightContext", "block: &SignedBlock", "policy: &BlockSignaturePolicy",
@@ -99,7 +99,7 @@ NATIVE_CONTROL_BINDINGS = (
         "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
         "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
     )),
-    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::prepare_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'PreparedCarrier::prepare(ValidatedCarrierPreparationInput', 'native: Some(native)')),
+    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::validate_and_record_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash)', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'Ok(Some(ValidatedCarrierPreparationInput {', 'native: Some(native)')),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ValidBlock::prepare_native_candidate(", "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
@@ -155,7 +155,7 @@ NATIVE_CONTROL_BINDINGS = (
         "frozen.network_id != *view.network_id()", "frozen.height != block.header().height().get()",
         "height.checked_add(1)", "!= Some(frozen.height)",
         "block.header().prev_block_hash() != view.latest_block_hash()",
-        ".map(|qc| qc.subject.block_hash)\n                    != view.latest_block_hash()",
+        ".map(|qc| qc.subject.block_hash)\n                    .or_else(|| {\n                        frozen\n                            .snapshot_bootstrap\n                            .map(|anchor| anchor.snapshot_block_hash)\n                    })\n                    != view.latest_block_hash()",
         "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
         "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
         "committed_nexus_amx_context_hash(state)", "committed_execution_policy_hash(state)",
@@ -2594,6 +2594,459 @@ NATIVE_CURRENT_RUNNER_BINDINGS = (
 )
 PREPARATION_OWNER_BINDINGS += NATIVE_CURRENT_RUNNER_BINDINGS
 
+SERVICE_PUBLICATION = "crates/iroha_core/src/state/carrier_preparation/service_publication.rs"
+# This is the live retained-owner publication seam. Its durability receipt follows
+# the captured checkpoint/manifest; these relations do not claim full memory admission.
+LIVE_PUBLICATION_BINDINGS = (
+    (SERVICE_PUBLICATION, "method", "RetainedCarrier::try_publish", (
+        "self,\n        target: &State,\n        queue: &OriginalCarrierQueue<'_>,\n        finality: VerifiedV2FinalityArtifact,\n        wake: Waker,\n    )",
+        "Result<PublishedCarrier<A>, (Self, LocalValidationRefusal)>",
+        "let original = match self.resume_capture()",
+        "Err((owner, error)) => return Err((owner, archive_refusal(&error, &wake)))",
+        "target.matches_kura_instance(&journals.kura)\n                    && journals\n                        .geometry\n                        .matches_publication_target(target, journals.valid.as_ref().header())",
+        "target.matches_kura_instance(&decision.journals.kura)\n                    && decision\n                        .journals\n                        .geometry\n                        .matches_publication_target(target, decision.block().header())",
+        "if !matches_target || !queue.belongs_to(target)",
+        'original,\n                LocalValidationRefusal::RecoveryRequired(\n                    "carrier publication belongs to another original State, Kura or Queue"',
+        "Self::Validated(journals) => match journals.bind_decision(finality.clone())",
+        "Self::Validated(refusal.journals),\n                        LocalValidationRefusal::RecoveryRequired(refusal.error.to_string())",
+        "Self::Decided(decision) => decision.finality() == finality.artifact()",
+        "Self::Checkpointed(decision) => decision.finality() == finality.artifact()",
+        "if !same_finality",
+        'original,\n                LocalValidationRefusal::RecoveryRequired(\n                    "retry finality differs from the original retained decision"',
+        "let kura = &decision.journals.kura;",
+        "kura.store_block(decision.block().clone())?;",
+        "let artifact = decision.finality();",
+        "let checkpoint = decision.journals.checkpoint;",
+        "kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;",
+        "kura.store_commit_manifest(\n                        CommitManifest::new(\n                            artifact.height,\n                            artifact.block_hash,\n                            None,\n                            None,\n                            checkpoint,\n                            None,\n                        )\n                        .with_authenticated_v2_commit_authority(artifact),\n                    )?;",
+        "let receipt = kura.store_v2_finality_artifact(artifact)?;",
+        "kura.persist_wsv_checkpoint_for_v2_commit(\n                        &receipt,\n                        decision.journals.checkpoint,\n                    )",
+        "Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint))",
+        'Self::Decided(decision),\n                            LocalValidationRefusal::RecoveryRequired(format!(\n                                "carrier durability: {error}"',
+        "let Self::Checkpointed(decision) = original else",
+        "let prepared = match decision.try_prepare_physical(target, Some(queue))",
+        "Self::Checkpointed(decision),\n                    physical_refusal(&error, &wake)",
+        "prepared.publish().map_err(|(decision, error)|",
+        "CarrierPublicationError::GeometryStorage(\n                    crate::state::LaneLifecycleError::PublicationBusy { field, wait },\n                ) => busy(field, wait, &wake)",
+        "_ => LocalValidationRefusal::RecoveryRequired(error.to_string())",
+        "(Self::Checkpointed(decision), refusal)",
+    )),
+    (SERVICE_PUBLICATION, "fn", "busy", (
+        "wait: &concread::release::ReleaseWait", "wake: &Waker",
+        "LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(field, wait.clone(), wake.clone()))",
+    )),
+    (SERVICE_PUBLICATION, "fn", "archive_refusal", (
+        # Bind each typed arm to its own release; string labels are normalized away.
+        'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", wait, wake)\n        }',
+        'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", wait, wake)\n        }',
+        'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", wait.release_wait(), wake)\n        }',
+        'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", wait.release_wait(), wake)\n        }',
+
+        "E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. })",
+        "E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. })",
+        "E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. })",
+        "E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. })",
+        'busy("provider_archive_index", wait, wake)',
+        'busy("reputation_archive_index", wait, wake)',
+        'busy("provider_archive_capture", wait.release_wait(), wake)',
+        'busy("reputation_archive_capture", wait.release_wait(), wake)',
+        "_ => LocalValidationRefusal::RecoveryRequired(error.to_string())",
+    )),
+    (SERVICE_PUBLICATION, "fn", "physical_refusal", (
+        # Bind each typed arm to its own release; string labels are normalized away.
+        'E::Provider(P::IndexBusy { wait }) | E::Archive(A::Provider(P::IndexBusy { wait })) => {\n            busy("provider_archive_index", wait, wake)\n        }',
+        'E::Reputation(RArch::IndexBusy { wait })\n        | E::Archive(A::Reputation(RArch::IndexBusy { wait })) => {\n            busy("reputation_archive_index", wait, wake)\n        }',
+
+        "E::Fence { field, wait }\n        | E::Queue(Q::Busy { field, wait })\n        | E::Kura(K::Busy { field, wait })",
+        "M::Busy(wait)", "}) => busy(field, wait, wake)",
+        'E::Queue(Q::Pending { wait, .. }) => busy("retiring_lane_queue", wait, wake)',
+        "E::World(W::Field(refusal)) => match &refusal.cause",
+        "M::Admission(mv::storage::AdmittedStorageError::Busy { release, .. })",
+        "mv::allocation::AllocationRefusal::Capacity { release, .. }",
+        ")) => busy(refusal.field, release, wake)",
+        'busy("provider_archive_index", wait, wake)',
+        'busy("reputation_archive_index", wait, wake)',
+        '\n        _ => LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))',
+        '_ => {\n                LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))\n            }',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += LIVE_PUBLICATION_BINDINGS
+
+
+def _validate_live_publication(items: dict[str, str], errors: list[str]) -> None:
+    """Bind the actual durable sequence and exact phase retained at each cut."""
+    symbol = "RetainedCarrier::try_publish"
+    body = items.get(symbol)
+    if body is None:
+        return  # The defining-item/ledger check already reports the missing owner.
+    sequence = (
+        "self.resume_capture()", "let matches_target = match &original",
+        "if !matches_target || !queue.belongs_to(target)",
+        "journals.bind_decision(finality.clone())", "let same_finality = match &original",
+        "if !same_finality", "let kura = &decision.journals.kura;",
+        "kura.store_block(decision.block().clone())?;", "let artifact = decision.finality();",
+        "let checkpoint = decision.journals.checkpoint;",
+        "kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;",
+        "kura.store_commit_manifest(", ".with_authenticated_v2_commit_authority(artifact)",
+        "let receipt = kura.store_v2_finality_artifact(artifact)?;",
+        "kura.persist_wsv_checkpoint_for_v2_commit(&receipt, decision.journals.checkpoint,)",
+        "Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint))",
+        "let Self::Checkpointed(decision) = original else",
+        "decision.try_prepare_physical(target, Some(queue))", "prepared.publish().map_err(",
+    )
+    cursor = 0
+    for token in sequence:
+        index = body.find(_code(token), cursor)
+        if index < 0:
+            errors.append(f"Native live publication {symbol} reorders authenticated publication: {token}")
+            break
+        cursor = index + len(_code(token))
+    # Presence alone cannot reject an early duplicate finality/visibility write,
+    # or a replacement writer inserted before the authenticated sequence.
+    for operation in (
+        ".resume_capture(", ".bind_decision(", ".store_block(",
+        ".store_wsv_checkpoint(", ".store_commit_manifest(",
+        "CommitManifest::new(", ".with_authenticated_v2_commit_authority(",
+        ".store_v2_finality_artifact(", ".persist_wsv_checkpoint_for_v2_commit(",
+        ".attach_checkpoint(", ".try_prepare_physical(", ".publish(",
+    ):
+        if body.count(_code(operation)) != 1:
+            errors.append(f"Native live publication {symbol} repeats or omits original operation: {operation}")
+    target_relations = (
+        ("target.matches_kura_instance(&journals.kura)", 1),
+        ("target.matches_kura_instance(&decision.journals.kura)", 2),
+        (".matches_publication_target(target, journals.valid.as_ref().header())", 1),
+        (".matches_publication_target(target, decision.block().header())", 2),
+        ("other => other", 2),
+    )
+    for token, count in target_relations:
+        if body.count(_code(token)) != count:
+            errors.append(f"Native live publication {symbol} loses exact phase identity: {token}")
+    # Finite critical branches, not a digest of the entire method: every durable
+    # error must return the original Decided owner; every physical retry must
+    # preserve its original Checkpointed owner and typed wake/refusal.
+    for relation in (
+        '''match durable {
+            Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint)),
+            Err(error) => {
+                return Err((Self::Decided(decision),
+                    LocalValidationRefusal::RecoveryRequired(format!("carrier durability: {error}")),
+                ));
+            }
+        }''',
+        '''let prepared = match decision.try_prepare_physical(target, Some(queue)) {
+            Ok(prepared) => prepared,
+            Err((decision, error)) => {
+                return Err((Self::Checkpointed(decision), physical_refusal(&error, &wake)));
+            }
+        };''',
+    ):
+        if _code(relation) not in body:
+            errors.append(f"Native live publication {symbol} loses original refusal phase")
+    for forbidden in (
+        "CapturedStateSnapshot::capture(", "capture_wsv_checkpoint(",
+        "validate_and_apply(", "execute_exact_apply(", "validate_and_prepare",
+        "rejected_outcome", "semantic_rejection", "unwrap_or_default(",
+        "mem::forget(", "ManuallyDrop", "unsafe{",
+    ):
+        if _code(forbidden) in body:
+            errors.append(f"Native live publication {symbol} reconstructs or discards original authority: {forbidden}")
+
+
+LIVE_DURABILITY_BINDINGS = (
+    (KURA, "method", "Kura::store_commit_manifest", (
+        "let _prune_guard = self.prune_lock.lock();", "self.ensure_prune_recovery_not_required()?;",
+        "self.durable_mutation_authorized()?;", "let _guard = self.sidecar_lock.lock();",
+        "self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;",
+        "self.ensure_checkpoint_accepts_manifest_write(&manifest)?;",
+        "let dir = self.commit_manifest_dir();", "create_dir_all_with_context(&dir)?;",
+        "let path = self.commit_manifest_path(manifest.height);",
+        "let namespace = self.open_bound_progress_namespace(&path, &path)?;",
+        "let bytes = manifest.encode();", "MAX_COMMIT_MANIFEST_BYTES,\n        )?;",
+        "file.write_all(&bytes)?;\n            file.flush()?;\n            file.sync_data()",
+        "std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;",
+        "Self::sync_bound_progress_intent_directories(&namespace)\n            .map_err(|error| Error::IO(error, dir.clone()))?;",
+        "if !self.bound_progress_namespace_unchanged(&namespace)",
+        '"commit manifest namespace changed during durability publication"',
+        "self.bind_wsv_checkpoint_to_manifest(&manifest)?;",
+        "resource_mutation.finish_resources_before_disk_rescan();",
+    )),
+    (KURA, "method", "Kura::store_v2_finality_artifact", (
+        "let _prune_guard = self.prune_lock.lock();",
+        "self.ensure_prune_recovery_not_required()?;", "self.ensure_canonical_storage_not_poisoned()?;",
+        "artifact.validate()?;", "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+        "self.durable_mutation_authorized()?;", "self.ensure_durable_block_at_height(height, block_hash)?;",
+        "artifact.validate_for_header(&canonical_header)?;",
+        "artifact.commit_qc.execution_commitment.merge_carrier != expected_merge_carrier",
+        "if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?",
+        "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+        "if retained_header != existing.block_header", "if existing.artifact != *artifact",
+        "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+        "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+        "return Ok(v2_commit_receipt(&existing.artifact));",
+        "self.verify_v2_finality_crypto(artifact)?;",
+        "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+        "self.cache_newly_verified_v2_finality(&path, &dir, &record)?;",
+        "Ok(v2_commit_receipt(artifact))",
+    )),
+    (KURA, "method", "Kura::resync_verified_v2_finality_record", (
+        "verified: &StableSidecarRead,\n    ) -> Result<()>",
+        "let namespace = self.open_bound_progress_namespace(path, path)?;",
+        "let file = Self::open_bound_progress_file(&namespace, path, &verified.metadata)?;",
+        "file.sync_all()\n            .map_err(|error| Error::IO(error, path.to_path_buf()))?;",
+        "Self::sync_bound_progress_intent_directories(&namespace)\n            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;",
+        ".read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?",
+        '"verified v2 finality disappeared during durability retry"',
+        "let opened = secure_file_metadata::from_file(&file)",
+        "if readback.bytes != verified.bytes\n            || readback.bytes_hash != verified.bytes_hash\n            || !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)\n            || !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)\n            || !self.bound_progress_namespace_unchanged(&namespace)",
+        '"verified v2 finality changed during durability retry"',
+        "Ok(())",
+    )),
+)
+PREPARATION_OWNER_BINDINGS += LIVE_DURABILITY_BINDINGS
+
+
+def _validate_live_durability(items: dict[str, str], errors: list[str]) -> None:
+    """Follow the live writers down to their original file and ancestor barriers."""
+    def ordered(symbol: str, *tokens: str) -> None:
+        body = items.get(symbol)
+        if body is None:
+            return
+        cursor = 0
+        for token in tokens:
+            index = body.find(_code(token), cursor)
+            if index < 0:
+                errors.append(f"Native live durability {symbol} reorders authenticated barrier: {token}")
+                return
+            cursor = index + len(_code(token))
+
+    manifest = "Kura::store_commit_manifest"
+    ordered(manifest, "let _prune_guard = self.prune_lock.lock();",
+            "self.durable_mutation_authorized()?;", "let _guard = self.sidecar_lock.lock();",
+            "self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;",
+            "self.ensure_checkpoint_accepts_manifest_write(&manifest)?;",
+            "create_dir_all_with_context(&dir)?;", "self.open_bound_progress_namespace(&path, &path)?",
+            "file.write_all(&bytes)?;", "file.sync_data()", "std::fs::rename(&tmp_path, &path)",
+            "Self::sync_bound_progress_intent_directories(&namespace)",
+            "if !self.bound_progress_namespace_unchanged(&namespace)", "return Err(Error::IO(",
+            "self.bind_wsv_checkpoint_to_manifest(&manifest)?;",
+            "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())")
+    for token, count in (
+        ("self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;", 2),
+        ("self.bind_wsv_checkpoint_to_manifest(", 1),
+        ("Self::sync_bound_progress_intent_directories(", 1),
+        ("self.bound_progress_namespace_unchanged(", 1),
+    ):
+        if manifest in items and items[manifest].count(_code(token)) != count:
+            errors.append(f"Native live durability {manifest} repeats or omits exact barrier: {token}")
+
+    resync = "Kura::resync_verified_v2_finality_record"
+    ordered(resync, "self.open_bound_progress_namespace(path, path)?",
+            "Self::open_bound_progress_file(&namespace, path, &verified.metadata)?",
+            "file.sync_all()", "Self::sync_bound_progress_intent_directories(&namespace)",
+            ".read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?",
+            "secure_file_metadata::from_file(&file)", "if readback.bytes != verified.bytes",
+            "|| readback.bytes_hash != verified.bytes_hash",
+            "|| !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)",
+            "|| !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)",
+            "|| !self.bound_progress_namespace_unchanged(&namespace)",
+            "return Err(Error::IO(", "Ok(())")
+    for operation in ("file.sync_all(", "Self::sync_bound_progress_intent_directories(",
+                      "self.bound_progress_namespace_unchanged(", "Ok(())"):
+        if resync in items and items[resync].count(_code(operation)) != 1:
+            errors.append(f"Native live durability {resync} repeats or omits exact barrier: {operation}")
+
+    finality = "Kura::store_v2_finality_artifact"
+    ordered(finality, "let _prune_guard = self.prune_lock.lock();",
+            "artifact.validate()?;", "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "self.ensure_durable_block_at_height(height, block_hash)?;",
+            "artifact.validate_for_header(&canonical_header)?;",
+            "artifact.commit_qc.execution_commitment.merge_carrier != expected_merge_carrier",
+            "if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?",
+            "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+            "if retained_header != existing.block_header", "if existing.artifact != *artifact",
+            "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+            "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+            "self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(",
+            "return Ok(v2_commit_receipt(&existing.artifact));",
+            "self.verify_v2_finality_crypto(artifact)?;",
+            "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+            "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+            "if existing.artifact != *artifact",
+            "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+            "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+            "self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(",
+            "return Ok(v2_commit_receipt(&existing.artifact));",
+            "self.cache_newly_verified_v2_finality(&path, &dir, &record)?;",
+            "Ok(v2_commit_receipt(artifact))")
+    for token, count in (
+        ("self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;", 2),
+        ("self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;", 2),
+        ("v2_commit_receipt(", 3),
+        ("self.write_atomic_synced_noclobber(", 1),
+    ):
+        if finality in items and items[finality].count(_code(token)) != count:
+            errors.append(f"Native live durability {finality} repeats or omits authenticated receipt gate: {token}")
+
+
+# Historical Native execution shares the original source kernel. Replay keeps
+# source custody through its own authenticated output/checkpoint tail; it never
+# captures a live PreparedCarrier or grants publication on a current QC alone.
+NATIVE_REPLAY_BINDINGS = (
+    (BLOCK, "method", "ValidBlock::prepare_native_candidate", (
+        "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "let Some(execution) = Self::validate_and_record_native_candidate(",
+        "source, context, genesis_account, time_source, block_cadence",
+        "return Ok(None);", "PreparedCarrier::prepare(execution)",
+        ".map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))",
+    )),
+    (BLOCK, "struct", "ValidatedReplayExecution", (
+        "pub(crate) valid: ValidBlock", "pub(crate) state: Box<StateBlock<'state>>",
+        "pub(crate) native: Option<crate::state::NativeExecutionCustody>",
+    )),
+    (CONTROLS, "method", "VerifiedReplayProposal::new", (
+        "verified: &super::VerifiedV2FinalityArtifact", "let artifact = verified.artifact();",
+        ".validate_for_header(&executed.header())", "let wire = executed.encode_wire()",
+        "let commitment = &artifact.commit_qc.execution_commitment;",
+        "if !executed.has_results()", "u64::try_from(wire.len()).ok() != Some(commitment.executed_block_wire_len)",
+        "Hash::new(&wire) != commitment.executed_block_wire_hash", "executed.canonical_proposal_wire_hash()",
+        "if proposal_wire_hash != artifact.subject.payload_hash", "(None, None) => {}",
+        "(Some(reference), Some(entry)) if reference.matches_entry(entry) => {}",
+        "network_id: artifact.height_context.network_id", "block_hash: executed.hash()",
+        "proposal_wire_hash,", "carrier_header: executed.header()",
+        "merge_entry: merge_entry.cloned().map(std::sync::Arc::new)",
+        "context: SumeragiV2ValidationContext::from_height_context(&artifact.height_context)",
+    )),
+    (CONTROLS, "method", "VerifiedReplayProposal::validate", (
+        "proposal: &SignedBlock", "state: &impl StateReadOnly", "let wire = proposal.encode_wire()",
+        "if !proposal.is_resultless_proposal()", "proposal.hash() != self.block_hash",
+        "Hash::new(&wire) != self.proposal_wire_hash", "*state.network_id() != self.network_id",
+        "proposal.header().height().get() != self.context.height", "u64::try_from(state.height())",
+        ".and_then(|height| height.checked_add(1))", "!= Some(self.context.height)",
+        "proposal.header().prev_block_hash() != state.latest_block_hash()", "return Err(",
+    )),
+    (CONTROLS, "method", "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block", (
+        "verified: &super::VerifiedV2FinalityArtifact", "Result<ValidatedReplayExecution<'state>, Error>",
+        "VerifiedReplayProposal::new(&executed, verified, merge_entry)",
+        "let proposal = executed.canonical_resultless_proposal();",
+        ".is_some_and(|bundle| bundle.native_lane_decisions.is_some())",
+        "authority.validate(&proposal, &state.query_view())?;", "let frozen = &verified.height_context;",
+        "if !topology", ".eq(frozen.roster.iter().map(|entry| &entry.validator))",
+        "if frozen.snapshot_bootstrap.is_some()", "state.authenticated_snapshot_v2_bootstrap()",
+        "record.context == *frozen && record.validator_set_pops == verified.validator_set_pops",
+        "VerifiedHeightContext::snapshot_bootstrap(bootstrap)", "frozen.height.checked_sub(1)",
+        ".filter(|height| *height != 0)", "state.kura().v2_finality_artifact_with_receipt(parent_height)",
+        "VerifiedHeightContext::successor(",
+        "frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops",
+        "state.prepare_proposed_native_lane_batch_source(&proposal, &[])",
+        "NativeLaneBatchSourcePreparationV1::Ready(source) => source",
+        "NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {",
+        "NativeLaneBatchSourcePreparationV1::ObservationChanged => {",
+        "Self::validate_and_record_native_candidate(", "valid: input.valid", "state: input.state", "native: input.native",
+        "return native.map_err(|error| (Box::new(executed), Box::new(error)));",
+        "Self::validate_keep_voting_block_inner(", "ConsensusValidationProfile::VerifiedReplay {",
+        "native: None",
+    )),
+    (STATE, "fn", "replay_blocks_from_kura_range_inner", (
+        "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block(", "signed_block.clone(),",
+        "merge_carrier.as_ref().map(|carrier| &carrier.entry)", "&validation_topology,",
+        "verify_replay_bootstrap_binding(state, &signed_block, finality)?;",
+        "let mut replay = match validation", 'let has_native_inputs = signed_block\n            .execution_context()\n            .is_some_and(|bundle| bundle.native_lane_decisions.is_some());',
+        "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+        "!native.retains_carrier(replay.valid.as_ref(), &finality.height_context)",
+        "let witness = replay.state.take_exec_witness().ok_or_else(",
+        "from_result_bearing_block_and_merge_entry", "replay.state.staged_merge_entry()",
+        'let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(\n            replay.valid.as_ref(),\n            replay.state.staged_merge_entry(),\n        )', 'let lane_finality_manifest =\n            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(\n                replay.valid.as_ref(),\n            )', 'let replayed_execution_commitment =\n            crate::sumeragi::exec::execution_commitment_from_validated_block(\n                &witness,\n                &native_amx_manifest,\n                &lane_finality_manifest,\n                replay.valid.as_ref(),\n            )', 'let result_check = ensure_replayed_results_match_committed(\n            height,\n            &signed_block,\n            committed_block.as_ref(),\n        )',
+        "execution_commitment_from_validated_block(", "if replayed_execution_commitment != finality.commit_qc.execution_commitment",
+        ".commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)",
+        "ensure_replayed_results_match_committed(", ".authorize_execution_output_publication(&committed_block, &witness)",
+        ".apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)",
+        ".prepare_replay_checkpoint_preview()", "canonical_staged_state_snapshot_hash(&replay.state)",
+        "if actual != wsv_checkpoint.state_hash()", "!native.retains_carrier(committed_block.as_ref(), &finality.height_context)",
+        "replay.state.commit()", "drop(replay.native)", "MergeLedgerPublicationMode::Replay",
+    )),
+    (STATE, "fn", "verify_replay_bootstrap_binding", (
+        "state.authenticated_snapshot_v2_bootstrap()", "u64::try_from(state.committed_height()) == Ok(anchor.snapshot_height)",
+        "if height != bootstrap.context.height", "if artifact.height_context != bootstrap.context",
+        "artifact.validator_set_pops != bootstrap.validator_set_pops", "block.header().prev_block_hash() != Some(anchor.snapshot_block_hash)",
+        "state.latest_block_hash_fast() != Some(anchor.snapshot_block_hash)",
+        "canonical_state_snapshot_hash(state)?", "if live_state_hash != anchor.snapshot_state_hash", "return Err(",
+    )),
+)
+NATIVE_REPLAY_TAIL_BINDING = next(row for row in NATIVE_REPLAY_BINDINGS if row[2] == "replay_blocks_from_kura_range_inner")
+PREPARATION_OWNER_BINDINGS += NATIVE_REPLAY_BINDINGS
+
+
+def _validate_native_replay(items: dict[str, str], errors: list[str]) -> None:
+    def ordered(symbol: str, *tokens: str) -> None:
+        body = items.get(symbol, "")
+        cursor = 0
+        for token in tokens:
+            index = body.find(_code(token), cursor)
+            if index < 0:
+                errors.append(f"Native replay {symbol} missing or reorders {token!r}")
+                return
+            cursor = index + len(_code(token))
+
+    ordered("ValidBlock::prepare_native_candidate",
+            "let Some(execution) = Self::validate_and_record_native_candidate(",
+            "source, context, genesis_account, time_source, block_cadence",
+            "return Ok(None);", "PreparedCarrier::prepare(execution)")
+    struct = items.get("ValidatedReplayExecution", "")
+    expected = "{ pub(crate) valid: ValidBlock, pub(crate) state: Box<StateBlock<'state>>, pub(crate) native: Option<crate::state::NativeExecutionCustody>, }"
+    if _code(expected) not in struct:
+        errors.append("Native replay custody fields must release State writers before original Native sources")
+    for owner in ("ValidBlock::validate_and_record_native_candidate",
+                  "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block"):
+        body = items.get(owner, "")
+        for retired in ("PreparedCarrier::prepare(", "PrefixPreparation::capture(", "prepare_journals("):
+            if _code(retired) in body:
+                errors.append(f"Native replay {owner} captures live metadata before its consumer owns the tail")
+    body = items.get("ValidBlock::prepare_native_candidate", "")
+    if "record_execution(" in body or "validate_static_state_dependent(" in body:
+        errors.append("Native replay live wrapper duplicates shared execution")
+    ordered("ValidBlock::validate_sumeragi_v2_replay_keep_voting_block",
+            "VerifiedReplayProposal::new(&executed, verified, merge_entry)",
+            "let proposal = executed.canonical_resultless_proposal();",
+            "bundle.native_lane_decisions.is_some()", "authority.validate(&proposal, &state.query_view())?;",
+            "if !topology", "let context =", "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
+            "v2_finality_artifact_with_receipt(parent_height)", "VerifiedHeightContext::successor(",
+            "prepare_proposed_native_lane_batch_source(&proposal, &[])",
+            "Self::validate_and_record_native_candidate(", "Ok(ValidatedReplayExecution {",
+            "return native.map_err(", "Self::validate_keep_voting_block_inner(")
+    replay = items.get("ValidBlock::validate_sumeragi_v2_replay_keep_voting_block", "")
+    for result in ("FirstInputRecoveryRequired { .. } => { return Err(",
+                   "ObservationChanged => { return Err("):
+        if _code(result) not in replay:
+            errors.append("Native replay incomplete source must retain its explicit refusal: " + result)
+    kernel = items.get("ValidBlock::validate_and_record_native_candidate", "")
+    controls = items.get("ValidBlock::prepare_native_execution_controls", "")
+    parent = ".parent_commit_qc.as_ref().map(|qc| qc.subject.block_hash).or_else(|| frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash))"
+    for name, body, expected in (("shared preflight", kernel, parent), ("execution controls", controls, parent.replace("|| frozen", "|| { frozen").replace("block_hash))", "block_hash) })"))):
+        if _code(expected) not in body:
+            errors.append("Native replay " + name + " must join the exact QC or authenticated snapshot parent")
+    ordered("replay_blocks_from_kura_range_inner",
+            "let mut replay = match validation", "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+            "!native.retains_carrier(replay.valid.as_ref(), &finality.height_context)",
+            "let witness = replay.state.take_exec_witness()", "execution_commitment_from_validated_block(",
+            "if replayed_execution_commitment != finality.commit_qc.execution_commitment",
+            ".commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)",
+            "ensure_replayed_results_match_committed(", ".authorize_execution_output_publication(&committed_block, &witness)",
+            ".apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)",
+            ".prepare_replay_checkpoint_preview()", "canonical_staged_state_snapshot_hash(&replay.state)",
+            "if actual != wsv_checkpoint.state_hash()", "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+            "!native.retains_carrier(committed_block.as_ref(), &finality.height_context)",
+            "replay.state.commit()", "drop(replay.native)")
+    tail = items.get("replay_blocks_from_kura_range_inner", "")
+    if tail.count(_code("if replay.native.is_some() != has_native_inputs")) != 2:
+        errors.append("Native replay custody presence must equal actual Native input presence at both checks")
+    if tail.count("drop(replay.native)") != 1:
+        errors.append("Native replay must drop its sole custody only after State commit")
+    if tail.count("!native.retains_state(&replay.state)") != 2:
+        errors.append("Native replay must authenticate State custody before witness and before commit")
+
+
 # Binding owners are authoritative inputs; mutation fixtures must copy every
 # referenced owner without a second manually synchronized Rust path inventory.
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(dict.fromkeys((
@@ -2668,6 +3121,10 @@ def validate_native_preparation_contract(
                 errors.append(f"Native preparation {symbol} missing or reorders executable relation {relation!r}")
                 return
             cursor = index + len(needle)
+
+    _validate_live_publication(items, errors)
+    _validate_live_durability(items, errors)
+    _validate_native_replay(items, errors)
 
     # Lower owners have repeated method/type names in Cell and Storage. Keep
     # these ordering checks path-qualified so one sibling cannot satisfy another.
@@ -3646,11 +4103,11 @@ def validate_native_preparation_contract(
     common = items.get("ValidBlock::finalize_common_execution_metadata", "")
     if common and common.find("finalize_axt_policy_transition_ratchets()") < common.find("evaluate_nexus_autoscale(block,fragments)"):
         errors.append("Native preparation common policy metadata before autoscale")
-    ordered("ValidBlock::prepare_native_candidate", "ensure_state_access_without_exec_witness()",
+    ordered("ValidBlock::validate_and_record_native_candidate", "ensure_state_access_without_exec_witness()",
             "source.preparation_input()", "verify_origin_block_signature(",
             "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
             "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
-            "recorded.into_preparation_parts()", "PreparedCarrier::prepare(ValidatedCarrierPreparationInput")
+            "recorded.into_preparation_parts()", "Ok(Some(ValidatedCarrierPreparationInput")
     ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared\n            .verify_source_binding()",
             "verify_execution_output_seal(&self.carrier)", "validate_native_output_source(&self.carrier)",
             "let seal = Arc::clone(", "= self.prepared", "NativeExecutionCustody")

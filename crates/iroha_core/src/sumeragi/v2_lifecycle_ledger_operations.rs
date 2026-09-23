@@ -3197,8 +3197,8 @@ impl LifecycleLedgerV1 {
     /// CompleteTip is sufficient to terminalize only that exact tail: its full
     /// finality artifact reauthenticates the retained replay envelope, and the
     /// ordinary terminal-chain oracle below rechecks every immutable owner,
-    /// payload, continuation, and predecessor after staging. A canonical-sync
-    /// height can instead retain unrelated local work without a Decision Apply
+    /// payload, continuation, and predecessor after staging. Signed genesis or
+    /// a canonical-sync height can retain local work without a Decision Apply
     /// lineage; that classification requires the separate store-minted proof
     /// that its exact frame physically existed. The consuming all-row retirement
     /// transaction cancels that superseded work and authenticates Serve payloads.
@@ -3210,7 +3210,7 @@ impl LifecycleLedgerV1 {
         if self.high_water() == 0
             && self.records.is_empty()
             && self.producer_debts.is_empty()
-            && complete_tip.authorizes_empty_genesis_lifecycle(self.context())
+            && complete_tip.authenticates_genesis_lifecycle_context(self.context())
         {
             return Ok((
                 self.clone(),

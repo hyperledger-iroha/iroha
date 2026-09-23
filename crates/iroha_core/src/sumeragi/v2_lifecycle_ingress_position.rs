@@ -1209,6 +1209,71 @@ enum FairIngressTurnSelectionPolicy {
     PredicateOnly,
 }
 impl FairV2Ingress {
+    /// Authenticate a closed global-height cut while preserving process-lived Native custody.
+    /// No queue entry, occurrence, allocation or retry owner is retired by this check.
+    /// The complete process drain remains a separate, stricter boundary.
+    pub(crate) fn ensure_closed_global_drained_cut(&self) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
+        let _publication_guard = self.producer_publication_lock.lock();
+        let state = self.state.lock();
+        if state.open {
+            return Err("finalized global ingress cut remained open".to_owned());
+        }
+        // Use the production structural validator, including every per-lane
+        // counter and coalescing index, even when release assertions are disabled.
+        validate_live_queue_structure(&state).map_err(|error| {
+            format!("finalized global ingress cut changed accounting: {error:?}")
+        })?;
+        if state.has_global_ingress()
+            || (state.len == 0 && state.last_service_attempt_at.is_some())
+            || state.leader_wire_lifecycles.values().any(|record| {
+                matches!(
+                    record.status,
+                    super::super::FairV2IngressLeaderWireStatus::Ingress
+                        | super::super::FairV2IngressLeaderWireStatus::Runtime
+                )
+            })
+        {
+            return Err("finalized global ingress cut retained global ownership".to_owned());
+        }
+        // Keep the same service/publication fences while validating immutable
+        // carriers outside the State mutex. These Arc clones are observations;
+        // the original entries and process-local admission positions stay owned.
+        let retained = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .map(|entry| {
+                (
+                    Arc::clone(&entry.inbound),
+                    Arc::clone(&entry.ownership_snapshot),
+                )
+            })
+            .collect::<Vec<_>>();
+        drop(state);
+        let mut peer_encodings = super::super::FairV2IngressPeerIdentityEncodings::default();
+        for (inbound, snapshot) in retained {
+            let live = inbound
+                .ingress_ownership()
+                .ok_or_else(|| "finalized global ingress cut lost Native ownership".to_owned())?;
+            if !inbound.message().is_native_lane()
+                || !snapshot.validate_exact()
+                || !live.validate_exact()
+                || snapshot.process_local_projection_hash_with_peer_encodings(&mut peer_encodings)
+                    != live.process_local_projection_hash_with_peer_encodings(&mut peer_encodings)
+                || !live.matches_message(inbound.message())
+                || !live.matches_semantic_origin(inbound.sender())
+                || !live.matches_reply_routes(inbound.reply_routes())
+                || live.leader_wire_token().is_some()
+                || live.leader_wire_runtime_receipt().is_some()
+                || live.runtime_lifecycle_ordinal().is_some()
+            {
+                return Err("finalized global ingress cut changed Native ownership".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     /// Select the exact next ordinary-or-lifecycle winner under one service episode.
     ///
     /// This is the queue-owned replacement for a read-only lifecycle probe

@@ -1953,7 +1953,7 @@ fn run_lifecycle_active_height(
                 break;
             }
             receiver
-                .ensure_closed_drained_cut()
+                .ensure_closed_global_drained_cut()
                 .map_err(V2RunnerError::Service)?;
             successor_timings
                 .record_first(SuccessorTimingStage::ClosedIngressDrained, Instant::now());
