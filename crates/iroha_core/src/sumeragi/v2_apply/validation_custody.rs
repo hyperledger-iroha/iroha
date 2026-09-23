@@ -208,6 +208,12 @@ pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
 }
 
 impl<P: CarrierValidator> RetainedBodyValidationService<P> {
+    /// Let a typed producer fill its already-funded descriptor once, without
+    /// exposing candidate or marker vectors to a second allocator.
+    pub(super) fn with_validator_mut<R>(&mut self, update: impl FnOnce(&mut P) -> R) -> R {
+        update(&mut self.validator)
+    }
+
     fn descriptor_layouts(limit: usize) -> Result<[Layout; 2], AllocationRefusal> {
         Ok([
             Layout::array::<Candidate<P::Owner>>(limit)

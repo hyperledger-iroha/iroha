@@ -6,6 +6,9 @@ use super::*;
 pub(super) fn validate_public_lane_reward_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), String> {
+    let currency = world
+        .sumeragi_npos_parameters()
+        .map(|params| params.xor_asset_definition_id);
     let mut expected = BTreeMap::<AssetId, Quantity>::new();
     let mut processed = BTreeMap::<(LaneId, AccountId, AssetId), Quantity>::new();
     for ((lane, _), claim) in world.public_lane_reward_claims().iter() {
@@ -19,6 +22,9 @@ pub(super) fn validate_public_lane_reward_reserves(
     for (key, record) in world.public_lane_rewards().iter() {
         if !public_lane_reward_record_matches_key(key, record) {
             return Err("reward reserve source contains a noncanonical reward record".to_owned());
+        }
+        if currency.as_ref() != Some(record.asset.definition()) {
+            return Err("reward source does not use the committed network XOR identity".to_owned());
         }
         let mut record_total = Quantity::zero();
         for share in &record.shares {
@@ -37,7 +43,8 @@ pub(super) fn validate_public_lane_reward_reserves(
                 let amount = processed
                     .entry((key.0, share.account.clone(), record.asset.clone()))
                     .or_insert_with(Quantity::zero);
-                *amount = amount.checked_add(&share.amount)
+                *amount = amount
+                    .checked_add(&share.amount)
                     .map_err(|_| "processed reward source total overflowed".to_owned())?;
                 continue;
             }
@@ -54,10 +61,13 @@ pub(super) fn validate_public_lane_reward_reserves(
     }
     for (key, accrued) in world.public_lane_reward_accruals().iter() {
         if accrued.is_zero() || processed.get(key).is_none_or(|total| accrued > total) {
-            return Err("reward accrual is zero, orphaned or exceeds its processed entitlement".to_owned());
+            return Err(
+                "reward accrual is zero, orphaned or exceeds its processed entitlement".to_owned(),
+            );
         }
         let amount = expected.entry(key.2.clone()).or_insert_with(Quantity::zero);
-        *amount = amount.checked_add(accrued)
+        *amount = amount
+            .checked_add(accrued)
             .map_err(|_| "accrued reward reserve total overflowed".to_owned())?;
     }
     if world
@@ -66,7 +76,8 @@ pub(super) fn validate_public_lane_reward_reserves(
         .ne(expected.iter())
     {
         return Err(
-            "reward reserves do not match unprocessed reward records and unpaid accruals".to_owned(),
+            "reward reserves do not match unprocessed reward records and unpaid accruals"
+                .to_owned(),
         );
     }
     for (asset, reserved) in expected {
@@ -94,6 +105,17 @@ pub(super) fn registered_custody_world_for_test(
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::{Mint, Register};
 
+    {
+        let mut parameters = world.parameters.block();
+        parameters.get_mut().set_parameter(Parameter::Custom(
+            iroha_data_model::parameter::system::SumeragiNposParameters {
+                xor_asset_definition_id: asset.definition().clone(),
+                ..Default::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
     let state = State::new(
         world,
         Kura::blank_kura_for_testing(),
@@ -167,8 +189,9 @@ mod tests {
         (world, asset)
     }
 
-    fn restore(value: json::Value) -> Result<Box<State>, json::Error> {
+    fn restore(value: json::Value) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
         deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura: Kura::blank_kura_for_testing(),
             query_handle: crate::query::store::LiveQueryStore::start_test(),
@@ -186,9 +209,12 @@ mod tests {
             .public_lane_reward_reserves
             .insert(asset.clone(), Quantity::from(24_u64));
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
         {
             let mut block = world.public_lane_reward_reserves.block();
@@ -205,6 +231,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reward_accruals_preserve_reserves_and_block_retirement() {
+        let (mut world, asset) = fixture();
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
+        let key = (LaneId::SINGLE, BOB_ID.clone(), asset.clone());
+        world
+            .public_lane_reward_accruals
+            .insert(key.clone(), Quantity::from(25_u64));
+        assert!(validate_public_lane_reward_reserves(&world.view()).is_ok());
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        assert!(matches!(
+            ensure_live_shared_dataspace_staking_owner_is_not_reset(
+                &world.view(),
+                &nexus,
+                &nexus,
+                &BTreeSet::from([LaneId::SINGLE]),
+                100,
+            ),
+            Err(LaneLifecycleError::UnsafeRetirement { .. })
+        ));
+        world
+            .public_lane_reward_accruals
+            .insert(key.clone(), Quantity::from(26_u64));
+        assert!(
+            validate_public_lane_reward_reserves(&world.view())
+                .unwrap_err()
+                .contains("exceeds")
+        );
+        world
+            .public_lane_reward_accruals
+            .insert(key, Quantity::zero());
+        assert!(validate_public_lane_reward_reserves(&world.view()).is_err());
+    }
+    #[test]
+    fn reward_reserves_reject_substituted_network_currency() {
+        let (world, _) = fixture();
+        {
+            let mut parameters = world.parameters.block();
+            parameters.get_mut().set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            parameters.commit();
+        }
+        assert!(
+            validate_public_lane_reward_reserves(&world.view())
+                .unwrap_err()
+                .contains("network XOR")
+        );
+    }
     #[test]
     fn reward_reserves_require_the_exact_custody_balance() {
         let (mut world, asset) = fixture();
@@ -263,9 +343,12 @@ mod tests {
     #[test]
     fn reward_reserves_reject_malformed_even_fully_claimed_totals() {
         let (mut world, asset) = fixture();
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         {
             let mut block = world.public_lane_reward_reserves.block();
             block.remove(asset);
@@ -301,9 +384,12 @@ mod tests {
         );
         {
             let mut block = state.world.block();
-            block
-                .public_lane_reward_claims
-                .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+            block.public_lane_reward_claims.insert(
+                (LaneId::SINGLE, BOB_ID.clone()),
+                PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(0),
+                },
+            );
             block.public_lane_reward_reserves.remove(asset.clone());
             block.commit();
         }
@@ -313,6 +399,7 @@ mod tests {
         for field in [
             "public_lane_rewards",
             "public_lane_reward_claims",
+            "public_lane_reward_accruals",
             "public_lane_reward_reserves",
         ] {
             assert_eq!(
@@ -383,9 +470,12 @@ mod tests {
             .is_ok(),
             "another lane's unpaid rewards do not prohibit retirement"
         );
-        world
-            .public_lane_reward_claims
-            .insert((LaneId::SINGLE, BOB_ID.clone(), asset.clone()), 0);
+        world.public_lane_reward_claims.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(0),
+            },
+        );
         {
             let mut block = world.public_lane_reward_reserves.block();
             block.remove(asset);

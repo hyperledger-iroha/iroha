@@ -13,13 +13,32 @@
 /// Height-bound production readiness, separate from consensus admission.
 pub mod readiness;
 
+/// Proof-bearing custody of every exact prepared target seat.
+pub mod seat_readiness;
+
+mod dkg_local_seat;
+mod dkg_private_exchange;
+pub use dkg_local_seat::LocalGlobalThresholdBeaconDkgSeatV1;
+pub use dkg_private_exchange::{
+    accept_global_threshold_beacon_dkg_private_edge_v1,
+    seal_global_threshold_beacon_dkg_private_edge_v1,
+    sign_global_threshold_beacon_dkg_dealer_commitment_v1,
+    sign_global_threshold_beacon_dkg_recipient_key_v1,
+};
+
+pub use seat_readiness::{
+    global_threshold_beacon_seat_readiness_challenge_v1,
+    prove_global_threshold_beacon_seat_readiness_v1,
+    verify_global_threshold_beacon_seat_readiness_v1,
+};
+
 use iroha_crypto::{
-    Hash,
+    Algorithm, Hash,
     threshold_bls::{
         AdaptiveThresholdBlsParameters, AdaptiveThresholdBlsPublicTranscript,
         AdaptiveThresholdBlsSecretShare, BeaconPurpose, DasRenDealerCommitment,
-        DasRenPartialSignature, DasRenRevealedShare, ThresholdBlsError, ThresholdBlsPublicKey,
-        ThresholdBlsSession, ThresholdBlsSignature, ValidatedDealerCommitment,
+        DasRenPartialSignature, ThresholdBlsError, ThresholdBlsPublicKey, ThresholdBlsSession,
+        ThresholdBlsSignature, ValidatedDealerCommitment,
     },
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -32,11 +51,12 @@ use iroha_data_model::{
     NetworkId,
     consensus::{
         FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-        GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconDkgComplaintResponseV1,
-        GlobalThresholdBeaconDkgComplaintV1, GlobalThresholdBeaconDkgDealerCommitmentV1,
-        GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconDkgTranscriptV1,
-        GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureProofV1,
-        GlobalThresholdBeaconPartialSignatureV1, GlobalThresholdBeaconPublicShareV1,
+        GlobalThresholdBeaconChainAnchorV1, GlobalThresholdBeaconDkgDealerCommitmentV1,
+        GlobalThresholdBeaconDkgEncryptedShareV1, GlobalThresholdBeaconDkgRecipientKeyV1,
+        GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconDkgShareAcceptanceV1,
+        GlobalThresholdBeaconDkgTranscriptV1, GlobalThresholdBeaconKeySessionV1,
+        GlobalThresholdBeaconPartialSignatureProofV1, GlobalThresholdBeaconPartialSignatureV1,
+        GlobalThresholdBeaconPublicShareV1,
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -190,11 +210,233 @@ impl GlobalThresholdBeaconPulseLinkV1 {
     }
 }
 
-/// Public, replayable snapshot of an active adaptive DKG reducer.
+/// Signed preimage for one exact DKG recipient encryption key.
+#[must_use]
+pub fn global_threshold_beacon_dkg_recipient_key_preimage_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+) -> Vec<u8> {
+    let mut out = b"iroha.global-threshold-beacon.dkg-recipient-key.v1\0".to_vec();
+    out.extend_from_slice(&session.encode());
+    out.extend_from_slice(&key.recipient_index.to_be_bytes());
+    out.extend_from_slice(&key.validator.encode());
+    out.extend_from_slice(&key.x25519_public_key);
+    out.extend_from_slice(&key.mlkem768_public_key.encode());
+    out
+}
+
+/// Exact signed recipient-key identity used in private-edge associated data.
+#[must_use]
+pub fn global_threshold_beacon_dkg_recipient_key_hash_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+) -> [u8; 32] {
+    Hash::new_from_chunks(&[
+        b"iroha.global-threshold-beacon.dkg-recipient-key-hash.v1\0",
+        &session.encode(),
+        &key.encode(),
+    ])
+    .into()
+}
+
+/// Signed preimage for a dealer's complete coefficient broadcast.
+#[must_use]
+pub fn global_threshold_beacon_dkg_dealer_commitment_preimage_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+) -> Vec<u8> {
+    let mut out = b"iroha.global-threshold-beacon.dkg-dealer-commitment.v1\0".to_vec();
+    out.extend_from_slice(&session.encode());
+    out.extend_from_slice(&commitment.dealer_index.to_be_bytes());
+    out.extend_from_slice(&commitment.coefficient_commitments.encode());
+    out.extend_from_slice(&commitment.constant_term_proof.encode());
+    out
+}
+
+/// Verify the dealer-seat signature on one exact public commitment.
 ///
-/// This is deliberately a projection of public broadcasts only. Private share
-/// deliveries and threshold-signature partials have no field in this type and
-/// therefore cannot enter authoritative World persistence.
+/// # Errors
+/// Rejects a forged seat, session, coefficient vector or proof broadcast.
+pub fn verify_global_threshold_beacon_dkg_dealer_commitment_signature_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    dealer_key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+) -> Result<(), GlobalThresholdBeaconError> {
+    if dealer_key.recipient_index != commitment.dealer_index
+        || commitment
+            .signature
+            .verify(
+                dealer_key.validator.public_key(),
+                &global_threshold_beacon_dkg_dealer_commitment_preimage_v1(session, commitment),
+            )
+            .is_err()
+    {
+        return Err(GlobalThresholdBeaconError::DealerCommitmentEquivocation);
+    }
+    Ok(())
+}
+
+/// Canonical AEAD associated data for one encrypted dealer-to-recipient edge.
+#[must_use]
+pub fn global_threshold_beacon_dkg_private_edge_aad_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
+) -> Vec<u8> {
+    let mut out = b"iroha.global-threshold-beacon.dkg-private-edge.v1\0".to_vec();
+    out.extend_from_slice(&session.encode());
+    out.extend_from_slice(&edge.dealer_index.to_be_bytes());
+    out.extend_from_slice(&edge.recipient_index.to_be_bytes());
+    out.extend_from_slice(&edge.dealer_commitment_hash);
+    out.extend_from_slice(&edge.recipient_key_hash);
+    out.extend_from_slice(&edge.delivery_height.to_be_bytes());
+    out
+}
+
+/// Signed preimage for the complete encrypted private edge.
+#[must_use]
+pub fn global_threshold_beacon_dkg_encrypted_share_preimage_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
+) -> Vec<u8> {
+    let mut out = global_threshold_beacon_dkg_private_edge_aad_v1(session, edge);
+    out.extend_from_slice(&edge.ephemeral_x25519_public_key);
+    out.extend_from_slice(&edge.mlkem768_ciphertext.encode());
+    out.extend_from_slice(&edge.encrypted_share.encode());
+    out
+}
+
+/// Stable hash of a signed private edge without revealing its plaintext.
+#[must_use]
+pub fn global_threshold_beacon_dkg_encrypted_share_hash_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
+) -> [u8; 32] {
+    Hash::new_from_chunks(&[
+        b"iroha.global-threshold-beacon.dkg-encrypted-share-hash.v1\0",
+        &session.encode(),
+        &edge.encode(),
+    ])
+    .into()
+}
+
+/// Signed preimage for one recipient's exact dealer edge acceptance.
+#[must_use]
+pub fn global_threshold_beacon_dkg_share_acceptance_preimage_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    acceptance: &GlobalThresholdBeaconDkgShareAcceptanceV1,
+) -> Vec<u8> {
+    let mut out = b"iroha.global-threshold-beacon.dkg-share-acceptance.v1\0".to_vec();
+    out.extend_from_slice(&session.encode());
+    out.extend_from_slice(&acceptance.dealer_index.to_be_bytes());
+    out.extend_from_slice(&acceptance.recipient_index.to_be_bytes());
+    out.extend_from_slice(&acceptance.dealer_commitment_hash);
+    out.extend_from_slice(&acceptance.encrypted_share_hash);
+    out.extend_from_slice(&acceptance.accepted_height.to_be_bytes());
+    out
+}
+
+/// Verify a target seat's signed, attempt-bound hybrid encryption key.
+///
+/// # Errors
+/// Rejects an invalid seat, non-BLS owner, malformed hybrid key or signature.
+pub fn verify_global_threshold_beacon_dkg_recipient_key_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+) -> Result<(), GlobalThresholdBeaconError> {
+    validate_participant(session, key.recipient_index)?;
+    if key.validator.public_key().algorithm() != Algorithm::BlsNormal
+        || iroha_crypto::hybrid::HybridPublicKey::from_bytes(
+            key.x25519_public_key,
+            &key.mlkem768_public_key,
+        )
+        .is_err()
+        || key
+            .signature
+            .verify(
+                key.validator.public_key(),
+                &global_threshold_beacon_dkg_recipient_key_preimage_v1(session, key),
+            )
+            .is_err()
+    {
+        return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+    }
+    Ok(())
+}
+
+/// Verify the public signed envelope of one encrypted private DKG edge.
+///
+/// # Errors
+/// Rejects a foreign recipient key, dealer, commitment, phase or signature.
+pub fn verify_global_threshold_beacon_dkg_encrypted_share_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    dealer: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+    dealer_key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    recipient_key: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    edge: &GlobalThresholdBeaconDkgEncryptedShareV1,
+) -> Result<(), GlobalThresholdBeaconError> {
+    if edge.dealer_index != dealer.dealer_index
+        || edge.dealer_index != dealer_key.recipient_index
+        || edge.recipient_index != recipient_key.recipient_index
+        || edge.dealer_commitment_hash
+            != global_threshold_beacon_dkg_dealer_commitment_hash_v1(session, dealer)
+        || edge.recipient_key_hash
+            != global_threshold_beacon_dkg_recipient_key_hash_v1(session, recipient_key)
+        || edge.delivery_height < session.commitments_end_height
+        || edge.delivery_height >= session.deliveries_end_height
+        || edge.encrypted_share.len() != 12 + 96 + 16
+        || iroha_crypto::hybrid::HybridKemCiphertext::from_parts(
+            edge.ephemeral_x25519_public_key,
+            &edge.mlkem768_ciphertext,
+        )
+        .is_err()
+        || edge
+            .signature
+            .verify(
+                dealer_key.validator.public_key(),
+                &global_threshold_beacon_dkg_encrypted_share_preimage_v1(session, edge),
+            )
+            .is_err()
+    {
+        return Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare);
+    }
+    Ok(())
+}
+
+/// Verify one exact recipient acceptance without exposing a private share.
+///
+/// # Errors
+/// Rejects changed session, commitment, recipient or acceptance signature.
+pub fn verify_global_threshold_beacon_dkg_share_acceptance_v1(
+    session: &GlobalThresholdBeaconDkgSessionV1,
+    dealer: &GlobalThresholdBeaconDkgDealerCommitmentV1,
+    recipient: &GlobalThresholdBeaconDkgRecipientKeyV1,
+    acceptance: &GlobalThresholdBeaconDkgShareAcceptanceV1,
+) -> Result<(), GlobalThresholdBeaconError> {
+    if acceptance.dealer_index != dealer.dealer_index
+        || acceptance.recipient_index != recipient.recipient_index
+        || acceptance.dealer_commitment_hash
+            != global_threshold_beacon_dkg_dealer_commitment_hash_v1(session, dealer)
+        || acceptance.encrypted_share_hash == [0; 32]
+        || acceptance.accepted_height < session.deliveries_end_height
+        || acceptance.accepted_height >= session.acceptances_end_height
+        || acceptance
+            .signature
+            .verify(
+                recipient.validator.public_key(),
+                &global_threshold_beacon_dkg_share_acceptance_preimage_v1(session, acceptance),
+            )
+            .is_err()
+    {
+        return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
+    }
+    Ok(())
+}
+
+/// Public, replayable snapshot of an active all-edge DKG reducer.
+///
+/// Encrypted delivery envelopes and signed acceptances are public audit data;
+/// plaintext private shares and threshold-signature partials have no field in
+/// this type and cannot enter authoritative World persistence.
 #[derive(
     Debug,
     Clone,
@@ -214,12 +456,14 @@ pub struct GlobalThresholdBeaconDkgSnapshotV1 {
     pub generator_h: [u8; 96],
     /// Purpose-separated Das--Ren `v` generator in canonical compressed G2 form.
     pub generator_v: [u8; 96],
+    /// Attempt-bound recipient keys in strictly increasing seat order.
+    pub recipient_keys: Vec<GlobalThresholdBeaconDkgRecipientKeyV1>,
     /// Dealer coefficient broadcasts in strictly increasing dealer order.
     pub dealer_commitments: Vec<GlobalThresholdBeaconDkgDealerCommitmentV1>,
-    /// Complaints in strictly increasing `(dealer, complainant)` order.
-    pub complaints: Vec<GlobalThresholdBeaconDkgComplaintV1>,
-    /// Public complaint responses in the same canonical pair order.
-    pub complaint_responses: Vec<GlobalThresholdBeaconDkgComplaintResponseV1>,
+    /// Signed encrypted private shares in canonical `(dealer, recipient)` order.
+    pub encrypted_shares: Vec<GlobalThresholdBeaconDkgEncryptedShareV1>,
+    /// Signed recipient acknowledgments in canonical `(dealer, recipient)` order.
+    pub share_acceptances: Vec<GlobalThresholdBeaconDkgShareAcceptanceV1>,
     /// Greatest committed height consumed by this reducer snapshot.
     pub last_updated_height: u64,
 }
@@ -234,9 +478,54 @@ impl GlobalThresholdBeaconDkgSnapshotV1 {
         validate_dkg_session(&self.session)?;
         validate_dkg_generators(&self.session, &self.generator_h, &self.generator_v)?;
 
+        let mut recipients = BTreeMap::new();
+        for key in &self.recipient_keys {
+            verify_global_threshold_beacon_dkg_recipient_key_v1(&self.session, key)?;
+            if recipients
+                .values()
+                .any(|existing: &&GlobalThresholdBeaconDkgRecipientKeyV1| {
+                    existing.validator == key.validator
+                        || (existing.x25519_public_key == key.x25519_public_key
+                            && existing.mlkem768_public_key == key.mlkem768_public_key)
+                })
+            {
+                return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+            }
+            if recipients.insert(key.recipient_index, key).is_some() {
+                return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+            }
+        }
+        if recipients.keys().copied().collect::<Vec<_>>()
+            != self
+                .recipient_keys
+                .iter()
+                .map(|key| key.recipient_index)
+                .collect::<Vec<_>>()
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+        }
+        if recipients.len() == usize::from(self.session.committee_size)
+            && global_threshold_beacon_roster_hash_v1(
+                &recipients
+                    .values()
+                    .map(|key| key.validator.clone())
+                    .collect::<Vec<_>>(),
+            ) != self.session.roster_hash
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+        }
+
         let mut commitments = BTreeMap::new();
         for commitment in &self.dealer_commitments {
             validate_participant(&self.session, commitment.dealer_index)?;
+            let dealer_key = recipients
+                .get(&commitment.dealer_index)
+                .ok_or(GlobalThresholdBeaconError::DealerCommitmentEquivocation)?;
+            verify_global_threshold_beacon_dkg_dealer_commitment_signature_v1(
+                &self.session,
+                dealer_key,
+                commitment,
+            )?;
             if commitment.coefficient_commitments.len() != usize::from(self.session.threshold)
                 || commitments
                     .insert(commitment.dealer_index, commitment)
@@ -255,75 +544,92 @@ impl GlobalThresholdBeaconDkgSnapshotV1 {
             return Err(GlobalThresholdBeaconError::DealerCommitmentEquivocation);
         }
 
-        let mut complaints = BTreeMap::new();
-        for complaint in &self.complaints {
-            validate_participant(&self.session, complaint.dealer_index)?;
-            validate_participant(&self.session, complaint.complainant_index)?;
-            let Some(commitment) = commitments.get(&complaint.dealer_index) else {
-                return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
-            };
-            if complaint.dealer_index == complaint.complainant_index
-                || complaint.dealer_commitment_hash
-                    != global_threshold_beacon_dkg_dealer_commitment_hash_v1(
-                        &self.session,
-                        commitment,
-                    )
-                || complaint.complaint_id
-                    != global_threshold_beacon_dkg_complaint_id_v1(
-                        &self.session,
-                        complaint.dealer_index,
-                        complaint.complainant_index,
-                        complaint.dealer_commitment_hash,
-                        complaint.reason,
-                    )
-                || complaints
-                    .insert(
-                        (complaint.dealer_index, complaint.complainant_index),
-                        complaint,
-                    )
+        let mut edges = BTreeMap::new();
+        for edge in &self.encrypted_shares {
+            let dealer = commitments
+                .get(&edge.dealer_index)
+                .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+            let dealer_key = recipients
+                .get(&edge.dealer_index)
+                .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+            let recipient_key = recipients
+                .get(&edge.recipient_index)
+                .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+            verify_global_threshold_beacon_dkg_encrypted_share_v1(
+                &self.session,
+                dealer,
+                dealer_key,
+                recipient_key,
+                edge,
+            )?;
+            if edge.delivery_height > self.last_updated_height
+                || edges
+                    .insert((edge.dealer_index, edge.recipient_index), edge)
                     .is_some()
             {
-                return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
+                return Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare);
             }
         }
-        if complaints.keys().copied().collect::<Vec<_>>()
+        if edges.keys().copied().collect::<Vec<_>>()
             != self
-                .complaints
+                .encrypted_shares
                 .iter()
-                .map(|complaint| (complaint.dealer_index, complaint.complainant_index))
+                .map(|edge| (edge.dealer_index, edge.recipient_index))
                 .collect::<Vec<_>>()
         {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
+            return Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare);
         }
 
-        let mut responses = BTreeMap::new();
-        for response in &self.complaint_responses {
-            let key = (response.dealer_index, response.recipient_index);
-            let Some(complaint) = complaints.get(&key) else {
-                return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
+        let mut acceptances = BTreeMap::new();
+        for acceptance in &self.share_acceptances {
+            let Some(dealer) = commitments.get(&acceptance.dealer_index) else {
+                return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
             };
-            if response.complaint_id != complaint.complaint_id
-                || responses.insert(key, response).is_some()
+            let Some(recipient) = recipients.get(&acceptance.recipient_index) else {
+                return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
+            };
+            let Some(edge) = edges.get(&(acceptance.dealer_index, acceptance.recipient_index))
+            else {
+                return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
+            };
+            if acceptance.encrypted_share_hash
+                != global_threshold_beacon_dkg_encrypted_share_hash_v1(&self.session, edge)
+                || acceptance.accepted_height > self.last_updated_height
             {
-                return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
+                return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
+            }
+            verify_global_threshold_beacon_dkg_share_acceptance_v1(
+                &self.session,
+                dealer,
+                recipient,
+                acceptance,
+            )?;
+            if acceptances
+                .insert(
+                    (acceptance.dealer_index, acceptance.recipient_index),
+                    acceptance,
+                )
+                .is_some()
+            {
+                return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
             }
         }
-        if responses.keys().copied().collect::<Vec<_>>()
+        if acceptances.keys().copied().collect::<Vec<_>>()
             != self
-                .complaint_responses
+                .share_acceptances
                 .iter()
-                .map(|response| (response.dealer_index, response.recipient_index))
+                .map(|acceptance| (acceptance.dealer_index, acceptance.recipient_index))
                 .collect::<Vec<_>>()
         {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
+            return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
         }
 
-        if (!self.dealer_commitments.is_empty()
+        if ((!self.recipient_keys.is_empty() || !self.dealer_commitments.is_empty())
             && self.last_updated_height < self.session.start_height)
-            || (!self.complaints.is_empty()
-                && self.last_updated_height < self.session.sharing_end_height)
-            || (!self.complaint_responses.is_empty()
-                && self.last_updated_height < self.session.complaints_end_height)
+            || (!self.encrypted_shares.is_empty()
+                && self.last_updated_height < self.session.commitments_end_height)
+            || (!self.share_acceptances.is_empty()
+                && self.last_updated_height < self.session.deliveries_end_height)
         {
             return Err(GlobalThresholdBeaconError::NonMonotonicDkgState);
         }
@@ -492,15 +798,18 @@ pub enum GlobalThresholdBeaconError {
     /// A dealer broadcast two different commitments for one session.
     #[error("global threshold-beacon DKG dealer commitment equivocation")]
     DealerCommitmentEquivocation,
-    /// A complaint is malformed, misbound, or conflicts with a prior complaint.
-    #[error("invalid global threshold-beacon DKG complaint")]
-    InvalidDkgComplaint,
-    /// A complaint response is absent, misbound, or conflicts with a prior response.
-    #[error("invalid global threshold-beacon DKG complaint response")]
-    InvalidDkgComplaintResponse,
-    /// Too few dealers remain qualified to preserve the configured fault bound.
-    #[error("global threshold-beacon DKG has too few qualified dealers")]
-    InsufficientQualifiedDealers,
+    /// A target seat's attempt-bound encryption key is invalid or equivocated.
+    #[error("invalid global threshold-beacon DKG recipient key")]
+    InvalidDkgRecipientKey,
+    /// An encrypted dealer-to-recipient edge is malformed, misbound or equivocated.
+    #[error("invalid global threshold-beacon DKG encrypted share")]
+    InvalidDkgEncryptedShare,
+    /// A signed dealer-to-recipient edge acceptance is invalid or equivocated.
+    #[error("invalid global threshold-beacon DKG share acceptance")]
+    InvalidDkgShareAcceptance,
+    /// One or more frozen dealer/recipient edges are absent at the cutoff.
+    #[error("global threshold-beacon DKG lacks complete accepted edges")]
+    IncompleteDkgEdges,
     /// The DKG state has already reached a terminal state.
     #[error("global threshold-beacon DKG is already terminal")]
     DkgTerminal,
@@ -530,22 +839,22 @@ pub enum GlobalThresholdBeaconError {
     ThresholdBls(#[from] ThresholdBlsError),
 }
 
-/// Consensus-height phase of an adaptive global beacon DKG run.
+/// Consensus-height phase of an all-edge global beacon DKG run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobalThresholdBeaconDkgPhaseV1 {
     /// The configured start height has not been reached.
     Pending,
-    /// Dealers broadcast coefficient commitments and constant-term proofs.
-    Sharing,
-    /// Recipients broadcast complaints about missing or invalid private shares.
-    Complaints,
-    /// Accused dealers publicly reveal the disputed share triples.
-    Responses,
-    /// The response deadline passed and qualification can be derived.
+    /// Dealers broadcast coefficient commitments and recipient encryption keys.
+    Commitments,
+    /// Dealers privately deliver encrypted share triples.
+    Deliveries,
+    /// Recipients publish signed acceptance of each exact private edge.
+    Acceptances,
+    /// The acceptance deadline passed and all edges can be checked.
     Finalizable,
     /// The session produced one canonical public transcript.
     Finalized,
-    /// The session could not retain the required honest-dealer floor.
+    /// The session could not collect every frozen dealer/recipient edge.
     Aborted,
 }
 
@@ -578,16 +887,6 @@ pub trait GlobalThresholdBeaconDkgCryptoV1 {
         generator_h: &[u8; 96],
         generator_v: &[u8; 96],
         commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
-    ) -> Result<(), ThresholdBlsError>;
-
-    /// Validate one public complaint response against its dealer commitment.
-    fn verify_complaint_response(
-        &self,
-        session: &GlobalThresholdBeaconDkgSessionV1,
-        generator_h: &[u8; 96],
-        generator_v: &[u8; 96],
-        commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
-        response: &GlobalThresholdBeaconDkgComplaintResponseV1,
     ) -> Result<(), ThresholdBlsError>;
 
     /// Derive the group key, all composite public shares, and ready transcript.
@@ -630,31 +929,6 @@ impl GlobalThresholdBeaconDkgCryptoV1 for AdaptiveGlobalThresholdBeaconDkgCrypto
         let parameters = adaptive_beacon_parameters(session)?;
         require_adaptive_generators(&parameters, generator_h, generator_v)?;
         verify_adaptive_dealer(&parameters, commitment)?;
-        Ok(())
-    }
-
-    fn verify_complaint_response(
-        &self,
-        session: &GlobalThresholdBeaconDkgSessionV1,
-        generator_h: &[u8; 96],
-        generator_v: &[u8; 96],
-        commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
-        response: &GlobalThresholdBeaconDkgComplaintResponseV1,
-    ) -> Result<(), ThresholdBlsError> {
-        let parameters = adaptive_beacon_parameters(session)?;
-        require_adaptive_generators(&parameters, generator_h, generator_v)?;
-        let dealer = verify_adaptive_dealer(&parameters, commitment)?;
-        if response.dealer_index != commitment.dealer_index {
-            return Err(ThresholdBlsError::InvalidComplaintResponse);
-        }
-        DasRenRevealedShare::verify(
-            &parameters,
-            &dealer,
-            response.recipient_index,
-            response.s_share,
-            response.r_share,
-            response.u_share,
-        )?;
         Ok(())
     }
 
@@ -752,9 +1026,10 @@ pub struct GlobalThresholdBeaconDkgStateV1 {
     session: GlobalThresholdBeaconDkgSessionV1,
     generator_h: [u8; 96],
     generator_v: [u8; 96],
+    recipient_keys: BTreeMap<u16, GlobalThresholdBeaconDkgRecipientKeyV1>,
     dealer_commitments: BTreeMap<u16, GlobalThresholdBeaconDkgDealerCommitmentV1>,
-    complaints: BTreeMap<(u16, u16), GlobalThresholdBeaconDkgComplaintV1>,
-    complaint_responses: BTreeMap<(u16, u16), GlobalThresholdBeaconDkgComplaintResponseV1>,
+    encrypted_shares: BTreeMap<(u16, u16), GlobalThresholdBeaconDkgEncryptedShareV1>,
+    share_acceptances: BTreeMap<(u16, u16), GlobalThresholdBeaconDkgShareAcceptanceV1>,
     finalized: Option<GlobalThresholdBeaconKeySessionV1>,
     aborted: bool,
     last_updated_height: u64,
@@ -776,9 +1051,10 @@ impl GlobalThresholdBeaconDkgStateV1 {
             session,
             generator_h,
             generator_v,
+            recipient_keys: BTreeMap::new(),
             dealer_commitments: BTreeMap::new(),
-            complaints: BTreeMap::new(),
-            complaint_responses: BTreeMap::new(),
+            encrypted_shares: BTreeMap::new(),
+            share_acceptances: BTreeMap::new(),
             finalized: None,
             aborted: false,
             last_updated_height,
@@ -786,7 +1062,8 @@ impl GlobalThresholdBeaconDkgStateV1 {
     }
 
     /// Restore one public snapshot, re-deriving generators and re-verifying all
-    /// public dealer proofs before the reducer can consume another event.
+    /// public dealer proofs, signed keys, envelopes, and acceptances before the
+    /// reducer can consume another event.
     pub fn from_snapshot(
         snapshot: GlobalThresholdBeaconDkgSnapshotV1,
         crypto: &impl GlobalThresholdBeaconDkgCryptoV1,
@@ -804,46 +1081,34 @@ impl GlobalThresholdBeaconDkgStateV1 {
                 commitment,
             )?;
         }
-        let commitments = snapshot
-            .dealer_commitments
-            .iter()
-            .map(|commitment| (commitment.dealer_index, commitment))
-            .collect::<BTreeMap<_, _>>();
-        for response in &snapshot.complaint_responses {
-            let commitment = commitments
-                .get(&response.dealer_index)
-                .ok_or(GlobalThresholdBeaconError::InvalidDkgComplaintResponse)?;
-            crypto.verify_complaint_response(
-                &snapshot.session,
-                &generator_h,
-                &generator_v,
-                commitment,
-                response,
-            )?;
-        }
         Ok(Self {
             session: snapshot.session,
             generator_h,
             generator_v,
+            recipient_keys: snapshot
+                .recipient_keys
+                .into_iter()
+                .map(|key| (key.recipient_index, key))
+                .collect(),
             dealer_commitments: snapshot
                 .dealer_commitments
                 .into_iter()
                 .map(|commitment| (commitment.dealer_index, commitment))
                 .collect(),
-            complaints: snapshot
-                .complaints
+            encrypted_shares: snapshot
+                .encrypted_shares
                 .into_iter()
-                .map(|complaint| {
+                .map(|edge| ((edge.dealer_index, edge.recipient_index), edge))
+                .collect(),
+            share_acceptances: snapshot
+                .share_acceptances
+                .into_iter()
+                .map(|acceptance| {
                     (
-                        (complaint.dealer_index, complaint.complainant_index),
-                        complaint,
+                        (acceptance.dealer_index, acceptance.recipient_index),
+                        acceptance,
                     )
                 })
-                .collect(),
-            complaint_responses: snapshot
-                .complaint_responses
-                .into_iter()
-                .map(|response| ((response.dealer_index, response.recipient_index), response))
                 .collect(),
             finalized: None,
             aborted: false,
@@ -862,9 +1127,10 @@ impl GlobalThresholdBeaconDkgStateV1 {
             session: self.session,
             generator_h: self.generator_h,
             generator_v: self.generator_v,
+            recipient_keys: self.recipient_keys.values().cloned().collect(),
             dealer_commitments: self.dealer_commitments.values().cloned().collect(),
-            complaints: self.complaints.values().copied().collect(),
-            complaint_responses: self.complaint_responses.values().copied().collect(),
+            encrypted_shares: self.encrypted_shares.values().cloned().collect(),
+            share_acceptances: self.share_acceptances.values().cloned().collect(),
             last_updated_height: self.last_updated_height,
         };
         snapshot.validate()?;
@@ -895,18 +1161,61 @@ impl GlobalThresholdBeaconDkgStateV1 {
         }
         if height < self.session.start_height {
             GlobalThresholdBeaconDkgPhaseV1::Pending
-        } else if height < self.session.sharing_end_height {
-            GlobalThresholdBeaconDkgPhaseV1::Sharing
-        } else if height < self.session.complaints_end_height {
-            GlobalThresholdBeaconDkgPhaseV1::Complaints
-        } else if height < self.session.responses_end_height {
-            GlobalThresholdBeaconDkgPhaseV1::Responses
+        } else if height < self.session.commitments_end_height {
+            GlobalThresholdBeaconDkgPhaseV1::Commitments
+        } else if height < self.session.deliveries_end_height {
+            GlobalThresholdBeaconDkgPhaseV1::Deliveries
+        } else if height < self.session.acceptances_end_height {
+            GlobalThresholdBeaconDkgPhaseV1::Acceptances
         } else {
             GlobalThresholdBeaconDkgPhaseV1::Finalizable
         }
     }
 
-    /// Admit one dealer broadcast during the sharing window.
+    /// Admit one exact target seat's signed recipient key during commitments.
+    pub fn record_recipient_key(
+        &mut self,
+        height: u64,
+        key: GlobalThresholdBeaconDkgRecipientKeyV1,
+    ) -> Result<(), GlobalThresholdBeaconError> {
+        self.require_monotonic_height(height)?;
+        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Commitments {
+            return Err(GlobalThresholdBeaconError::WrongDkgPhase);
+        }
+        verify_global_threshold_beacon_dkg_recipient_key_v1(&self.session, &key)?;
+        if let Some(existing) = self.recipient_keys.get(&key.recipient_index) {
+            return if existing == &key {
+                self.last_updated_height = height;
+                Ok(())
+            } else {
+                Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey)
+            };
+        }
+        if self.recipient_keys.values().any(|existing| {
+            existing.validator == key.validator
+                || (existing.x25519_public_key == key.x25519_public_key
+                    && existing.mlkem768_public_key == key.mlkem768_public_key)
+        }) {
+            return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+        }
+        let mut roster = self
+            .recipient_keys
+            .iter()
+            .map(|(index, key)| (*index, key.validator.clone()))
+            .collect::<BTreeMap<_, _>>();
+        roster.insert(key.recipient_index, key.validator.clone());
+        if roster.len() == usize::from(self.session.committee_size)
+            && global_threshold_beacon_roster_hash_v1(&roster.into_values().collect::<Vec<_>>())
+                != self.session.roster_hash
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgRecipientKey);
+        }
+        self.recipient_keys.insert(key.recipient_index, key);
+        self.last_updated_height = height;
+        Ok(())
+    }
+
+    /// Admit one dealer broadcast during the commitment window.
     pub fn record_dealer_commitment(
         &mut self,
         height: u64,
@@ -914,10 +1223,19 @@ impl GlobalThresholdBeaconDkgStateV1 {
         crypto: &impl GlobalThresholdBeaconDkgCryptoV1,
     ) -> Result<(), GlobalThresholdBeaconError> {
         self.require_monotonic_height(height)?;
-        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Sharing {
+        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Commitments {
             return Err(GlobalThresholdBeaconError::WrongDkgPhase);
         }
         validate_participant(&self.session, commitment.dealer_index)?;
+        let dealer_key = self
+            .recipient_keys
+            .get(&commitment.dealer_index)
+            .ok_or(GlobalThresholdBeaconError::DealerCommitmentEquivocation)?;
+        verify_global_threshold_beacon_dkg_dealer_commitment_signature_v1(
+            &self.session,
+            dealer_key,
+            &commitment,
+        )?;
         if commitment.coefficient_commitments.len() != usize::from(self.session.threshold) {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession);
         }
@@ -941,96 +1259,103 @@ impl GlobalThresholdBeaconDkgStateV1 {
         Ok(())
     }
 
-    /// Admit one canonically bound complaint during the complaint window.
-    pub fn record_complaint(
+    /// Admit one signed private ciphertext during the delivery window.
+    pub fn record_encrypted_share(
         &mut self,
         height: u64,
-        complaint: GlobalThresholdBeaconDkgComplaintV1,
+        edge: GlobalThresholdBeaconDkgEncryptedShareV1,
     ) -> Result<(), GlobalThresholdBeaconError> {
         self.require_monotonic_height(height)?;
-        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Complaints {
+        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Deliveries {
             return Err(GlobalThresholdBeaconError::WrongDkgPhase);
         }
-        validate_participant(&self.session, complaint.dealer_index)?;
-        validate_participant(&self.session, complaint.complainant_index)?;
-        if complaint.dealer_index == complaint.complainant_index {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
+        if edge.delivery_height != height {
+            return Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare);
         }
         let dealer = self
             .dealer_commitments
-            .get(&complaint.dealer_index)
-            .ok_or(GlobalThresholdBeaconError::InvalidDkgComplaint)?;
-        if complaint.dealer_commitment_hash
-            != global_threshold_beacon_dkg_dealer_commitment_hash_v1(&self.session, dealer)
-            || complaint.complaint_id
-                != global_threshold_beacon_dkg_complaint_id_v1(
-                    &self.session,
-                    complaint.dealer_index,
-                    complaint.complainant_index,
-                    complaint.dealer_commitment_hash,
-                    complaint.reason,
-                )
-        {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
-        }
-        let key = (complaint.dealer_index, complaint.complainant_index);
-        if let Some(existing) = self.complaints.get(&key) {
-            return if existing == &complaint {
+            .get(&edge.dealer_index)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+        let dealer_key = self
+            .recipient_keys
+            .get(&edge.dealer_index)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+        let recipient_key = self
+            .recipient_keys
+            .get(&edge.recipient_index)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)?;
+        verify_global_threshold_beacon_dkg_encrypted_share_v1(
+            &self.session,
+            dealer,
+            dealer_key,
+            recipient_key,
+            &edge,
+        )?;
+        let key = (edge.dealer_index, edge.recipient_index);
+        if let Some(existing) = self.encrypted_shares.get(&key) {
+            return if existing == &edge {
                 self.last_updated_height = height;
                 Ok(())
             } else {
-                Err(GlobalThresholdBeaconError::InvalidDkgComplaint)
+                Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)
             };
         }
-        self.complaints.insert(key, complaint);
+        self.encrypted_shares.insert(key, edge);
         self.last_updated_height = height;
         Ok(())
     }
 
-    /// Admit one valid public share reveal during the response window.
-    pub fn record_complaint_response(
+    /// Admit one signed acceptance only after private delivery has closed.
+    pub fn record_share_acceptance(
         &mut self,
         height: u64,
-        response: GlobalThresholdBeaconDkgComplaintResponseV1,
-        crypto: &impl GlobalThresholdBeaconDkgCryptoV1,
+        acceptance: GlobalThresholdBeaconDkgShareAcceptanceV1,
     ) -> Result<(), GlobalThresholdBeaconError> {
         self.require_monotonic_height(height)?;
-        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Responses {
+        if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Acceptances {
             return Err(GlobalThresholdBeaconError::WrongDkgPhase);
         }
-        let key = (response.dealer_index, response.recipient_index);
-        let complaint = self
-            .complaints
-            .get(&key)
-            .ok_or(GlobalThresholdBeaconError::InvalidDkgComplaintResponse)?;
-        if response.complaint_id != complaint.complaint_id {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
+        if acceptance.accepted_height != height {
+            return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
         }
-        if let Some(existing) = self.complaint_responses.get(&key) {
-            return if existing == &response {
+        let dealer = self
+            .dealer_commitments
+            .get(&acceptance.dealer_index)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgShareAcceptance)?;
+        let recipient = self
+            .recipient_keys
+            .get(&acceptance.recipient_index)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgShareAcceptance)?;
+        let edge = self
+            .encrypted_shares
+            .get(&(acceptance.dealer_index, acceptance.recipient_index))
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgShareAcceptance)?;
+        if acceptance.encrypted_share_hash
+            != global_threshold_beacon_dkg_encrypted_share_hash_v1(&self.session, edge)
+        {
+            return Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance);
+        }
+        verify_global_threshold_beacon_dkg_share_acceptance_v1(
+            &self.session,
+            dealer,
+            recipient,
+            &acceptance,
+        )?;
+        let key = (acceptance.dealer_index, acceptance.recipient_index);
+        if let Some(existing) = self.share_acceptances.get(&key) {
+            return if existing == &acceptance {
                 self.last_updated_height = height;
                 Ok(())
             } else {
-                Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse)
+                Err(GlobalThresholdBeaconError::InvalidDkgShareAcceptance)
             };
         }
-        let commitment = self
-            .dealer_commitments
-            .get(&response.dealer_index)
-            .ok_or(GlobalThresholdBeaconError::InvalidDkgComplaintResponse)?;
-        crypto.verify_complaint_response(
-            &self.session,
-            &self.generator_h,
-            &self.generator_v,
-            commitment,
-            &response,
-        )?;
-        self.complaint_responses.insert(key, response);
+        self.share_acceptances.insert(key, acceptance);
         self.last_updated_height = height;
         Ok(())
     }
 
-    /// Derive the qualified set and finalize the sole canonical public transcript.
+    /// Finalize only after every frozen dealer/recipient edge is accepted.
     pub fn finalize(
         &mut self,
         height: u64,
@@ -1043,42 +1368,36 @@ impl GlobalThresholdBeaconDkgStateV1 {
         if self.phase_at(height) != GlobalThresholdBeaconDkgPhaseV1::Finalizable {
             return Err(GlobalThresholdBeaconError::WrongDkgPhase);
         }
-        let qualified_dealers = self
-            .dealer_commitments
-            .keys()
-            .copied()
-            .filter(|dealer| {
-                self.complaints
-                    .keys()
-                    .filter(|(accused, _)| accused == dealer)
-                    .all(|key| self.complaint_responses.contains_key(key))
-            })
-            .collect::<Vec<_>>();
-        let fault_tolerance = (self.session.committee_size - 1) / 3;
-        let required_qualified = self.session.committee_size - fault_tolerance;
-        if qualified_dealers.len() < usize::from(required_qualified) {
+        let seats = usize::from(self.session.committee_size);
+        let all_edges = seats
+            .checked_mul(seats)
+            .ok_or(GlobalThresholdBeaconError::InvalidDkgSession)?;
+        if self.recipient_keys.len() != seats
+            || self.dealer_commitments.len() != seats
+            || self.encrypted_shares.len() != all_edges
+            || self.share_acceptances.len() != all_edges
+        {
             self.aborted = true;
             self.last_updated_height = height;
-            return Err(GlobalThresholdBeaconError::InsufficientQualifiedDealers);
+            return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);
         }
+        let qualified_dealers = (1..=self.session.committee_size).collect::<Vec<_>>();
+        let recipient_keys = self.recipient_keys.values().cloned().collect::<Vec<_>>();
         let dealer_commitments = self
             .dealer_commitments
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let complaints = self.complaints.values().copied().collect::<Vec<_>>();
-        let complaint_responses = self
-            .complaint_responses
-            .values()
-            .copied()
-            .collect::<Vec<_>>();
+        let encrypted_shares = self.encrypted_shares.values().cloned().collect::<Vec<_>>();
+        let share_acceptances = self.share_acceptances.values().cloned().collect::<Vec<_>>();
         let event_hash = global_threshold_beacon_dkg_event_hash_v1(
             &self.session,
             &self.generator_h,
             &self.generator_v,
+            &recipient_keys,
             &dealer_commitments,
-            &complaints,
-            &complaint_responses,
+            &encrypted_shares,
+            &share_acceptances,
             &qualified_dealers,
             height,
         );
@@ -1100,8 +1419,9 @@ impl GlobalThresholdBeaconDkgStateV1 {
             generator_h: self.generator_h,
             generator_v: self.generator_v,
             dealer_commitments,
-            complaints,
-            complaint_responses,
+            recipient_keys,
+            encrypted_shares,
+            share_acceptances,
             qualified_dealers,
             event_hash,
             finalized_at_height: height,
@@ -1130,10 +1450,11 @@ fn validate_dkg_session(
     session: &GlobalThresholdBeaconDkgSessionV1,
 ) -> Result<(), GlobalThresholdBeaconError> {
     if session.version != GLOBAL_THRESHOLD_BEACON_VERSION_V1
+        || session.attempt_id == [0; 32]
         || is_zero(&session.roster_hash)
-        || session.start_height >= session.sharing_end_height
-        || session.sharing_end_height >= session.complaints_end_height
-        || session.complaints_end_height >= session.responses_end_height
+        || session.start_height >= session.commitments_end_height
+        || session.commitments_end_height >= session.deliveries_end_height
+        || session.deliveries_end_height >= session.acceptances_end_height
     {
         return Err(GlobalThresholdBeaconError::InvalidDkgSession);
     }
@@ -1178,34 +1499,8 @@ pub fn global_threshold_beacon_dkg_dealer_commitment_hash_v1(
 ) -> [u8; 32] {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(b"iroha.global-threshold-beacon.dkg-dealer.v1\0");
-    preimage.extend_from_slice(session.network_id.as_bytes());
-    preimage.extend_from_slice(&session.session_id);
-    preimage.extend_from_slice(&session.roster_hash);
+    preimage.extend_from_slice(&session.encode());
     preimage.extend_from_slice(&commitment.encode());
-    *Hash::new(&preimage).as_ref()
-}
-
-/// Compute the canonical identity of one complaint from its fully bound fields.
-#[must_use]
-pub fn global_threshold_beacon_dkg_complaint_id_v1(
-    session: &GlobalThresholdBeaconDkgSessionV1,
-    dealer_index: u16,
-    complainant_index: u16,
-    dealer_commitment_hash: [u8; 32],
-    reason: iroha_data_model::consensus::GlobalThresholdBeaconDkgComplaintReasonV1,
-) -> [u8; 32] {
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(b"iroha.global-threshold-beacon.dkg-complaint.v1\0");
-    preimage.extend_from_slice(session.network_id.as_bytes());
-    preimage.extend_from_slice(&session.session_id);
-    preimage.extend_from_slice(&session.roster_hash);
-    preimage.extend_from_slice(&dealer_index.to_be_bytes());
-    preimage.extend_from_slice(&complainant_index.to_be_bytes());
-    preimage.extend_from_slice(&dealer_commitment_hash);
-    preimage.push(match reason {
-        iroha_data_model::consensus::GlobalThresholdBeaconDkgComplaintReasonV1::MissingPrivateShare => 0,
-        iroha_data_model::consensus::GlobalThresholdBeaconDkgComplaintReasonV1::InvalidPrivateShare => 1,
-    });
     *Hash::new(&preimage).as_ref()
 }
 
@@ -1216,9 +1511,10 @@ pub fn global_threshold_beacon_dkg_event_hash_v1(
     session: &GlobalThresholdBeaconDkgSessionV1,
     generator_h: &[u8; 96],
     generator_v: &[u8; 96],
+    recipient_keys: &[GlobalThresholdBeaconDkgRecipientKeyV1],
     dealer_commitments: &[GlobalThresholdBeaconDkgDealerCommitmentV1],
-    complaints: &[GlobalThresholdBeaconDkgComplaintV1],
-    complaint_responses: &[GlobalThresholdBeaconDkgComplaintResponseV1],
+    encrypted_shares: &[GlobalThresholdBeaconDkgEncryptedShareV1],
+    share_acceptances: &[GlobalThresholdBeaconDkgShareAcceptanceV1],
     qualified_dealers: &[u16],
     finalized_at_height: u64,
 ) -> [u8; 32] {
@@ -1227,9 +1523,10 @@ pub fn global_threshold_beacon_dkg_event_hash_v1(
     preimage.extend_from_slice(&session.encode());
     preimage.extend_from_slice(generator_h);
     preimage.extend_from_slice(generator_v);
+    preimage.extend_from_slice(&recipient_keys.to_vec().encode());
     preimage.extend_from_slice(&dealer_commitments.to_vec().encode());
-    preimage.extend_from_slice(&complaints.to_vec().encode());
-    preimage.extend_from_slice(&complaint_responses.to_vec().encode());
+    preimage.extend_from_slice(&encrypted_shares.to_vec().encode());
+    preimage.extend_from_slice(&share_acceptances.to_vec().encode());
     preimage.extend_from_slice(&qualified_dealers.to_vec().encode());
     preimage.extend_from_slice(&finalized_at_height.to_be_bytes());
     *Hash::new(&preimage).as_ref()
@@ -1247,7 +1544,7 @@ fn validate_adaptive_dkg_shape(
         || session.roster_hash != record.roster_hash
         || session.committee_size != record.committee_size
         || session.threshold != record.threshold
-        || transcript.finalized_at_height < session.responses_end_height
+        || transcript.finalized_at_height < session.acceptances_end_height
         || transcript.event_hash != record.dkg_contribution_hash
         || is_zero(&transcript.generator_h)
         || is_zero(&transcript.generator_v)
@@ -1256,112 +1553,43 @@ fn validate_adaptive_dkg_shape(
         return Err(GlobalThresholdBeaconError::InvalidDkgSession);
     }
 
-    let mut commitments = BTreeMap::new();
-    for commitment in &transcript.dealer_commitments {
-        validate_participant(session, commitment.dealer_index)?;
-        if commitment.coefficient_commitments.len() != usize::from(session.threshold)
-            || commitments
-                .insert(commitment.dealer_index, commitment)
-                .is_some()
-        {
-            return Err(GlobalThresholdBeaconError::DealerCommitmentEquivocation);
-        }
-    }
-    if commitments.keys().copied().collect::<Vec<_>>()
-        != transcript
-            .dealer_commitments
-            .iter()
-            .map(|commitment| commitment.dealer_index)
-            .collect::<Vec<_>>()
+    let snapshot = GlobalThresholdBeaconDkgSnapshotV1 {
+        session: *session,
+        generator_h: transcript.generator_h,
+        generator_v: transcript.generator_v,
+        recipient_keys: transcript.recipient_keys.clone(),
+        dealer_commitments: transcript.dealer_commitments.clone(),
+        encrypted_shares: transcript.encrypted_shares.clone(),
+        share_acceptances: transcript.share_acceptances.clone(),
+        last_updated_height: transcript.finalized_at_height,
+    };
+    snapshot.validate()?;
+    let seats = usize::from(session.committee_size);
+    let all_edges = seats
+        .checked_mul(seats)
+        .ok_or(GlobalThresholdBeaconError::InvalidDkgSession)?;
+    let expected_dealers = (1..=session.committee_size).collect::<Vec<_>>();
+    if transcript.recipient_keys.len() != seats
+        || transcript.dealer_commitments.len() != seats
+        || transcript.encrypted_shares.len() != all_edges
+        || transcript.share_acceptances.len() != all_edges
+        || transcript.qualified_dealers != expected_dealers
     {
-        return Err(GlobalThresholdBeaconError::DealerCommitmentEquivocation);
+        return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);
     }
-
-    let mut complaints = BTreeMap::new();
-    for complaint in &transcript.complaints {
-        validate_participant(session, complaint.dealer_index)?;
-        validate_participant(session, complaint.complainant_index)?;
-        let Some(commitment) = commitments.get(&complaint.dealer_index) else {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
-        };
-        if complaint.dealer_index == complaint.complainant_index
-            || complaint.dealer_commitment_hash
-                != global_threshold_beacon_dkg_dealer_commitment_hash_v1(session, commitment)
-            || complaint.complaint_id
-                != global_threshold_beacon_dkg_complaint_id_v1(
-                    session,
-                    complaint.dealer_index,
-                    complaint.complainant_index,
-                    complaint.dealer_commitment_hash,
-                    complaint.reason,
-                )
-            || complaints
-                .insert(
-                    (complaint.dealer_index, complaint.complainant_index),
-                    complaint,
-                )
-                .is_some()
-        {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
-        }
-    }
-    if complaints.keys().copied().collect::<Vec<_>>()
-        != transcript
-            .complaints
-            .iter()
-            .map(|complaint| (complaint.dealer_index, complaint.complainant_index))
-            .collect::<Vec<_>>()
+    if global_threshold_beacon_dkg_event_hash_v1(
+        session,
+        &transcript.generator_h,
+        &transcript.generator_v,
+        &transcript.recipient_keys,
+        &transcript.dealer_commitments,
+        &transcript.encrypted_shares,
+        &transcript.share_acceptances,
+        &transcript.qualified_dealers,
+        transcript.finalized_at_height,
+    ) != transcript.event_hash
     {
-        return Err(GlobalThresholdBeaconError::InvalidDkgComplaint);
-    }
-
-    let mut responses = BTreeMap::new();
-    for response in &transcript.complaint_responses {
-        let key = (response.dealer_index, response.recipient_index);
-        let Some(complaint) = complaints.get(&key) else {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
-        };
-        if response.complaint_id != complaint.complaint_id
-            || responses.insert(key, response).is_some()
-        {
-            return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
-        }
-    }
-    if responses.keys().copied().collect::<Vec<_>>()
-        != transcript
-            .complaint_responses
-            .iter()
-            .map(|response| (response.dealer_index, response.recipient_index))
-            .collect::<Vec<_>>()
-    {
-        return Err(GlobalThresholdBeaconError::InvalidDkgComplaintResponse);
-    }
-
-    let derived_qualified = commitments
-        .keys()
-        .copied()
-        .filter(|dealer| {
-            complaints
-                .keys()
-                .filter(|(accused, _)| accused == dealer)
-                .all(|key| responses.contains_key(key))
-        })
-        .collect::<Vec<_>>();
-    let fault_tolerance = (session.committee_size - 1) / 3;
-    if derived_qualified != transcript.qualified_dealers
-        || derived_qualified.len() < usize::from(session.committee_size - fault_tolerance)
-        || global_threshold_beacon_dkg_event_hash_v1(
-            session,
-            &transcript.generator_h,
-            &transcript.generator_v,
-            &transcript.dealer_commitments,
-            &transcript.complaints,
-            &transcript.complaint_responses,
-            &transcript.qualified_dealers,
-            transcript.finalized_at_height,
-        ) != transcript.event_hash
-    {
-        return Err(GlobalThresholdBeaconError::InsufficientQualifiedDealers);
+        return Err(GlobalThresholdBeaconError::TranscriptMismatch);
     }
     Ok(())
 }
@@ -1388,19 +1616,6 @@ fn reconstruct_adaptive_beacon_transcript(
                 .map(|dealer| (commitment.dealer_index, dealer))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    for response in &public_dkg.complaint_responses {
-        let dealer = validated_dealers
-            .get(&response.dealer_index)
-            .ok_or(GlobalThresholdBeaconError::InvalidDkgComplaintResponse)?;
-        DasRenRevealedShare::verify(
-            &parameters,
-            dealer,
-            response.recipient_index,
-            response.s_share,
-            response.r_share,
-            response.u_share,
-        )?;
-    }
     let qualified = public_dkg
         .qualified_dealers
         .iter()
@@ -1495,6 +1710,25 @@ pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
         session: &ValidatedGlobalThresholdBeaconSessionV1,
         payload: &[u8],
     ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String>;
+
+    /// Prove exact prepared-seat custody in a domain distinct from consensus pulses.
+    ///
+    /// Providers that restrict their remote interface to typed pulse requests override this
+    /// method with an independently validated readiness operation.
+    ///
+    /// # Errors
+    /// Rejects inconsistent readiness contexts, unavailable custody or invalid share proofs.
+    fn prove_seat_readiness(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+        context: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
+    ) -> Result<
+        GlobalThresholdBeaconPartialSignatureV1,
+        seat_readiness::GlobalThresholdBeaconSeatReadinessErrorV1,
+    > {
+        seat_readiness::prove_with_partial_signer(self, session, authority, context)
+    }
 
     /// Return whether the feature-isolated test daemon must corrupt this
     /// provider's outbound share after signing and before broadcast.
@@ -2610,15 +2844,22 @@ fn is_zero(bytes: &[u8]) -> bool {
 mod fixtures;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use fixtures::signed_persisted_pulse_fixture_for_world;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub use fixtures::{
+    complete_beacon_dkg_fixture_for_exact_session_v1, complete_beacon_dkg_fixture_for_seat_v1,
+};
 #[cfg(test)]
-pub(crate) use fixtures::signed_pulses_fixture_for_roster_and_anchors;
+pub(crate) use fixtures::{
+    prepared_session_and_signers_fixture_v1, signed_pulses_fixture_for_roster_and_anchors,
+};
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{
         fixtures::{
             AdaptiveBeaconFixture, adaptive_beacon_fixture, adaptive_beacon_fixture_for_session,
-            adaptive_dkg_session_fixture, beacon_fixture_network_id,
+            adaptive_beacon_fixture_for_session_and_keys, adaptive_dkg_session_fixture,
+            beacon_fixture_network_id,
         },
         *,
     };
@@ -2647,10 +2888,7 @@ pub(crate) mod tests {
     use iroha_data_model::{
         account::AccountId,
         block::{BlockHeader, consensus_v2 as wire},
-        consensus::{
-            GlobalThresholdBeaconDkgComplaintReasonV1, GlobalThresholdBeaconDkgConstantProofV1,
-            GlobalThresholdBeaconPublicShareV1, NposConsensusEffects,
-        },
+        consensus::NposConsensusEffects,
         governance::types::{
             BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
@@ -2667,8 +2905,6 @@ pub(crate) mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-
-    struct AcceptingAdaptiveDkgCrypto;
 
     #[test]
     fn active_global_beacon_session_projection_rejects_noncanonical_storage() {
@@ -2717,197 +2953,148 @@ pub(crate) mod tests {
         );
     }
 
-    impl GlobalThresholdBeaconDkgCryptoV1 for AcceptingAdaptiveDkgCrypto {
-        fn derive_generators(
-            &self,
-            session: &GlobalThresholdBeaconDkgSessionV1,
-        ) -> Result<([u8; 96], [u8; 96]), ThresholdBlsError> {
-            let parameters = adaptive_beacon_parameters(session)?;
-            Ok((*parameters.h_bytes(), *parameters.v_bytes()))
-        }
-
-        fn verify_dealer_commitment(
-            &self,
-            _session: &GlobalThresholdBeaconDkgSessionV1,
-            _generator_h: &[u8; 96],
-            _generator_v: &[u8; 96],
-            _commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
-        ) -> Result<(), ThresholdBlsError> {
-            Ok(())
-        }
-
-        fn verify_complaint_response(
-            &self,
-            _session: &GlobalThresholdBeaconDkgSessionV1,
-            _generator_h: &[u8; 96],
-            _generator_v: &[u8; 96],
-            _commitment: &GlobalThresholdBeaconDkgDealerCommitmentV1,
-            _response: &GlobalThresholdBeaconDkgComplaintResponseV1,
-        ) -> Result<(), ThresholdBlsError> {
-            Ok(())
-        }
-
-        fn finalize_qualified_dealers(
-            &self,
-            session: &GlobalThresholdBeaconDkgSessionV1,
-            _generator_h: &[u8; 96],
-            _generator_v: &[u8; 96],
-            _dealer_commitments: &[GlobalThresholdBeaconDkgDealerCommitmentV1],
-            _qualified_dealers: &[u16],
-            event_hash: [u8; 32],
-        ) -> Result<GlobalThresholdBeaconDkgDerivedPublicV1, ThresholdBlsError> {
-            Ok(GlobalThresholdBeaconDkgDerivedPublicV1 {
-                group_public_key: g2_generator(),
-                public_shares: (1..=session.committee_size)
-                    .map(|index| GlobalThresholdBeaconPublicShareV1 {
-                        index,
-                        participant_seat_binding: [index as u8 + 0x40; 32],
-                        public_key_share: g2_generator(),
-                    })
-                    .collect(),
-                transcript_hash: event_hash,
-            })
-        }
+    fn complete_dkg_fixture(seats: u16) -> AdaptiveBeaconFixture {
+        let mut session = adaptive_dkg_session_fixture();
+        session.committee_size = seats;
+        session.threshold = (seats - 1) / 3 + 1;
+        let keys = super::fixtures::adaptive_fixture_signing_keys(seats);
+        session.roster_hash = global_threshold_beacon_roster_hash_v1(
+            &keys
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>(),
+        );
+        adaptive_beacon_fixture_for_session_and_keys(session, &keys)
     }
 
-    fn adaptive_dkg_dealer_fixture(
-        dealer_index: u16,
-    ) -> GlobalThresholdBeaconDkgDealerCommitmentV1 {
-        GlobalThresholdBeaconDkgDealerCommitmentV1 {
-            dealer_index,
-            coefficient_commitments: vec![g2_generator(), neg_g2_generator()],
-            constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-                commitment: g2_generator(),
-                response: [dealer_index as u8 + 0x30; 32],
-            },
-        }
-    }
-
-    #[test]
-    fn adaptive_dkg_reducer_derives_qualification_after_complaint_resolution() {
-        let crypto = AcceptingAdaptiveDkgCrypto;
-        let session = adaptive_dkg_session_fixture();
-        let mut state = GlobalThresholdBeaconDkgStateV1::new(session, &crypto)
-            .expect("valid adaptive DKG state");
-        for dealer_index in 1..=4 {
+    fn replay_dkg_until_finalizable(
+        transcript: &GlobalThresholdBeaconDkgTranscriptV1,
+        edge_count: usize,
+    ) -> GlobalThresholdBeaconDkgStateV1 {
+        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+        let session = transcript.session;
+        let mut state =
+            GlobalThresholdBeaconDkgStateV1::new(session, &crypto).expect("valid DKG session");
+        for key in &transcript.recipient_keys {
             state
-                .record_dealer_commitment(1, adaptive_dkg_dealer_fixture(dealer_index), &crypto)
-                .expect("dealer commitment");
+                .record_recipient_key(session.start_height, key.clone())
+                .expect("signed recipient key");
         }
-        let dealer = state
-            .dealer_commitments
-            .get(&1)
-            .expect("dealer one commitment");
-        let dealer_commitment_hash =
-            global_threshold_beacon_dkg_dealer_commitment_hash_v1(&session, dealer);
-        let reason = GlobalThresholdBeaconDkgComplaintReasonV1::InvalidPrivateShare;
-        let complaint_id = global_threshold_beacon_dkg_complaint_id_v1(
-            &session,
-            1,
-            2,
-            dealer_commitment_hash,
-            reason,
-        );
+        for commitment in &transcript.dealer_commitments {
+            state
+                .record_dealer_commitment(session.start_height, commitment.clone(), &crypto)
+                .expect("verified dealer commitment");
+        }
+        for edge in transcript.encrypted_shares.iter().take(edge_count) {
+            state
+                .record_encrypted_share(session.commitments_end_height, edge.clone())
+                .expect("signed encrypted edge");
+        }
+        for acceptance in transcript.share_acceptances.iter().take(edge_count) {
+            state
+                .record_share_acceptance(session.deliveries_end_height, acceptance.clone())
+                .expect("signed edge acceptance");
+        }
         state
-            .record_complaint(
-                10,
-                GlobalThresholdBeaconDkgComplaintV1 {
-                    dealer_index: 1,
-                    complainant_index: 2,
-                    dealer_commitment_hash,
-                    reason,
-                    complaint_id,
-                },
-            )
-            .expect("complaint");
-        state
-            .record_complaint_response(
-                20,
-                GlobalThresholdBeaconDkgComplaintResponseV1 {
-                    complaint_id,
-                    dealer_index: 1,
-                    recipient_index: 2,
-                    s_share: [1; 32],
-                    r_share: [2; 32],
-                    u_share: [3; 32],
-                },
-                &crypto,
-            )
-            .expect("valid public response");
-        let finalized = state.finalize(30, &crypto).expect("finalized DKG");
-        assert_eq!(finalized.adaptive_dkg.qualified_dealers, vec![1, 2, 3, 4]);
-        assert_eq!(
-            state.phase_at(30),
-            GlobalThresholdBeaconDkgPhaseV1::Finalized
-        );
     }
 
     #[test]
-    fn adaptive_dkg_reducer_rejects_phase_errors_equivocation_and_too_small_q() {
-        let crypto = AcceptingAdaptiveDkgCrypto;
-        let session = adaptive_dkg_session_fixture();
-        let mut state = GlobalThresholdBeaconDkgStateV1::new(session, &crypto)
-            .expect("valid adaptive DKG state");
+    fn adaptive_dkg_reducer_requires_every_signed_private_edge_at_four_and_seven_seats() {
+        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+        for seats in [4, 7] {
+            let fixture = complete_dkg_fixture(seats);
+            let transcript = &fixture.session.record().adaptive_dkg;
+            let all_edges = usize::from(seats) * usize::from(seats);
+            assert_eq!(transcript.encrypted_shares.len(), all_edges);
+            assert_eq!(transcript.share_acceptances.len(), all_edges);
+            assert_eq!(
+                transcript.qualified_dealers,
+                (1..=seats).collect::<Vec<_>>()
+            );
+            let mut complete = replay_dkg_until_finalizable(transcript, all_edges);
+            assert_eq!(
+                complete
+                    .finalize(transcript.finalized_at_height, &crypto)
+                    .expect("complete all-edge DKG")
+                    .adaptive_dkg,
+                *transcript
+            );
+            let mut missing = replay_dkg_until_finalizable(transcript, all_edges - 1);
+            assert_eq!(
+                missing.finalize(transcript.finalized_at_height, &crypto),
+                Err(GlobalThresholdBeaconError::IncompleteDkgEdges)
+            );
+            assert_eq!(
+                missing.phase_at(transcript.finalized_at_height + 1),
+                GlobalThresholdBeaconDkgPhaseV1::Aborted
+            );
+            // Public transcript bytes never contain the plaintext verified share
+            // triple that travelled only through authenticated encryption.
+            let private = fixture.dealer_secrets[0]
+                .private_share(&fixture.parameters, &fixture.dealer_commitments[0], 1)
+                .expect("verified private fixture share");
+            let scalar_bytes = private.components_for_authenticated_encryption();
+            let public_bytes = transcript.encode();
+            for scalar in scalar_bytes.iter() {
+                assert!(!public_bytes.windows(32).any(|window| window == scalar));
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_dkg_rejects_out_of_phase_and_replayed_attempt_edges() {
+        let fixture = complete_dkg_fixture(4);
+        let transcript = &fixture.session.record().adaptive_dkg;
+        let session = transcript.session;
+        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+        let mut state =
+            GlobalThresholdBeaconDkgStateV1::new(session, &crypto).expect("valid DKG state");
         assert_eq!(
-            state.record_dealer_commitment(10, adaptive_dkg_dealer_fixture(1), &crypto),
+            state.record_encrypted_share(
+                session.start_height,
+                transcript.encrypted_shares[0].clone()
+            ),
             Err(GlobalThresholdBeaconError::WrongDkgPhase)
         );
-        for dealer_index in 1..=4 {
+        for key in &transcript.recipient_keys {
             state
-                .record_dealer_commitment(1, adaptive_dkg_dealer_fixture(dealer_index), &crypto)
+                .record_recipient_key(session.start_height, key.clone())
+                .expect("recipient key");
+        }
+        for commitment in &transcript.dealer_commitments {
+            state
+                .record_dealer_commitment(session.start_height, commitment.clone(), &crypto)
                 .expect("dealer commitment");
         }
-        let mut equivocation = adaptive_dkg_dealer_fixture(1);
-        equivocation.coefficient_commitments[0][0] ^= 1;
+        let edge = &transcript.encrypted_shares[0];
+        let mut other_attempt = session;
+        other_attempt.attempt_id[0] ^= 1;
         assert_eq!(
-            state.record_dealer_commitment(2, equivocation, &crypto),
-            Err(GlobalThresholdBeaconError::DealerCommitmentEquivocation)
+            verify_global_threshold_beacon_dkg_encrypted_share_v1(
+                &other_attempt,
+                &transcript.dealer_commitments[0],
+                &transcript.recipient_keys[0],
+                &transcript.recipient_keys[0],
+                edge,
+            ),
+            Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)
         );
-        for (dealer_index, complainant_index) in [(1, 3), (2, 4)] {
-            let dealer = state
-                .dealer_commitments
-                .get(&dealer_index)
-                .expect("dealer commitment");
-            let dealer_commitment_hash =
-                global_threshold_beacon_dkg_dealer_commitment_hash_v1(&session, dealer);
-            let reason = GlobalThresholdBeaconDkgComplaintReasonV1::MissingPrivateShare;
-            state
-                .record_complaint(
-                    10,
-                    GlobalThresholdBeaconDkgComplaintV1 {
-                        dealer_index,
-                        complainant_index,
-                        dealer_commitment_hash,
-                        reason,
-                        complaint_id: global_threshold_beacon_dkg_complaint_id_v1(
-                            &session,
-                            dealer_index,
-                            complainant_index,
-                            dealer_commitment_hash,
-                            reason,
-                        ),
-                    },
-                )
-                .expect("unresolved complaint");
-        }
+        state
+            .record_encrypted_share(session.commitments_end_height, edge.clone())
+            .expect("first edge");
+        let mut equivocated = edge.clone();
+        equivocated.encrypted_share[12] ^= 1;
         assert_eq!(
-            state.finalize(30, &crypto),
-            Err(GlobalThresholdBeaconError::InsufficientQualifiedDealers)
+            state.record_encrypted_share(session.commitments_end_height, equivocated),
+            Err(GlobalThresholdBeaconError::InvalidDkgEncryptedShare)
         );
-        assert_eq!(state.phase_at(31), GlobalThresholdBeaconDkgPhaseV1::Aborted);
     }
 
     #[test]
     fn adaptive_dkg_public_snapshot_roundtrips_and_restores() {
-        let crypto = AcceptingAdaptiveDkgCrypto;
-        let session = adaptive_dkg_session_fixture();
-        let mut state = GlobalThresholdBeaconDkgStateV1::new(session, &crypto)
-            .expect("valid adaptive DKG state");
-        for dealer_index in 1..=4 {
-            state
-                .record_dealer_commitment(1, adaptive_dkg_dealer_fixture(dealer_index), &crypto)
-                .expect("dealer commitment");
-        }
+        let fixture = complete_dkg_fixture(4);
+        let transcript = &fixture.session.record().adaptive_dkg;
+        let state = replay_dkg_until_finalizable(transcript, 16);
         let snapshot = state.public_snapshot().expect("public snapshot");
         let bytes = norito::to_bytes(&snapshot).expect("encode public DKG snapshot");
         let binary: GlobalThresholdBeaconDkgSnapshotV1 =
@@ -2926,8 +3113,11 @@ pub(crate) mod tests {
         let decoded_json: GlobalThresholdBeaconDkgSnapshotV1 =
             norito::json::from_str(&json).expect("decode public DKG snapshot JSON");
         assert_eq!(decoded_json, snapshot);
-        let restored = GlobalThresholdBeaconDkgStateV1::from_snapshot(binary, &crypto)
-            .expect("cryptographically restore public snapshot");
+        let restored = GlobalThresholdBeaconDkgStateV1::from_snapshot(
+            binary,
+            &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
+        )
+        .expect("cryptographically restore public snapshot");
         assert_eq!(
             restored.public_snapshot().expect("restored snapshot"),
             snapshot
@@ -3008,13 +3198,18 @@ pub(crate) mod tests {
     pub(crate) fn finalized_key_session_fixture_for_context_v1(
         network_id: NetworkId,
         session_id: [u8; 32],
-        roster_hash: [u8; 32],
+        signing_keys: &[KeyPair],
     ) -> FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
         let mut dkg_session = adaptive_dkg_session_fixture();
         dkg_session.network_id = network_id;
         dkg_session.session_id = session_id;
-        dkg_session.roster_hash = roster_hash;
-        let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+        dkg_session.roster_hash = global_threshold_beacon_roster_hash_v1(
+            &signing_keys
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone()))
+                .collect::<Vec<_>>(),
+        );
+        let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg_session, signing_keys);
         FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
             .expect("proof-valid finalized global beacon key fixture")
     }
@@ -3423,8 +3618,10 @@ pub(crate) mod tests {
             height: 40,
             view: 0,
         };
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 7, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                network_id, 7, 7, 2, 42, &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -3458,8 +3655,8 @@ pub(crate) mod tests {
             }),
             quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"threshold beacon fixture nexus"),
             execution_policy_hash: Hash::new(b"threshold beacon fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -3601,6 +3798,7 @@ pub(crate) mod tests {
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         context.epoch_end_height = 50;
+        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         context.validate().expect("valid non-boundary context");
         assert_eq!(
             context.height, 41,
@@ -3619,7 +3817,9 @@ pub(crate) mod tests {
         dkg_a.network_id = network_id;
         dkg_a.session_id = [0xA1; 32];
         dkg_a.roster_hash = global_threshold_beacon_roster_hash_v1(&predecessor_roster);
-        let fixture_a = adaptive_beacon_fixture_for_session(dkg_a);
+        let mut predecessor_keys = keys.clone();
+        predecessor_keys.rotate_left(1);
+        let fixture_a = adaptive_beacon_fixture_for_session_and_keys(dkg_a, &predecessor_keys);
         let cursor = GlobalThresholdBeaconPulseLinkV1 {
             pulse_id: [0x63; 32],
             seed: [0x64; 32],
@@ -3824,6 +4024,7 @@ pub(crate) mod tests {
         let mut context = live_producer_context(&keys, network_id, parent_hash);
         if parliament_requested_slot {
             context.epoch_end_height = 50;
+            context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
             context.validate().expect("valid optional-slot context");
         }
         let roster = context
@@ -4004,6 +4205,7 @@ pub(crate) mod tests {
         let snapshot = norito::json::to_value(&state)
             .expect("serialize the committed key rotation and pulse history");
         let restored = crate::state::deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: state.kura_handle(),
             query_handle: LiveQueryStore::start_test(),

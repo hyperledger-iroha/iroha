@@ -49,7 +49,7 @@ def test_native_preparation_accepts_actual_owners(fixture):
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
-    ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(Box<super::StagedCarrierCapture<Admission>>)", "Capturing(super::StagedCarrierCapture<Admission>)"),
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(super::FundedBox<super::StagedCarrierCapture<Admission>>)", "Capturing(super::StagedCarrierCapture<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Validated(PreparedCarrierJournals<Admission>)", "Validated(Box<PreparedCarrierJournals<Admission>>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)", "Decided(PreparedCarrierJournals<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "crate::kura::KuraWsvCheckpointReceipt", "()"),
@@ -78,7 +78,7 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "if !owner.matches_candidate(context, body)", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", ".ok_or(CarrierCustodyError::IncompleteCapture)?", ".unwrap_or_default()"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "Some(commitment) => commitment", "Some(commitment) => { self.resume_candidate(index, context, body)?; commitment }"),
-    ("JOURNALS", "fn try_complete", "mut self: Box<Self>", "mut self: Self"),
+    ("JOURNALS", "fn try_complete", "Ok(self.into_inner().into_journals())", "Ok(self.into_journals())"),
     ("JOURNALS", "fn try_complete", "return Err((self, error));", "return Err((Box::new(*self), error));"),
     ("JOURNALS", "fn try_complete", "self.try_prepare_archives()", "Ok::<_, CarrierArchivePreparationError>(())"),
     ("JOURNALS", "fn try_prepare_archives", "if let Some(error) = &self.capture_refusal", "if let Some(error) = &None"),
@@ -1054,8 +1054,8 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
-    pytest.param("HASH_ADMISSION", "impl BlockHashAdmissionError", "Self::Busy(wait) | Self::Changed(wait) => Some(wait)", "Self::Busy(wait) | Self::Changed(wait) => None", id="original-physical-release"),
-    pytest.param("HASH_ADMISSION", "impl<E: std::fmt::Debug> StateBlockStartError", "Self::History(error) => error.release_wait()", "Self::History(error) => None", id="history-release-survives-stage-wrapper"),
+    pytest.param("HASH_ADMISSION", "impl StateStorageAdmissionError", "Self::Busy(wait) | Self::Changed(wait) => Some(wait)", "Self::Busy(wait) | Self::Changed(wait) => None", id="original-physical-release"),
+    pytest.param("HASH_ADMISSION", "impl<E: std::fmt::Debug> StateBlockStartError", "Self::Storage(error) => error.release_wait()", "Self::Storage(error) => None", id="history-release-survives-stage-wrapper"),
     pytest.param("HASH_RESTORE", "fn emergency_fast_block_hashes", "BlockHashes::new_emergency_fast_empty()", "BlockHashes::default()", id="empty-fast-remains-readonly"),
     pytest.param("STATE", "fn new_emergency_fast_empty", "inner: BlockHashStorage::EmergencyFastEmpty", "inner: BlockHashStorage::Owned(other)", id="empty-fast-has-no-mutable-tree"),
     pytest.param("RUNTIME_ACQUISITION", "fn acquire_canonical_runtime_block", "self.block_hashes.try_next_block(replacement)?", "self.block_hashes.try_next_block(false)?", id="exact-admitted-replacement-mode"),
@@ -1076,7 +1076,7 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "*view == active_view && !pending.is_ready(&wake)", "false", id="merge-waits-on-exact-view-dependency"),
     pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "let Some(wait) = error.release_wait() else", "let Some(wait) = None else", id="merge-refusal-retains-original-release"),
     pytest.param("LANE_WORK_HISTORY", "fn refresh_merge_candidates", "HistoryAdmissionWait::new(\n                                    wait.clone(),", "HistoryAdmissionWait::new(\n                                    concread::release::ReleaseNotification::default().observe(),", id="merge-cannot-substitute-release-owner"),
-    pytest.param("RUNNER_HISTORY", "fn candidate_attachments", "error.downcast_ref::<crate::state::BlockHashAdmissionError>()", "None::<&crate::state::BlockHashAdmissionError>", id="npos-preserves-typed-history-refusal"),
+    pytest.param("RUNNER_HISTORY", "fn candidate_attachments", "error.downcast_ref::<crate::state::StateStorageAdmissionError>()", "None::<&crate::state::StateStorageAdmissionError>", id="npos-preserves-typed-history-refusal"),
     pytest.param("RUNNER_HISTORY", "let attachments = match attachments", "&queue.sumeragi_waker()", "&std::task::Waker::noop()", id="npos-arms-original-proposal-runner"),
     pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "MergeCandidateValidationError::Frontier(error.to_string())", "MergeCandidateValidationError::Invalid(error.to_string())", id="permanent-history-failure-is-local"),
     pytest.param("LANE_WORK_HISTORY", "fn classify_merge_state_validation", "Ok(MergeCandidateValidation::Deferred)", "Ok(MergeCandidateValidation::Ready)", id="temporary-history-refusal-never-authorizes"),
@@ -1093,7 +1093,7 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("HASH_ADMISSION", "fn try_new", "budget.with_deferred_refund_notifications", "other.with_deferred_refund_notifications", id="constructor-original-refund-scope"),
     pytest.param("HASH_ADMISSION", "fn try_new", "budget: budget.clone()", "budget: other.clone()", id="startup-original-pool"),
     pytest.param("HASH_ADMISSION", "fn try_new", "owner.admit_successor(existing, additional)", "owner.admit(additional)", id="startup-permanent-floor"),
-    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.map().ok_or(BlockHashAdmissionError::ReadOnly)?", "other.map().unwrap()", id="readonly-original-family"),
+    pytest.param("HASH_ADMISSION", "fn try_next_block", "self.map().ok_or(StateStorageAdmissionError::ReadOnly)?", "other.map().unwrap()", id="readonly-original-family"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.len().saturating_sub(1)", "view.len()", id="replacement-tip-overwrite"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "view.predecessor().retain()", "other.predecessor().retain()", id="pinned-reader-predecessor"),
     pytest.param("HASH_ADMISSION", "fn try_next_block", "self.admit_successor(existing, additional)", "self.admit(additional)", id="no-permanent-capacity-wait"),
@@ -1109,9 +1109,9 @@ def test_shared_history_cleanup_and_publication_order(fixture, owner, anchor, fi
     pytest.param("STATE", "macro_rules! work_hash_read", "index < self.hash_count()", "true", id="hidden-tip-cannot-be-looked-up"),
     pytest.param("STATE", "macro_rules! work_hash_read", "end <= self.len()", "true", id="hidden-tip-cannot-escape-range"),
     pytest.param('RETAINED_HASH_SLOT', 'fn try_prepare', 'self.reserved_tip.is_some()', 'false', id='unfinished-tip-not-publishable'),
-    pytest.param("APPLY", "fn classify_validation_failure", "=> Some(release)", "=> None", id="capacity-refund-schedules-retry"),
+    pytest.param("APPLY", "fn classify_validation_failure", "Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(", "Some(wait) => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(", id="capacity-refund-schedules-retry"),
     pytest.param("APPLY", "fn classify_validation_failure", "self.queue.sumeragi_waker()", "other.sumeragi_waker()", id="original-service-retry-waker"),
-    pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::BlockHashAdmission(_) => return None", "=> return None", id="local-refusal-no-peer-rejection"),
+    pytest.param("CONTROLS", "fn map_block_err_to_reason", "| BlockValidationError::StateStorageAdmission(_) => return None", "=> return None", id="local-refusal-no-peer-rejection"),
 ])
 def test_prepaid_history_keeps_exact_funding_tip_and_local_refusal(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture

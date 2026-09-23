@@ -805,16 +805,43 @@ mod tests {
             },
             |next| next.epoch,
         );
-        let mint_roster = mint_finality_roster(network_id, epoch, &roster);
+        use iroha_data_model::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+        let mint_authority = mint_finality_authority(network_id, 0, &roster);
+        let authorization = snapshot
+            .map(|next| next.kagemusha_mint_finality_authorization.clone())
+            .or_else(|| {
+                previous.map(|parent| {
+                    parent
+                        .finality
+                        .finality_artifact
+                        .height_context
+                        .kagemusha_mint_finality_authorization
+                        .clone()
+                })
+            })
+            .unwrap_or_else(|| KagemushaMintFinalityEpochAuthorizationV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 0,
+                first_height: 1,
+                last_height: 1_000_000,
+                authority_generation: 0,
+                authority_id: mint_authority.authority_id().unwrap(),
+                beacon: BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+            });
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch,
-            kagemusha_mint_finality_epoch_id: mint_roster
-                .finality_epoch_id()
-                .expect("fixture paired-Pasta roster id"),
-            kagemusha_mint_finality_epoch_roster: mint_roster,
+            kagemusha_mint_finality_authority: mint_authority,
+            kagemusha_mint_finality_authorization: authorization,
             epoch_end_height: snapshot.map_or_else(
                 || {
                     previous.map_or(1_000_000, |parent| {
@@ -867,19 +894,19 @@ mod tests {
             .expect("fixture finality matches block header");
         (artifact, keys)
     }
-    fn mint_finality_roster(
+    fn mint_finality_authority(
         network_id: NetworkId,
-        epoch: u64,
+        generation: u64,
         roster: &[ValidatorPower],
-    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
         use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
             KagemushaMintFinalityValidatorKeysV1,
         };
-        KagemushaMintFinalityEpochRosterV1 {
+        KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch,
+            generation,
             validators: roster
                 .iter()
                 .enumerate()
@@ -895,13 +922,39 @@ mod tests {
         use iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot;
         let artifact = &mut fixture.finality.finality_artifact;
         let mut context = artifact.height_context.clone();
-        let next_roster =
-            mint_finality_roster(context.network_id, context.epoch + 1, &context.roster);
+        use iroha_data_model::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+        };
         context.epoch_end_height = context.height;
-        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+        context.kagemusha_mint_finality_authorization.last_height = context.height;
+        let authority = context.kagemusha_mint_finality_authority.clone();
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: context.network_id,
             epoch: context.epoch + 1,
-            kagemusha_mint_finality_epoch_id: next_roster.finality_epoch_id().unwrap(),
-            kagemusha_mint_finality_epoch_roster: next_roster,
+            first_height: context.height + 1,
+            last_height: 1_000_000,
+            authority_generation: authority.generation,
+            authority_id: authority.authority_id().unwrap(),
+            beacon: BeaconEpochBindingV1::Installed(
+                iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id: [0xB1; 32],
+                    transcript_hash: [0xB2; 32],
+                },
+            ),
+            previous_authorization_id: context
+                .kagemusha_mint_finality_authorization
+                .authorization_id()
+                .unwrap(),
+            transition_id: [0; 32],
+            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+        };
+        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            committee_preparation: None,
+            epoch: context.epoch + 1,
+            kagemusha_mint_finality_authority: authority,
+            kagemusha_mint_finality_authorization: authorization,
             epoch_end_height: 1_000_000,
             mode: context.mode,
             roster: context.roster.clone(),

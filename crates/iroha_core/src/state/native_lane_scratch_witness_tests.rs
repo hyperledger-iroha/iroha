@@ -306,7 +306,7 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
     let state = &fixture.native.state;
     let groups = native_economic_groups(&fixture);
     let batch = state.prepare_lane_decision_batch(&groups).unwrap();
-    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let header = carrier.header();
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -342,8 +342,8 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
             state.replay_finalized_native_lane_batch(&included, &[]).err(),
         ];
         let source_errors = [
-            state.prepare_proposed_native_lane_batch_source(&carrier, &[]).err(),
-            state.prepare_finalized_native_lane_batch_source(&included, &[]).err(),
+            state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).err(),
+            state.prepare_finalized_native_lane_batch_source(included.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier((&included).carrier())).err(),
         ];
         let refused_while_held = !released.load(Ordering::Acquire);
         drop(suppression);
@@ -353,7 +353,7 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
             assert!(matches!(error, Some(MergeLedgerCommitError::ExecutionRecorderConflict(_))), "entry {index}: {error:?}");
         }
         for error in source_errors {
-            assert!(error.unwrap().contains("already belongs"));
+            assert!(error.unwrap().to_string().contains("already belongs"));
         }
         assert!(refused_while_held, "all Native entries must refuse before waiting for State");
     });

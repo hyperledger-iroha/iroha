@@ -38,8 +38,8 @@ fn world_delta_ignores_noop_touch_history_and_aborted_changes() {
     assert_eq!(actual.changed_values(), 2);
     assert_eq!(actual, sequenced.net_state_delta().unwrap());
     assert_eq!(
-        actual.fields, 291,
-        "282 World fields, with ten stores replacing TriggerSet"
+        actual.fields, 293,
+        "284 World fields, with ten stores replacing TriggerSet"
     );
 }
 

@@ -77,6 +77,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
 };
@@ -200,10 +201,7 @@ enum CorridorRunMode {
     FaultSoak { duration: Duration },
 }
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    nexus_fee_asset_definition_id()
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
@@ -559,19 +557,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 __asset_definition_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .into(),
-        Register::asset_definition({
-            let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "xor".to_owned(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -660,6 +649,11 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
+                iroha::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), cross_dataspace_gas_account_id()),
+                    Quantity::from(VALIDATOR_STAKE),
+                ),
             )
             .into(),
         );
@@ -7489,11 +7483,11 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
             b"g13p historical roster genesis",
         )));
-        let kagemusha_mint_finality_epoch_roster =
-            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let kagemusha_mint_finality_authority =
+            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
                 version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
-                epoch: 7,
+                generation: 0,
                 validators: roster
                     .iter()
                     .enumerate()
@@ -7510,16 +7504,26 @@ mod tests {
                     })
                     .collect(),
             };
-        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-            .finality_epoch_id()
-            .expect("valid KAGEMUSHA mint-finality fixture roster");
+        let kagemusha_mint_finality_authorization = iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+ version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+ network_id: network_id,
+ epoch: 0,
+ first_height: 1,
+ last_height: 100,
+ authority_generation: kagemusha_mint_finality_authority.generation,
+ authority_id: kagemusha_mint_finality_authority.authority_id().expect("canonical fixture authority"),
+ beacon: iroha::data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+ previous_authorization_id: [0; 32],
+ transition_id: [0; 32],
+ decision: iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+};
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
-            epoch: 7,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            epoch: 0,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -7619,14 +7623,14 @@ mod tests {
         assert!(expected_post_swap_balances(1_000_001).is_err());
     }
     #[test]
-    fn asset_definition_helpers_keep_stake_and_fee_domains_distinct() {
+    fn asset_definition_helpers_use_one_real_network_xor() {
         let stake_definition_id = stake_asset_definition_id();
         let fee_definition_id = nexus_fee_asset_definition_id();
         assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
-        assert_ne!(
+        assert_eq!(stake_definition_id, fee_definition_id);
+        assert_eq!(
             stake_definition_id.to_string(),
-            fee_definition_id.to_string(),
-            "stake and fee helpers should not collapse cross-dataspace asset domains"
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         );
     }
     #[test]
@@ -7676,7 +7680,7 @@ mod tests {
         assert_eq!(transactions.len(), 1);
         assert_eq!(
             transactions[0].len(),
-            12 + LANE_VALIDATOR_COUNT * 5 + VALIDATORS_PER_LANE
+            11 + LANE_VALIDATOR_COUNT * 5 + VALIDATORS_PER_LANE
         );
         let lane_registrations = transactions[0]
             .iter()

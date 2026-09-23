@@ -3,6 +3,14 @@
 mod tests {
     use super::*;
     #[test]
+    fn staking_preparation_is_bounded_read_only_post() {
+        let route = core::NEXUS_STAKING_PREPARATION_POST;
+        assert_eq!(route.path(), "/v1/nexus/staking/prepare");
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn diagnostic_status_routes_are_explicit() {
         let routes = [
             diagnostic::STATUS,
@@ -786,6 +794,7 @@ mod tests {
         for (method, path) in [
             (HttpMethod::Get, "/openapi"),
             (HttpMethod::Post, "/v1/nexus/lifecycle"),
+            (HttpMethod::Post, "/v1/nexus/validator-committee"),
             (HttpMethod::Post, "/v1/sorafs/storage/fetch"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por"),
@@ -804,6 +813,7 @@ mod tests {
         }
         assert!(CATALOGED_ROUTES.contains(&diagnostic::OPENAPI_JSON));
         assert!(CATALOGED_ROUTES.contains(&core::NEXUS_LIFECYCLE_GET));
+        assert!(CATALOGED_ROUTES.contains(&core::NEXUS_VALIDATOR_COMMITTEE_GET));
         assert!(
             CATALOGED_ROUTES
                 .contains(&contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST)

@@ -3,6 +3,24 @@
 mod config;
 mod consensus_message_control;
 mod dedicated_read;
+#[cfg(unix)]
+mod disposable_mint_finality_seed;
+#[cfg(unix)]
+mod disposable_runtime_provider_broker;
+#[cfg(unix)]
+pub use disposable_runtime_provider_broker::{
+    DisposableBeaconProviderBinding, new_disposable_owner_private_root,
+};
+#[cfg(unix)]
+mod disposable_rotation_ceremony;
+#[cfg(unix)]
+pub use disposable_rotation_ceremony::{
+    DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, DisposablePendingCustodyInput,
+    DisposablePreparedBeaconCustody, DisposableRetainedBeaconCredential,
+    DisposableRotationDkgOutput, DisposableRotationProofInput, DisposableRotationSeatOutput,
+    prepare_disposable_pending_custody, run_disposable_genesis_dkg,
+    run_disposable_genesis_dkg_from_configs, run_disposable_rotation_dkg,
+};
 pub mod fslock_ports;
 pub mod genesis_support;
 use color_eyre::eyre::{Context, Report, Result, eyre};
@@ -67,7 +85,7 @@ use iroha_data_model::{
     sns::NameStatus,
     transaction::Executable,
 };
-use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
+use iroha_genesis::{GenesisBlock, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -995,6 +1013,9 @@ pub enum Program {
     /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
     #[doc(hidden)]
     IrohadParliamentSigners,
+    /// Feature-isolated stock-custody broker for disposable peer networks.
+    #[doc(hidden)]
+    IrohadDisposableBroker,
     /// Shipping Taira launcher, including its offline production beacon bootstrap.
     IrohadTaira,
     /// Iroha Client CLI
@@ -1047,11 +1068,15 @@ impl Program {
             // The test signer is explicitly rejected whenever a release-prebuilt
             // contract is active. This value is therefore an unreachable sentinel.
             Self::IrohadParliamentSigners => ReleasePrebuiltBinary::Irohad,
+            Self::IrohadDisposableBroker => ReleasePrebuiltBinary::Irohad,
             Self::Iroha => ReleasePrebuiltBinary::Iroha,
         }
     }
     const fn release_prebuilt_allowed(self) -> bool {
-        !matches!(self, Self::IrohadParliamentSigners)
+        !matches!(
+            self,
+            Self::IrohadParliamentSigners | Self::IrohadDisposableBroker
+        )
     }
     fn spec(&self) -> ProgramSpec {
         match self {
@@ -1105,6 +1130,21 @@ impl Program {
                 .collect(),
                 isolated_target_subdir: Some("parliament-signers"),
             },
+            Self::IrohadDisposableBroker => ProgramSpec {
+                name: "iroha_test_runtime_provider_broker",
+                env: "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER",
+                pkg: "irohad",
+                build_args: [
+                    "--bin",
+                    "iroha_test_runtime_provider_broker",
+                    "--features",
+                    "test-network-disposable-broker",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+                isolated_target_subdir: Some("disposable-broker"),
+            },
             Self::IrohadTaira => ProgramSpec {
                 name: "iroha3d_taira",
                 env: PROGRAM_IROHAD_TAIRA_ENV,
@@ -1130,6 +1170,7 @@ static IROHAD_TAIRA_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
+static IROHAD_DISPOSABLE_BROKER_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
@@ -2725,7 +2766,7 @@ impl Program {
         let release_contract = release_program_contract(repo)?;
         if release_contract.is_some() && !self.release_prebuilt_allowed() {
             return Err(eyre!(
-                "the feature-isolated Parliament signer daemon is forbidden in release-prebuilt corridors"
+                "feature-isolated test programs are forbidden in release-prebuilt corridors"
             ));
         }
         let release_binary = self.release_prebuilt_binary();
@@ -2771,6 +2812,9 @@ impl Program {
             Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
             Program::IrohadParliamentSigners => {
                 cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
+            }
+            Program::IrohadDisposableBroker => {
+                cached_binary_if_present(&IROHAD_DISPOSABLE_BROKER_BIN)
             }
             Program::Iroha => cached_binary_if_present(&IROHA_BIN),
         };
@@ -2866,6 +2910,9 @@ impl Program {
                     Program::IrohadParliamentSigners => {
                         let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
                     }
+                    Program::IrohadDisposableBroker => {
+                        let _ = IROHAD_DISPOSABLE_BROKER_BIN.set(found.clone());
+                    }
                     Program::Iroha => {
                         let _ = IROHA_BIN.set(found.clone());
                     }
@@ -2913,6 +2960,9 @@ impl Program {
                 }
                 Program::IrohadParliamentSigners => {
                     let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
+                }
+                Program::IrohadDisposableBroker => {
+                    let _ = IROHAD_DISPOSABLE_BROKER_BIN.set(found.clone());
                 }
                 Program::Iroha => {
                     let _ = IROHA_BIN.set(found.clone());
@@ -3278,6 +3328,9 @@ pub struct Network {
     // Cache a single, deterministic genesis block per network instance to ensure
     // all peers that submit genesis use byte-for-byte identical content.
     cached_genesis: OnceLock<GenesisBlock>,
+    // The generated manifest is retained with the cached signed block even
+    // when file-backed policies require fresh native pre-execution on each call.
+    generated_genesis_manifest: OnceLock<RawGenesisTransaction>,
     // Only immutable, file-free policy inputs may reuse pre-execution validation.
     // File-backed policies retain the ordinary fresh-validation path.
     validated_genesis: Option<OnceLock<ValidatedNetworkGenesis>>,
@@ -3294,17 +3347,39 @@ pub struct Network {
 struct ValidatedNetworkGenesis {
     block: GenesisBlock,
     staged_hashes: config::StagedGenesisPolicyHashes,
+    raw_manifest: Option<RawGenesisTransaction>,
+}
+/// Exact generated manifest and signed block offered to native per-seat genesis provisioning.
+///
+/// The manifest is retained at the original builder call and verified against
+/// this signed block before its serialized bytes are exposed to a subprocess.
+#[derive(Clone)]
+pub struct NativeGenesisProvisioningBundle {
+    /// Canonical JSON bytes of the retained raw genesis manifest.
+    pub manifest_json: Vec<u8>,
+    /// SHA-256 of `manifest_json`, for asserting the staged file is unchanged.
+    pub manifest_sha256: [u8; 32],
+    /// Canonical signed-block wire bytes.
+    pub signed_wire: Vec<u8>,
+    /// Genesis signer public key authenticated by the signed block.
+    pub public_key: PublicKey,
+    /// Exact block hash used to derive the network ID.
+    pub block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    /// Exact account-address discriminant in the retained signed manifest.
+    pub chain_discriminant: u16,
 }
 impl ValidatedNetworkGenesis {
     fn new(
         block: GenesisBlock,
         staged_hashes: config::StagedGenesisPolicyHashes,
+        raw_manifest: Option<RawGenesisTransaction>,
         profile: &ConsensusBootstrapProfile,
         topology: &[PeerId],
     ) -> Self {
         let validated = Self {
             block,
             staged_hashes,
+            raw_manifest,
         };
         validated.assert_matches(profile, topology);
         validated
@@ -3408,6 +3483,35 @@ struct ConsensusBootstrapProfile {
     bls_domain: &'static str,
     chain_id: ChainId,
     wire_protocol_version: u32,
+}
+#[cfg(unix)]
+fn disposable_genesis_mint_finality_authority(
+    peers: &[NetworkPeer],
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityGenesisParametersV1,
+    };
+    let mut ordered = peers.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|peer| peer.id());
+    let validators = ordered
+        .into_iter()
+        .map(|peer| {
+            peer.disposable_mint_finality_keys(0)
+                .expect("each genesis voter must hold its exact private Pasta seed")
+        })
+        .collect();
+    let authority = KagemushaMintFinalityGenesisParametersV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            generation: 0,
+            validators,
+        },
+    };
+    authority
+        .validate()
+        .expect("held peer seeds must form a canonical genesis Pasta authority");
+    authority
 }
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
@@ -3601,6 +3705,13 @@ impl Network {
             ));
         }
         let _ = program.resolve_async().await?;
+        #[cfg(unix)]
+        if self
+            .all_peers()
+            .any(NetworkPeer::has_disposable_runtime_provider_broker)
+        {
+            let _ = Program::IrohadDisposableBroker.resolve_async().await?;
+        }
         let mut submitters: Vec<usize> = genesis_submitters.into_iter().collect();
         submitters.sort_unstable();
         submitters.dedup();
@@ -4243,6 +4354,57 @@ impl Network {
         self.prepare_validated_genesis(&peer_topology).block
     }
 
+    /// Return the retained raw manifest with its exact signed genesis body.
+    ///
+    /// # Errors
+    ///
+    /// Custom genesis blocks have no generated raw manifest. An encoding or
+    /// signed-manifest mismatch also fails before the bundle can be used.
+    pub fn native_genesis_provisioning_bundle(&self) -> Result<NativeGenesisProvisioningBundle> {
+        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
+        let validated = self.validated_genesis.as_ref().map_or_else(
+            || self.prepare_validated_genesis(&peer_topology),
+            |cache| {
+                cache
+                    .get_or_init(|| self.prepare_validated_genesis(&peer_topology))
+                    .clone()
+            },
+        );
+        let manifest = validated.raw_manifest.as_ref().ok_or_else(|| {
+            eyre!("native genesis provisioning requires the retained generated manifest")
+        })?;
+        let manifest_json = norito::json::to_vec(manifest)
+            .map_err(|error| eyre!("serialize retained genesis manifest: {error}"))?;
+        let signed_wire = validated
+            .block
+            .0
+            .encode_wire()
+            .map_err(|error| eyre!("encode exact signed genesis: {error}"))?;
+        let block_hash = validated.block.0.hash();
+        let public_key = self.genesis_key_pair.public_key().clone();
+        let verified = iroha_genesis::validate_prepared_genesis_bundle(
+            &signed_wire,
+            manifest,
+            &public_key,
+            block_hash,
+        )
+        .map_err(|error| eyre!("retained raw manifest differs from signed genesis: {error}"))?;
+        assert_eq!(
+            verified.canonical_wire(),
+            signed_wire,
+            "per-seat provisioning must consume the exact validated signed genesis bytes"
+        );
+        let manifest_sha256 = sha256(&manifest_json);
+        Ok(NativeGenesisProvisioningBundle {
+            manifest_json,
+            manifest_sha256,
+            signed_wire,
+            public_key,
+            block_hash,
+            chain_discriminant: manifest.chain_discriminant(),
+        })
+    }
+
     fn prepare_validated_genesis(&self, peer_topology: &[PeerId]) -> ValidatedNetworkGenesis {
         let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
         let actual_config = Some(resolve_final_actual_config(
@@ -4288,6 +4450,7 @@ impl Network {
                 return ValidatedNetworkGenesis::new(
                     cached_genesis.clone(),
                     staged_hashes,
+                    self.generated_genesis_manifest.get().cloned(),
                     &self.consensus_profile,
                     peer_topology,
                 );
@@ -4321,12 +4484,13 @@ impl Network {
             let validated = ValidatedNetworkGenesis::new(
                 augmented,
                 staged_hashes,
+                None,
                 &self.consensus_profile,
                 peer_topology,
             );
             return validated;
         }
-        let (genesis, staged_hash) =
+        let (genesis, staged_hash, raw_manifest) =
             config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                 self.genesis_isi.clone(),
                 self.genesis_post_topology_isi.clone(),
@@ -4343,13 +4507,16 @@ impl Network {
                 Some(consensus_handshake_meta),
                 None,
                 confidential_policy_hash,
+                None,
             );
         let validated = ValidatedNetworkGenesis::new(
             genesis,
             staged_hash,
+            Some(raw_manifest.clone()),
             &self.consensus_profile,
             peer_topology,
         );
+        let _ = self.generated_genesis_manifest.set(raw_manifest);
         let _ = self.cached_genesis.set(validated.block.clone());
         validated
     }
@@ -5967,6 +6134,8 @@ pub struct NetworkBuilder {
     permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap,
     consensus_message_control: bool,
     parliament_test_signers: Option<ParliamentTestSignerSelection>,
+    #[cfg(unix)]
+    disposable_mint_finality_custody: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
 type InitialConsensusMessageControlFactory =
@@ -7099,6 +7268,8 @@ impl NetworkBuilder {
             ),
             consensus_message_control: false,
             parliament_test_signers: None,
+            #[cfg(unix)]
+            disposable_mint_finality_custody: false,
             initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
@@ -7548,6 +7719,16 @@ impl NetworkBuilder {
     pub fn with_npos_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Npos)
     }
+    /// Provision independent owner-private Pasta seeds for supplementary candidate validators.
+    ///
+    /// Every signed-genesis voter receives a held seed automatically. This also
+    /// provisions unseated candidate processes so they can later publish keys
+    /// and be activated from the same seed supplied to daemon FD 199.
+    #[cfg(unix)]
+    pub fn with_disposable_mint_finality_custody(mut self) -> Self {
+        self.disposable_mint_finality_custody = true;
+        self
+    }
     /// Automatically generate BLS key material and PoP records for trusted peers.
     ///
     /// Enabled by default; calling this method is only necessary when chaining builder combinators.
@@ -7856,8 +8037,18 @@ impl NetworkBuilder {
             permissioned_lane_authority_bootstrap,
             consensus_message_control,
             parliament_test_signers,
+            #[cfg(unix)]
+            disposable_mint_finality_custody,
             initial_consensus_message_control,
         } = self;
+        #[cfg(unix)]
+        if disposable_mint_finality_custody {
+            assert_eq!(
+                consensus_mode,
+                ConsensusMode::Npos,
+                "supplementary Pasta custody requires signed NPoS consensus"
+            );
+        }
         let chain_discriminant = materialize_profile_account_defaults(&mut config_layers)
             .unwrap_or_else(|error| panic!("invalid test-network profile defaults: {error:#}"));
         // Builder-owned instruction generation and custom genesis callbacks use the
@@ -8004,6 +8195,23 @@ impl NetworkBuilder {
                     )
             })
             .collect();
+        #[cfg(unix)]
+        for peer in &peers {
+            peer.provision_disposable_mint_finality_seed()
+                .expect("generate independent owner-private Pasta seed for each genesis voter");
+        }
+        #[cfg(unix)]
+        if disposable_mint_finality_custody {
+            for peer in &committee_validators {
+                peer.provision_disposable_mint_finality_seed()
+                    .expect("generate independent owner-private Pasta seed for each candidate");
+            }
+        }
+        #[cfg(unix)]
+        let disposable_mint_finality_genesis =
+            Some(disposable_genesis_mint_finality_authority(&peers));
+        #[cfg(not(unix))]
+        let disposable_mint_finality_genesis = None;
         let observer_slow_reader_relays = observer_slow_reader_relays
             .map(|config| ObserverSlowReaderRelays::new(&observers, config));
         let observer_advertised_p2p_addresses = observer_slow_reader_relays
@@ -8402,7 +8610,7 @@ impl NetworkBuilder {
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
                 CARPENTER_ID.clone(),
-                gas_account_id,
+                gas_account_id.clone(),
             ] {
                 bootstrap_tx.push(
                     Mint::asset_quantity(
@@ -8424,6 +8632,12 @@ impl NetworkBuilder {
                         stake_account: validator_id.clone(),
                         initial_stake: stake_amount.clone(),
                         metadata: Metadata::default(),
+                        monetary_plan:
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                                AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                                stake_amount.clone(),
+                            ),
                     }
                     .into(),
                 );
@@ -8599,7 +8813,7 @@ impl NetworkBuilder {
                     None,
                 ),
                 None => {
-                    let (preview_genesis, staged_hash) =
+                    let (preview_genesis, staged_hash, _) =
                     config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
                         genesis_isi.clone(),
                         genesis_post_topology_isi.clone(),
@@ -8619,6 +8833,7 @@ impl NetworkBuilder {
                             ConsensusMode::Npos => SumeragiConsensusMode::Npos,
                         }),
                         confidential_policy_hash,
+                        disposable_mint_finality_genesis.clone(),
                     );
                     assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
                     (
@@ -8648,7 +8863,8 @@ impl NetworkBuilder {
                 "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
             );
         let provisional_v2_context = provisional_metadata.sumeragi_v2;
-        let provisional_kagemusha_mint_finality = provisional_metadata.kagemusha_mint_finality;
+        let provisional_kagemusha_mint_finality = disposable_mint_finality_genesis
+            .unwrap_or(provisional_metadata.kagemusha_mint_finality);
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
@@ -8799,6 +9015,7 @@ impl NetworkBuilder {
             genesis_isi,
             genesis_post_topology_isi,
             cached_genesis,
+            generated_genesis_manifest: OnceLock::new(),
             validated_genesis: resolved_genesis_config.as_ref().and_then(|config| {
                 (config.nexus.registry.manifest_directory.is_none()
                     && config.nexus.registry.cache_directory.is_none()
@@ -8915,6 +9132,10 @@ struct PeerRun {
     shutdown: oneshot::Sender<()>,
     fatal_tx: watch::Sender<bool>,
     pid: Option<u32>,
+    #[cfg(unix)]
+    broker_child: Option<Child>,
+    #[cfg(unix)]
+    mint_seed_lease: Option<disposable_mint_finality_seed::DisposableMintFinalitySeedLease>,
 }
 /// Lifecycle events of a peer
 #[derive(Copy, Clone, Debug)]
@@ -9030,6 +9251,12 @@ pub struct NetworkPeer {
     program: Program,
     parliament_beacon_signer_mode: Option<ParliamentBeaconSignerMode>,
     consensus_message_control: Option<Arc<ConsensusMessageControl>>,
+    #[cfg(unix)]
+    disposable_mint_finality_seed:
+        Arc<StdMutex<Option<Arc<disposable_mint_finality_seed::DisposableMintFinalitySeed>>>>,
+    #[cfg(unix)]
+    disposable_runtime_provider_broker:
+        Arc<StdMutex<Option<Arc<disposable_runtime_provider_broker::DisposableBrokerConfig>>>>,
     // dropping these the last
     port_p2p: Arc<AllocatedPort>,
     port_api: Arc<AllocatedPort>,
@@ -9194,6 +9421,12 @@ impl NetworkPeer {
         let irohad =
             revalidate_release_prebuilt_binary(self.program.release_prebuilt_binary(), &irohad)?
                 .unwrap_or(irohad);
+        #[cfg(unix)]
+        let broker_child = self
+            .spawn_disposable_runtime_provider_broker(run_num)
+            .await?;
+        #[cfg(unix)]
+        let mint_seed_descriptor = self.disposable_mint_finality_seed_descriptor(run_num)?;
         let make_irohad_command = |binary: &Path| {
             let mut cmd = tokio::process::Command::new(binary);
             strip_config_env_overrides(&mut cmd);
@@ -9216,9 +9449,16 @@ impl NetworkPeer {
                 cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
             }
             cmd.current_dir(&self.dir);
-            cmd
+            #[cfg(unix)]
+            if let Some(source) = mint_seed_descriptor.as_ref() {
+                let source = source.descriptor().try_clone()?;
+                disposable_mint_finality_seed::inherit_disposable_mint_finality_seed(
+                    &mut cmd, source,
+                );
+            }
+            Ok::<_, Report>(cmd)
         };
-        let mut child = match make_irohad_command(&irohad).spawn() {
+        let mut child = match make_irohad_command(&irohad)?.spawn() {
             Ok(child) => child,
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 warn!(
@@ -9234,7 +9474,7 @@ impl NetworkPeer {
                     &refreshed,
                 )?
                 .unwrap_or(refreshed);
-                make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
+                make_irohad_command(&refreshed)?.spawn().wrap_err_with(|| {
                     eyre!(
                         "failed to spawn `iroha3d` after refreshing binary path: {}",
                         refreshed.display()
@@ -9687,6 +9927,10 @@ impl NetworkPeer {
             shutdown: shutdown_tx,
             fatal_tx: fatal_tx.clone(),
             pid,
+            #[cfg(unix)]
+            broker_child,
+            #[cfg(unix)]
+            mint_seed_lease: mint_seed_descriptor,
         });
         Ok(())
     }
@@ -9748,6 +9992,12 @@ impl NetworkPeer {
                 warn!("timed out waiting for aborted peer tasks; continuing shutdown");
             }
         }
+        #[cfg(unix)]
+        if let Some(mut broker_child) = run.broker_child.take() {
+            disposable_runtime_provider_broker::stop_disposable_broker(&mut broker_child).await;
+        }
+        #[cfg(unix)]
+        drop(run.mint_seed_lease.take());
         true
     }
     /// Forcefully kills the running peer
@@ -10339,7 +10589,7 @@ impl NetworkPeer {
     fn base_config_table(&self) -> Table {
         let p2p_literal = self.p2p_address().to_literal();
         let torii_literal = self.api_address().to_literal();
-        Table::new()
+        let config = Table::new()
             .write("public_key", self.key_pair.public_key().to_string())
             .write(
                 "private_key",
@@ -10369,7 +10619,52 @@ impl NetworkPeer {
             .write(
                 ["torii", "max_content_len"],
                 toml::Value::Integer(16 * 1024 * 1024),
+            );
+        #[cfg(unix)]
+        let config = if self
+            .disposable_mint_finality_seed
+            .lock()
+            .expect("disposable Pasta seed lock is not poisoned")
+            .is_some()
+        {
+            config.write(
+                ["sumeragi", "mint_finality_seed_fd"],
+                i64::from(disposable_mint_finality_seed::MINT_FINALITY_SEED_FD),
             )
+        } else {
+            config
+        };
+        #[cfg(unix)]
+        if let (Some(endpoint), Some(binding)) = (
+            self.disposable_runtime_provider_broker_endpoint(),
+            self.disposable_beacon_provider_binding(),
+        ) {
+            return config
+                .write(
+                    ["runtime_provider_broker", "endpoint_path"],
+                    endpoint
+                        .to_str()
+                        .expect("validated broker endpoint is UTF-8")
+                        .to_owned(),
+                )
+                .write(
+                    ["sumeragi", "global_beacon_partial_signer_provider_handle"],
+                    binding.handle,
+                )
+                .write(
+                    ["sumeragi", "global_beacon_partial_signer_provider_revision"],
+                    i64::try_from(binding.revision)
+                        .expect("validated broker revision fits TOML i64"),
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "global_beacon_partial_signer_provider_policy_digest_hex",
+                    ],
+                    lowercase_hex(&binding.policy_digest),
+                );
+        }
+        config
     }
     fn ensure_rans_tables(&self) {
         let dst = self
@@ -10642,6 +10937,10 @@ impl NetworkPeerBuilder {
             program,
             parliament_beacon_signer_mode,
             consensus_message_control,
+            #[cfg(unix)]
+            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
+            #[cfg(unix)]
+            disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(port_p2p),
             port_api: Arc::new(port_api),
         };
@@ -11527,6 +11826,8 @@ mod tests {
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
             consensus_message_control: None,
+            #[cfg(unix)]
+            disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -11599,6 +11900,8 @@ mod tests {
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
             consensus_message_control: None,
+            #[cfg(unix)]
+            disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
         };
@@ -12071,6 +12374,10 @@ mod tests {
                 shutdown: shutdown_tx,
                 fatal_tx: fatal_tx.clone(),
                 pid: None,
+                #[cfg(unix)]
+                broker_child: None,
+                #[cfg(unix)]
+                mint_seed_lease: None,
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
@@ -12102,6 +12409,10 @@ mod tests {
                 shutdown: shutdown_tx,
                 fatal_tx,
                 pid: Some(42_424),
+                #[cfg(unix)]
+                broker_child: None,
+                #[cfg(unix)]
+                mint_seed_lease: None,
             });
         }
         assert_eq!(peer.process_id().await, Some(42_424));
@@ -12138,6 +12449,10 @@ mod tests {
                 shutdown: shutdown_tx,
                 fatal_tx,
                 pid: None,
+                #[cfg(unix)]
+                broker_child: None,
+                #[cfg(unix)]
+                mint_seed_lease: None,
             });
         }
         running_peer.is_running.store(true, Ordering::Relaxed);
@@ -12170,6 +12485,10 @@ mod tests {
                 shutdown: shutdown_tx,
                 fatal_tx,
                 pid: None,
+                #[cfg(unix)]
+                broker_child: None,
+                #[cfg(unix)]
+                mint_seed_lease: None,
             });
         }
         peer.is_running.store(false, Ordering::Relaxed);
@@ -15684,7 +16003,8 @@ mod tests {
             .first()
             .expect("validator peer")
             .account_id();
-        let mut saw_definition = false;
+        let mut definition_count = 0;
+        let mut saw_staking_plan = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
         for tx in genesis.0.external_transactions() {
@@ -15697,7 +16017,22 @@ mod tests {
                             register
                         && register.object.id == fee_asset_definition_id
                     {
-                        saw_definition = true;
+                        definition_count += 1;
+                        assert_eq!(register.object.spec(), &NumericSpec::fractional(9));
+                    }
+                    if let Some(registration) = instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        assert_eq!(
+                            registration.monetary_plan.source_asset.definition(),
+                            &fee_asset_definition_id
+                        );
+                        assert_eq!(
+                            registration.monetary_plan.destination_asset.definition(),
+                            &fee_asset_definition_id
+                        );
+                        saw_staking_plan = true;
                     }
                     if let Some(mint) = instruction
                         .as_any()
@@ -15715,10 +16050,11 @@ mod tests {
                 }
             }
         }
-        assert!(
-            saw_definition,
-            "npos bootstrap should register the default nexus fee asset definition"
+        assert_eq!(
+            definition_count, 1,
+            "staking and fees share exactly one XOR definition"
         );
+        assert!(saw_staking_plan);
         assert!(
             saw_alice_mint,
             "npos bootstrap should fund ALICE with the default nexus fee asset"
@@ -16244,6 +16580,26 @@ mod tests {
         );
     }
     #[test]
+    fn disposable_broker_is_feature_target_and_release_isolated() {
+        let spec = Program::IrohadDisposableBroker.spec();
+        let args = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(spec.env, "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER");
+        assert_eq!(spec.isolated_target_subdir, Some("disposable-broker"));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--bin", "iroha_test_runtime_provider_broker"] })
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--features", "test-network-disposable-broker"] })
+        );
+        assert!(!Program::IrohadDisposableBroker.release_prebuilt_allowed());
+    }
+    #[test]
     fn parliament_signer_daemon_is_feature_target_and_release_isolated() {
         let spec = Program::IrohadParliamentSigners.spec();
         let args = spec
@@ -16659,6 +17015,38 @@ mod tests {
         let f1 = g1.0.encode_wire().expect("encode genesis wire");
         let f2 = g2.0.encode_wire().expect("encode genesis wire");
         assert_eq!(f1, f2, "framed genesis must be identical across calls");
+    }
+    #[test]
+    fn retained_genesis_manifest_is_bound_to_exact_signed_wire() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let bundle = network
+            .native_genesis_provisioning_bundle()
+            .expect("generated genesis retains its original manifest");
+        assert_eq!(sha256(&bundle.manifest_json), bundle.manifest_sha256);
+        assert_eq!(network.genesis().0.hash(), bundle.block_hash);
+        assert_eq!(
+            network.genesis().0.encode_wire().expect("genesis wire"),
+            bundle.signed_wire
+        );
+        let tampered = {
+            let mut bytes = bundle.signed_wire.clone();
+            let last = bytes.last_mut().expect("nonempty signed genesis");
+            *last ^= 1;
+            bytes
+        };
+        let manifest: RawGenesisTransaction =
+            norito::json::from_slice(&bundle.manifest_json).expect("raw manifest roundtrip");
+        assert!(
+            iroha_genesis::validate_prepared_genesis_bundle(
+                &tampered,
+                &manifest,
+                &bundle.public_key,
+                bundle.block_hash,
+            )
+            .is_err(),
+            "a changed signed block cannot reuse the retained manifest identity"
+        );
     }
     #[test]
     fn genesis_roundtrip_decodes() {
@@ -17164,18 +17552,15 @@ mod tests {
                         .clone();
                     let nexus_domain =
                         DomainId::try_new("nexus", "universal").expect("nexus domain");
-                    let stake_asset_id = AssetDefinitionId::derive_from_components(
-                        nexus_domain.clone(),
-                        "xor".parse().expect("stake asset name"),
-                    );
+                    let stake_asset_id = SumeragiNposParameters::default().xor_asset_definition_id;
                     let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
                     let bootstrap = vec![
                         Register::domain(Domain::new(nexus_domain)).into(),
                         Register::asset_definition(
                             AssetDefinition::new(
                                 stake_asset_id.clone(),
-                                "Custom Genesis Stake".to_owned(),
-                                NumericSpec::default(),
+                                "XOR".to_owned(),
+                                NumericSpec::fractional(9),
                                 iroha_data_model::asset::AssetBalancePolicy::Global,
                                 None,
                             )
@@ -17184,7 +17569,7 @@ mod tests {
                         .into(),
                         Mint::asset_quantity(
                             stake_amount.clone(),
-                            AssetId::new(stake_asset_id, ALICE_ID.clone()),
+                            AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
                         )
                         .into(),
                     ];
@@ -17194,8 +17579,20 @@ mod tests {
                             ALICE_ID.clone(),
                             peer_id,
                             ALICE_ID.clone(),
-                            stake_amount,
+                            stake_amount.clone(),
                             Metadata::default(),
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                                AssetId::new(
+                                    stake_asset_id,
+                                    AccountId::parse_encoded(
+                                        &defaults::nexus::staking::stake_escrow_account_id(),
+                                    )
+                                    .expect("default escrow")
+                                    .into_account_id(),
+                                ),
+                                stake_amount,
+                            ),
                         )
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),

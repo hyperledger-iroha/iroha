@@ -241,16 +241,35 @@ fn retained_governance_fixture(
     );
     let mut seed = b"sumeragi-v2:permissioned-leader-seed".to_vec();
     seed.extend_from_slice(&network.encode());
+    let authority = metadata
+        .kagemusha_mint_finality
+        .authority_generation
+        .bind_network_id(network)
+        .unwrap();
+    let authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: network,
+            epoch: 0,
+            first_height: 1,
+            last_height: u64::MAX,
+            authority_generation: authority.generation,
+            authority_id: authority
+                .authority_id()
+                .expect("canonical fixture authority"),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32],
+            transition_id: [0; 32],
+            decision:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+        };
     let context = crate::sumeragi::v2_context::build_genesis_height_context(
         crate::sumeragi::v2_context::GenesisContextInputs {
             network_id: network,
             election: crate::sumeragi::v2_context::FrozenElectionInputs {
                 epoch: 0,
-                kagemusha_mint_finality_epoch_roster: metadata
-                    .kagemusha_mint_finality
-                    .epoch_roster
-                    .bind_network_id(network)
-                    .unwrap(),
+                kagemusha_mint_finality_authority: authority,
+                kagemusha_mint_finality_authorization: authorization,
                 epoch_end_height: u64::MAX,
                 mode: ConsensusMode::Permissioned,
                 roster,

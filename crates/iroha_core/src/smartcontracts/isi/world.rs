@@ -11383,7 +11383,7 @@ pub mod isi {
                 )
             })?;
             let active_session_before = match certificate.action {
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey => state_transaction
+                Action::FinalizeGlobalBeaconKey => state_transaction
                     .world
                     .global_beacon_active_session()
                     .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
@@ -11408,7 +11408,7 @@ pub mod isi {
             })?;
 
             match certificate.action {
-                Action::InstallGlobalBeaconKey => {
+                Action::FinalizeGlobalBeaconKey => {
                     let record = norito::decode_canonical::<
                         FinalizedGlobalThresholdBeaconKeySessionRecordV1,
                     >(&certificate.public_state)
@@ -11433,13 +11433,6 @@ pub mod isi {
                         )
                         .into());
                     }
-                    // The certificate roster is the exact block-H authorization
-                    // roster. Its signed canonical public-state hash independently
-                    // commits the installed DKG target roster and committee size;
-                    // the H+1 producer checks that target against its authenticated
-                    // HeightContext before producing any pulse. Keeping these two
-                    // bindings distinct permits an epoch-boundary successor roster
-                    // without weakening either exact-roster check.
                     if state_transaction
                         .world
                         .global_beacon_key_sessions()
@@ -11451,62 +11444,36 @@ pub mod isi {
                         )
                         .into());
                     }
-                    if let Some(previous) = state_transaction
-                        .world
-                        .global_beacon_active_session()
-                        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
-                        .copied()
-                    {
-                        state_transaction
-                            .world
-                            .retire_global_beacon_key_session(previous, next_height)
-                            .map_err(|_| {
-                                threshold_key_lifecycle_error_v1(
-                                    "global-beacon predecessor cannot be retired",
-                                )
-                            })?;
-                    }
-                    state_transaction
-                        .world
-                        .put_finalized_global_beacon_key_session(record)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon public key session cannot be persisted",
-                            )
-                        })?;
-                    state_transaction
-                        .world
-                        .activate_global_beacon_key_session(certificate.session_id, next_height)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon public key session cannot be activated",
-                            )
-                        })?;
-                }
-                Action::RetireGlobalBeaconKey => {
-                    let record = state_transaction
-                        .world
-                        .global_beacon_key_sessions()
-                        .get(&certificate.session_id)
-                        .ok_or_else(|| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon retirement session is absent",
-                            )
-                        })?;
-                    if record.session.transcript_hash != certificate.transcript_hash {
-                        return Err(threshold_key_lifecycle_error_v1(
-                            "global-beacon retirement transcript does not match",
+                    let bootstrap =
+                        crate::state::validator_committee::validate_beacon_finalization(
+                            state_transaction,
+                            &record,
+                            &ordered_roster,
                         )
-                        .into());
+                        .map_err(|error| {
+                            InstructionExecutionError::InvariantViolation(error.into())
+                        })?;
+                    // Finish every fallible check before changing the original overlay.
+                    // Only bootstrap may activate here; successor activation is an
+                    // indivisible effect of the certified committee boundary.
+                    let mut record = record;
+                    if bootstrap {
+                        record.activate(next_height).map_err(|_| {
+                            threshold_key_lifecycle_error_v1(
+                                "bootstrap beacon key cannot activate at the next height",
+                            )
+                        })?;
                     }
                     state_transaction
                         .world
-                        .retire_global_beacon_key_session(certificate.session_id, next_height)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon key session is not exactly active",
-                            )
-                        })?;
+                        .global_beacon_key_sessions
+                        .insert(certificate.session_id, record);
+                    if bootstrap {
+                        state_transaction.world.global_beacon_active_session.insert(
+                            GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+                            certificate.session_id,
+                        );
+                    }
                 }
                 Action::InstallParliamentTleKey => {
                     let public_state = norito::decode_canonical::<TleKeySessionPublicStateV1>(
@@ -20410,6 +20377,15 @@ pub mod isi {
                     )
                     .into());
                 }
+                if state_transaction
+                    .world
+                    .sumeragi_npos_parameters()
+                    .is_some_and(|params| &params.xor_asset_definition_id == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} is the committed network XOR identity").into(),
+                    ).into());
+                }
                 if let Some(((lane_id, epoch), _)) = state_transaction
                     .world
                     .public_lane_rewards
@@ -20429,7 +20405,7 @@ pub mod isi {
                 }
                 if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                     .world
-                    .public_lane_reward_claims
+                    .public_lane_reward_accruals
                     .iter()
                     .find(|((_, _, asset_id), _)| asset_id.definition() == asset_definition_id)
                 {
@@ -20782,6 +20758,23 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                match iroha_data_model::nexus::ValidatorCommitteeOperationV1::from_custom_parameter(
+                    custom,
+                ) {
+                    Ok(Some(operation)) => {
+                        return state_transaction
+                            .apply_validator_committee_operation(_authority, operation)
+                            .map_err(|error| {
+                                InstructionExecutionError::InvariantViolation(error.into())
+                            });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "invalid validator committee command: {error}"
+                        )));
+                    }
+                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -20997,6 +20990,12 @@ pub mod isi {
                                         )),
                                     )
                                 })?;
+                                if !state_transaction._curr_block.is_genesis()
+                                    && !state_transaction.world.parameters.get().custom().contains_key(next.id()) {
+                                    return Err(invalid_smart_contract_parameter(
+                                        "network XOR and NPoS authority must be installed by authenticated genesis",
+                                    ));
+                                }
                                 if let Some(previous_custom) = state_transaction
                                     .world
                                     .parameters
@@ -21013,6 +21012,13 @@ pub mod isi {
                                                 ),
                                             )
                                         })?;
+                                    if npos.xor_asset_definition_id != previous.xor_asset_definition_id {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "SumeragiNposParameters.xor_asset_definition_id is immutable after installation".to_owned(),
+                                            ),
+                                        ));
+                                    }
                                     if npos.evidence_horizon_blocks
                                         != previous.evidence_horizon_blocks
                                     {
@@ -21040,46 +21046,6 @@ pub mod isi {
                                                 previous.epoch_length_blocks,
                                                 npos.epoch_length_blocks,
                                             )),
-                                        ));
-                                    }
-                                }
-                            }
-                            if next.id()
-                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
-                            {
-                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
-                                    .ok_or_else(|| {
-                                        InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "invalid Kagemusha V1 next mint-finality roster parameter"
-                                                    .to_owned(),
-                                            ),
-                                        )
-                                    })?;
-                                if let Some(previous_custom) = state_transaction
-                                    .world
-                                    .parameters
-                                    .get()
-                                    .custom()
-                                    .get(next.id())
-                                {
-                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
-                                        .ok_or_else(|| {
-                                            InstructionExecutionError::InvalidParameter(
-                                                InvalidParameterError::SmartContract(
-                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
-                                                        .to_owned(),
-                                                ),
-                                            )
-                                        })?;
-                                    if staged.roster.network_id != previous.roster.network_id
-                                        || staged.roster.epoch < previous.roster.epoch
-                                    {
-                                        return Err(InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
-                                                    .to_owned(),
-                                            ),
                                         ));
                                     }
                                 }
@@ -25255,8 +25221,7 @@ pub mod isi {
             let quorum =
                 u16::try_from((ordered_roster.len() - 1) / 3 * 2 + 1).expect("small test quorum");
             let expected_active_session_id = match action {
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey
-                | consensus_keys::ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey => {
+                consensus_keys::ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey => {
                     state_transaction
                         .world
                         .global_beacon_active_session()
@@ -25436,7 +25401,7 @@ pub mod isi {
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
         });
 
-        world_test!(global_beacon_boundary_rotation_signs_the_successor_dkg_target {
+        world_test!(global_beacon_certificate_cannot_rotate_without_frozen_preparation {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
@@ -25472,7 +25437,7 @@ pub mod isi {
                 crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                     state_transaction.network_id,
                     [0xA4; 32],
-                    authorization_roster_hash,
+                    &validator_keys,
                 );
             let key_a_activation = key_a.session.adaptive_dkg.finalized_at_height;
             key_a
@@ -25490,12 +25455,12 @@ pub mod isi {
             let key_b = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                 state_transaction.network_id,
                 [0xB4; 32],
-                successor_roster_hash,
+                &successor_validator_keys,
             );
             let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                consensus_keys::ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
                 key_b.session.session_id,
                 key_b.session.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical beacon key B"),
@@ -25508,49 +25473,18 @@ pub mod isi {
                 key_b.session.roster_hash, successor_roster_hash,
                 "the signed public state independently names the H+1 DKG target"
             );
-            install_b
+            state_transaction.apply();
+            let mut state_transaction = block.transaction();
+            let rejected = install_b
                 .execute(&ALICE_ID, &mut state_transaction)
-                .expect("block-H exact-roster QC schedules the successor DKG key");
-
-            let persisted_a = state_transaction
-                .world
-                .global_beacon_key_sessions
-                .get(&key_a.session.session_id)
-                .expect("predecessor key retained");
-            let persisted_b = state_transaction
-                .world
-                .global_beacon_key_sessions
-                .get(&key_b.session.session_id)
-                .expect("successor key persisted");
-            assert_eq!(persisted_a.retired_at_height, Some(41));
-            assert_eq!(persisted_b.activated_at_height, Some(41));
-            assert!(persisted_a.is_active_at(40));
-            assert!(!persisted_a.is_active_at(41));
-            assert!(!persisted_b.is_active_at(40));
-            assert!(persisted_b.is_active_at(41));
-            assert_eq!(
-                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                    &persisted_b.session,
-                    &successor_roster,
-                ),
-                Ok(successor_roster_hash),
-                "the installed key is usable by the authenticated successor roster"
-            );
-            assert_eq!(
-                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                    &persisted_b.session,
-                    &ordered_roster,
-                ),
-                Err(crate::beacon::GlobalThresholdBeaconError::RosterMismatch),
-                "the authorization roster cannot be substituted as the DKG target"
-            );
-            assert_eq!(
-                state_transaction
-                    .world
-                    .global_beacon_active_session
-                    .get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY),
-                Some(&key_b.session.session_id)
-            );
+                .expect_err("a lifecycle QC cannot bypass authenticated committee preparation");
+            assert!(format!("{rejected:?}").contains("authenticated incumbent finality"));
+            drop(state_transaction);
+            let restored = block.transaction();
+            // Neither the candidate record nor a retirement escapes transaction rollback.
+            assert!(restored.world.global_beacon_key_sessions.get(&key_b.session.session_id).is_none());
+            assert_eq!(restored.world.global_beacon_active_session.get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY),Some(&key_a.session.session_id));
+            assert_eq!(restored.world.global_beacon_key_sessions.get(&key_a.session.session_id),Some(&key_a));
         });
 
         world_test!(parliament_tle_rotation_cuts_over_at_next_height_and_retains_bound_openings {
@@ -33932,6 +33866,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -33951,13 +33886,13 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                 },
             );
-            stx.world.public_lane_reward_claims.insert(
+            stx.world.public_lane_reward_accruals.insert(
                 (
                     LaneId::SINGLE,
                     ALICE_ID.clone(),
                     AssetId::new(reward_def, account_id.clone()),
                 ),
-                1,
+                iroha_primitives::numeric::Quantity::one(),
             );
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve surviving account audit state");
@@ -34627,6 +34562,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -34739,6 +34675,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Exited,
                     activation_height: current_height,
+                    election_exit_height: Some(current_height),
                     deactivation_height: Some(current_height),
                     last_reward_epoch: None,
                 },
@@ -34781,6 +34718,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -34817,6 +34755,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -39146,6 +39085,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: block_height,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -39559,6 +39499,43 @@ seiyaku GovernanceLifecycle {
                     other => panic!("unexpected error type: {other:?}"),
                 }
             }
+        });
+        world_test!(set_parameter_cannot_install_network_currency_after_genesis {
+            let state = blank_state();
+            let predecessor = new_dummy_block();
+            let header = iroha_data_model::block::BlockHeader::new(
+                std::num::NonZeroU64::new(2).unwrap(),
+                Some(predecessor.as_ref().hash()), None, 1, 0,
+            );
+            let mut state_block = state.block(header);
+            {
+                let mut stx = state_block.transaction();
+                let error = SetParameter::new(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                )).expect_execute_err(&ALICE_ID, &mut stx,
+                    "a post-genesis parameter transaction cannot choose the network currency");
+                assert_contains!(format!("{error:?}"),
+                    "network XOR and NPoS authority must be installed by authenticated genesis");
+            }
+            let stx = state_block.transaction();
+            assert!(stx.world.sumeragi_npos_parameters().is_none(),
+                "rejected installation must leave no currency pin after transaction rollback");
+        });
+        world_test!(set_parameter_keeps_network_xor_identity_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters::default();
+            SetParameter::new(Parameter::Custom(initial.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install network currency pin");
+            let mut replacement = initial.clone();
+            replacement.xor_asset_definition_id = AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("other.universal")
+                    .expect("domain"),
+                "currency".parse().expect("name"),
+            );
+            let error = SetParameter::new(Parameter::Custom(replacement.into_custom_parameter()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "network currency substitution must reject");
+            assert_contains!(format!("{error:?}"), "xor_asset_definition_id is immutable", "exact currency pin must persist");
+            assert_eq!(stx.world.sumeragi_npos_parameters(), Some(initial));
         });
         world_test!(set_parameter_keeps_npos_evidence_horizon_immutable {
             blank_state_transaction!(state, block, state_block, stx);

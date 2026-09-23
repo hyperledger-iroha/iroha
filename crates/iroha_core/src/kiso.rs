@@ -843,6 +843,13 @@ mod tests {
                 }),
                 chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
             },
+            runtime_provider_broker: iroha_config::parameters::actual::RuntimeProviderBroker {
+                endpoint_path:
+                    iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
+                        defaults::runtime_provider_broker::endpoint_path(),
+                    )
+                    .expect("default runtime-provider broker endpoint is valid"),
+            },
             network: Network {
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
                 public_address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),

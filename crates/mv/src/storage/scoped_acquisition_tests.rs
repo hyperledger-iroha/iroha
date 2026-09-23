@@ -284,3 +284,142 @@ fn ordinary_acquisition_retains_zero_sized_scope_and_original_protocol() {
     assert_eq!(target.view().get(&7), Some(&71));
     assert_eq!(target.revert.read().get(&7), Some(&Some(70)));
 }
+
+#[test]
+fn admitted_owned_acquisition_rejects_foreign_pool_without_locking() {
+    let budget = AllocationBudget::new(1 << 20);
+    let other = AllocationBudget::new(1 << 20);
+    let target = fixture(&budget);
+    let original = budget.reserved_bytes();
+    let scope = other.try_owned_refund_scope().unwrap();
+    let _healthy = StartFault::set(0);
+    assert!(matches!(
+        target.try_block_acquisition_owned(&scope),
+        Err(AdmittedStorageError::ScopeIdentity)
+    ));
+    assert_eq!(START_CALLS.with(Cell::get), 0);
+    assert!(target.revert.try_acquire_writer().is_some());
+    assert!(target.blocks.try_acquire_writer().is_some());
+    assert_eq!(budget.reserved_bytes(), original);
+    drop(scope);
+    assert_eq!(other.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_returned_block_retains_original_scope_until_both_writers_release() {
+    let budget = AllocationBudget::new(1 << 20);
+    let target = fixture(&budget);
+    let before = budget.reserved_bytes();
+    let mut block = {
+        let scope = budget.try_owned_refund_scope().unwrap();
+        let mut slot = target.try_block_acquisition_owned(&scope).unwrap();
+        slot.try_initialize(BlockMode::Ordinary).unwrap();
+        slot.into_block()
+    };
+    block.try_insert_admitted(7, 78).unwrap();
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let Err(crate::allocation::AllocationRefusal::Capacity { release, .. }) =
+        budget.try_reserve_bytes(1)
+    else {
+        panic!("original finite pool is exhausted");
+    };
+    let probe = Probe::new(&target);
+    let mut future = release.wait_for_release();
+    let waker = Waker::from(Arc::clone(&probe));
+    assert!(
+        Pin::new(&mut future)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    drop(held);
+    assert_eq!(probe.calls.load(SeqCst), 0);
+    drop(block);
+    assert!(probe.calls.load(SeqCst) > 0);
+    assert_eq!(probe.unavailable.load(SeqCst), 0);
+    assert_eq!(budget.reserved_bytes(), before);
+    assert_eq!(target.view().get(&7), Some(&71));
+    drop((future, waker, probe, target));
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_owned_publication_preserves_original_pointer_through_abort_and_publish() {
+    let budget = AllocationBudget::new(1 << 20);
+    let target = fixture(&budget);
+    let original = target
+        .try_capture_admitted_block(BlockMode::Ordinary, |block| {
+            block.try_insert_admitted(7, 79).unwrap();
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let pointer = original.blocks.get(&7).unwrap() as *const u64;
+    let before = budget.reserved_bytes();
+    let scope = budget.try_owned_refund_scope().unwrap();
+    let after_scope = budget.reserved_bytes();
+    let mut slot = match original.try_publication_slot_owned(&scope, &target) {
+        Ok(slot) => slot,
+        Err(_) => panic!("exact original scope"),
+    };
+    drop(scope);
+    assert_eq!(
+        budget.reserved_bytes(),
+        after_scope,
+        "slot retains exact original control"
+    );
+    slot.try_prepare().unwrap();
+    assert_eq!(
+        budget.reserved_bytes(),
+        after_scope,
+        "attachment neither copies nor recharges"
+    );
+    let (original, cleanup) = slot.into_prepared().abort();
+    assert_eq!(original.blocks.get(&7).unwrap() as *const u64, pointer);
+    assert_eq!(target.view().get(&7), Some(&71));
+    drop(cleanup);
+    assert_eq!(budget.reserved_bytes(), before);
+    let scope = budget.try_owned_refund_scope().unwrap();
+    let mut slot = original
+        .try_publication_slot_owned(&scope, &target)
+        .ok()
+        .unwrap();
+    drop(scope);
+    slot.try_prepare().unwrap();
+    let published = slot.into_prepared().publish();
+    assert_eq!(target.view().get(&7).unwrap() as *const u64, pointer);
+    published.into_admission();
+    drop(target);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn admitted_owned_publication_rejects_foreign_scope_without_losing_original() {
+    let budget = AllocationBudget::new(1 << 20);
+    let target = fixture(&budget);
+    let original = target
+        .try_capture_admitted_block(BlockMode::Ordinary, |block| {
+            block.try_insert_admitted(7, 77).unwrap();
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    let pointer = original.blocks.get(&7).unwrap() as *const u64;
+    let before = budget.reserved_bytes();
+    let other = AllocationBudget::new(1 << 20);
+    let scope = other.try_owned_refund_scope().unwrap();
+    let (original, error) = match original.try_publication_slot_owned(&scope, &target) {
+        Ok(_) => panic!("foreign scope must refuse before acquisition"),
+        Err(refusal) => refusal,
+    };
+    assert_eq!(
+        error,
+        PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity)
+    );
+    assert_eq!(original.blocks.get(&7).unwrap() as *const u64, pointer);
+    assert_eq!(budget.reserved_bytes(), before);
+    assert!(target.revert.try_acquire_writer().is_some());
+    assert!(target.blocks.try_acquire_writer().is_some());
+    drop((original, scope, target));
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(other.reserved_bytes(), 0);
+}

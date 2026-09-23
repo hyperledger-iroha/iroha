@@ -2681,6 +2681,7 @@ where
             let mut kagami: Option<PathBuf> = None;
             let mut nexus_xor_asset_definition_id: Option<String> = None;
             let mut kagemusha_mint_finality_parameters_dir: Option<PathBuf> = None;
+            let mut xor_allocations_dir: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2711,6 +2712,12 @@ where
                         };
                         nexus_xor_asset_definition_id = Some(asset_definition_id);
                     }
+                    "--xor-allocations-dir" => {
+                        let path = pending
+                            .next()
+                            .ok_or("expected path after --xor-allocations-dir")?;
+                        xor_allocations_dir = Some(normalize_path(Path::new(&path))?);
+                    }
                     "--kagemusha-mint-finality-parameters-dir" => {
                         let Some(path) = pending.next() else {
                             return Err(
@@ -2738,6 +2745,8 @@ where
                     kagami_override: kagami,
                     nexus_xor_asset_definition_id,
                     kagemusha_mint_finality_parameters_dir,
+                    xor_allocations_dir: xor_allocations_dir
+                        .ok_or("kagami-profiles requires --xor-allocations-dir <DIR>")?,
                 },
             })
         }

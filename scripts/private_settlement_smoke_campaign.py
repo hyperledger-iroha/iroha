@@ -469,7 +469,7 @@ def validate_finality(proof: Any, result: dict[str, Any], identities: list[Any])
     artifact = fields(proof["finality_artifact"], {"format_version", "protocol_version", "height",
         "height_context", "subject", "block_hash", "commit_qc", "validator_set_pops"}, "finality artifact")
     context = fields(artifact["height_context"], {"network_id", "protocol_version", "height", "epoch",
-        "kagemusha_mint_finality_epoch_id", "kagemusha_mint_finality_epoch_roster", "epoch_end_height",
+        "kagemusha_mint_finality_authorization", "kagemusha_mint_finality_authority", "epoch_end_height",
         "next_epoch_snapshot", "mode", "parent_commit_qc", "snapshot_bootstrap", "roster", "quorum",
         "nexus_amx_context_hash", "execution_policy_hash", "da_layout", "leader_seed"}, "height context")
     header = fields(proof["block_header"], {"height", "prev_block_hash", "merkle_root", "result_merkle_root",

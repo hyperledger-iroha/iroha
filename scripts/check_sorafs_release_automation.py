@@ -323,7 +323,7 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
     "configs/sorafs/runtime_provider_broker/README.md": (
         "it does not supply a concrete signing backend,",
         "statically link a reviewed deployment-owned",
-        "Do not add credential, private-key, token, plugin, test-provider, or socket",
+        "Do not add credential, private-key, token, plugin, or test-provider arguments.",
         "The expected executable digest must come",
         "The checked-in Linux Governance DAG consumer dependency is mandatory",
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
@@ -345,7 +345,8 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "LimitCORE=0",
         (
             "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
-            "--catalog /etc/iroha/runtime-provider-broker/catalog.norito"
+            "--catalog /etc/iroha/runtime-provider-broker/catalog.norito "
+            "--broker-endpoint /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock"
         ),
     ),
     (
@@ -366,6 +367,8 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "org.hyperledger.iroha.runtime-provider-broker-v1",
         "/usr/local/libexec/iroha-runtime-provider-broker-v1",
         "/private/etc/iroha/runtime-provider-broker/catalog.norito",
+        "<string>--broker-endpoint</string>",
+        "/private/var/iroha/run/runtime-provider-broker-v1.sock",
         "<key>UserName</key>",
         "<key>GroupName</key>",
         "<key>SoftResourceLimits</key>\n  <dict>\n    <key>Core</key>",
@@ -407,10 +410,18 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "mod launcher;",
         'include!("runtime_provider_broker/protocol.rs");',
     ),
-    "crates/irohad/src/runtime_provider_broker/platform.rs": (
+    "crates/iroha_config/src/parameters/defaults.rs": (
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform.rs": (
+        'include!("platform_server_qualification.rs");',
         'include!("pop_recipient_client.rs");',
+    ),
+    "crates/irohad/src/runtime_provider_broker/platform_server_qualification.rs": (
+        "EndpointPolicy",
+        "if policy.verify_all_ancestors {",
+        "verify_directory(ancestor, policy.expected_service_uid, true)?;",
     ),
     "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs": (
         "endpoint_recovery::prepare_endpoint",

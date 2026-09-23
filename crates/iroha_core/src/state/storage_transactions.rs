@@ -245,6 +245,8 @@ mod block {
     #[derive(thiserror::Error, Debug, displaydoc::Display)]
     #[ignore_extra_doc_attributes]
     pub enum TransactionsBlockError {
+        /// Original local State storage refusal; never a consensus rejection: {0}
+        LocalStateStorage(#[source] crate::state::StateStorageAdmissionError),
         /// `TransactionsBlock::insert_block()` was not called
         MissingInsertBlock,
         /// Block height `{actual_current_height}` does not match expected `{expected_current_height}`;

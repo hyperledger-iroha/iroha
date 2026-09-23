@@ -149,14 +149,24 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
         assert_eq!(callback.observations(), [0; 5]);
         if exit == 0 {
             let journals = carrier
-                .prepare_journals(None, None, |_| Ok::<_, ()>(()))
+                .prepare_journals(
+                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                    None,
+                    None,
+                    |_| Ok::<_, ()>(()),
+                )
                 .unwrap_or_else(|e| panic!("capture original owner: {e}"));
             assert!(Pin::new(&mut future).poll(&mut task).is_ready());
             assert_eq!(callback.observations(), [1, 1, 0, 0, 0]);
             drop(journals);
         } else if exit == 1 {
             let error = carrier
-                .prepare_journals(None, None, |_| Err::<(), _>("exact admission refusal"))
+                .prepare_journals(
+                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                    None,
+                    None,
+                    |_| Err::<(), _>("exact admission refusal"),
+                )
                 .err()
                 .unwrap();
             assert_eq!(callback.observations(), [0; 5]);
@@ -164,9 +174,12 @@ fn replacement_rewind_retains_notifications_through_carrier_capture_and_admissio
             drop(error);
         } else {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                carrier.prepare_journals(None, None, |_| -> Result<(), ()> {
-                    panic!("actual capture admission unwind")
-                })
+                carrier.prepare_journals(
+                    crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                    None,
+                    None,
+                    |_| -> Result<(), ()> { panic!("actual capture admission unwind") },
+                )
             }));
             assert!(result.is_err());
         }

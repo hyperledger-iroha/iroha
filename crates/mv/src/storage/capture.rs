@@ -64,6 +64,9 @@ impl<'a, K: Key, V: Value, Admission, M: StorageMode<K, V>>
         else {
             unreachable!("original checked map block");
         };
+        // Keep original returned-scope custody until both writers have detached.
+        // It precedes all moved physical owners so unwind releases them first.
+        let custody = block._acquisition_custody;
         let Block {
             writers,
             dirty,
@@ -87,6 +90,7 @@ impl<'a, K: Key, V: Value, Admission, M: StorageMode<K, V>>
             },
         });
         self.cleanup = cleanup;
+        drop(custody);
     }
 }
 

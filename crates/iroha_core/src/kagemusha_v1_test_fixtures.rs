@@ -3,22 +3,23 @@
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::ValidatorPower,
-    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
 };
 #[cfg(test)]
 use iroha_data_model::{
     block::consensus_v2::SumeragiV2GenesisContextParameters,
     isi::kagemusha_v1::{
-        KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityGenesisParametersV1,
     },
 };
 
 /// Build real, canonically encoded paired-Pasta public keys aligned with `roster`.
-pub(crate) fn mint_finality_roster(
+pub(crate) fn mint_finality_authority(
     network_id: NetworkId,
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
     let validators = roster
         .iter()
         .enumerate()
@@ -27,16 +28,16 @@ pub(crate) fn mint_finality_roster(
                 .wrapping_add(u8::try_from(index).expect("test validator index fits in one byte"));
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
-                epoch,
+                generation,
                 validator.validator.clone(),
             )
             .expect("derive deterministic paired-Pasta test validator keys")
         })
         .collect();
-    let fixture = KagemushaMintFinalityEpochRosterV1 {
+    let fixture = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation,
         validators,
     };
     fixture.validate().expect("valid test mint-finality roster");
@@ -46,9 +47,9 @@ pub(crate) fn mint_finality_roster(
 /// Build a real networkless signed-genesis template aligned with `roster`.
 #[cfg(test)]
 pub(crate) fn mint_finality_template(
-    epoch: u64,
+    generation: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterTemplateV1 {
+) -> KagemushaMintFinalityAuthorityGenerationTemplateV1 {
     let validators = roster
         .iter()
         .enumerate()
@@ -57,15 +58,15 @@ pub(crate) fn mint_finality_template(
                 .wrapping_add(u8::try_from(index).expect("test validator index fits in one byte"));
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
-                epoch,
+                generation,
                 validator.validator.clone(),
             )
             .expect("derive deterministic paired-Pasta test validator keys")
         })
         .collect();
-    let template = KagemushaMintFinalityEpochRosterTemplateV1 {
+    let template = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        epoch,
+        generation,
         validators,
     };
     template
@@ -80,23 +81,109 @@ pub(crate) fn mint_finality_genesis_parameters(
     roster: &[ValidatorPower],
 ) -> KagemushaMintFinalityGenesisParametersV1 {
     KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: mint_finality_template(0, roster),
-        next_epoch_roster: None,
+        authority_generation: mint_finality_template(0, roster),
     }
 }
 
-/// Build the roster and its self-authenticating canonical identifier.
-#[cfg(test)]
-pub(crate) fn mint_finality_roster_and_id(
-    network_id: NetworkId,
+/// Build a standalone authenticated-context fixture with an explicit scheduling interval.
+///
+/// Non-genesis fixtures pin a synthetic predecessor and installed beacon. Tests which exercise
+/// an actual boundary must instead use [`mint_finality_successor_authorization`].
+pub(crate) fn mint_finality_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
     epoch: u64,
+    first_height: u64,
+    last_height: u64,
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        BeaconEpochBindingV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1,
+    };
+    let genesis = epoch == 0;
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch,
+        first_height,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority
+            .authority_id()
+            .expect("fixture authority identity"),
+        beacon: if genesis {
+            BeaconEpochBindingV1::Bootstrap
+        } else {
+            BeaconEpochBindingV1::Installed(
+                iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id: [0x71; 32],
+                    transcript_hash: [0x72; 32],
+                },
+            )
+        },
+        previous_authorization_id: if genesis { [0; 32] } else { [0x73; 32] },
+        transition_id: if genesis { [0; 32] } else { [0x74; 32] },
+        decision: if genesis {
+            KagemushaMintFinalityEpochDecisionV1::Genesis
+        } else {
+            KagemushaMintFinalityEpochDecisionV1::Activate
+        },
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid standalone scheduling fixture");
+    authorization
+}
+
+/// Build complete fixture context fields with explicit key lifetime and scheduling interval.
+pub(crate) fn mint_finality_context_fields(
+    network_id: NetworkId,
+    generation: u64,
+    epoch: u64,
+    first_height: u64,
+    last_height: u64,
     roster: &[ValidatorPower],
-) -> ([u8; 32], KagemushaMintFinalityEpochRosterV1) {
-    let roster = mint_finality_roster(network_id, epoch, roster);
-    let id = roster
-        .finality_epoch_id()
-        .expect("derive deterministic mint-finality test roster ID");
-    (id, roster)
+) -> (
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    KagemushaMintFinalityAuthorityGenerationV1,
+) {
+    let authority = mint_finality_authority(network_id, generation, roster);
+    let authorization = mint_finality_authorization(&authority, epoch, first_height, last_height);
+    (authorization, authority)
+}
+
+/// Build an exact successor suitable for certified-retention and activation boundary fixtures.
+pub(crate) fn mint_finality_successor_authorization(
+    previous: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+    decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    };
+    let mut successor = mint_finality_authorization(
+        authority,
+        previous.epoch.checked_add(1).unwrap(),
+        previous.last_height.checked_add(1).unwrap(),
+        last_height,
+    );
+    successor.previous_authorization_id = previous.authorization_id().unwrap();
+    successor.decision = decision;
+    if decision == KagemushaMintFinalityEpochDecisionV1::Retain {
+        successor.transition_id = [0; 32];
+    }
+    if matches!(
+        decision,
+        KagemushaMintFinalityEpochDecisionV1::Retain
+            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+    ) && previous.beacon != BeaconEpochBindingV1::Bootstrap
+    {
+        successor.beacon = previous.beacon;
+    }
+    successor
+        .validate_successor(previous)
+        .expect("exact scheduling successor fixture");
+    successor
 }
 
 /// Build a closed four-validator signed-genesis parameter fixture.

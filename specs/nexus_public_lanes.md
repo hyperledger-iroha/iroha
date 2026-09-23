@@ -22,7 +22,7 @@ The implementation lives in:
 - Core instruction execution and custody:
   `crates/iroha_core/src/smartcontracts/isi/staking.rs`
 
-Stake instructions lock the configured staking asset by
+Stake instructions lock the network XOR identity committed in NPoS parameters by
 withdrawing from the `stake_account`/`staker` into a bonded escrow account
 (`nexus.staking.stake_escrow_account_id`). Slashes debit the escrow and credit
 the configured sink (`nexus.staking.slash_sink_account_id`), and unbonds return
@@ -165,37 +165,46 @@ Runtime guards:
 All instructions live under `iroha_data_model::isi::staking`. They derive Norito
 encoders/decoders so SDKs can submit the payloads without bespoke codecs.
 
+### 2.0 Exact signed monetary effects
+
+Registration (including candidate registration), bond, final unbond and manual
+slash carry a required `PublicLaneMonetaryPlanV1`. Its signature covers the exact
+source and destination `AssetId` (including dataspace scope), quantity, validity
+height and operation-specific retained state. Registration binds the scheduled
+activation height; bond binds activation height and peer; final unbond binds
+activation height and the complete pending-request commitment; slash binds
+activation height and current slashable exposure. Core recomputes every field
+before movement. The instruction fixes reserve direction and quantity.
+
+`network_scope` is either `Network(NetworkId)` or `Genesis`. Genesis is accepted
+only during authenticated initial genesis execution. For a committed epoch length
+`L` and current height `H`, `H <= valid_until_height <= H + L`; missing parameters
+or arithmetic overflow reject. There is no unsigned monetary layout.
+
+DS validation-fee admission collects these signed principal transfers and charges
+the active policy per positive transfer. Native staking principal cannot serve as
+the fee-coordinate payment. `RecordPublicLaneRewards` reserves existing treasury
+funds and has no transfer fee. Opaque VM/deferred code cannot manufacture native
+DS staking effects, including reserve-only records and zero-payment claims;
+signed multisig and proved overlays remain subject to execution-time checks.
+Authenticated consensus slashing retains its separate finality-owned capability.
+
 ### 2.1 `RegisterPublicLaneValidator`
 
-Registers a validator and bonds an initial stake:
-
-```norito
-{
-  "lane_id": 1,
-  "validator": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-  "peer_id": "ed0120F4s1C9m2m4G8Dqv4HY2Q8g7iATgJx6Y5wM1U3Q9H3bQJ7Lh",
-  "stake_account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-  "initial_stake": "150000",
-  "metadata": {
-    "commission_bps": 750,
-    "jurisdiction": "JP",
-    "telemetry_id": "val-01"
-  }
-}
-```
+Registers a validator and bonds an initial stake. The required fields are
+`lane_id`, `validator`, `peer_id`, `stake_account`, `initial_stake`, `metadata`,
+and `monetary_plan` as defined above. Candidate consent covers this complete
+registration, including its exact monetary plan.
 
 Validation rules:
 
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
 - `peer_id` MUST resolve to a registered world-state peer. Lane `0` requires
   an unbounded `Validator` consensus key and current global topology membership
-  until the prepared epoch-key transition is implemented. Participant-lane
-  admission does not confer global committee membership. A non-zero participant lane prefers an unbounded
-  `Committee` key and accepts an unbounded `Validator` key for transparent-path
-  compatibility; either key must be live at the scheduled `activation_height`,
-  and any peer with a live `Validator` key at that height must already belong to
-  the nonempty global topology. This closes admission through another lane while
-  global epoch-key transitions remain unavailable.
+  for the current tenure. A fresh global peer enters through a prepared,
+  certified committee transition. A non-zero participant lane requires an
+  unbounded `Committee` key live at the scheduled `activation_height`;
+  participant admission never confers global committee membership.
 - A public lane cannot bind the same `peer_id` to multiple retained validator
   records. Exited records continue to reserve both their validator-capacity
   slot and peer identity while any slashable custody remains.
@@ -257,12 +266,13 @@ Validation rules:
   freeze: `h + 1 < activation_height`. `Active`, `Exiting`, `Exited`, and
   `Slashed` records reject it so evidence always resolves against one immutable
   voting tenure.
-- The replacement `peer_id` MUST satisfy the same runtime checks as
-  `RegisterPublicLaneValidator` (registered peer, an unbounded lane-appropriate
-  consensus key live at the scheduled activation height and no duplicate retained
-  lane binding). A distinct replacement peer supplies a signature bound to the
-  network, validator, lane, activation height, previous peer and replacement peer;
-  existing peer administrators may authorize that binding explicitly.
+- Every rebind MUST carry a replacement-peer signature bound to the exact
+  network, validator, lane, activation height, previous peer, and replacement
+  peer. This includes a same-peer idempotent request; account or peer-management
+  authority cannot substitute for the replacement peer's consent. A distinct
+  replacement `peer_id` MUST also satisfy the registration checks (registered
+  peer, an unbounded lane-appropriate consensus key live at the scheduled
+  activation height, and no duplicate retained lane binding).
 - `peer_signature` is an explicit optional field in the canonical instruction
   layout. When present it signs `PublicLanePeerBindingAuthorization`: protocol
   domain `iroha.staking.public_lane_peer_binding.v1`, genesis-derived network,
@@ -270,9 +280,8 @@ Validation rules:
   previous peer. This prevents consent replay across pending tenures or bindings.
   An absent signature is permitted only for the validator account's own
   signatory, an exact peer-management authority, or genesis bootstrap.
-- Lane-0 replacements, and replacements in any lane with a live `Validator` key
-  at activation, also require current membership when the global topology is
-  nonempty until prepared epoch-key transitions are available.
+- Lane-0 replacements require current membership for the current tenure;
+  new global peers enter through a certified epoch transition.
 - Rebinding to the already-bound `peer_id` succeeds idempotently.
 
 ### 2.3 `BondPublicLaneStake`
@@ -320,7 +329,27 @@ Records the payout for an epoch. Fields:
 - `total_reward`: fee-funded amount reserved for the supplied distribution.
 - `shares`: vector of `PublicLaneRewardShare` entries.
 
-### 2.8 `CancelConsensusEvidencePenalty`
+### 2.8 `ClaimPublicLaneRewards`
+
+The recipient signs a required `PublicLaneRewardClaimPlanV1`: network scope and
+expiry, the exact prior processing cursor, at most 64 consecutive chronological
+reward-record commitments, and at most 64 sorted exact source assets. Each source
+binds its prior positive accrual or absence and exact payment to the recipient.
+Sources are exactly those touched by the records plus explicitly selected old
+accruals. Missing records, skipped prefixes, stale cursors or accruals, and wrong
+payouts reject before funds move.
+
+`public_lane_reward_claims[(lane, recipient)]` stores
+`PublicLaneRewardClaimStateV1 { through_epoch: Option<u64> }`.
+`public_lane_reward_accruals[(lane, recipient, source_asset)]` retains positive
+unpaid quantities. Zero-entitlement records and unpaid dust advance processing
+without forfeiture; dust remains reserved. These point rows let clients process
+historical sources in bounded batches. Positive payouts are prepared together
+as one atomic numeric movement batch. Refusal restores reserve preimages and
+leaves cursor and accrual state unchanged. Pending queries expose
+`processed_through_epoch: Option<u64>` without an epoch-zero sentinel.
+
+### 2.9 `CancelConsensusEvidencePenalty`
 
 Cancels consensus slashing before the delayed penalty applies.
 
@@ -352,10 +381,10 @@ account migration and entity deletion preserve these obligations.
   stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
   For stake-elected lanes, `RegisterPublicLaneValidator` now binds an explicit
   `peer_id`. Lane `0` requires a registered peer with a live, unbounded
-  `Validator` key. Fresh global candidates outside the frozen topology are
-  refused until prepared epoch-key transitions can safely activate them. Non-zero participant lanes
-  prefer a live, unbounded `Committee` key and accept a `Validator` key for
-  transparent-path compatibility without adding that peer to global quorum.
+  `Validator` key in the current topology. Fresh global peers must complete
+  candidate publication and a certified epoch transition. Non-zero participant
+  lanes require a live, unbounded `Committee` key and do not add that peer to
+  global quorum.
   Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release
@@ -517,7 +546,7 @@ replay cannot pay it twice, and amounts below the payment threshold remain owed
 until enough accumulates. A failed payment restores its reserve and claim cursor.
 Recorded source assets remain authoritative after fee-policy or lane-mode
 changes. Snapshot restoration reconciles current and predecessor reserves with
-reward records and claim cursors; lane retirement requires unpaid rewards to be
+reward records, processing cursors and retained accruals; lane retirement requires unpaid rewards to be
 settled. The pending-rewards query includes unpaid epoch zero.
 
 TODO: close the protocol and deployment outcomes in

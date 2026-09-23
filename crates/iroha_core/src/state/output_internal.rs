@@ -114,7 +114,7 @@ impl InternalInvocation {
                 let enabled: Name = TRIGGER_ENABLED_METADATA_KEY
                     .parse()
                     .map_err(|_| "invalid trigger enabled metadata key")?;
-                let mut policy = OutputTransaction::new(state);
+                let mut policy = OutputTransaction::new(state)?;
                 let tx = policy
                     .transaction
                     .as_mut()
@@ -131,7 +131,7 @@ impl InternalInvocation {
                 {
                     return Err("quarantine action disappeared".into());
                 }
-                policy.apply();
+                policy.apply()?;
             }
             Self::Time(_) => {
                 let action = state
@@ -147,7 +147,7 @@ impl InternalInvocation {
                     .retry_state
                     .map_or(0, |s| s.retries_used)
                     .saturating_add(1);
-                let mut policy = OutputTransaction::new(state);
+                let mut policy = OutputTransaction::new(state)?;
                 let tx = policy
                     .transaction
                     .as_mut()
@@ -166,7 +166,7 @@ impl InternalInvocation {
                 ) {
                     return Err("retry action disappeared".into());
                 }
-                policy.apply();
+                policy.apply()?;
             }
         }
         Ok(())
@@ -195,7 +195,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .as_mut()
             .ok_or("output budget already consumed")?
             .begin(invocation.terminal())?;
-        let mut attempt = OutputTransaction::new(self.state);
+        let mut attempt = OutputTransaction::new(self.state)?;
         let tx = attempt
             .transaction
             .as_mut()
@@ -290,7 +290,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .as_mut()
                 .ok_or("missing internal transaction")?;
             append_completions(&mut tx.world.external_event_buf, call, &row)?;
-            attempt.apply();
+            attempt.apply()?;
         } else {
             drop(attempt);
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;

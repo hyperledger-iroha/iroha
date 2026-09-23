@@ -419,8 +419,8 @@ impl KagemushaMintCreditV1 {
                 self.finality_authority_head,
             ),
             (
-                "kagemusha.mint_credit.finality_genesis_roster_id",
-                self.finality_genesis_roster_id,
+                "kagemusha.mint_credit.finality_genesis_authorization_id",
+                self.finality_genesis_authorization_id,
             ),
             (
                 "kagemusha.mint_credit.finality_proof_binding_digest",

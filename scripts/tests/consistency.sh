@@ -57,6 +57,48 @@ do_check() {
     fi
 }
 
+check_schema() {
+    local schema="specs/references/schema.json"
+    local genesis="specs/references/genesis_schema.json"
+    local staged_schema staged_genesis
+    staged_schema="$(mktemp "specs/references/.schema.json.XXXXXX")"
+    staged_genesis="$(mktemp "specs/references/.genesis_schema.json.XXXXXX")"
+
+    # One canonical invocation emits both descriptor maps. Validate both
+    # outputs before replacing either checked-in artifact.
+    if ! eval "$cmd_schema --genesis-out \"$staged_genesis\"" > "$staged_schema"; then
+        echo "[FAIL] schema generator command failed"
+        rm -f -- "$staged_schema" "$staged_genesis"
+        exit_code=1
+        return
+    fi
+    if [[ ! -s "$staged_schema" || ! -s "$staged_genesis" ]]; then
+        echo "[FAIL] schema generator produced an empty output"
+        rm -f -- "$staged_schema" "$staged_genesis"
+        exit_code=1
+        return
+    fi
+
+    if [[ "$update" -eq 1 ]]; then
+        chmod 0644 "$staged_schema" "$staged_genesis"
+        mv -f -- "$staged_schema" "$schema"
+        mv -f -- "$staged_genesis" "$genesis"
+        echo "[UPDATED] $schema"
+        echo "[UPDATED] $genesis"
+    else
+        for pair in "$staged_schema:$schema" "$staged_genesis:$genesis"; do
+            local staged="${pair%%:*}" target="${pair#*:}"
+            if diff "$staged" "$target" > /dev/null; then
+                echo "[OK] $target is up to date"
+            else
+                echo "[DIFF] $target is out of date"
+                exit_code=1
+            fi
+        done
+        rm -f -- "$staged_schema" "$staged_genesis"
+    fi
+}
+
 do_render_check() {
     local cmd="$1"
     if ! eval "$cmd" > /dev/null; then
@@ -128,7 +170,7 @@ for task in "${tasks[@]}"; do
             check_genesis_template
             ;;
         "schema")
-            do_check "$cmd_schema" "specs/references/schema.json"
+            check_schema
             ;;
         "cli-help")
             do_render_check "$cmd_iroha_help"

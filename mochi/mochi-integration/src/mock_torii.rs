@@ -702,7 +702,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
     };
     use iroha_model_base::peer::PeerId;
     mod replay_fixture_owner;
@@ -726,12 +726,11 @@ mod tests {
             .collect::<Vec<_>>();
         validators.sort_by(|left, right| left.validator.cmp(&right.validator));
         let parameters = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         };
         parameters
             .validate()
@@ -814,7 +813,7 @@ mod tests {
             value
                 .get("kagemusha_mint_finality")
                 .and_then(Value::as_object)
-                .and_then(|parameters| parameters.get("epoch_roster"))
+                .and_then(|parameters| parameters.get("authority_generation"))
                 .and_then(Value::as_object)
                 .and_then(|roster| roster.get("validators"))
                 .and_then(Value::as_array)

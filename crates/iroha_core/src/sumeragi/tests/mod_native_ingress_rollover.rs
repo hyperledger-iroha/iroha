@@ -158,15 +158,129 @@ fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts()
         ingress.try_push_owned_at(inbound(), Instant::now()),
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
-    let mut delivered = ingress
+    let delivered = ingress
         .try_recv_if(|message| message.message().is_native_lane())
         .unwrap();
-    let evidence = delivered.take_ingress_ownership().unwrap();
+    let evidence = delivered.ingress_ownership().unwrap();
     assert!(evidence.validate_exact());
+    assert!(evidence.matches_message(delivered.message()));
+    assert!(evidence.matches_native_authenticated_hop(&hop));
     assert_eq!(evidence.physical_admission_ordinal(), Some(ordinal));
     assert_eq!(evidence.runtime_lifecycle_ordinal(), None);
     assert_eq!(delivered.message().encode(), native.encode());
+    let dequeued_projection = evidence.process_local_projection_hash();
+    let mut changed_origin = delivered.clone();
+    changed_origin.sender = authenticated_peer_for_test();
+    assert!(
+        super::v2_runner::native_ingress_carrier::NativeFairIngressCarrier::from_checked_dequeue(
+            changed_origin,
+        )
+        .is_err(),
+        "a different semantic origin cannot inherit the checked occurrence"
+    );
+    let mut changed_hop = delivered.clone();
+    changed_hop.via = authenticated_peer_for_test();
+    assert!(
+        super::v2_runner::native_ingress_carrier::NativeFairIngressCarrier::from_checked_dequeue(
+            changed_hop,
+        )
+        .is_err(),
+        "a different authenticated hop cannot inherit the charged source"
+    );
+    let carrier =
+        super::v2_runner::native_ingress_carrier::NativeFairIngressCarrier::from_checked_dequeue(
+            delivered,
+        )
+        .expect("checked Native dequeue retains physical and route ownership");
+    assert_eq!(carrier.sender(), &hop);
+    assert_eq!(carrier.via(), &hop);
+    assert!(carrier.reply_routes().is_none());
+    assert_eq!(
+        carrier.ownership().process_local_projection_hash(),
+        dequeued_projection
+    );
+    let super::v2_runner::native_ingress_carrier::NativeFairIngressAdmission::Retry(carrier) =
+        carrier.retry_for_test()
+    else {
+        panic!("a backpressured Native driver must return the original occurrence")
+    };
+    assert_eq!(
+        carrier.ownership().process_local_projection_hash(),
+        dequeued_projection
+    );
+    assert_eq!(
+        carrier.ownership().physical_admission_ordinal(),
+        Some(ordinal)
+    );
+    assert_eq!(carrier.sender(), &hop);
+    assert_eq!(carrier.via(), &hop);
     assert!(!ingress.state.lock().lanes.contains_key(&source));
+    drop(carrier);
+    ingress
+        .try_push_owned_at(inbound(), Instant::now())
+        .expect("the closed test admission path can stage one new Native occurrence");
+    let guard = super::output_guard::ConsensusOutputGuard::isolated();
+    let mut pump =
+        super::v2_runner::native_ingress_carrier::NativeFairIngressPump::new(Arc::clone(&guard));
+    assert_eq!(
+        pump.service_with(&ingress, super::v2_lane_driver::NativeLaneAdmission::Retry)
+            .expect("checked Native dequeue retains backpressured input"),
+        super::v2_runner::native_ingress_carrier::NativeFairIngressServiceOutcome::Retained,
+    );
+    let retained_projection = pump
+        .pending_ownership_for_test()
+        .expect("one process owner retains the exact retry")
+        .process_local_projection_hash();
+    assert!(!ingress.state.lock().lanes.contains_key(&source));
+    ingress
+        .try_push_owned_at(inbound(), Instant::now())
+        .expect("second physical Native occurrence remains in fair ingress");
+    assert_eq!(ingress.len(), 1);
+    assert_eq!(
+        pump.service_with(&ingress, super::v2_lane_driver::NativeLaneAdmission::Retry)
+            .expect("one pending Native retry is serviced before another dequeue"),
+        super::v2_runner::native_ingress_carrier::NativeFairIngressServiceOutcome::Retained,
+    );
+    assert_eq!(
+        ingress.len(),
+        1,
+        "retry cannot dequeue the second occurrence"
+    );
+    assert_eq!(
+        pump.pending_ownership_for_test()
+            .expect("same first occurrence remains in the process owner")
+            .process_local_projection_hash(),
+        retained_projection,
+    );
+    assert_eq!(
+        pump.service_with(&ingress, |_| {
+            super::v2_lane_driver::NativeLaneAdmission::Accepted
+        })
+        .expect("same retained input reaches the driver after capacity release"),
+        super::v2_runner::native_ingress_carrier::NativeFairIngressServiceOutcome::Accepted,
+    );
+    assert!(pump.pending_ownership_for_test().is_none());
+    assert_eq!(
+        ingress.len(),
+        1,
+        "accepting the retry does not skip the next input"
+    );
+    assert_eq!(
+        pump.service_with(&ingress, |_| {
+            super::v2_lane_driver::NativeLaneAdmission::Accepted
+        })
+        .expect("next checked Native occurrence can now enter the driver"),
+        super::v2_runner::native_ingress_carrier::NativeFairIngressServiceOutcome::Accepted,
+    );
+    assert_eq!(ingress.len(), 0);
+    assert!(!guard.restart_required());
+    assert_ne!(retained_projection, dequeued_projection);
+    let mismatch_guard = super::output_guard::ConsensusOutputGuard::isolated();
+    let mut mismatch = super::v2_runner::native_ingress_carrier::NativeFairIngressPump::new(
+        Arc::clone(&mismatch_guard),
+    );
+    assert!(mismatch.accept_checked_dequeue_for_test(inbound()).is_err());
+    assert!(mismatch_guard.restart_required());
     ingress.close();
     ingress.ensure_closed_drained_cut().unwrap();
 }

@@ -128,6 +128,21 @@ fn staking_values() -> Vec<Value> {
     let request_id = Hash::new(b"fixture-unbond-request");
     vec![
         capture(staking::BondPublicLaneStake {
+            monetary_plan: {
+                let mut plan = crate::isi::staking::monetary_registration_fixture(
+                    &(staker.clone()),
+                    Quantity::from(13_u64),
+                );
+                plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+                    crate::nexus::PublicLaneBondPreconditionV1 {
+                        activation_height: 1,
+                        peer_id: iroha_model_base::peer::PeerId::new(
+                            (validator.clone()).expect_single_signatory().clone(),
+                        ),
+                    },
+                );
+                plan
+            },
             lane_id: LaneId::SINGLE,
             validator: validator.clone(),
             staker: staker.clone(),
@@ -143,12 +158,38 @@ fn staking_values() -> Vec<Value> {
             release_at_ms: 1_234_567,
         }),
         capture(staking::FinalizePublicLaneUnbond {
+            monetary_plan: {
+                let mut plan = crate::isi::staking::monetary_registration_fixture(
+                    &(staker),
+                    Quantity::from(7_u64),
+                );
+                plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
+                    crate::nexus::PublicLaneUnbondPreconditionV1 {
+                        activation_height: 1,
+                        request_hash: request_id,
+                    },
+                );
+                plan
+            },
             lane_id: LaneId::SINGLE,
             validator: validator.clone(),
             staker,
             request_id,
         }),
         capture(staking::SlashPublicLaneValidator {
+            monetary_plan: {
+                let mut plan = crate::isi::staking::monetary_registration_fixture(
+                    &(validator.clone()),
+                    Quantity::from(3_u64),
+                );
+                plan.precondition = crate::nexus::PublicLaneMonetaryPreconditionV1::Slash(
+                    crate::nexus::PublicLaneSlashPreconditionV1 {
+                        activation_height: 1,
+                        slashable_exposure: Quantity::from(3_u64),
+                    },
+                );
+                plan
+            },
             lane_id: LaneId::SINGLE,
             validator: validator.clone(),
             offence_height: 17,

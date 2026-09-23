@@ -12,11 +12,11 @@ decoders, aliases, shims and parallel implementations are prohibited.
 
 | Milestone | Completion gate | Current state |
 | --- | --- | --- |
-| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | Repairing the 13 failures found by the 126-pass focused Core runs; rerun in progress |
-| Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Synthetic `nexus.universal/xor` defaults and local bootstrap paths identified; replacement pending |
-| Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Canonical model, signer and recursive-proof replacement in progress |
-| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Implementation pending |
-| Monetary fees | Exact signed effects, bounded claim processing with retained dust, and native execution equality checks | Implementation in progress |
+| Custody and lifecycle | All focused staking, reserve, snapshot and restoration controls pass | 141 focused Core tests passed at the custody checkpoint, including the original 13 failures; later protocol changes require a fresh run |
+| Canonical XOR | Genesis-pinned network XOR funds bonds, rewards and withdrawals; no synthetic staking definition or implicit production minting | Required immutable network XOR pin and canonical defaults implemented; production implicit minting removed; integration validation pending |
+| Authority and election | Separate key generations and scheduling epochs; freeze E+2 membership at E and prepare through E+1 | Canonical generation/authorization, paired possession and deterministic E+2 selection implemented; integration tests pending |
+| Atomic transition | All target seats ready; current exact quorum certifies activation or retention and cancellation; restart preserves both sessions | Original execution overlay stages membership authorization, beacon lifecycle and exact attempt outcome; standalone beacon rotation removed; current/pending credential consumer and qualification in progress |
+| Monetary fees | Exact signed effects, bounded claim processing with retained dust, and native execution equality checks | Source implementation present; Core, enacted-fee and network qualification pending |
 | Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | Complete N0/L1–L6 implementation and qualification remain open |
 | Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Implementation in progress |
 | Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties, rewards and full withdrawal; maintained formal/DA/workspace/SDK gates | Pending |
@@ -38,10 +38,12 @@ genesis test allocations and are not claims of mainnet monetary value.
   model and Core, Initial/default executor dispatch, canonical instruction
   registry and generated record fixtures. Consent binds network and exact
   activation tenure; rebind also binds the previous peer. Ordinary peer
-  administration retains its permission gate. Global candidate-pool changes,
-  including future eligibility changes through exit or minimum self-bond
-  crossings, remain refused until the prepared key transition is implemented.
-  Unchanged eligibility and independent participant-lane custody remain usable.
+  administration retains its permission gate. Fresh candidates enter the future
+  election pool with exact funded XOR custody; candidacy does not add voting
+  power. An election at E freezes the exact E+2 target, with a complete E+1
+  preparation interval. Requests in the already frozen boundary block apply to
+  E+3. Requested election exit and actual end of service are distinct fields;
+  retention extends pending-unbond slashing and release heights.
 - CLI candidate registration, signed rebinding, bond/delegation, scheduled and
   finalized unbond, reward recording and claiming. Runtime peer signing inputs
   use the existing owner-private file loader and remain outside the repository.
@@ -60,23 +62,84 @@ genesis test allocations and are not claims of mainnet monetary value.
 - Beacon startup authenticates the exact installed session and checks the local
   provider's non-signing capability for its actual seat. A present provider
   handle alone does not establish usable custody.
-- Four-validator plus observer admission-safety integration scenario in
-  `integration_tests/tests/sumeragi_npos_candidate.rs`; it proves a fresh global
-  candidate is refused without partial state while the prepared transition is
-  unavailable. It does not qualify permissionless global onboarding or committee
-  replacement. Independent participant-lane and existing global-peer consent are
-  covered separately in Core tests.
+- Four-validator plus observer candidacy scenario in
+  `integration_tests/tests/sumeragi_npos_candidate.rs`: invalid consent preserves
+  balances and valid canonical-XOR funding admits the future candidate without
+  changing the exact current four-seat authority. Execution of this updated
+  scenario and real 4→7→4 transitions remain pending.
+- Candidate keys require BLS peer consent plus possession of both generation-bound
+  Pasta keys. Every prepared seat additionally proves custody of its exact beacon
+  share under the finalized DKG transcript and complete transition context. A
+  lifecycle certificate finalizes a pending beacon; only certified committee
+  activation retires the old key and activates the new one. Genesis bootstrap
+  requires the exact current genesis authority.
+- The seven-seat Core fixture exercises fresh dealer commitments, distinct
+  private shares, transcript validation, native custody import and real
+  threshold signatures with the signed-genesis network XOR. It constructs
+  dealer secrets centrally for deterministic testing only. The first-release
+  DKG data model and reducer instead carry signed attempt-bound recipient keys,
+  dealer commitments, encrypted dealer-to-recipient edges and signed recipient
+  acceptances; no public complaint or private-share reveal record remains.
+  The daemon's per-seat command path still needs independent broker custody,
+  genesis orchestration, restart and network qualification. The Core fixture
+  does not establish a 4→7→4 network transition.
+- Current and predecessor restoration require the exact authenticated preparation
+  and terminal boundary history, including missing-row detection and exact beacon
+  activation state. A snapshot without the required retained finality is rejected;
+  authenticated snapshot-bootstrap history delivery remains to be qualified.
 
 ## Outstanding protocol and runtime outcomes
 
 | Outcome | Exact dependency and completion criterion | Owners |
 | --- | --- | --- |
-| Dynamic election and mint-finality keys | The current last-block selection and fixed-four maintenance cannot prepare replacement custody in time. TODO: replace epoch-coupled keys with authority generations, freeze E+2 membership at E, and prepare exact keys through E+1. The current quorum must be able to certify one-epoch retention without each incumbent publishing fresh keys. | Core/data model, KAGEMUSHA and deployment |
-| Prepared beacon transition | A successor needs exact-roster DKG, current-committee authorization, retained current/successor shares and atomic activation. Parliament can require an early pulse independently of the next epoch-end election pulse. TODO: make the prepared successor and activation condition explicit, and qualify current/pending session startup and restart. Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
-| Staking under an enacted DS-transfer validation-fee policy | `validation_fee.rs` admits reviewed balance-neutral lifecycle actions, but rejects monetary staking and reward reservations whose state-selected effects lack explicit signed bindings. TODO: carry exact staking effects through policy admission and the canonical native execution owner. Ordinary Nexus/PipelineGas charging already uses signed `FeePaymentIntent`; staking-specific runtime qualification of those payer bounds remains outstanding and is separate from this policy blocker. | Core/native execution and fees |
+| Dynamic election and mint-finality keys | Generation/authorization formats and E+2 preparation replace epoch-coupled staging and fixed-four workers. TODO: qualify exact selection, complete preparation, and certified retention without fresh incumbent keys on actual networks. | Core/data model, KAGEMUSHA and deployment |
+| Prepared beacon transition | The signed encrypted all-edge DKG model and reducer bind the frozen exact roster and fail closed before finalization if an edge or acceptance is absent. The deterministic Core fixture still constructs secrets centrally; daemon per-seat custody, authenticated exchange, genesis orchestration, current/pending session restart and atomic activation need qualification. Parliament can require an early pulse independently of the next epoch-end election pulse. Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
+| Staking under an enacted DS-transfer validation-fee policy | Exact signed monetary bindings and native effect checks are implemented. The policy counts every actual signed real-XOR staking transfer leg under `PerQualifyingTransferInstruction`, even when the DS fee asset differs; principal cannot satisfy the fee coordinate. Reward reservations and claim dust with no transfer leg incur no transfer fee. The focused Core fee suite passed 110/110 on 2026-09-23. TODO: qualify bounded claims, multisig/proved overlays, and the canonical native execution owner on an unchanged network candidate. Ordinary Nexus/PipelineGas charging already uses signed `FeePaymentIntent`; staking-specific runtime qualification of those payer bounds remains outstanding. | Core/native execution and fees |
 | Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: close the silent-initial-author counterexample and retirement/restart cuts in `sumeragi_liveness_redesign_goals.md`; a second signer or local retry bypass is not a completion. | Core/Sumeragi, Queue, Kura and formal owners |
 | Reward allocation | The selected policy is explicit treasury-funded canonical-XOR distributions. TODO: qualify funding, signed recording and bounded payment together. Automatic participation formulas, commission and issuance programs are outside this implementation. | Treasury/governance and Core |
 | Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, queued Parliament pulse, missing target signer, all-seat restart, replay rejection, rewards, slashing and final withdrawal. Run the maintained fault/DA/formal gates and complete workspace checks. | Integration, release and subsystem owners |
+
+### Distributed beacon ceremony cutover
+
+The first-release source candidate uses an all-edge Das–Ren ceremony over the
+frozen target, with no public complaint or private-share reveal layout.
+Each target seat publishes a fresh hybrid encryption public key signed by its
+actual BLS consensus key. The signed key record binds the network, transition
+ID, authority generation, complete DKG session, roster hash and recipient
+index; the private key stays in that seat's broker custody. One dealer process
+per seat generates only its own polynomial, signs its public commitment and
+encrypts one verified contribution to each recipient. The private envelope is
+signed by that dealer and uses canonical associated data consisting of a domain
+tag, complete encoded DKG session, transition ID, authority generation, dealer
+and recipient indexes, dealer commitment hash, recipient key digest and the
+authenticated sharing height. The recipient checks that signature, exact
+context and share equation, then signs one acceptance for the exact edge.
+
+Use `iroha_crypto::hybrid::{HybridKeyPair, encapsulate, decapsulate}` for the
+existing X25519/ML-KEM-768 key exchange and
+`iroha_crypto::encryption::SymmetricEncryptor<ChaCha20Poly1305>` for nonce-bearing
+AEAD over the associated data. The public reducer requires all `n` distinct
+commitments and all `n²` distinct signed acceptances before the finalized
+acceptance cutoff. It derives the transcript from those exact commitments; a
+recipient aggregates only its locally decrypted contributions. A missing,
+invalid, replayed or late edge cannot finalize the target. The current exact
+quorum instead certifies retention and cancellation, and a later election uses
+a new attempt and transcript. This keeps current-chain progress but lets one
+uncooperative target block that transition's activation.
+
+Each dealer and recipient needs a durable, owner-private, one-shot attempt
+journal keyed by network and transition ID. It must retain the original public
+commitment, encrypted outbound envelopes, accepted edges and local aggregate
+across restart, reject conflicting replays and never regenerate a polynomial
+for the same attempt. The dealer polynomial can be erased after every original
+outbound envelope is durably stored. The source cutover spans DKG records in
+`iroha_data_model::consensus`, public reduction and share verification in
+`iroha_core::beacon`, and per-seat broker custody and authenticated exchange in
+`irohad`. The public complaint/reveal fields and the all-secrets production
+coordinator are retired. CLI and disposable-network orchestration remain to be
+qualified. Exact incumbent-quorum
+transcript finalization, all-seat readiness and boundary activation still need
+their separate authenticated evidence; an all-edge receipt is not activation.
 
 The global committee remains exactly `3f + 1` with `2f + 1` equal validator
 votes. Observers and admitted candidates cannot pad quorum. Signed RS16 DA,
@@ -85,19 +148,64 @@ policy remain mandatory.
 
 ## Validation
 
-Validation is in progress. The focused model, executor and codec staking
+The custody checkpoint passed 141 focused Core tests with no failures or skips.
+The command selected staking, reward reserves, pinned custody, admission, snapshot,
+configuration restoration and fee guards; the source checkpoint and complete log
+are retained outside the repository under `/tmp/iroha-staking-custody-checkpoint`
+and `/tmp/iroha-staking-core-checkpoint.log`. This result predates the authority,
+monetary-plan and XOR schema changes now in progress.
+
+Validation is in progress. The earlier focused model, executor and codec staking
 selection passed 31 tests (the deliberate fixture generator remained ignored),
-and the complete default-executor library passed 180 tests. The canonical
-instruction-record selection passed 321 tests and failed two checks of the same
-pre-existing privacy fixture: commit `c27a25ee13` changed the SDK-consumer enum
-from `JavaAndroid` (wire 2) to `JavaSourceKotlin` (wire 10), while that captured
-fixture remained unchanged. Its row is byte-identical to HEAD and contains no
-staking-registry dependency. The accepted plan now includes its separate repair:
-the canonical typed fixture generator regenerated that one record after the
-enum change; the identity assertions remain intact and their rerun is pending.
-No baseline runtime rebuild is claimed.
+and the complete default-executor library passed 180 tests. On 2026-09-23 the
+typed current-protocol printers recaptured the privacy qualification record,
+the staking monetary and peer-consent records, and the updated evidence nested
+in penalty cancellation. The canonical instruction-record selection now passes
+323 tests with zero failures and one intentional ignored printer. Its 321 rows,
+357 cases, strict identity checks and four-frame roundtrips remain enforced;
+no old decoder or identity fallback was added. The focused Core fee suite passes
+110 tests with no failures on the same monetary source. The current combined
+Core and network candidate still needs its own runtime qualification.
 
 The six-package test-target check passed before the subsequent pinned-stake
 custody and global-pool guard additions. Final Core, daemon, CLI, Torii and network
 validation is still pending. Compilation and source checks do not establish
 live finality or the outstanding outcomes above.
+
+Current integration work also includes explicit reviewed validator allocations for
+`xtask kagami-profiles`; signing must fail on an unfunded manifest rather than
+reintroducing implicit minting. The Rust-authored seven-row validator/staking
+Norito fixture and Kotlin typed decoder pass their focused three-test consumer
+suite, including strict quantity-decimal rejection. The committed seven-row
+fixture also passes a Rust-authored byte-for-byte pin test. The focused
+JavaScript staking codec passes three tests covering exact consent, monetary
+roundtrips, rejected retired JSON shapes and unsafe integers. The full Kotlin core suite
+fails 385 of 1,587 tests without the required same-source ABI-23 native bridge
+and Kotlin fixture-generator executable; that result is not an SDK pass. Swift
+source typechecking and a standalone Rust-fixture and strict quantity-decimal
+runtime smoke pass; its full package test still requires a rebuilt ABI-23 local
+bridge. CLI plan-file signing remains an intermediate workflow; complete SDK
+and operator qualification
+are outstanding. The new Kotlin/Swift source and shared fixture are in both
+maintained SDK source closures; their 25 focused Python closure/OpenAPI-pin
+controls pass. The maintained multilane formal structural/source-binding checker
+passes after rebinding the current Native preparation and State merge owners;
+the focused mutation suite and TLC/Apalache runners remain separate, and the
+checker must be rerun after the production-source cutover.
+
+The updated bridge successor regression passes on the current data-model source:
+one focused test rejects a self-consistent, re-signed authority, epoch authorization,
+or execution-policy substitution before hostile BLS verification. The retired
+layout scan is driving remaining generated schema and SDK fixture replacement.
+The funded Native validator's focused service selector passes 15 tests, including
+original-candidate readiness refusal and retry. Complete pre-execution admission,
+the production runner cutover and an unchanged-candidate Core rerun remain open;
+these focused checks do not qualify committee transitions or staking execution.
+
+The allocation-control checkpoint passed all 481 Concread library tests. The MV
+checkpoint reached 246 passes and one failing new restore-footprint oracle; the
+oracle was corrected to account for retained inline leaf capacity, and its rerun
+remains pending. These controls do not close production N0: native waiter/control
+allocations, complete original World payload admission, restoration and sole-owner
+production cutover remain open. Current Core integration is rebuilding after the
+wire and lifecycle replacements; no unchanged-candidate qualification is claimed.

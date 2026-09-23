@@ -53,8 +53,9 @@ current runtime bindings and durable deployment history.
 Reset input validation checks the complete action timeout budget before scanning
 artifacts or reading signing custody. The install budget counts every required
 artifact upload, including `kagami`, plus each validator's stage and install
-actions. All four beacon providers activate before the epoch supervisor starts;
-restart qualification follows that required barrier. Prepared Inrou stage files
+actions. Every signed-genesis bootstrap beacon provider activates before
+restart qualification. The retired epoch worker service and state must be
+absent. Prepared Inrou stage files
 use mode0600; retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 
@@ -83,11 +84,10 @@ the public testnet.
 ### Public-lane staking commands
 
 `iroha staking register-candidate` atomically registers a fresh consensus peer
-and bonds the validator's initial stake on an independent stake-elected lane.
-Fresh global lane-0 candidates remain blocked until an authenticated beacon
-and mint-key committee transition is prepared; that transition workflow is
-not implemented. A signed binding to an existing current global committee peer
-is supported. The command signs the complete registration
+and bonds the validator's initial stake on a stake-elected lane, including global
+lane 0. Admission schedules future election eligibility. Global committee
+activation additionally requires the frozen selection, complete credentials and
+every selected seat's custody evidence at the certified boundary. The command signs the complete registration
 against the genesis-derived `--network-id` with the key from
 `--peer-private-key-file`. That runtime file must use an absolute path, contain
 one canonical BLS-normal private key, and be owned by the caller with exact
@@ -99,15 +99,15 @@ schedules future eligibility; it does not change the current committee.
 iroha --config validator.toml staking register-candidate \
   --lane-id "$STAKE_ELECTED_LANE_ID" --validator "$VALIDATOR" --peer-id "$PEER_ID" \
   --initial-stake 25000 --network-id "$NETWORK_ID" --activation-height "$ACTIVATION_HEIGHT" \
-  --peer-private-key-file /run/iroha/peer.key
+  --peer-private-key-file /run/iroha/peer.key --monetary-plan candidate-plan.json
 iroha --config staker.toml staking bond \
-  --lane-id 0 --validator "$VALIDATOR" --amount 10.000000001
+  --lane-id 0 --validator "$VALIDATOR" --amount 10.000000001 --monetary-plan bond-plan.json
 iroha --config staker.toml staking schedule-unbond \
   --lane-id 0 --validator "$VALIDATOR" --amount 5 \
   --request-id "$WITHDRAWAL_HASH" --release-at-ms "$RELEASE_AT_MS"
 iroha --config staker.toml staking finalize-unbond \
-  --lane-id 0 --validator "$VALIDATOR" --request-id "$WITHDRAWAL_HASH"
-iroha --config recipient.toml staking claim-rewards --lane-id 0 --upto-epoch 12
+  --lane-id 0 --validator "$VALIDATOR" --request-id "$WITHDRAWAL_HASH" --monetary-plan withdrawal-plan.json
+iroha --config recipient.toml staking claim-rewards --lane-id 0 --claim-plan claim-plan.json
 iroha --config treasury.toml staking record-rewards --file epoch-rewards.json
 ```
 
@@ -118,15 +118,36 @@ owner or reward recipient to authorize their respective operations. Amounts
 are exact decimal quantities. Bond metadata accepts a Norito JSON object via
 `--metadata` and replaces the stake share's metadata.
 
-Candidate `--activation-height` must be the exact next unfrozen election boundary
-after the new key's activation lead. The signature is restricted to that tenure;
+Candidate `--activation-height` must be the exact next unfrozen election target
+after the new key's activation lead: E+2 before the selecting boundary, E+3 for
+an instruction in that boundary. The signature is restricted to that tenure;
 if the planned boundary passes before inclusion, prepare a new authorization.
 
 Choose and retain a unique canonical hash for `--request-id`; use that exact
 value when finalizing. `--release-at-ms` must respect the network's configured
 unbonding delay. Finalization additionally waits for consensus liability and
-pending evidence checks. Omitting `--upto-epoch` claims all available epochs;
-an explicit bound is inclusive.
+pending evidence checks. Registration, bonding, and finalization require a
+Norito JSON `PublicLaneMonetaryPlanV1`; claims require a
+`PublicLaneRewardClaimPlanV1`. These files bind the target network, expiry,
+exact assets and amounts, and current tenure or reward cursor/record commitments.
+The CLI prints the complete plan to stderr before signing and rejects mismatched
+runtime networks, recipients, amounts, or noncanonical plans. Core rechecks
+all state preconditions at execution. Plans use the network's committed XOR
+identity for staking and fees; public Nexus requires its own operator-selected
+identity and cannot substitute Taira's asset.
+
+Claim plans contain at most 64 ordered reward record commitments and 64 exact
+sources. A zero payout may advance record processing while preserving unpaid
+dust. Prepare canonical files with `staking prepare --lane-id 0
+--valid-for-blocks 20 --out plan.json` followed by `registration`, `bond`,
+`finalize-unbond`, or `claim-rewards` and the operation's explicit account/amount
+arguments. Registration accepts `--candidate` for fresh-peer key lead. Claims
+accept `--max-records 0..64`, `--upto-epoch`, and repeated `--accrued-source`
+for earlier unpaid sources. Output files are never overwritten. The command
+prints the coherent server observation, exact legs, balances and reserves;
+its block identity is not an independently verified state proof. Election
+eligibility assumes next-block inclusion. Refresh expired or stale plans;
+execution checks permissions, maturity, lifecycle and all monetary preconditions.
 
 `record-rewards` reads a Norito JSON `RecordPublicLaneRewards` object with
 `lane_id`, `epoch`, `reward_asset`, `total_reward`, `shares`, and `metadata`.
@@ -135,12 +156,11 @@ exact `amount`. The configured fee-sink authority submits the distribution;
 the chain verifies its funding and allocation totals. This command does not
 mint rewards. The existing `register`, `rebind`, `activate`, and `exit`
 commands remain available for their corresponding validator transitions.
-For a replacement peer distinct from the validator account key, `rebind`
-accepts `--network-id`, `--peer-private-key-file`, `--activation-height`, and
-`--previous-peer-id` together to sign consent for the exact stored pending
-tenure and binding. Without that consent, binding a distinct peer
-requires peer-management authority. The replacement peer must already have a
-valid registered consensus key.
+`rebind` requires `--network-id` matching the configured genesis network, `--peer-private-key-file`,
+`--activation-height`, and `--previous-peer-id` to sign replacement-peer
+consent for the exact stored pending tenure and binding. Consent is required
+even when the replacement peer matches the existing binding. A distinct
+replacement peer must already have a valid registered consensus key.
 
 ### Scaling load terminal handoff
 
@@ -820,3 +840,101 @@ height order from genesis through the exact stopped tip. The collector verifies
 that archive against the anchored finality chain and exact Kura carriers before
 publishing `Vec<FinalizedNativeContextV1>` and committed Network output queries.
 A genesis context alone cannot supply this historical execution evidence.
+
+
+### Frozen committee preparation
+
+`iroha staking committee status` queries the exact current or requested target.
+Every committee command requires `--trusted-context-id` and `--anchor-height`
+from an independent chain trust anchor, and verifies each immediate finalized
+successor through the observed tip. `--max-finality-heights` and `--timeout-ms`
+bound that work. A response without a selected preparation does not establish
+readiness; candidate publications and preparation progress remain observations
+until certified by the relevant boundary.
+
+`publish-candidate --candidate <FILE>` consumes Kagami's signed
+`ValidatorCandidateKeysV1`. `prepare-credentials` derives the complete ordered
+keys and beacon binding from the selected attempt. `admit-seat --readiness <FILE>`
+consumes Kagami's exact `AdmitValidatorCommitteeSeatV1`, verifies both actual
+Pasta-key and threshold-share possession against the anchored attempt, and
+rejects another transition or target epoch. These commands render the exact
+operation before normal transaction signing. Only boundary finality decides
+activation or cancellation; there is no administrative activate/cancel command.
+
+Kagami's offline `prove-committee-seat-readiness-v1` takes the public status,
+seat index and two inherited secret pipes. Runtime daemon credential provisioning
+is a separate custody handoff; a public proof file cannot establish that a
+running validator has installed its pending credentials.
+
+`staking committee export-selection-evidence` writes a new canonical Norito
+file for the frozen E+2 roster before a target DKG transcript exists. Supply
+`--trusted-context-id`, `--anchor-height`, `--target-epoch`,
+`--transition-id` and `--out` from independently selected network/attempt
+pins. The export verifies contiguous finality into E+1, the exact frozen
+selection, target BLS possession proofs and the unchanged incumbent authority.
+It authorizes only the selected DKG attempt; it does not prove candidate
+Pasta keys, completed custody, a finalized transcript or activation.
+
+For a fresh four-seat network, `iroha3d_taira beacon-bootstrap
+provision-genesis-seat` takes the canonical request, signed prepared genesis,
+manifest, public key and canonical height-one finality proof, plus an
+independently pinned `--network-id` and `--chain-discriminant`. Each physical
+seat supplies only its own
+native BLS key through inherited FD 198 and receives the same separate public
+and finality FIFOs described below. The daemon checks the signed genesis voting
+roster and PoPs before accepting height one. `assemble-genesis-dkg` requires
+height-two through height-four finality proofs and all four provider manifests;
+`sign-genesis-install` and `assemble-genesis-install` require three of the four
+genesis voters to authorize the exact install draft before the first pulse.
+Those commands emit artifacts and an instruction; they do not submit it.
+
+Run `iroha3d_taira beacon-bootstrap provision-rotation-seat` once per target
+seat with that binary file as `--selection-evidence`. Supply the same independent
+`--network-id`, `--trusted-context-id`, `--anchor-height`, `--target-epoch` and
+`--transition-id` on every invocation, plus that seat's one-based
+`--signer-index`, inherited native BLS identity through `--key-fd 198` or
+`--config-fd 198`, `--provider-handle`, `--provider-revision`, separate inherited
+`--public-fd` and `--finality-fd` FIFOs, and an existing owner-private
+`--attempt-root`. The daemon derives the exact attempt/seat child name and
+claims it before generating one dealer polynomial and one recipient secret.
+A failed or restarted attempt cannot regenerate those secrets in that root;
+the current quorum must retain and cancel it. The public FIFO carries canonical
+length-prefixed signed publication, all-edge and assembled-session snapshots.
+The finality FIFO carries contiguous canonical `BridgeFinalityProof` frames,
+each preceded by a four-byte big-endian length. Every seat verifies the exact
+selection chain and phase proofs before writing its owner-private credential,
+`pending-share.bin`, and public provider manifest. The credential covers only
+that seat's session; it does not replace retained incumbent credentials.
+
+After all seats have published, `beacon-bootstrap assemble-rotation-dkg` takes
+the same selection evidence and independent pins, the complete canonical
+`--public-session`, one canonical `--phase-proof` file per height from selection
+through DKG finalization, every seat's `--provider` manifest, and an in-window
+`--certificate-height`. It verifies the ordered complete transcript and finality
+chain and emits a public bundle with an **unsigned**
+`FinalizeGlobalBeaconKey` draft. Each incumbent signs that exact bundle with
+`beacon-bootstrap sign-rotation`, passing the original selection evidence and
+pins, `--bundle`, zero-based `--signer-index`, inherited signing key through
+`--key-fd 198` or `--config-fd 198`, and a new `--output` signature file.
+`assemble-rotation` takes the same inputs plus one `--signature` per signer;
+both commands independently reverify the embedded phase proofs. Assembly writes
+only the native finalization instruction for normal authorized transaction
+admission. The current exact quorum must still finalize it, every target seat
+must prove actual installed custody and possession, and only authenticated
+boundary finality can activate the transition.
+The public-reset controller now starts four separate genesis-seat processes,
+relays their signed public frames against independently verified h1–h4 finality,
+and assembles the exact genesis install instruction. Its one administrative
+host can still read all four validator configuration copies; this is not
+operator-isolated custody. The disposable 4→7→4 activation and production
+operator-isolated ceremony remain unqualified, so these commands alone do not
+establish release readiness.
+
+`staking committee export-custody-evidence` requires an independent context/height
+anchor, explicit target epoch and transition ID, and
+`--beacon-finalization-certificate` with the incumbent quorum's exact public
+`FinalizeGlobalBeaconKey` certificate. It verifies the complete bounded chain
+and writes a new canonical binary evidence file for daemon
+`beacon-prepare-custody`. Progress observations alone cannot authorize a changed
+transcript; this export proves pending-custody authorization, not transaction
+inclusion or committee activation.

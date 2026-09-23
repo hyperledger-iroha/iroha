@@ -2,7 +2,7 @@ mod native_preparation_errors {
     use super::*;
     use crate::{
         block::valid::NativeCandidatePreparationError,
-        state::{BlockHashAdmissionError, MergeLedgerCommitError},
+        state::{MergeLedgerCommitError, StateStorageAdmissionError},
         sumeragi::v2_body_store::{BodyValidationRejectionIdentity, LocalValidationRefusal},
     };
     use std::{
@@ -12,36 +12,57 @@ mod native_preparation_errors {
     };
 
     #[test]
-    fn hash_admission_retains_original_release_and_runner_through_all_native_origins() {
+    fn state_storage_admission_retains_original_release_and_runner_through_all_native_origins() {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         fixture.service.queue.set_sumeragi_wake(sender);
-        for origin in 0..3 {
-            for dependency in 0..3 {
+        for origin in 0..5 {
+            for dependency in 0..5 {
                 let release = concread::release::ReleaseNotification::default();
                 let foreign = concread::release::ReleaseNotification::default();
                 let pool = mv::allocation::AllocationBudget::new(1);
                 let occupied = pool.try_reserve_bytes(1).unwrap();
                 let refusal = match dependency {
-                    0 => BlockHashAdmissionError::Busy(release.observe()),
-                    1 => BlockHashAdmissionError::Changed(release.observe()),
-                    _ => {
-                        BlockHashAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap())
+                    0 => StateStorageAdmissionError::Busy(release.observe()),
+                    1 => StateStorageAdmissionError::Changed(release.observe()),
+                    2 => StateStorageAdmissionError::Capacity(
+                        pool.try_reserve_bytes(1).err().unwrap(),
+                    ),
+                    3 => {
+                        StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Busy {
+                            role: mv::storage::StorageRole::Current,
+                            release: release.observe(),
+                        })
                     }
+                    _ => StateStorageAdmissionError::World(
+                        mv::storage::AdmittedStorageError::Allocation(
+                            pool.try_reserve_bytes(1).err().unwrap(),
+                        ),
+                    ),
                 };
                 let expected = refusal.release_wait().unwrap().clone();
                 let error = match origin {
                     0 => NativeCandidatePreparationError::Preflight(Box::new(
-                        BlockValidationError::BlockHashAdmission(refusal),
+                        BlockValidationError::StateStorageAdmission(refusal),
                     )),
                     1 => NativeCandidatePreparationError::Execution(
-                        MergeLedgerCommitError::BlockHashAdmission(refusal),
+                        MergeLedgerCommitError::StateStorageAdmission(refusal),
                     ),
-                    _ => NativeCandidatePreparationError::Execution(
+                    2 => NativeCandidatePreparationError::Execution(
                         MergeLedgerCommitError::NativeControlValidation(Box::new(
-                            BlockValidationError::BlockHashAdmission(refusal),
+                            BlockValidationError::StateStorageAdmission(refusal),
                         )),
                     ),
+                    _ => NativeCandidatePreparationError::Preflight(Box::new(
+                        BlockValidationError::from_npos_application_error(
+                            eyre::Report::new(refusal).wrap_err("pristine transaction admission"),
+                            if origin == 3 {
+                                "NPoS effects"
+                            } else {
+                                "merge beacon composition"
+                            },
+                        ),
+                    )),
                 };
                 let classified = fixture
                     .service
@@ -52,7 +73,7 @@ mod native_preparation_errors {
                 else {
                     panic!("Native origin {origin} lost its exact hash dependency: {classified:?}");
                 };
-                assert_eq!(busy.resource, "block_hash_history");
+                assert_eq!(busy.resource, "state_storage");
                 assert_eq!(busy.wait, expected);
                 let mut wait = busy.wait.clone().wait_for_release();
                 assert_eq!(
@@ -65,7 +86,7 @@ mod native_preparation_errors {
                     Poll::Pending
                 );
                 assert!(receiver.try_recv().is_err());
-                if dependency == 2 {
+                if matches!(dependency, 2 | 4) {
                     drop(release.guard(()));
                     assert_eq!(
                         Pin::new(&mut wait).poll(&mut Context::from_waker(busy.waker())),
@@ -92,6 +113,17 @@ mod native_preparation_errors {
                 assert!(receiver.try_recv().is_err());
             }
         }
+    }
+
+    #[test]
+    fn npos_application_semantic_error_remains_a_deterministic_rejection() {
+        assert_eq!(
+            BlockValidationError::from_npos_application_error(
+                eyre::eyre!("invalid penalty action"),
+                "NPoS effects",
+            ),
+            BlockValidationError::NposEffectsInvalid("NPoS effects: invalid penalty action".into()),
+        );
     }
 
     #[test]
@@ -151,9 +183,9 @@ mod native_preparation_errors {
                     "local source preparation has no typed semantic verdict".to_owned(),
                 ),
             ),
-            NativeCandidatePreparationError::Execution(MergeLedgerCommitError::BlockHashAdmission(
-                BlockHashAdmissionError::Poisoned,
-            )),
+            NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::StateStorageAdmission(StateStorageAdmissionError::Poisoned),
+            ),
         ] {
             let classified = fixture
                 .service

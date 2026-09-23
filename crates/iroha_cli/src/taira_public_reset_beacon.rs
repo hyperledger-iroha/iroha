@@ -16,13 +16,18 @@ use iroha_core::beacon::{
     GlobalThresholdBeaconDkgPhaseV1, GlobalThresholdBeaconDkgStateV1,
     global_threshold_beacon_roster_hash_v1,
 };
-use iroha_crypto::PublicKey;
+use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
+    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
 };
-use std::process::{ChildStderr, ChildStdout};
+use std::num::NonZeroU64;
 use zeroize::Zeroizing;
+
+#[path = "taira_public_reset_beacon/relay.rs"]
+mod relay;
+use relay::GenesisRelay;
 
 const PLAN_SCHEMA: &str = "iroha.taira.public-reset.beacon-bootstrap-plan.v1";
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
@@ -85,17 +90,19 @@ struct GenesisProofV1 {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
+    first_finality: BridgeFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PublicBundleV1 {
     schema: String,
-    genesis: GenesisProofV1,
     request: NativeRequestV1,
+    genesis: GenesisProofV1,
+    phase_proofs: Vec<BridgeFinalityProof>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    certificate: ThresholdKeyLifecycleCertificateV1,
+    finalization_draft: ThresholdKeyLifecycleCertificateV1,
     providers: Vec<ProviderV1>,
 }
 
@@ -246,23 +253,29 @@ fn derive_public_beacon_inputs_from_slots(
         ));
     }
     let network = NetworkId::from_genesis_hash(genesis.expected_hash());
-    let mut digest = Sha256::new();
-    digest.update(b"iroha:taira:public-reset:beacon-session:v1\0");
-    digest.update(network.as_bytes());
-    digest.update(nonce.as_bytes());
     let request = NativeRequestV1 {
         schema: REQUEST_SCHEMA.into(),
         dkg_session: GlobalThresholdBeaconDkgSessionV1 {
             version: 1,
             network_id: network,
-            session_id: digest.finalize().into(),
+            session_id: Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-session.v1\0",
+                network.as_bytes(),
+            ])
+            .into(),
+            attempt_id: Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-attempt.v1\0",
+                network.as_bytes(),
+            ])
+            .into(),
+            authority_generation: 0,
             roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
             committee_size: 4,
             threshold: 2,
             start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
         },
         target_roster: roster.clone(),
         authorization_roster: roster.clone(),
@@ -277,6 +290,8 @@ fn derive_public_beacon_inputs_from_slots(
     )
     .map_err(|error| eyre!("native fresh beacon request is invalid: {error:?}"))?;
     let mut final_units = Vec::new();
+    let attempt = hex::encode(request.dkg_session.attempt_id);
+    let network_root = hex::encode(network.as_bytes());
     for (validator, peer) in validators.iter().zip(selected) {
         reset::validate_slug("beacon validator role", validator.slug)?;
         let seat = roster
@@ -286,7 +301,7 @@ fn derive_public_beacon_inputs_from_slots(
             + 1;
         final_units.push(PreparedBeaconUnitV1 {
             validator: validator.slug.to_owned(), signer_index: u16::try_from(seat)?,
-            credential_path: format!("/var/lib/taira/.public-reset-control-v1/beacon/{nonce}/ceremony/seat-{seat}/{CREDENTIAL_FILE}"),
+            credential_path: format!("/var/lib/taira/.public-reset-control-v1/beacon/{network_root}/ceremony/attempt-{attempt}-seat-{seat}/{CREDENTIAL_FILE}"),
             config_file: "beacon.toml".into(),
         });
     }
@@ -299,13 +314,21 @@ fn derive_public_beacon_inputs_from_slots(
 }
 
 pub(in super::super) fn ceremony_root(inventory: &InventoryV1) -> PathBuf {
-    Path::new("/var/lib/taira/.public-reset-control-v1/beacon").join(&inventory.authorization_nonce)
+    Path::new("/var/lib/taira/.public-reset-control-v1/beacon").join(hex::encode(
+        inventory
+            .beacon_bootstrap
+            .request
+            .dkg_session
+            .network_id
+            .as_bytes(),
+    ))
 }
 
 fn credential_path(inventory: &InventoryV1, index: usize) -> PathBuf {
+    let attempt = hex::encode(inventory.beacon_bootstrap.request.dkg_session.attempt_id);
     ceremony_root(inventory)
         .join("ceremony")
-        .join(format!("seat-{}", index + 1))
+        .join(format!("attempt-{attempt}-seat-{}", index + 1))
         .join(CREDENTIAL_FILE)
 }
 
@@ -324,8 +347,23 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
         || request.target_roster.iter().collect::<BTreeSet<_>>() != expected_roster.iter().collect()
         || request.authorization_roster != request.target_roster
         || hex::encode(request.dkg_session.network_id.as_bytes()) != inventory.next_genesis_hash
+        || request.dkg_session.session_id
+            != <[u8; 32]>::from(Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-session.v1\0",
+                request.dkg_session.network_id.as_bytes(),
+            ]))
+        || request.dkg_session.attempt_id
+            != <[u8; 32]>::from(Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-attempt.v1\0",
+                request.dkg_session.network_id.as_bytes(),
+            ]))
+        || request.dkg_session.authority_generation != 0
         || request.dkg_session.committee_size != 4
         || request.dkg_session.threshold != 2
+        || request.dkg_session.start_height != 1
+        || request.dkg_session.commitments_end_height != 2
+        || request.dkg_session.deliveries_end_height != 3
+        || request.dkg_session.acceptances_end_height != 4
         || request.dkg_session.roster_hash
             != global_threshold_beacon_roster_hash_v1(&request.target_roster)
         || request.provider_handles.len() != 4
@@ -352,9 +390,10 @@ pub(in super::super) fn validate_plan(inventory: &InventoryV1) -> Result<()> {
         &AdaptiveGlobalThresholdBeaconDkgCryptoV1,
     )
     .map_err(|_| eyre!("beacon bootstrap has invalid native DKG windows"))?;
-    if state.phase_at(request.dkg_session.start_height) != GlobalThresholdBeaconDkgPhaseV1::Sharing
+    if state.phase_at(request.dkg_session.start_height)
+        != GlobalThresholdBeaconDkgPhaseV1::Commitments
     {
-        return Err(eyre!("beacon bootstrap must begin in native Sharing"));
+        return Err(eyre!("beacon bootstrap must begin in native Commitments"));
     }
     // Unit interpretation remains the native renderer/loaded-systemd contract. This
     // inventory binds the exact public bytes, including the fixed credential/config paths.
@@ -499,245 +538,10 @@ fn mark_started(
 fn require_new_ceremony(root: &Path, next: usize) -> Result<()> {
     if next != 0 || root.join("started.json").try_exists()? {
         return Err(eyre!(
-            "beacon ceremony process was lost before its final bundle; retain this attempt and prepare a fresh deployment explicitly"
+            "beacon ceremony was lost before its final bundle; retain this attempt and prepare a fresh deployment explicitly"
         ));
     }
     Ok(())
-}
-
-/// Own only the child/process group created by this controller invocation.
-/// Neither the shared host-action lock nor a remote HostAction spans its lifetime.
-struct CeremonyChild {
-    child: Child,
-    height_writer: Option<File>,
-    stdout: ChildStdout,
-    stderr: ChildStderr,
-    stdout_bytes: Vec<u8>,
-    stderr_bytes: Vec<u8>,
-    deadline: Instant,
-    last_height: u64,
-    complete: bool,
-}
-
-impl Drop for CeremonyChild {
-    fn drop(&mut self) {
-        self.height_writer.take();
-        if !self.complete {
-            let _ = terminate_owned_child(&mut self.child);
-        }
-    }
-}
-
-impl CeremonyChild {
-    #[cfg(unix)]
-    #[allow(
-        unsafe_code,
-        reason = "only the controller-owned FIFO read descriptor survives into its owned child"
-    )]
-    fn spawn(
-        program: &Path,
-        mut args: Vec<OsString>,
-        initial_height: u64,
-        deadline: Instant,
-    ) -> Result<Self> {
-        ensure_local_deadline(Some(deadline))?;
-        let (reader, writer) = std::io::pipe()?;
-        let reader = File::from(std::os::fd::OwnedFd::from(reader));
-        let writer = File::from(std::os::fd::OwnedFd::from(writer));
-        let fd = reader.as_raw_fd();
-        if fd < 3 || matches!(fd, 198..=200) {
-            return Err(eyre!(
-                "beacon height pipe overlaps reserved signer descriptors"
-            ));
-        }
-        args.extend(["--height-fd".into(), fd.to_string().into()]);
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env_clear()
-            .env("LC_ALL", "C")
-            .current_dir("/")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        unsafe {
-            command.pre_exec(move || {
-                rustix::io::fcntl_setfd(
-                    std::os::fd::BorrowedFd::borrow_raw(fd),
-                    rustix::io::FdFlags::empty(),
-                )
-                .map_err(std::io::Error::from)
-            });
-        }
-        let mut child = command
-            .spawn()
-            .wrap_err("could not spawn native beacon provisioner")?;
-        drop(reader);
-        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-            let _ = terminate_owned_child(&mut child);
-            return Err(eyre!("beacon child public pipes missing"));
-        };
-        let result = Self {
-            child,
-            height_writer: Some(writer),
-            stdout,
-            stderr,
-            stdout_bytes: Vec::new(),
-            stderr_bytes: Vec::new(),
-            deadline,
-            last_height: initial_height,
-            complete: false,
-        };
-        for fd in [
-            result.stdout.as_fd(),
-            result.stderr.as_fd(),
-            result.height_writer.as_ref().unwrap().as_fd(),
-        ] {
-            let flags = rustix::fs::fcntl_getfl(fd)?;
-            rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK)?;
-        }
-        Ok(result)
-    }
-
-    fn poll(&mut self) -> Result<Option<ExitStatus>> {
-        ensure_local_deadline(Some(self.deadline))?;
-        drain_public_pipe(&mut self.stdout, &mut self.stdout_bytes)?;
-        drain_public_pipe(&mut self.stderr, &mut self.stderr_bytes)?;
-        let status = self.child.try_wait()?;
-        ensure_local_deadline(Some(self.deadline))?;
-        if let Some(status) = status {
-            if !status.success() {
-                return Err(eyre!(
-                    "native beacon provisioner failed; retain the ceremony marker and discard uninstalled secrets"
-                ));
-            }
-        }
-        Ok(status)
-    }
-
-    fn require_running(&mut self) -> Result<()> {
-        if self.poll()?.is_some() {
-            return Err(eyre!(
-                "beacon provisioner exited before its final authenticated height"
-            ));
-        }
-        Ok(())
-    }
-
-    fn wait_sharing(
-        &mut self,
-        root: &Path,
-        expected: &GlobalThresholdBeaconDkgSessionV1,
-    ) -> Result<()> {
-        loop {
-            if self.poll()?.is_some() {
-                return Err(eyre!(
-                    "beacon provisioner exited before the controller completed required ledger operations"
-                ));
-            }
-            let path = root.join("ceremony/sharing-snapshot.json");
-            if path.try_exists()? {
-                let (file, snapshot) = open_pinned_regular(&path, "beacon Sharing snapshot")?;
-                let bytes = read_pinned_bytes(
-                    &path,
-                    "beacon Sharing snapshot",
-                    file,
-                    &snapshot,
-                    PUBLIC_LIMIT,
-                )?;
-                let snapshot: iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1 =
-                    json::from_slice(&bytes)?;
-                snapshot
-                    .validate()
-                    .map_err(|error| eyre!("native Sharing snapshot is invalid: {error:?}"))?;
-                if &snapshot.session != expected
-                    || snapshot.last_updated_height != self.last_height
-                    || snapshot.dealer_commitments.len() != 4
-                    || !snapshot.complaints.is_empty()
-                    || !snapshot.complaint_responses.is_empty()
-                {
-                    return Err(eyre!(
-                        "native Sharing snapshot differs from the authorized fresh session"
-                    ));
-                }
-                return Ok(());
-            }
-            std::thread::sleep(
-                PROCESS_POLL_INTERVAL.min(self.deadline.saturating_duration_since(Instant::now())),
-            );
-        }
-    }
-
-    fn deliver(&mut self, root: &Path, height: &VerifiedCommittedHeightV1) -> Result<()> {
-        let current = height.committed_height().get();
-        if current <= self.last_height {
-            return Err(eyre!(
-                "beacon controller cannot repeat or invent an observed height"
-            ));
-        }
-        let evidence = canonical_json_report_bytes(&json::to_value(height)?)?;
-        // Durable full evidence precedes the only integer written to the FIFO.
-        reset::inputs::write_new_private(&root.join(format!("height-{current}.json")), &evidence)?;
-        self.require_running()?;
-        let bytes = format!("{current}\n");
-        let writer = self
-            .height_writer
-            .as_mut()
-            .ok_or_else(|| eyre!("beacon height pipe already closed"))?;
-        match writer.write(bytes.as_bytes()) {
-            Ok(count) if count == bytes.len() => self.last_height = current,
-            Ok(_) => {
-                return Err(eyre!(
-                    "beacon height FIFO did not accept the complete atomic record"
-                ));
-            }
-            Err(error) => {
-                return Err(error).wrap_err("beacon height FIFO rejected authenticated evidence");
-            }
-        }
-        Ok(())
-    }
-
-    fn finish(mut self, root: &Path) -> Result<()> {
-        self.height_writer.take();
-        while self.poll()?.is_none() {
-            std::thread::sleep(
-                PROCESS_POLL_INTERVAL.min(self.deadline.saturating_duration_since(Instant::now())),
-            );
-        }
-        let bundle = root.join("ceremony/public-bundle.json");
-        let (file, snapshot) = open_pinned_regular(&bundle, "completed native beacon bundle")?;
-        let bytes = read_pinned_bytes(
-            &bundle,
-            "completed native beacon bundle",
-            file,
-            &snapshot,
-            PUBLIC_LIMIT,
-        )?;
-        let _: PublicBundleV1 = json::from_slice(&bytes)?;
-        ensure_local_deadline(Some(self.deadline))?;
-        self.complete = true;
-        Ok(())
-    }
-}
-
-fn drain_public_pipe(reader: &mut impl Read, output: &mut Vec<u8>) -> Result<()> {
-    let mut buffer = [0; 8192];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(count) => {
-                if output.len().saturating_add(count) > MAX_PROCESS_OUTPUT {
-                    return Err(eyre!("beacon child exceeded bounded public output"));
-                }
-                output.extend_from_slice(&buffer[..count]);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error).wrap_err("cannot read beacon child public output"),
-        }
-    }
 }
 
 fn read_public<T: JsonDeserialize>(path: &Path, label: &str) -> Result<(T, Vec<u8>)> {
@@ -872,8 +676,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         Ok(output.stdout)
     }
 
-    /// Start the one fresh process, execute the three existing canaries once, and
-    /// hand it only the final authenticated height after all three applied.
+    /// Start four one-seat processes and advance each signed DKG phase after its
+    /// corresponding canary is included in authenticated finality.
     fn provision_beacon(
         &mut self,
         progress: &mut dyn RecoveryProgress,
@@ -913,7 +717,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         )
         .map_err(|_| eyre!("invalid DKG session"))?;
         if state.phase_at(initial.committed_height().get())
-            != GlobalThresholdBeaconDkgPhaseV1::Sharing
+            != GlobalThresholdBeaconDkgPhaseV1::Commitments
         {
             return Err(eyre!(
                 "actual committed height is outside the signed fresh DKG sharing window"
@@ -936,9 +740,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             &request_bytes,
             &initial,
         )?;
-        let args = vec![
-            "beacon-bootstrap".into(),
-            "provision".into(),
+        let h1 = initial
+            .proof_at(NonZeroU64::new(1).ok_or_else(|| eyre!("invalid genesis height"))?)
+            .ok_or_else(|| eyre!("authenticated h1 finality is unavailable"))?;
+        reset::inputs::write_new_private(
+            &root.join("genesis-finality.norito"),
+            &norito::encode_canonical(h1)?,
+        )?;
+        let proof_args = vec![
+            "--network-id".into(),
+            request.dkg_session.network_id.to_string().into(),
+            "--chain-discriminant".into(),
+            inventory.chain_discriminant.to_string().into(),
             "--request".into(),
             root.join("request.json").into_os_string(),
             "--genesis-manifest".into(),
@@ -947,33 +760,46 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             root.join("genesis.signed.nrt").into_os_string(),
             "--genesis-public-key".into(),
             root.join("genesis.public-key").into_os_string(),
-            "--observed-height".into(),
-            initial.committed_height().to_string().into(),
-            "--output".into(),
-            root.join("ceremony").into_os_string(),
-            "--timeout-ms".into(),
-            deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .to_string()
-                .into(),
+            "--genesis-finality".into(),
+            root.join("genesis-finality.norito").into_os_string(),
         ];
-        let mut child = CeremonyChild::spawn(
-            &self.beacon_daemon()?,
-            args,
-            initial.committed_height().get(),
-            deadline,
-        )?;
-        child.wait_sharing(
-            &root,
-            &self.admitted.inventory.beacon_bootstrap.request.dkg_session,
-        )?;
+        let ceremony = root.join("ceremony");
+        ensure_private_directory(&ceremony)?;
+        let program = self.beacon_daemon()?;
+        let mut relay = GenesisRelay::new(request.dkg_session, h1, deadline)?;
+        for (index, peer) in request.target_roster.iter().enumerate() {
+            let selected = inventory
+                .validator_clients
+                .iter()
+                .position(|client| client.peer_id == peer.to_string())
+                .ok_or_else(|| eyre!("signed genesis seat has no selected validator"))?;
+            let validator = &inventory.validators[selected];
+            let original = self.closure.file(&validator.slug, "config")?;
+            validate_snapshot_file(original, artifact(&validator.artifacts, "config")?)?;
+            let (file, snapshot) = open_pinned_regular(original, "genesis seat config")?;
+            let config = Zeroizing::new(read_pinned_bytes(
+                original,
+                "genesis seat config",
+                file,
+                &snapshot,
+                CONFIG_LIMIT,
+            )?);
+            relay.spawn_seat(
+                &program,
+                &ceremony,
+                &proof_args,
+                u16::try_from(index + 1)?,
+                &config,
+            )?;
+        }
+        relay.publications()?;
         let mut final_height = None;
-        for (index, kind) in ["onboarding", "faucet", "write_canary"]
-            .into_iter()
-            .enumerate()
+        for (index, (kind, phase_height)) in
+            [("onboarding", 2_u64), ("faucet", 3), ("write_canary", 4)]
+                .into_iter()
+                .enumerate()
         {
-            child.require_running()?;
+            relay.require_running()?;
             self.run_journaled_write_canary_child(
                 progress,
                 index,
@@ -983,10 +809,29 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             )?;
             let observed =
                 observe_new(&mut observer, &clients, &self.admitted.inventory, deadline)?;
+            if phase_height < 4 && observed.committed_height().get() != phase_height {
+                return Err(eyre!(
+                    "genesis DKG missed an exact public-edge phase cutoff; retain this attempt"
+                ));
+            }
             reset::inputs::write_new_private(
                 &root.join(format!("after-{kind}.json")),
                 &canonical_json_report_bytes(&json::to_value(&observed)?)?,
             )?;
+            let proof = observed
+                .proof_at(NonZeroU64::new(phase_height).ok_or_else(|| eyre!("invalid DKG phase"))?)
+                .ok_or_else(|| eyre!("required authenticated DKG phase finality is unavailable"))?;
+            reset::inputs::write_new_private(
+                &ceremony.join(format!("phase-{phase_height}.norito")),
+                &norito::encode_canonical(proof)?,
+            )?;
+            relay.advance(phase_height, proof)?;
+            match phase_height {
+                2 => relay.deliveries()?,
+                3 => relay.acceptances()?,
+                4 => {}
+                _ => return Err(eyre!("unexpected DKG phase")),
+            }
             final_height = Some(observed);
         }
         let observed = final_height
@@ -998,25 +843,68 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 .beacon_bootstrap
                 .request
                 .dkg_session
-                .responses_end_height
+                .acceptances_end_height
         {
             return Err(eyre!(
                 "the three required operations did not reach DKG response completion; no empty carrier is permitted"
             ));
         }
-        child.deliver(&root, &observed)?;
-        child.finish(&root)?;
+        let (public_session, providers, phase_proofs) = relay.finish()?;
+        let public_session_path = ceremony.join("public-session.norito");
+        reset::inputs::write_new_private(
+            &public_session_path,
+            &norito::encode_canonical(&public_session)?,
+        )?;
+        let mut assemble_args: Vec<OsString> =
+            vec!["beacon-bootstrap".into(), "assemble-genesis-dkg".into()];
+        assemble_args.extend(proof_args);
+        for phase_height in 2..=4 {
+            assemble_args.extend([
+                "--phase-proof".into(),
+                ceremony
+                    .join(format!("phase-{phase_height}.norito"))
+                    .into_os_string(),
+            ]);
+        }
+        assemble_args.extend([
+            "--public-session".into(),
+            public_session_path.into_os_string(),
+        ]);
+        for provider in providers {
+            assemble_args.extend(["--provider".into(), provider.into_os_string()]);
+        }
+        assemble_args.extend([
+            "--certificate-height".into(),
+            observed
+                .committed_height()
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| eyre!("beacon install height overflow"))?
+                .to_string()
+                .into(),
+            "--output".into(),
+            ceremony.join("public-bundle.json").into_os_string(),
+        ]);
+        self.run_beacon_native(assemble_args, Vec::new(), deadline)?;
         let (bundle, bytes) = read_public::<PublicBundleV1>(
             &root.join("ceremony/public-bundle.json"),
             "beacon public bundle",
         )?;
         validate_bundle_identity(&self.admitted.inventory, &bundle)?;
+        if bundle.record.session != public_session
+            || bundle.phase_proofs != phase_proofs
+            || &bundle.genesis.first_finality != h1
+        {
+            return Err(eyre!(
+                "native beacon bundle differs from the per-seat signed public exchange"
+            ));
+        }
         let completed = CompletedV1 {
             schema: "iroha.taira.public-reset.beacon-completed.v1".into(),
             authorization_sha256: self.admitted.authorization_sha256.clone(),
             bundle_sha256: sha256_hex(&bytes),
-            finalized_observed_height: observed.committed_height().get(),
-            provisioner_exit_code: 0,
+            finalized_observed_height: public_session.adaptive_dkg.finalized_at_height,
+            seat_processes_exit_code: 0,
         };
         reset::inputs::write_new_private(
             &root.join("complete.json"),
@@ -1032,7 +920,7 @@ struct CompletedV1 {
     authorization_sha256: String,
     bundle_sha256: String,
     finalized_observed_height: u64,
-    provisioner_exit_code: i32,
+    seat_processes_exit_code: i32,
 }
 
 fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) -> Result<()> {
@@ -1046,17 +934,34 @@ fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) ->
         || bundle.record.session.adaptive_dkg.session != plan.request.dkg_session
         || bundle.record.session.adaptive_dkg.finalized_at_height
             != bundle.finalized_observed_height
-        || bundle.certificate.effective_height
-            != bundle
-                .finalized_observed_height
-                .checked_add(1)
-                .ok_or_else(|| eyre!("beacon install height overflow"))?
+        || bundle.finalized_observed_height != plan.request.dkg_session.acceptances_end_height
+        || bundle.finalization_draft.effective_height <= bundle.finalized_observed_height
+        || bundle.phase_proofs.len() != 3
     {
         return Err(eyre!(
             "native beacon bundle differs from the exact signed bootstrap plan"
         ));
     }
-    let _ = plan_genesis(inventory, &bundle.genesis.signed_wire)?;
+    let genesis = plan_genesis(inventory, &bundle.genesis.signed_wire)?;
+    if bundle.genesis.first_finality.block_header.hash() != genesis.block().hash()
+        || bundle.genesis.first_finality.finality_artifact.height != 1
+    {
+        return Err(eyre!(
+            "native beacon bundle has another signed-genesis anchor"
+        ));
+    }
+    let mut verifier = BridgeFinalityVerifier::with_context(
+        plan.request.dkg_session.network_id,
+        bundle.genesis.first_finality.finality_artifact.context_id(),
+    );
+    verifier.verify(&bundle.genesis.first_finality)?;
+    for (offset, proof) in bundle.phase_proofs.iter().enumerate() {
+        let height = u64::try_from(offset + 2)?;
+        if proof.finality_artifact.height != height || proof.block_header.height().get() != height {
+            return Err(eyre!("beacon phase proof is not an immediate successor"));
+        }
+        verifier.verify(proof)?;
+    }
     for (index, provider) in bundle.providers.iter().enumerate() {
         if provider.signer_index != u16::try_from(index + 1)?
             || provider.validator != plan.request.target_roster[index]
@@ -1083,7 +988,7 @@ fn validate_completed_ceremony(
     if completed.schema != "iroha.taira.public-reset.beacon-completed.v1"
         || completed.authorization_sha256 != authorization
         || completed.bundle_sha256 != sha256_hex(&bytes)
-        || completed.provisioner_exit_code != 0
+        || completed.seat_processes_exit_code != 0
         || completed.finalized_observed_height != bundle.finalized_observed_height
     {
         return Err(eyre!(
@@ -1122,11 +1027,21 @@ fn verify_native_install(
     let output = temporary.path().join("instructions.json");
     let mut args = vec![
         "beacon-bootstrap".into(),
-        "assemble-install".into(),
+        "assemble-genesis-install".into(),
+        "--network-id".into(),
+        inventory
+            .beacon_bootstrap
+            .request
+            .dkg_session
+            .network_id
+            .to_string()
+            .into(),
+        "--chain-discriminant".into(),
+        inventory.chain_discriminant.to_string().into(),
         "--bundle".into(),
         bundle_path.clone().into_os_string(),
     ];
-    let mut certificate = bundle.certificate.clone();
+    let mut certificate = bundle.finalization_draft.clone();
     certificate.signatures.clear();
     for seat in 0..3 {
         let signature = root.join(format!("signature-{seat}.json"));
@@ -1325,7 +1240,22 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             }
             let args = vec![
                 "beacon-bootstrap".into(),
-                "sign-install".into(),
+                "sign-genesis-install".into(),
+                "--network-id".into(),
+                self.admitted
+                    .inventory
+                    .beacon_bootstrap
+                    .request
+                    .dkg_session
+                    .network_id
+                    .to_string()
+                    .into(),
+                "--chain-discriminant".into(),
+                self.admitted
+                    .inventory
+                    .chain_discriminant
+                    .to_string()
+                    .into(),
                 "--bundle".into(),
                 root.join("ceremony/public-bundle.json").into_os_string(),
                 "--signer-index".into(),
@@ -1399,7 +1329,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         .claims
                         .execution_expires_at_unix_ms,
                 )?;
-            if fee_quote.observation.next_block_height != native.bundle.certificate.effective_height
+            if fee_quote.observation.next_block_height
+                != native.bundle.finalization_draft.effective_height
             {
                 return Err(eyre!(
                     "beacon install height advanced after DKG; the certified instruction cannot be replaced"
@@ -1476,7 +1407,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             let outcome = blocking
                 .client()
                 .wait_for_transaction_applied(transaction.hash(), options)?;
-            if outcome.block_height != Some(native.bundle.certificate.effective_height) {
+            if outcome.block_height != Some(native.bundle.finalization_draft.effective_height) {
                 return Err(eyre!(
                     "beacon installation applied outside its certified exact height"
                 ));
@@ -1487,7 +1418,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 AuthenticatedHeightObserverV1::new(&genesis, peers(&self.admitted.inventory)?)?;
             let height = observe_new(&mut observer, &client, &self.admitted.inventory, deadline)?;
             let carrier_height =
-                std::num::NonZeroU64::new(native.bundle.certificate.effective_height)
+                std::num::NonZeroU64::new(native.bundle.finalization_draft.effective_height)
                     .ok_or_else(|| eyre!("zero install height"))?;
             let proof = height.proof_at(carrier_height).ok_or_else(|| {
                 eyre!("beacon install is ahead of authenticated durable finality")
@@ -1670,7 +1601,7 @@ fn validate_installation_proof(
             return Err(eyre!("beacon proof chain changes its exact genesis roster"));
         }
         verifier.verify(proof)?;
-        if proof.block_header.height().get() == native.bundle.certificate.effective_height {
+        if proof.block_header.height().get() == native.bundle.finalization_draft.effective_height {
             carrier = Some(proof);
         }
     }
@@ -2117,23 +2048,32 @@ pub(in super::super) fn fixture_plan(
         .map(|client| client.peer_id.parse::<PeerId>().unwrap())
         .collect::<Vec<_>>();
     roster.sort();
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"fixture next Taira genesis"),
+    ));
     let request = NativeRequestV1 {
         schema: REQUEST_SCHEMA.into(),
         dkg_session: GlobalThresholdBeaconDkgSessionV1 {
             version: 1,
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"fixture next Taira genesis",
-                )),
-            ),
-            session_id: [42; 32],
+            network_id,
+            session_id: Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-session.v1\0",
+                network_id.as_bytes(),
+            ])
+            .into(),
+            attempt_id: Hash::new_from_chunks(&[
+                b"iroha.global-beacon.genesis-attempt.v1\0",
+                network_id.as_bytes(),
+            ])
+            .into(),
+            authority_generation: 0,
             roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
             committee_size: 4,
             threshold: 2,
             start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
         },
         target_roster: roster.clone(),
         authorization_roster: roster.clone(),
@@ -2145,7 +2085,9 @@ pub(in super::super) fn fixture_plan(
     let units = validators.iter().zip(clients).map(|(validator, client)| {
         let peer = client.peer_id.parse::<PeerId>().unwrap();
         let seat = roster.iter().position(|value| value == &peer).unwrap() + 1;
-        let bytes = format!("[Service]\nExecStart=/fixture --config {}/current/config/beacon.toml --credential /var/lib/taira/.public-reset-control-v1/beacon/abcdefghijklmnopqrstuvwx12345678/ceremony/seat-{seat}/{CREDENTIAL_FILE}\n", validator.service_root).into_bytes();
+        let attempt = hex::encode(request.dkg_session.attempt_id);
+        let network_root = hex::encode(request.dkg_session.network_id.as_bytes());
+        let bytes = format!("[Service]\nExecStart=/fixture --config {}/current/config/beacon.toml --credential /var/lib/taira/.public-reset-control-v1/beacon/{network_root}/ceremony/attempt-{attempt}-seat-{seat}/{CREDENTIAL_FILE}\n", validator.service_root).into_bytes();
         FinalUnitV1 { validator: validator.slug.clone(), sha256: sha256_hex(&bytes), bytes }
     }).collect();
     BeaconBootstrapPlanV1 {
@@ -2338,7 +2280,7 @@ mod tests {
         // Here the exact typed instruction bytes are the already-verified input.
         let certificate = ThresholdKeyLifecycleCertificateV1 {
             version: 1,
-            action: ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            action: ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
             expected_active_session_id: None,
             effective_height: 7,
             network_id: network,
@@ -2414,7 +2356,7 @@ mod tests {
         let wire = json::to_value(&inventory.beacon_bootstrap).unwrap();
         let decoded: BeaconBootstrapPlanV1 = json::from_value(wire.clone()).unwrap();
         assert_eq!(json::to_value(&decoded).unwrap(), wire);
-        for case in 0..6 {
+        for case in 0..9 {
             let mut changed = inventory.clone();
             match case {
                 0 => changed.beacon_bootstrap.final_units.swap(0, 1),
@@ -2429,10 +2371,31 @@ mod tests {
                         changed.beacon_bootstrap.request.provider_handles[1].clone()
                 }
                 4 => changed.beacon_bootstrap.request.provider_revision = 0,
-                _ => changed.authorization_nonce = "differentauthorizationnonce12345678".into(),
+                5 => changed.beacon_bootstrap.request.dkg_session.session_id = [9; 32],
+                6 => changed.beacon_bootstrap.request.dkg_session.attempt_id = [9; 32],
+                7 => {
+                    changed
+                        .beacon_bootstrap
+                        .request
+                        .dkg_session
+                        .authority_generation = 1
+                }
+                _ => {
+                    changed
+                        .beacon_bootstrap
+                        .request
+                        .dkg_session
+                        .acceptances_end_height = 5
+                }
             }
             assert!(validate_plan(&changed).is_err(), "case {case}");
         }
+        let mut alternate_authorization = inventory.clone();
+        alternate_authorization.authorization_nonce = "differentauthorizationnonce12345678".into();
+        assert_eq!(
+            ceremony_root(&inventory),
+            ceremony_root(&alternate_authorization)
+        );
         let mut absent = json::to_value(&inventory).unwrap();
         absent.as_object_mut().unwrap().remove("beacon_bootstrap");
         assert!(json::from_value::<InventoryV1>(absent).is_err());
@@ -2492,41 +2455,6 @@ mod tests {
             fs::read(directory.path().join("started.json")).unwrap(),
             b"retained-attempt"
         );
-    }
-
-    #[test]
-    fn beacon_owned_child_deadline_retains_private_attempt() {
-        let directory = reset::private_custody_test_dir("beacon-controller-");
-        let marker = directory.path().join("started.json");
-        reset::inputs::write_new_private(&marker, b"retained-attempt").unwrap();
-        let mut child = CeremonyChild::spawn(
-            Path::new("/bin/sh"),
-            vec![
-                "-c".into(),
-                "while :; do sleep 1; done".into(),
-                "beacon-test".into(),
-            ],
-            1,
-            Instant::now() + Duration::from_secs(5),
-        )
-        .unwrap();
-        child.deadline = Instant::now();
-        assert!(child.poll().is_err());
-        drop(child); // Terminates and reaps only this owned process group.
-        assert_eq!(fs::read(marker).unwrap(), b"retained-attempt");
-    }
-    #[test]
-    fn beacon_successful_early_child_exit_cannot_authorize_another_operation() {
-        let mut child = CeremonyChild::spawn(
-            Path::new("/bin/sh"),
-            vec!["-c".into(), "exit 0".into(), "beacon-test".into()],
-            1,
-            Instant::now() + Duration::from_secs(5),
-        )
-        .unwrap();
-        assert!(child.child.wait().unwrap().success());
-        assert!(child.require_running().is_err());
-        assert!(!child.complete);
     }
 
     #[cfg(unix)]

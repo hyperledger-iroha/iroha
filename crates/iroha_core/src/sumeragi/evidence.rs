@@ -1479,15 +1479,20 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = test_network_id(b"sumeragi-v2-evidence-genesis");
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 7, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                    network_id,
+                    0,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let context = wire_v2::HeightContext {
                 network_id,
                 protocol_version: wire_v2::PROTOCOL_VERSION,
                 height: 1,
-                epoch: 7,
+                epoch: 0,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 snapshot_bootstrap: None,
@@ -1495,8 +1500,8 @@ mod tests {
                 parent_commit_qc: None,
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
@@ -1523,14 +1528,29 @@ mod tests {
             }
         }
         fn for_epoch(epoch: u64) -> Self {
-            let mut fixture = Self::new();
+            let mut fixture = if epoch == 0 {
+                Self::new()
+            } else {
+                Self::for_height(2)
+            };
             fixture.context.epoch = epoch;
             (
-                fixture.context.kagemusha_mint_finality_epoch_id,
-                fixture.context.kagemusha_mint_finality_epoch_roster,
-            ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                fixture.context.kagemusha_mint_finality_authorization,
+                fixture.context.kagemusha_mint_finality_authority,
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
                 fixture.context.network_id,
+                fixture.context.kagemusha_mint_finality_authority.generation,
                 epoch,
+                if epoch == 0 {
+                    1
+                } else {
+                    fixture
+                        .context
+                        .kagemusha_mint_finality_authorization
+                        .first_height
+                        .max(2)
+                },
+                fixture.context.epoch_end_height,
                 &fixture.context.roster,
             );
             fixture
@@ -1863,7 +1883,9 @@ mod tests {
             height,
             effects.v2_evidence_admissions.len(),
         );
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
@@ -2677,7 +2699,9 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must roll its prune simulation back"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         let application_error =
             match super::super::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut effects_transaction,
@@ -2764,7 +2788,9 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must leave the retained evidence intact"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut effects_transaction,
             &effects,

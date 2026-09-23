@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     smartcontracts::ValidSingularQuery,
-    state::{StateBlock, StateTransaction},
+    state::{StateBlock, StateStorageAdmissionError, StateTransaction},
 };
 use blake3::hash as blake3_hash;
 use core::convert::TryFrom;
@@ -653,10 +653,19 @@ fn parse_pin_expiry_key(
 /// The expiry index is part of authenticated world state. All due retirements
 /// are staged in one state transaction so a corrupt marker or accounting
 /// summary rejects the complete block effect without a partial release.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PinExpiryMaintenanceError {
+    /// A local World owner or finite pool refused the original transaction.
+    #[error(transparent)]
+    Storage(#[from] StateStorageAdmissionError),
+    /// Authenticated pin accounting or retirement was invalid.
+    #[error(transparent)]
+    Instruction(#[from] InstructionExecutionError),
+}
 pub(crate) fn expire_pin_manifests_at_consensus_time(
     state_block: &mut StateBlock<'_>,
-) -> Result<usize, InstructionExecutionError> {
-    let mut state_transaction = state_block.transaction();
+) -> Result<usize, PinExpiryMaintenanceError> {
+    let mut state_transaction = state_block.try_transaction()?;
     let consensus_epoch = state_transaction.block_unix_timestamp_ms() / 1_000;
     let prefix = StatePath::from_str(PIN_EXPIRY_STATE_KEY_PREFIX_V1)
         .expect("static pin expiry prefix is valid");
@@ -670,7 +679,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
         if !marker.is_empty() {
             return Err(pin_accounting_corruption(format!(
                 "expiry marker `{key}` must have an empty value"
-            )));
+            ))
+            .into());
         }
         let (retention_epoch, digest) = parse_pin_expiry_key(key)?;
         if retention_epoch > consensus_epoch {
@@ -679,7 +689,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
         if due.len() >= maximum {
             return Err(pin_accounting_corruption(format!(
                 "due expiry marker count exceeds configured global manifest ceiling {maximum}"
-            )));
+            ))
+            .into());
         }
         due.push((retention_epoch, digest));
     }
@@ -701,7 +712,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
             return Err(pin_accounting_corruption(format!(
                 "expiry marker for {} disagrees with its live manifest record",
                 manifest_hex(digest)
-            )));
+            ))
+            .into());
         }
         let authority = record.submitted_by.clone();
         iroha_data_model::isi::sorafs::RetirePinManifest {

@@ -14,7 +14,7 @@ pub(super) fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return Some(<$ty>::WIRE_ID);
+                return Some(core::any::type_name::<$ty>());
             }
         )+};
     }
@@ -30,21 +30,34 @@ pub(super) fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&
     None
 }
 
-fn registration_plan(registration: &RegisterPublicLaneValidator) -> Option<&PublicLaneMonetaryPlanV1> {
+fn registration_plan(
+    registration: &RegisterPublicLaneValidator,
+) -> Option<&PublicLaneMonetaryPlanV1> {
     let plan = &registration.monetary_plan;
     (plan.has_canonical_shape()
         && plan.source_asset.account() == &registration.stake_account
         && plan.amount == registration.initial_stake
-        && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration { .. }))
+        && matches!(
+            plan.precondition,
+            PublicLaneMonetaryPreconditionV1::Registration(
+                iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { .. }
+            )
+        ))
     .then_some(plan)
 }
 
 fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlanV1> {
-    if let Some(candidate) = instruction.as_any().downcast_ref::<RegisterPublicLaneCandidate>() {
+    if let Some(candidate) = instruction
+        .as_any()
+        .downcast_ref::<RegisterPublicLaneCandidate>()
+    {
         let plan = registration_plan(&candidate.registration)?;
-        return matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration { activation_height } if activation_height == candidate.activation_height).then_some(plan);
+        return matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Registration (iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height }) if activation_height == candidate.activation_height).then_some(plan);
     }
-    if let Some(registration) = instruction.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
+    if let Some(registration) = instruction
+        .as_any()
+        .downcast_ref::<RegisterPublicLaneValidator>()
+    {
         return registration_plan(registration);
     }
     if let Some(bond) = instruction.as_any().downcast_ref::<BondPublicLaneStake>() {
@@ -52,21 +65,42 @@ fn transfer_plan(instruction: &InstructionBox) -> Option<&PublicLaneMonetaryPlan
         return (plan.has_canonical_shape()
             && plan.source_asset.account() == &bond.staker
             && plan.amount == bond.amount
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Bond { .. }))
+            && matches!(
+                plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Bond(
+                    iroha_data_model::nexus::PublicLaneBondPreconditionV1 { .. }
+                )
+            ))
         .then_some(plan);
     }
-    if let Some(unbond) = instruction.as_any().downcast_ref::<FinalizePublicLaneUnbond>() {
+    if let Some(unbond) = instruction
+        .as_any()
+        .downcast_ref::<FinalizePublicLaneUnbond>()
+    {
         let plan = &unbond.monetary_plan;
         return (plan.has_canonical_shape()
             && plan.destination_asset.account() == &unbond.staker
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Unbond { .. }))
+            && matches!(
+                plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Unbond(
+                    iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 { .. }
+                )
+            ))
         .then_some(plan);
     }
-    if let Some(slash) = instruction.as_any().downcast_ref::<SlashPublicLaneValidator>() {
+    if let Some(slash) = instruction
+        .as_any()
+        .downcast_ref::<SlashPublicLaneValidator>()
+    {
         let plan = &slash.monetary_plan;
         return (plan.has_canonical_shape()
             && plan.amount == slash.amount
-            && matches!(plan.precondition, PublicLaneMonetaryPreconditionV1::Slash { .. }))
+            && matches!(
+                plan.precondition,
+                PublicLaneMonetaryPreconditionV1::Slash(
+                    iroha_data_model::nexus::PublicLaneSlashPreconditionV1 { .. }
+                )
+            ))
         .then_some(plan);
     }
     None
@@ -86,23 +120,33 @@ pub(super) fn collect_signed_staking_effects(
         instruction_index,
         instruction_wire_id,
     };
-    let mut append = |entry_index: usize, source: &AssetId, destination: &AssetId, amount: &Quantity| {
-        collection.transfers.push(AssetTransferSummary {
-            context_index,
-            instruction_index,
-            entry_index: Some(entry_index),
-            asset_definition_id: source.definition().clone(),
-            source_account_id: source.account().clone(),
-            destination_account_id: destination.account().clone(),
-            amount: amount.clone(),
-            explicit_fee_eligible: false,
-        });
-    };
-    if let Some(rewards) = instruction.as_any().downcast_ref::<RecordPublicLaneRewards>() {
-        let total = rewards.shares.iter().try_fold(Quantity::zero(), |sum, share| {
-            if share.amount.is_zero() { return None; }
-            sum.checked_add(&share.amount).ok()
-        });
+    let mut append =
+        |entry_index: usize, source: &AssetId, destination: &AssetId, amount: &Quantity| {
+            collection.transfers.push(AssetTransferSummary {
+                context_index,
+                instruction_index,
+                entry_index: Some(entry_index),
+                asset_definition_id: source.definition().clone(),
+                source_account_id: source.account().clone(),
+                destination_account_id: destination.account().clone(),
+                amount: amount.clone(),
+                explicit_fee_eligible: false,
+                native_staking_leg: true,
+            });
+        };
+    if let Some(rewards) = instruction
+        .as_any()
+        .downcast_ref::<RecordPublicLaneRewards>()
+    {
+        let total = rewards
+            .shares
+            .iter()
+            .try_fold(Quantity::zero(), |sum, share| {
+                if share.amount.is_zero() {
+                    return None;
+                }
+                sum.checked_add(&share.amount).ok()
+            });
         if rewards.total_reward.is_zero() || total.as_ref() != Some(&rewards.total_reward) {
             return Err(invalid());
         }
@@ -110,13 +154,21 @@ pub(super) fn collect_signed_staking_effects(
         // transfer principal under PerQualifyingTransferInstruction.
         return Ok(());
     }
-    if let Some(claim) = instruction.as_any().downcast_ref::<ClaimPublicLaneRewards>() {
+    if let Some(claim) = instruction
+        .as_any()
+        .downcast_ref::<ClaimPublicLaneRewards>()
+    {
         if !claim.claim_plan.has_canonical_shape(&claim.account) {
             return Err(invalid());
         }
         for (entry, source) in claim.claim_plan.sources.iter().enumerate() {
             if !source.payout.is_zero() {
-                append(entry, &source.source_asset, &source.destination_asset, &source.payout);
+                append(
+                    entry,
+                    &source.source_asset,
+                    &source.destination_asset,
+                    &source.payout,
+                );
             }
         }
         return Ok(());
@@ -124,21 +176,4 @@ pub(super) fn collect_signed_staking_effects(
     let plan = transfer_plan(instruction).ok_or_else(invalid)?;
     append(0, &plan.source_asset, &plan.destination_asset, &plan.amount);
     Ok(())
-}
-
-/// Opaque code cannot create signed staking authority by manufacturing a plan at runtime.
-/// This also covers reserve-only reward recording and zero-payout accrual processing.
-pub(super) fn opaque_staking_policy_asset_effect(
-    instruction: &InstructionBox,
-    fee_asset: &AssetDefinitionId,
-) -> Option<&'static str> {
-    let wire_id = monetary_staking_wire_id(instruction)?;
-    let touches = if let Some(rewards) = instruction.as_any().downcast_ref::<RecordPublicLaneRewards>() {
-        rewards.reward_asset.definition() == fee_asset
-    } else if let Some(claim) = instruction.as_any().downcast_ref::<ClaimPublicLaneRewards>() {
-        claim.claim_plan.sources.iter().any(|source| source.source_asset.definition() == fee_asset)
-    } else {
-        transfer_plan(instruction).is_some_and(|plan| plan.source_asset.definition() == fee_asset)
-    };
-    touches.then_some(wire_id)
 }

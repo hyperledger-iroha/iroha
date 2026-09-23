@@ -110,10 +110,12 @@ pub(super) fn constrain_epoch_authorization<F: KagemushaPoseidonFieldV1>(
     let activate = gate.is_equal(ctx, decision, Constant(F::ONE));
     let retain = gate.is_equal(ctx, decision, Constant(F::from(2)));
     let (installed, session, transcript) = match value.map(|v| v.beacon) {
-        Some(BeaconEpochBindingV1::Installed {
-            session_id,
-            transcript_hash,
-        }) => (true, session_id, transcript_hash),
+        Some(BeaconEpochBindingV1::Installed(
+            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                session_id,
+                transcript_hash,
+            },
+        )) => (true, session_id, transcript_hash),
         None | Some(BeaconEpochBindingV1::Bootstrap) => (false, [0; 32], [0; 32]),
     };
     let beacon_installed = ctx.load_witness(F::from(u64::from(installed)));
@@ -238,4 +240,108 @@ pub(super) fn constrain_authorization_successor<F: KagemushaPoseidonFieldV1>(
         &current.beacon_transcript,
         installed_retention,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halo2_proofs::dev::MockProver;
+    use iroha_data_model::isi::kagemusha_v1::{
+        InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+    };
+
+    fn authorization_pair() -> (
+        KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochAuthorizationV1,
+    ) {
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"authorization circuit fixture"),
+        ));
+        let current = KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 3,
+            first_height: 301,
+            last_height: 400,
+            authority_generation: 1,
+            authority_id: [0x41; 32],
+            previous_authorization_id: [0x42; 32],
+            transition_id: [0; 32],
+            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: [0x43; 32],
+                transcript_hash: [0x44; 32],
+            }),
+        };
+        let next = KagemushaMintFinalityEpochAuthorizationV1 {
+            epoch: 4,
+            first_height: 401,
+            last_height: 500,
+            previous_authorization_id: current.authorization_id().unwrap(),
+            ..current
+        };
+        next.validate_successor(&current).unwrap();
+        (current, next)
+    }
+
+    fn circuit(
+        current: &KagemushaMintFinalityEpochAuthorizationV1,
+        next: &KagemushaMintFinalityEpochAuthorizationV1,
+    ) -> KagemushaMintCertificateEqCircuitV1 {
+        let mut builder = mint_certificate_builder::<Fp>();
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let mut sha = PastaSha256JobsV1::default();
+        let enabled = ctx.load_constant(Fp::ONE);
+        let current_assigned =
+            constrain_epoch_authorization(ctx, &range, &mut sha, Some(current), enabled).unwrap();
+        let next_assigned =
+            constrain_epoch_authorization(ctx, &range, &mut sha, Some(next), enabled).unwrap();
+        constrain_authorization_successor(ctx, &range, &current_assigned, &next_assigned, enabled);
+        // The Table16 SHA jobs constrain the same fixed byte layout as native authorization_id.
+        let expected = current.authorization_id().unwrap();
+        for (actual, expected) in current_assigned.digest.iter().zip(expected) {
+            let difference = range.gate().sub(
+                ctx,
+                actual.quantum_cell(),
+                Constant(Fp::from(u64::from(expected))),
+            );
+            range.gate().assert_is_const(ctx, &difference, &Fp::ZERO);
+        }
+        super::super::super::base_packing::finalize_base_params_v1(
+            &mut builder,
+            MINIMUM_UNUSABLE_ROWS,
+        )
+        .unwrap();
+        KagemushaMintCertificateEqCircuitV1 {
+            builder,
+            sha_jobs: sha,
+            dense_jobs: PastaDenseMsmJobsV1::default(),
+        }
+    }
+
+    #[test]
+    fn scheduling_authorization_circuit_constrains_epoch_parent_and_exact_retention() {
+        let (current, next) = authorization_pair();
+        MockProver::run(16, &circuit(&current, &next), vec![vec![]])
+            .unwrap()
+            .assert_satisfied();
+        for coordinate in 0..3 {
+            let mut changed = next;
+            match coordinate {
+                0 => changed.epoch = current.epoch,
+                1 => changed.previous_authorization_id[0] ^= 1,
+                _ => changed.authority_id[0] ^= 1,
+            }
+            assert!(
+                MockProver::run(16, &circuit(&current, &changed), vec![vec![]])
+                    .unwrap()
+                    .verify()
+                    .is_err(),
+                "coordinate {coordinate}"
+            );
+        }
+    }
 }

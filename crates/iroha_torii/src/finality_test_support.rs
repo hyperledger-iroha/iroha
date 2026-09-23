@@ -23,6 +23,16 @@ pub(crate) fn torii_proof_finality_for_block(
     network_id: NetworkId,
     parent: Option<&V2FinalityArtifact>,
 ) -> V2FinalityArtifact {
+    torii_proof_finality_for_block_with_context(block, network_id, parent, |_| {})
+}
+
+/// Sign a structural fixture after one explicit context customization.
+pub(crate) fn torii_proof_finality_for_block_with_context(
+    block: &SignedBlock,
+    network_id: NetworkId,
+    parent: Option<&V2FinalityArtifact>,
+    customize: impl FnOnce(&mut HeightContext),
+) -> V2FinalityArtifact {
     use iroha_core::zk::kagemusha_v1_recursion::{
         KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
         derive_kagemusha_mint_finality_validator_keys_v1, sign_kagemusha_mint_finality_seal_v1,
@@ -34,7 +44,7 @@ pub(crate) fn torii_proof_finality_for_block(
             encode_kagemusha_consensus_signature_envelope_v1,
         },
         isi::kagemusha_v1::{
-            KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalitySealBundleV1,
+            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalitySealBundleV1,
         },
     };
     use norito::codec::Encode as _;
@@ -49,10 +59,10 @@ pub(crate) fn torii_proof_finality_for_block(
             power: 1,
         })
         .collect::<Vec<_>>();
-    let epoch = KagemushaMintFinalityEpochRosterV1 {
+    let epoch = KagemushaMintFinalityAuthorityGenerationV1 {
         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -73,7 +83,7 @@ pub(crate) fn torii_proof_finality_for_block(
         block.header().prev_block_hash(),
         parent.map(|parent| parent.block_hash)
     );
-    let context = HeightContext {
+    let mut context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
@@ -85,13 +95,20 @@ pub(crate) fn torii_proof_finality_for_block(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).unwrap(),
         roster,
-        kagemusha_mint_finality_epoch_id: epoch.finality_epoch_id().unwrap(),
-        kagemusha_mint_finality_epoch_roster: epoch,
+        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: 1, network_id, epoch: 0, first_height: 1, last_height: 100,
+            authority_generation: 0, authority_id: epoch.authority_id().unwrap(),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32], transition_id: [0; 32],
+            decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+        },
+        kagemusha_mint_finality_authority: epoch,
         nexus_amx_context_hash: Hash::new(b"Torii exact proof test context"),
         execution_policy_hash: Hash::new(b"Torii exact proof test execution policy"),
         da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         leader_seed: [0x42; 32],
     };
+    customize(&mut context);
     context.validate().unwrap();
     let wire = block.encode_wire().unwrap();
     let subject = BlockSubject {
@@ -145,7 +162,7 @@ pub(crate) fn torii_proof_finality_for_block(
         &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
     )
     .unwrap();
-    let epoch = &context.kagemusha_mint_finality_epoch_roster;
+    let epoch = &context.kagemusha_mint_finality_authority;
     qc.aggregate_signature = if let Some(message) =
         build_kagemusha_mint_finality_seal_message_v1(epoch, &context, &vote).unwrap()
     {

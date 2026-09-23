@@ -456,10 +456,20 @@ fn append_public_xor_binding(
             alias_bound = true;
         }
     }
+    let parameters = genesis.effective_parameters()?;
+    let mut npos = parameters
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .ok_or_else(|| color_eyre::eyre::eyre!("public XOR requires the signed NPoS snapshot"))?;
+    npos.xor_asset_definition_id = asset_definition_id.clone();
+    let mut builder = genesis
+        .into_builder()
+        .append_parameter(Parameter::Custom(npos.into_custom_parameter()));
     if has_domain && has_asset_definition && alias_bound {
-        return Ok(genesis);
+        return Ok(builder.build_raw()?.with_consensus_meta());
     }
-    let mut builder = genesis.into_builder().next_transaction();
+    builder = builder.next_transaction();
     if !has_domain {
         builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
     }
@@ -749,7 +759,24 @@ mod consensus_manifest_tests {
         .kagemusha_mint_finality_genesis_parameters()
         .clone();
         iroha_genesis::GenesisSourceTemplate::from_path(&path)
-            .and_then(|template| template.materialize(parameters))
+            .and_then(|template| {
+                template.materialize(
+                    parameters,
+                    Some(
+                        if relative_path.contains("nexus/")
+                            || relative_path.contains("iroha3-nexus/")
+                        {
+                            AssetDefinitionId::derive_from_components(
+                                DomainId::parse_fully_qualified("mainnet-fixture.universal")
+                                    .expect("fixture domain"),
+                                "xor".parse().expect("fixture asset"),
+                            )
+                        } else {
+                            SumeragiNposParameters::default().xor_asset_definition_id
+                        },
+                    ),
+                )
+            })
             .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))
     }
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
@@ -834,7 +861,7 @@ mod consensus_manifest_tests {
         load_kagemusha_mint_finality_parameters(&path)
             .expect("canonical operator parameters must load");
 
-        parameters.epoch_roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        parameters.authority_generation.validators[0].eq_proof_public_key = [0xFF; 32];
         std::fs::write(
             &path,
             norito::json::to_vec_pretty(&parameters).expect("serialize invalid parameters"),

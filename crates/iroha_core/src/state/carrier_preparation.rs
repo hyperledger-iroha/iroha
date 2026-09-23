@@ -29,8 +29,12 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
-pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
+pub(crate) use journals::CarrierArchivePreparationError;
 pub(crate) use journals::RetainedCarrier;
+pub(crate) use journals::{
+    CarrierJournalInputs, CarrierJournalPreparationError, CarrierJournalShellReservation,
+};
+pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 
 /// A prepared candidate with all execution ownership retained and no Apply API.
 pub(crate) struct PreparedCarrier<'state> {
@@ -92,6 +96,22 @@ impl<'state> PreparedCarrier<'state> {
     pub(crate) fn world_journal_shell_bytes() -> Result<usize, mv::allocation::AllocationRefusal> {
         super::world_journals::resources::WorldJournalShellDemand::plan()
             .map(|demand| demand.total_bytes())
+    }
+
+    /// Reserve exact World/capture/effects shells from the original finite pool.
+    /// Other execution and publication demand must be admitted separately before
+    /// invoking the validator; this structural owner is not complete admission.
+    pub(crate) fn reserve_journal_shells<A>(
+        budget: &mv::allocation::AllocationBudget,
+    ) -> Result<journals::CarrierJournalShellReservation<A>, mv::allocation::AllocationRefusal>
+    {
+        journals::CarrierJournalShellReservation::try_reserve(budget)
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn reserve_journal_shells_for_test<A>()
+    -> journals::CarrierJournalShellReservation<A> {
+        journals::CarrierJournalShellReservation::for_test()
     }
 
     /// Inspect the exact retained Native custody without source reconstruction.

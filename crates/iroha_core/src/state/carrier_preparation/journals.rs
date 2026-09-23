@@ -22,6 +22,10 @@ use crate::query::{
     reputation_finalized::{PreparedReputationCapture, ReputationCandidateCapture},
 };
 
+#[path = "journal_resources.rs"]
+mod journal_resources;
+pub(crate) use journal_resources::{CarrierJournalShellReservation, FundedBox};
+
 #[path = "runtime_journals.rs"]
 mod runtime_journals;
 
@@ -40,6 +44,20 @@ use runtime_journals::RuntimeJournals;
 /// Archive inability is not a consensus verdict on the authenticated proposal.
 #[derive(thiserror::Error)]
 pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
+    /// Execution hit a local storage limit; no candidate receipt may be published.
+    #[error("candidate local storage admission: {error}")]
+    LocalStorageRefusal {
+        /// The exact candidate, still retaining its original journals.
+        carrier: PreparedCarrier<'state>,
+        /// Pre-execution provider predecessor retained for a local retry.
+        provider: Option<ProviderCandidateCapture>,
+        /// Pre-execution reputation predecessor retained for a local retry.
+        reputation: Option<ReputationCandidateCapture>,
+        /// The first local refusal, independent of contract error handling.
+        error: StateStorageAdmissionError,
+        /// The original journal shell reservation.
+        journal_shells: CarrierJournalShellReservation<Admission>,
+    },
     /// The caller could not retain the complete original candidate journals.
     #[error("candidate journal resource admission failed")]
     JournalAdmission {
@@ -51,6 +69,8 @@ pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
         reputation: Option<ReputationCandidateCapture>,
         /// Original resource-admission refusal, before any allocating capture.
         error: E,
+        /// Original pre-execution shell capacity retained for the same retry.
+        journal_shells: CarrierJournalShellReservation<Admission>,
     },
     /// The original World journals do not share one execution mode.
     #[error("candidate World capture: {0}")]
@@ -59,7 +79,7 @@ pub(crate) enum CarrierJournalPreparationError<'state, Admission, E> {
     #[error("candidate archive preparation: {error}")]
     ArchivePreparation {
         /// Exact lifetime-free carrier, including original captured archive material.
-        carrier: Box<StagedCarrierCapture<Admission>>,
+        carrier: FundedBox<StagedCarrierCapture<Admission>>,
         /// Typed local dependency or recovery diagnostic, never proposal invalidity.
         error: CarrierArchivePreparationError,
     },
@@ -76,6 +96,9 @@ impl<Admission, E: std::fmt::Debug> std::fmt::Debug
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::LocalStorageRefusal { error, .. } => {
+                f.debug_tuple("LocalStorageRefusal").field(error).finish()
+            }
             Self::JournalAdmission { error, .. } => {
                 f.debug_tuple("JournalAdmission").field(error).finish()
             }
@@ -121,18 +144,21 @@ impl<Admission> StagedCarrierCapture<Admission> {
         self.journals
             .matches_validation_candidate(context, proposal)
     }
+}
 
+impl<Admission> FundedBox<StagedCarrierCapture<Admission>> {
     /// Resume the exact boxed capture without replacing its allocation on refusal.
     pub(crate) fn try_complete(
-        mut self: Box<Self>,
-    ) -> Result<PreparedCarrierJournals<Admission>, (Box<Self>, CarrierArchivePreparationError)>
-    {
+        mut self,
+    ) -> Result<PreparedCarrierJournals<Admission>, (Self, CarrierArchivePreparationError)> {
         if let Err(error) = self.try_prepare_archives() {
             return Err((self, error));
         }
-        Ok((*self).into_journals())
+        Ok(self.into_inner().into_journals())
     }
+}
 
+impl<Admission> StagedCarrierCapture<Admission> {
     // Initial capture and boxed retries prepare the same retained archive owners.
     // This borrowed step never moves the large carrier or allocates another box.
     fn try_prepare_archives(&mut self) -> Result<(), CarrierArchivePreparationError> {
@@ -238,7 +264,7 @@ pub(crate) struct PreparedCarrierJournals<
     // Keep one admitted allocation across consuming phase transitions. Inline
     // policies and lifecycle effects otherwise multiply across every owned
     // success/refusal value, exhausting ordinary stacks during authentication.
-    effects: Box<RetainedCarrierEffects>,
+    effects: FundedBox<RetainedCarrierEffects>,
     // Rust drops fields in declaration order. Capacity outlives every retained
     // journal, archive plan and deferred effect, including partial publication.
     admission: Admission,
@@ -297,6 +323,8 @@ impl<'state> PreparedCarrier<'state> {
     /// reconstructed membership writer or second World tail is introduced.
     /// The required admission callback sees every retained candidate owner before
     /// projections, the retained-effects allocation and journal detachment. Its
+    /// explicit shell reservation must come from the original pre-execution
+    /// finite pool and remains separate from this complete admission. The
     /// borrowed inputs preserve allocation capacities; serialized lengths alone
     /// do not account for retained memory.
     /// Detachment moves original MV allocations without cloning; execution's
@@ -307,6 +335,7 @@ impl<'state> PreparedCarrier<'state> {
     /// for synchronous handling only; no State writer may cross an async wait.
     pub(crate) fn prepare_journals<Admission, E>(
         self,
+        journal_shells: CarrierJournalShellReservation<Admission>,
         provider_capture: Option<ProviderCandidateCapture>,
         reputation_capture: Option<ReputationCandidateCapture>,
         admit_journals: impl FnOnce(CarrierJournalInputs<'_, 'state>) -> Result<Admission, E>,
@@ -314,6 +343,15 @@ impl<'state> PreparedCarrier<'state> {
         PreparedCarrierJournals<Admission>,
         CarrierJournalPreparationError<'state, Admission, E>,
     > {
+        if let Err(error) = self.state.require_storage_admission() {
+            return Err(CarrierJournalPreparationError::LocalStorageRefusal {
+                carrier: self,
+                provider: provider_capture,
+                reputation: reputation_capture,
+                error,
+                journal_shells,
+            });
+        }
         // Exhaustively borrow the complete owner. Adding a retained field must
         // also update admission; a partial State/prefix projection is insufficient.
         let PreparedCarrierFields {
@@ -349,9 +387,16 @@ impl<'state> PreparedCarrier<'state> {
                     provider: provider_capture,
                     reputation: reputation_capture,
                     error,
+                    journal_shells,
                 });
             }
         };
+        let CarrierJournalShellReservation {
+            world: world_shells,
+            effects: effects_charge,
+            capture: capture_charge,
+            ..
+        } = journal_shells;
         // Parameters drop after locals. Move archive payload owners into locals
         // declared after capacity so every capture/error/unwind releases them first.
         let mut provider_capture = provider_capture;
@@ -472,7 +517,7 @@ impl<'state> PreparedCarrier<'state> {
         } = state.into_fields();
         da_rewind_releases = original_da_rewind_releases;
         let mut pending = StateJournalCapture::new(
-            world.capture_slot(),
+            world.capture_slot(world_shells),
             runtime_journals::RuntimeCapture::new(
                 canonical_runtime.into_executing(),
                 commit_topology.into_executing(),
@@ -510,30 +555,33 @@ impl<'state> PreparedCarrier<'state> {
             effects: {
                 #[cfg(test)]
                 tests::observe_effects_allocation_attempt();
-                Box::new(RetainedCarrierEffects {
-                    header,
-                    nexus,
-                    runtime_policy,
-                    sccp_registry,
-                    verified_lane_relay_records,
-                    da_commitments,
-                    lifecycle,
-                    staged_merge_entry,
-                    canonical_wsv_merge_commit_authorization,
-                    canonical_carrier_commit_metadata_authorization,
-                    merge_carrier_entrypoints,
-                    pending_public_lane_slash_observability,
-                    #[cfg(feature = "telemetry")]
-                    pending_parliament_telemetry_events,
-                    #[cfg(feature = "telemetry")]
-                    committed_parliament_attempt_counts,
-                    #[cfg(feature = "telemetry")]
-                    committed_citizens_total,
-                    #[cfg(feature = "telemetry")]
-                    committed_musubi_replication_shortfall_releases,
-                    authenticated_replay_commit,
-                    replay_prevalidation,
-                })
+                FundedBox::new(
+                    RetainedCarrierEffects {
+                        header,
+                        nexus,
+                        runtime_policy,
+                        sccp_registry,
+                        verified_lane_relay_records,
+                        da_commitments,
+                        lifecycle,
+                        staged_merge_entry,
+                        canonical_wsv_merge_commit_authorization,
+                        canonical_carrier_commit_metadata_authorization,
+                        merge_carrier_entrypoints,
+                        pending_public_lane_slash_observability,
+                        #[cfg(feature = "telemetry")]
+                        pending_parliament_telemetry_events,
+                        #[cfg(feature = "telemetry")]
+                        committed_parliament_attempt_counts,
+                        #[cfg(feature = "telemetry")]
+                        committed_citizens_total,
+                        #[cfg(feature = "telemetry")]
+                        committed_musubi_replication_shortfall_releases,
+                        authenticated_replay_commit,
+                        replay_prevalidation,
+                    },
+                    effects_charge,
+                )
             },
             admission,
         };
@@ -545,10 +593,11 @@ impl<'state> PreparedCarrier<'state> {
         };
         if let Err(error) = carrier.try_prepare_archives() {
             return Err(CarrierJournalPreparationError::ArchivePreparation {
-                carrier: Box::new(carrier),
+                carrier: FundedBox::new(carrier, capture_charge),
                 error,
             });
         }
+        drop(capture_charge);
         Ok(carrier.into_journals())
     }
 }

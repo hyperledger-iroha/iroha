@@ -31,12 +31,16 @@ use iroha::{
         transaction::{Executable, SignedTransaction},
     },
 };
+use iroha_config::parameters::defaults;
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::{
+    json::Json,
+    numeric::{NumericSpec, Quantity},
+};
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
     ConsensusMessageControlRule, Network, NetworkBuilder, genesis_factory_with_post_topology,
@@ -156,10 +160,9 @@ fn block_gas_parameter_for_payload(payload_bytes: usize) -> Parameter {
     ))
 }
 fn da_stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("DA stake domain"),
-        "xor".parse().expect("DA stake asset name"),
-    )
+    defaults::nexus::staking::stake_asset_id()
+        .parse()
+        .expect("canonical network XOR asset")
 }
 fn da_validator_account_id(index: usize) -> AccountId {
     let key_pair = KeyPair::try_from_seed(
@@ -175,13 +178,14 @@ fn da_route_authority_genesis_transactions(
     let stake_asset_id = da_stake_asset_definition_id();
     let mut bootstrap = vec![
         Register::domain(Domain::new(
-            DomainId::try_new("nexus", "universal").expect("DA stake domain"),
+            DomainId::try_new("universal", "universal").expect("XOR domain"),
         ))
         .into(),
         Register::asset_definition(
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 stake_asset_id.clone(),
-                "DA route stake".to_owned(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
                 AssetBalancePolicy::Global,
                 None,
             )
@@ -209,6 +213,11 @@ fn da_route_authority_genesis_transactions(
                 validator_id.clone(),
                 Quantity::from(DA_VALIDATOR_STAKE),
                 Metadata::default(),
+                iroha::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                    Quantity::from(DA_VALIDATOR_STAKE),
+                ),
             )
             .into(),
         );
@@ -2420,10 +2429,9 @@ fn da_route_authority_genesis_binds_every_peer_once() {
     assert_eq!(transactions[1].len(), peers.len() * 2);
     assert_eq!(
         da_stake_asset_definition_id(),
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("nexus", "universal").expect("DA stake domain"),
-            "xor".parse().expect("DA stake asset name"),
-        )
+        defaults::nexus::staking::stake_asset_id()
+            .parse()
+            .expect("canonical network XOR asset")
     );
 
     let registrations = transactions[1]

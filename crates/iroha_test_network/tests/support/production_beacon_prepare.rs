@@ -1,15 +1,12 @@
 //! Fresh native localnet inputs for the production-custody beacon contract.
 
 use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
-use iroha_core::{
-    beacon::global_threshold_beacon_roster_hash_v1, sumeragi::signed_genesis_voting_peers,
-};
+use iroha_core::sumeragi::signed_genesis_voting_peers;
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    consensus::{GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgSessionV1},
     isi::{Mint, Register},
     parameter::system::{Parameters, SumeragiNposParameters},
     role::Role,
@@ -19,8 +16,7 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_genesis::{GenesisBlock, RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::peer::PeerId;
-use norito::{derive::JsonSerialize, json};
-use rand::{TryRngCore as _, rngs::OsRng};
+use norito::json;
 use std::{
     fs,
     io::Write as _,
@@ -41,12 +37,10 @@ use tokio::{
 pub(super) struct Prepared {
     pub directory: PathBuf,
     pub genesis_directory: PathBuf,
-    pub request: PathBuf,
     pub roster: Vec<PeerId>,
     pub network_id: NetworkId,
     pub genesis_public_key: PublicKey,
     pub routed_client: PathBuf,
-    pub epoch_schedule: PathBuf,
 }
 
 // One real funded account gives the retained explicit-route contract an
@@ -174,16 +168,6 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
     Ok(client_path)
 }
 
-#[derive(JsonSerialize)]
-struct Request {
-    schema: String,
-    dkg_session: GlobalThresholdBeaconDkgSessionV1,
-    target_roster: Vec<PeerId>,
-    authorization_roster: Vec<PeerId>,
-    provider_handles: Vec<String>,
-    provider_revision: u64,
-}
-
 async fn run(command: &mut Command, evidence: &Path, deadline: Instant, stage: &str) -> Result<()> {
     ensure!(
         Instant::now() < deadline,
@@ -255,9 +239,8 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
             npos.max_validators == 4,
             "native fixture roster ceiling is not four"
         );
-        // The first real epoch-maintenance operation admits at 8, anchors at 9 and
-        // executes at 10. Epoch 11 makes that execution merge itself carry the
-        // mandatory pulse; no padding transaction or pulse-only block exists.
+        // Cross a real scheduling boundary after the installed beacon ceremony.
+        // The authority generation remains unchanged without a certified transition.
         npos.epoch_length_blocks = NonZeroU64::new(11).expect("positive fixture epoch");
         // Retain evidence within the signed three-epoch window, rather than
         // truncating only the epoch while leaving incompatible production bounds.
@@ -534,70 +517,16 @@ pub(super) async fn prepare(
         );
         fs::write(path, toml::to_string(&client)?)?;
     }
-    let mut session_id = [0; 32];
-    OsRng
-        .try_fill_bytes(&mut session_id)
-        .map_err(|error| eyre!("fresh session entropy: {error}"))?;
-    ensure!(session_id != [0; 32], "fresh beacon session is zero");
-    let session_name: String = session_id
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let provider_handles: Vec<_> = (1..=4)
-        .map(|seat| format!("software://beacon/{session_name}/seat-{seat}"))
-        .collect();
-    for handle in &provider_handles {
-        iroha_config::parameters::validate_production_runtime_handle(handle)
-            .map_err(|error| eyre!("invalid public provider handle: {error:?}"))?;
-    }
-    let request_value = Request {
-        schema: "iroha.global-beacon.bootstrap.request.v1".into(),
-        dkg_session: GlobalThresholdBeaconDkgSessionV1 {
-            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-            network_id,
-            session_id,
-            roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
-            committee_size: 4,
-            threshold: 2,
-            start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
-        },
-        target_roster: roster.clone(),
-        authorization_roster: roster.clone(),
-        provider_handles,
-        provider_revision: 1,
-    };
-    let request = root.join("beacon-request.json");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&request)?;
-    file.write_all(&json::to_vec(&request_value)?)?;
-    file.sync_all()?;
     ensure!(
         Instant::now() < deadline,
         "beacon fixture deadline after genesis preparation"
     );
-    let epoch_schedule = super::epoch_maintenance::prepare_schedule(
-        &directory,
-        kagami,
-        &roster,
-        network_id,
-        &genesis_public_key,
-        deadline,
-    )
-    .await?;
     Ok(Prepared {
         directory,
         genesis_directory,
-        request,
         roster,
         network_id,
         genesis_public_key,
         routed_client,
-        epoch_schedule,
     })
 }

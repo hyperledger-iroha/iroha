@@ -1258,28 +1258,15 @@ fn replace_account_id_in_public_lane(
             }
         }
     }
-    let mut claim_updates = Vec::new();
-    for (key, value) in state_transaction.world.public_lane_reward_claims.iter() {
-        let (lane_id, account_id, asset_id) = key;
-        let mut updated = false;
-        let updated_account = if account_id == old {
-            updated = true;
-            new.clone()
-        } else {
-            account_id.clone()
-        };
-        let updated_asset = replace_account_id_in_asset_id(asset_id, old, new);
-        if &updated_asset != asset_id {
-            updated = true;
-        }
-        if updated {
-            claim_updates.push((
-                key.clone(),
-                (lane_id.clone(), updated_account, updated_asset),
-                *value,
-            ));
-        }
-    }
+    // Rekey admission requires the destination account to be absent. Its monetary
+    // state therefore cannot collide with the exact recipient and custody keys.
+    let claim_updates: Vec<_> = state_transaction
+        .world
+        .public_lane_reward_claims
+        .iter()
+        .filter(|((_, account), _)| account == old)
+        .map(|(key, value)| (key.clone(), (key.0, new.clone()), value.clone()))
+        .collect();
     for (old_key, new_key, value) in claim_updates {
         state_transaction
             .world
@@ -1288,6 +1275,38 @@ fn replace_account_id_in_public_lane(
         state_transaction
             .world
             .public_lane_reward_claims
+            .insert(new_key, value);
+    }
+    let accrual_updates: Vec<_> = state_transaction
+        .world
+        .public_lane_reward_accruals
+        .iter()
+        .filter(|((_, account, asset), _)| account == old || asset.account() == old)
+        .map(|(key, value)| {
+            let recipient = if &key.1 == old {
+                new.clone()
+            } else {
+                key.1.clone()
+            };
+            (
+                key.clone(),
+                (
+                    key.0,
+                    recipient,
+                    replace_account_id_in_asset_id(&key.2, old, new),
+                ),
+                value.clone(),
+            )
+        })
+        .collect();
+    for (old_key, new_key, value) in accrual_updates {
+        state_transaction
+            .world
+            .public_lane_reward_accruals
+            .remove(old_key);
+        state_transaction
+            .world
+            .public_lane_reward_accruals
             .insert(new_key, value);
     }
     let reserve_updates = state_transaction
@@ -5402,6 +5421,7 @@ mod tests {
                 metadata: Metadata::default(),
                 status: active.clone(),
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },
@@ -5420,6 +5440,7 @@ mod tests {
                 metadata: Metadata::default(),
                 status: active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },

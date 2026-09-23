@@ -4718,7 +4718,7 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
 
 /// Build deterministic paired-Pasta authority aligned to a unit-test consensus roster.
 #[cfg(test)]
-pub(crate) fn test_kagemusha_mint_finality_roster(
+pub(crate) fn test_kagemusha_mint_finality_authority(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
@@ -4731,7 +4731,7 @@ pub(crate) fn test_kagemusha_mint_finality_roster(
     KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation: epoch,
         validators: roster
             .iter()
             .enumerate()
@@ -4742,6 +4742,87 @@ pub(crate) fn test_kagemusha_mint_finality_roster(
             })
             .collect(),
     }
+}
+
+/// Build an explicit standalone scheduling authorization for a unit-test context.
+#[cfg(test)]
+pub(crate) fn test_kagemusha_mint_finality_authorization(
+    authority: &crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    epoch: u64,
+    first_height: u64,
+    last_height: u64,
+) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+    use crate::isi::kagemusha_v1::{
+        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+    };
+    let genesis = epoch == 0;
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch,
+        first_height,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority
+            .authority_id()
+            .expect("fixture authority identity"),
+        beacon: if genesis {
+            BeaconEpochBindingV1::Bootstrap
+        } else {
+            BeaconEpochBindingV1::Installed(
+                crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id: [0x71; 32],
+                    transcript_hash: [0x72; 32],
+                },
+            )
+        },
+        previous_authorization_id: if genesis { [0; 32] } else { [0x73; 32] },
+        transition_id: if genesis { [0; 32] } else { [0x74; 32] },
+        decision: if genesis {
+            KagemushaMintFinalityEpochDecisionV1::Genesis
+        } else {
+            KagemushaMintFinalityEpochDecisionV1::Activate
+        },
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid standalone scheduling fixture");
+    authorization
+}
+
+/// Build the exact contiguous authorization certified by a unit-test boundary context.
+#[cfg(test)]
+pub(crate) fn test_kagemusha_mint_finality_successor_authorization(
+    previous: &crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+    authority: &crate::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+    decision: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1,
+) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+    use crate::isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1};
+    let mut successor = test_kagemusha_mint_finality_authorization(
+        authority,
+        previous.epoch.checked_add(1).unwrap(),
+        previous.last_height.checked_add(1).unwrap(),
+        last_height,
+    );
+    successor.previous_authorization_id = previous.authorization_id().unwrap();
+    successor.decision = decision;
+    if decision == KagemushaMintFinalityEpochDecisionV1::Retain {
+        successor.transition_id = [0; 32];
+    }
+    if matches!(
+        decision,
+        KagemushaMintFinalityEpochDecisionV1::Retain
+            | KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+    ) && previous.beacon != BeaconEpochBindingV1::Bootstrap
+    {
+        successor.beacon = previous.beacon;
+    }
+    successor
+        .validate_successor(previous)
+        .expect("valid scheduling successor fixture");
+    successor
 }
 
 /// Build deterministic signed-genesis context parameters for unit tests.
@@ -4773,14 +4854,13 @@ pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
         })
         .collect::<Vec<_>>();
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    let bound = test_kagemusha_mint_finality_roster(network_id, 0, &roster);
+    let bound = test_kagemusha_mint_finality_authority(network_id, 0, &roster);
     KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: bound.version,
-            epoch: bound.epoch,
+            generation: bound.generation,
             validators: bound.validators,
         },
-        next_epoch_roster: None,
     }
 }
 #[cfg(test)]
@@ -4838,16 +4918,19 @@ mod terminal_height_context_tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"terminal-height genesis")),
         );
         let mint_finality_roster =
-            test_kagemusha_mint_finality_roster(network_id, u64::MAX, &roster);
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid terminal mint-finality roster");
+            test_kagemusha_mint_finality_authority(network_id, u64::MAX, &roster);
+        let mint_finality_authorization = test_kagemusha_mint_finality_authorization(
+            &mint_finality_roster,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+        );
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: u64::MAX,
             epoch: u64::MAX,
-            kagemusha_mint_finality_authorization: mint_finality_epoch_id,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
             kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,

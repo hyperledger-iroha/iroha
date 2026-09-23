@@ -1,12 +1,11 @@
 # Generated instruction record identities
 
-`instruction_record_generated_identity_frames.json` contains immutable captures
-for all 290 current `isi!` declarations: 281 nongeneric records and 39 concrete
-instantiations of the nine generic declarations. Its 320 type rows preserve 355
-populated values and 1,420 complete root, vector, option and map frames.
+`instruction_record_generated_identity_frames.json` contains current first-release
+captures for 321 instruction-record type rows. Its 357 populated values preserve
+1,428 complete root, vector, option and map frames.
 
 The fixture SHA-256 is
-`9da764b5c7ea5ef44f9e93049430b019133796135bbda358ef0a3c0c579618a5`.
+`7c05d9493fbfac8cbf249f26fe5fe7a5a70f114cc8a163d1c7e3467e6fdb6b9b`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -42,7 +41,13 @@ including exact root, vector, option and map decode/re-encode checks.
 typed fixture and its real codec roundtrip helper. Its Proposed lifecycle contains
 only `proposed_at_height`; the retired automatic activation-height field is absent.
 All four frame forms were decoded, compared and exactly re-encoded by the generator.
-Only that one case's four frames changed; the other 354 cases, all nominal and
-directional identities, and the strict retired-field rejection tests are unchanged.
+That checkpoint changed one case while preserving its nominal and directional
+identities and the strict retired-field rejection tests.
+
+On 2026-09-23, the typed current-protocol printers recaptured the Exact12
+qualification and staking rows, including two distinct signed peer rebindings
+and the updated consensus evidence nested in penalty cancellation. The unchanged
+inventory count and complete four-frame roundtrips remain mandatory; no old
+decoder or identity fallback was introduced.
 The opt-in `capture_current_privacy_activation_instruction_identity_frames` test
 prints the actual capture to stdout and never writes the fixture itself.

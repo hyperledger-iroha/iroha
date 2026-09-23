@@ -212,8 +212,7 @@ impl ValidBlock {
             return Ok(None);
         }
         preflight.map_err(|error| NativeCandidatePreparationError::Preflight(Box::new(error)))?;
-        let body = body.clone();
-        let Some(recorded) = source.record_execution(body, context)? else {
+        let Some(recorded) = source.record_execution(context)? else {
             return Ok(None);
         };
         let (block, state, native) = recorded

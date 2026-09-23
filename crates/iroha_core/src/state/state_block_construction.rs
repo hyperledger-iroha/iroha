@@ -179,6 +179,7 @@ impl State {
                 .expect("original acquired State block")
                 .into_fields();
             let block = StateBlock::from_fields(StateBlockFields {
+                local_storage_refusal: None,
                 state_ref: self,
                 da_rewind_releases,
                 canonical_runtime: block_field::BlockField::new(canonical_runtime),

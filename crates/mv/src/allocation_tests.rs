@@ -705,6 +705,7 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
     let owner = Arc::new(Owner::new_charged(
         Data(7),
         concread::internals::lincowcell::InitialCharges {
+            notification: concread::release::ReleaseNotification::default(),
             root: initial.try_split(initial_layouts.root).unwrap(),
             reader: initial.try_split(initial_layouts.reader).unwrap(),
         },
@@ -818,6 +819,8 @@ fn partition_retains_exact_original_pool_and_conserves_real_credits() {
         part.try_split(Layout::from_size_align(16, 8).unwrap())
             .unwrap()
     });
+    assert!(charge.belongs_to(&budget));
+    assert!(!charge.belongs_to(&equal_but_foreign));
     budget.with_deferred_refund_notifications(|_| {
         without_allocations(|| drop(part));
         assert_eq!(budget.reserved_bytes(), 56);
@@ -887,4 +890,58 @@ fn partition_refusal_and_zero_partition_preserve_original_remaining_and_refund()
     assert_eq!(budget.reserved_bytes(), 17);
     without_allocations(|| drop(child));
     assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn owned_refund_scope_reserves_original_control_until_last_custodian() {
+    let bytes = OwnedAllocationScope::allocation_layout().size();
+    let small = AllocationBudget::new(bytes - 1);
+    assert!(matches!(
+        small.try_owned_refund_scope(),
+        Err(AllocationRefusal::ExceedsLimit { .. })
+    ));
+    assert_eq!(small.reserved_bytes(), 0);
+    let budget = AllocationBudget::new(bytes + 1);
+    let scope = budget.try_owned_refund_scope().unwrap();
+    assert_eq!(budget.reserved_bytes(), bytes);
+    let last = without_allocations(|| scope.clone());
+    let held = budget.try_reserve_bytes(1).unwrap();
+    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    drop(held);
+    drop(scope);
+    assert_eq!(wakes.0.load(SeqCst), 0);
+    assert_eq!(budget.reserved_bytes(), bytes);
+    drop(last);
+    assert!(wakes.0.load(SeqCst) > 0);
+    assert!(poll(&mut wait, &wakes).is_ready());
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn owned_refund_scopes_unlink_out_of_order_across_lexical_and_foreign_scopes() {
+    let bytes = OwnedAllocationScope::allocation_layout().size();
+    let budget = AllocationBudget::new(bytes * 3 + 1);
+    let other = AllocationBudget::new(bytes + 1);
+    let outer = budget.try_owned_refund_scope().unwrap();
+    let foreign = other.try_owned_refund_scope().unwrap();
+    let retained =
+        budget.with_deferred_refund_notifications(|_| budget.try_owned_refund_scope().unwrap());
+    let held = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    drop(held);
+    drop(outer);
+    drop(foreign);
+    assert_eq!(wakes.0.load(SeqCst), 0);
+    assert_eq!(other.reserved_bytes(), 0);
+    drop(retained);
+    assert!(wakes.0.load(SeqCst) > 0);
+    assert_eq!(budget.reserved_bytes(), 0);
+    // The TLS chain must contain no pointer into any freed owned/lexical record.
+    without_allocations(|| budget.with_deferred_refund_notifications(|_| {}));
 }

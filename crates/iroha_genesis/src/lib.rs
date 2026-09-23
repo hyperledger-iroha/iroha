@@ -130,7 +130,7 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
     mut validator_ids: Vec<iroha_model_base::peer::PeerId>,
 ) -> KagemushaMintFinalityGenesisParametersV1 {
     use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityValidatorKeysV1,
     };
 
@@ -176,12 +176,11 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
         })
         .collect::<Vec<_>>();
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch: 0,
+            generation: 0,
             validators,
         },
-        next_epoch_roster: None,
     };
     parameters
         .validate()
@@ -1513,6 +1512,11 @@ pub mod genesis_instructions_json {
             Some(Value::Null) | None => Metadata::default(),
             Some(value) => norito::json::value::from_value(value)?,
         };
+        let monetary_plan = norito::json::value::from_value(
+            fields
+                .remove("monetary_plan")
+                .ok_or_else(|| json::Error::missing_field("monetary_plan"))?,
+        )?;
         ensure_no_extra_fields(&fields)?;
         let register = RegisterPublicLaneValidator::new(
             lane_id,
@@ -1521,6 +1525,7 @@ pub mod genesis_instructions_json {
             stake_account,
             initial_stake,
             metadata,
+            monetary_plan,
         );
         Ok(Some(InstructionBox::from(register)))
     }
@@ -1984,6 +1989,10 @@ pub mod genesis_instructions_json {
             fields.insert(
                 "initial_stake".to_string(),
                 Value::String(register.initial_stake().to_string()),
+            );
+            fields.insert(
+                "monetary_plan".to_owned(),
+                norito::json::value::to_value(register.monetary_plan()).ok()?,
             );
             let metadata = norito::json::value::to_value(register.metadata()).ok()?;
             fields.insert("metadata".to_string(), metadata);
@@ -2817,6 +2826,17 @@ pub mod genesis_instructions_json {
                 validator_id.clone(),
                 Quantity::from(10_u64),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(
+                        SumeragiNposParameters::default().xor_asset_definition_id,
+                        ALICE_ID.clone(),
+                    ),
+                    AssetId::new(
+                        SumeragiNposParameters::default().xor_asset_definition_id,
+                        iroha_test_samples::BOB_ID.clone(),
+                    ),
+                    Quantity::from(10_u64),
+                ),
             );
             let activate = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator_id.clone());
             let instructions: Vec<InstructionBox> = vec![
@@ -2864,6 +2884,17 @@ pub mod genesis_instructions_json {
                 validator_id,
                 Quantity::from(10_u64),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(
+                        SumeragiNposParameters::default().xor_asset_definition_id,
+                        ALICE_ID.clone(),
+                    ),
+                    AssetId::new(
+                        SumeragiNposParameters::default().xor_asset_definition_id,
+                        iroha_test_samples::BOB_ID.clone(),
+                    ),
+                    Quantity::from(10_u64),
+                ),
             );
             let mut json_text = String::new();
             serialize(&[InstructionBox::from(register)], &mut json_text);
@@ -3421,12 +3452,68 @@ impl GenesisSourceTemplate {
     ///
     /// # Errors
     ///
-    /// Returns an error when the authority shape is invalid or the completed JSON is not a valid
-    /// [`RawGenesisTransaction`].
+    /// Returns an error when the authority or explicit NPoS XOR selection is invalid, or the
+    /// completed JSON is not a valid [`RawGenesisTransaction`].
     pub fn materialize(
         mut self,
         parameters: KagemushaMintFinalityGenesisParametersV1,
+        xor_asset_definition_id: Option<AssetDefinitionId>,
     ) -> Result<RawGenesisTransaction> {
+        let is_npos = self
+            .value
+            .get("consensus_mode")
+            .and_then(norito::json::Value::as_str)
+            == Some("Npos");
+        if is_npos != xor_asset_definition_id.is_some() {
+            return Err(eyre!(
+                "NPoS source materialization requires an explicit canonical XOR definition; permissioned sources omit it"
+            ));
+        }
+        if let Some(asset) = xor_asset_definition_id {
+            let chain = self
+                .value
+                .get("chain")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_default();
+            if chain == "00000000-0000-0000-0000-000000000753"
+                && asset.to_string() == "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            {
+                return Err(eyre!(
+                    "public Nexus requires its operator-provisioned mainnet XOR definition; the Taira testnet definition is forbidden"
+                ));
+            }
+            if chain == "fc56984b-2be7-431d-840e-21514d1883f0"
+                && asset.to_string() != "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            {
+                return Err(eyre!("public Taira requires its canonical XOR definition"));
+            }
+            let transactions = self
+                .value
+                .get_mut("transactions")
+                .and_then(norito::json::Value::as_array_mut)
+                .ok_or_else(|| eyre!("genesis source has no transaction array"))?;
+            let mut pinned = 0;
+            for transaction in transactions {
+                if let Some(payload) = transaction
+                    .get_mut("parameters")
+                    .and_then(|value| value.get_mut("custom"))
+                    .and_then(|value| value.get_mut("sumeragi_npos_parameters"))
+                    .and_then(|value| value.get_mut("payload"))
+                    .and_then(norito::json::Value::as_object_mut)
+                {
+                    payload.insert(
+                        "xor_asset_definition_id".to_owned(),
+                        norito::json::Value::String(asset.to_string()),
+                    );
+                    pinned += 1;
+                }
+            }
+            if pinned != 1 {
+                return Err(eyre!(
+                    "NPoS source must have exactly one authoritative XOR asset pin"
+                ));
+            }
+        }
         parameters
             .validate()
             .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality parameters: {error}"))?;
@@ -3453,8 +3540,7 @@ impl RawGenesisTransaction {
     /// # Errors
     ///
     /// Returns an error when NPoS parameters disagree with the consensus mode, are malformed, or
-    /// the optional epoch-one mint-finality roster is not present exactly at an NPoS height-one
-    /// epoch boundary.
+    /// the initial mint-finality authority is not generation zero.
     pub fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
         let parameters = self.effective_parameters()?;
         let npos_parameter = parameters
@@ -3466,32 +3552,20 @@ impl RawGenesisTransaction {
                     .ok_or_else(|| eyre!("genesis carries malformed `sumeragi_npos_parameters`"))
             })
             .transpose()?;
-        let has_next_roster = self.kagemusha_mint_finality.next_epoch_roster.is_some();
+        self.kagemusha_mint_finality
+            .validate()
+            .map_err(|error| eyre!("invalid genesis mint-finality authority: {error}"))?;
         match (self.consensus_mode, npos_parameters) {
             (SumeragiConsensusMode::Permissioned, Some(_)) => Err(eyre!(
                 "permissioned genesis must omit `sumeragi_npos_parameters`"
-            )),
-            (SumeragiConsensusMode::Permissioned, None) if has_next_roster => Err(eyre!(
-                "`kagemusha_mint_finality.next_epoch_roster` must be null for permissioned genesis"
             )),
             (SumeragiConsensusMode::Permissioned, None) => Ok(()),
             (SumeragiConsensusMode::Npos, None) => Err(eyre!(
                 "NPoS genesis requires `sumeragi_npos_parameters`; node-local election defaults are not signed inputs"
             )),
-            (SumeragiConsensusMode::Npos, Some(parameters)) => {
-                let height_one_is_epoch_boundary = parameters.epoch_length_blocks().get() == 1;
-                if height_one_is_epoch_boundary != has_next_roster {
-                    let requirement = if height_one_is_epoch_boundary {
-                        "must be present when NPoS `epoch_length_blocks` is 1"
-                    } else {
-                        "must be null unless NPoS `epoch_length_blocks` is 1"
-                    };
-                    return Err(eyre!(
-                        "`kagemusha_mint_finality.next_epoch_roster` {requirement}"
-                    ));
-                }
-                Ok(())
-            }
+            (SumeragiConsensusMode::Npos, Some(parameters)) => parameters
+                .validate()
+                .map_err(|error| eyre!("invalid genesis NPoS parameters: {error}")),
         }
     }
     fn validate_structured_parameter_blocks(&self) -> Result<()> {
@@ -3862,7 +3936,7 @@ impl RawGenesisTransaction {
                 "genesis topology repeats a validator identity; provision one canonical entry per validator"
             ));
         }
-        let authority = &self.kagemusha_mint_finality.epoch_roster.validators;
+        let authority = &self.kagemusha_mint_finality.authority_generation.validators;
         if authority.len() != topology.len()
             || authority
                 .iter()
@@ -5106,8 +5180,10 @@ mod tests {
 
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-        GenesisSourceTemplate::from_path(path)?
-            .materialize(deterministic_test_kagemusha_mint_finality_genesis_parameters())
+        GenesisSourceTemplate::from_path(path)?.materialize(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            Some(SumeragiNposParameters::default().xor_asset_definition_id),
+        )
     }
 
     #[test]
@@ -5116,8 +5192,10 @@ mod tests {
             .join("../../defaults/genesis.template.json");
         assert!(RawGenesisTransaction::from_path(&path).is_err());
         let parameters = deterministic_test_kagemusha_mint_finality_genesis_parameters();
-        let materialized =
-            GenesisSourceTemplate::from_path(&path)?.materialize(parameters.clone())?;
+        let materialized = GenesisSourceTemplate::from_path(&path)?.materialize(
+            parameters.clone(),
+            Some(SumeragiNposParameters::default().xor_asset_definition_id),
+        )?;
         assert_eq!(
             materialized.kagemusha_mint_finality_genesis_parameters(),
             &parameters
@@ -5127,14 +5205,47 @@ mod tests {
     }
 
     #[test]
-    fn direct_signing_rejects_mint_finality_schedule_mismatches() {
+    fn source_template_requires_explicit_network_xor_and_rejects_testnet_substitution() -> Result<()>
+    {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let parameters = deterministic_test_kagemusha_mint_finality_genesis_parameters();
+        let generic = root.join("../../defaults/genesis.template.json");
+        assert!(
+            GenesisSourceTemplate::from_path(&generic)?
+                .materialize(parameters.clone(), None)
+                .is_err()
+        );
+        let mainnet = root.join("../../configs/soranexus/nexus/genesis.template.json");
+        assert!(
+            GenesisSourceTemplate::from_path(&mainnet)?
+                .materialize(
+                    parameters.clone(),
+                    Some(SumeragiNposParameters::default().xor_asset_definition_id)
+                )
+                .is_err()
+        );
+        let supplied = AssetDefinitionId::derive_from_components(
+            DomainId::parse_fully_qualified("mainnet-fixture.universal")?,
+            "xor".parse()?,
+        );
+        let manifest = GenesisSourceTemplate::from_path(&mainnet)?
+            .materialize(parameters, Some(supplied.clone()))?;
+        let effective = manifest.effective_parameters()?;
+        let npos = effective
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("materialized pin");
+        assert_eq!(npos.xor_asset_definition_id, supplied);
+        Ok(())
+    }
+    #[test]
+    fn direct_signing_rejects_nonzero_genesis_authority_generation() {
         let genesis_key_pair = checked_genesis_fixture_keypair();
         let mut authority = deterministic_test_kagemusha_mint_finality_genesis_parameters();
-        let mut next_epoch_roster = authority.epoch_roster.clone();
-        next_epoch_roster.epoch = 1;
-        authority.next_epoch_roster = Some(next_epoch_roster);
+        authority.authority_generation.generation = 1;
         let permissioned = GenesisBuilder::new_without_executor(
-            ChainId::from("permissioned-successor-authority"),
+            ChainId::from("invalid-genesis-authority-generation"),
             PathBuf::from("."),
         )
         .set_topology(deterministic_test_genesis_topology_entries())
@@ -5142,25 +5253,36 @@ mod tests {
         .with_kagemusha_mint_finality_genesis_parameters(authority);
         let error = permissioned
             .build_and_sign(&genesis_key_pair)
-            .expect_err("permissioned direct signing must reject an epoch-one authority");
-        assert!(error.to_string().contains("must be null for permissioned"));
+            .expect_err("genesis must start with authority generation zero");
+        assert!(error.to_string().contains("authority"));
+    }
 
-        let mut npos_parameters = SumeragiNposParameters::default();
-        npos_parameters.epoch_length_blocks = NonZeroU64::new(1).expect("non-zero epoch length");
-        npos_parameters.evidence_horizon_blocks = 1;
-        npos_parameters.slashing_delay_blocks = 1;
-        let npos = GenesisBuilder::new_without_executor(
-            ChainId::from("npos-missing-successor-authority"),
-            PathBuf::from("."),
-        )
-        .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()))
-        .set_topology(deterministic_test_genesis_topology_entries())
-        .build_raw_for_test()
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
-        let error = npos
-            .build_and_sign(&genesis_key_pair)
-            .expect_err("height-one NPoS boundary must reject a missing epoch-one authority");
-        assert!(error.to_string().contains("must be present"));
+    #[test]
+    fn genesis_authority_generation_is_independent_of_npos_epoch_length() {
+        for epoch_length in [3, 3_600] {
+            let mut parameters = SumeragiNposParameters::default();
+            parameters.epoch_length_blocks = NonZeroU64::new(epoch_length).unwrap();
+            parameters.evidence_horizon_blocks = 1;
+            parameters.slashing_delay_blocks = 1;
+            let manifest = GenesisBuilder::new_without_executor(
+                ChainId::from("independent-genesis-authority"),
+                PathBuf::from("."),
+            )
+            .append_parameter(Parameter::Custom(parameters.into_custom_parameter()))
+            .set_topology(deterministic_test_genesis_topology_entries())
+            .build_raw_for_test()
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            manifest
+                .validate_mode_specific_consensus_parameters()
+                .expect("epoch cadence does not pre-provision another key authority");
+            assert_eq!(
+                manifest
+                    .kagemusha_mint_finality
+                    .authority_generation
+                    .generation,
+                0
+            );
+        }
     }
 
     #[test]

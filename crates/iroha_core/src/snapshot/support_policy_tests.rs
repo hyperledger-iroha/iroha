@@ -102,8 +102,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(network_id, 0, 0, 1, u64::MAX, &roster);
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -117,8 +117,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         quorum: wire_v2::DualQuorum::from_roster(&roster)
             .expect("equal-power snapshot evidence quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
         execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
         da_layout: wire_v2::DataAvailabilityLayout {
@@ -299,8 +299,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             1,
             Hash::new(b"snapshot eviction executed block wire placeholder"),
         );
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(*network_id, 0, 0, 1, 100, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -317,8 +317,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -635,7 +635,8 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
             &snapshot_read_budget_for_testing(),
-        )
+                    &crate::state::kagemusha_operation_indexes::default_budget(),
+)
         .is_err(),
         "restart must not select a rejected unpublished generation"
     );
@@ -740,7 +741,8 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("post-height snapshot must remain exactly restart-readable");
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
         assert_eq!(

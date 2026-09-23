@@ -29,7 +29,7 @@ use iroha_data_model::{
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
         kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
         },
         register::Register,
@@ -58,7 +58,9 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
-use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
+use iroha_genesis::{
+    GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto, RawGenesisTransaction,
+};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -255,6 +257,7 @@ pub(crate) fn genesis_unexecuted_with_keypair_and_post_topology(
         None,
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+        None,
     )
     .0
 }
@@ -290,6 +293,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
+        None,
     )
     .0
 }
@@ -309,7 +313,12 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-) -> (GenesisBlock, StagedGenesisPolicyHashes) {
+    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
+) -> (
+    GenesisBlock,
+    StagedGenesisPolicyHashes,
+    RawGenesisTransaction,
+) {
     init_instruction_registry();
     build_minimal_genesis_with_post_topology_and_staged_hash(
         extra_transactions,
@@ -327,6 +336,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_ha
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
+        mint_finality_override,
     )
 }
 fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>]) {
@@ -387,14 +397,13 @@ fn test_kagemusha_mint_finality_genesis_parameters(
             .expect("derive independent test-only paired-Pasta validator keys")
         })
         .collect();
-    let epoch_roster = KagemushaMintFinalityEpochRosterTemplateV1 {
+    let authority_generation = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        epoch: 0,
+        generation: 0,
         validators,
     };
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster,
-        next_epoch_roster: None,
+        authority_generation,
     };
     parameters
         .validate()
@@ -486,6 +495,7 @@ fn build_minimal_genesis_with_post_topology(
         consensus_handshake_meta,
         consensus_mode_override,
         confidential_policy_hash,
+        None,
     )
     .0
 }
@@ -505,7 +515,12 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-) -> (GenesisBlock, StagedGenesisPolicyHashes) {
+    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
+) -> (
+    GenesisBlock,
+    StagedGenesisPolicyHashes,
+    RawGenesisTransaction,
+) {
     // Permission JSON is materialized here, before native pre-execution begins.
     // A supplied runtime configuration owns its address profile on every calling thread.
     let _profile = runtime_config.as_ref().map(|config| {
@@ -517,7 +532,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     let mut post_topology_transactions = post_topology_transactions;
     strip_handshake_metadata_transactions(&mut extra_transactions);
     strip_handshake_metadata_transactions(&mut post_topology_transactions);
-    let (mut block, genesis_account, topology_vec, genesis_key_pair) =
+    let (mut block, genesis_account, topology_vec, genesis_key_pair, raw_genesis) =
         build_minimal_genesis_unexecuted_with_post_topology(
             extra_transactions,
             post_topology_transactions,
@@ -532,6 +547,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             consensus_handshake_meta,
             consensus_mode_override,
             confidential_policy_hash,
+            mint_finality_override,
         );
     let (signed_block, staged_hash) = preexecute_genesis_with_runtime_config(
         &block,
@@ -545,7 +561,7 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     )
     .expect("minimal genesis must pre-execute without synthetic results");
     block.0 = signed_block;
-    (block, staged_hash)
+    (block, staged_hash, raw_genesis)
 }
 #[allow(dead_code)]
 fn build_minimal_genesis_unexecuted(
@@ -554,7 +570,7 @@ fn build_minimal_genesis_unexecuted(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
-    build_minimal_genesis_unexecuted_with_post_topology(
+    let (block, account, peers, key_pair, _) = build_minimal_genesis_unexecuted_with_post_topology(
         extra_transactions,
         Vec::new(),
         topology,
@@ -568,7 +584,9 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-    )
+        None,
+    );
+    (block, account, peers, key_pair)
 }
 fn build_minimal_genesis_unexecuted_with_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
@@ -584,7 +602,14 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
-) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
+    mint_finality_override: Option<KagemushaMintFinalityGenesisParametersV1>,
+) -> (
+    GenesisBlock,
+    AccountId,
+    Vec<PeerId>,
+    KeyPair,
+    RawGenesisTransaction,
+) {
     fn append_external_genesis_transaction(
         mut builder: GenesisBuilder,
         instructions: Vec<InstructionBox>,
@@ -656,6 +681,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .map(decode_consensus_handshake_metadata)
         .transpose()
         .expect("test-network consensus handshake metadata must be canonical");
+    assert!(
+        consensus_handshake_metadata.is_none() || mint_finality_override.is_none(),
+        "signed consensus metadata and a disposable Pasta override cannot both specify authority"
+    );
     if let (Some(metadata), Some(mode_override)) = (
         consensus_handshake_metadata.as_ref(),
         consensus_mode_override,
@@ -686,6 +715,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
                 )
             },
         );
+    let kagemusha_mint_finality = mint_finality_override.unwrap_or(kagemusha_mint_finality);
+    kagemusha_mint_finality
+        .validate()
+        .expect("override must be a canonical generation-zero mint-finality authority");
     builder = builder
         .with_sumeragi_v2_context_parameters(sumeragi_v2)
         .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
@@ -985,13 +1018,20 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .expect("build canonical test-network genesis manifest")
         .with_consensus_mode(consensus_mode);
     let block = raw_genesis
+        .clone()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             &genesis_key_pair,
             da_proof_policies,
             confidential_policy_hash,
         )
         .expect("build minimal genesis");
-    (block, genesis_account, topology_vec, genesis_key_pair)
+    (
+        block,
+        genesis_account,
+        topology_vec,
+        genesis_key_pair,
+        raw_genesis,
+    )
 }
 fn format_hash_hex(hash: [u8; 32]) -> String {
     use std::fmt::Write as _;
@@ -2004,7 +2044,7 @@ mod tests {
             ..Default::default()
         };
         let policies = iroha_core::da::proof_policy_bundle(&nexus.lane_config);
-        let (block, genesis_account, topology_vec, genesis_key_pair) =
+        let (block, genesis_account, topology_vec, genesis_key_pair, _) =
             super::build_minimal_genesis_unexecuted_with_post_topology(
                 Vec::new(),
                 Vec::new(),
@@ -2019,6 +2059,7 @@ mod tests {
                 None,
                 None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+                None,
             );
         let executed = super::populate_genesis_results(
             &block,
@@ -2057,10 +2098,8 @@ mod tests {
         let validator_key = KeyPair::random();
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
-        let stake_asset_id = AssetDefinitionId::derive_from_components(
-            nexus_domain.clone(),
-            "multilane_stake".parse().expect("stake asset name"),
-        );
+        let stake_asset_id = iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id;
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
         let lane_zero = LaneConfig {
             id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
@@ -2120,11 +2159,23 @@ mod tests {
                 validator_id.clone(),
                 Quantity::from(10_u32),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(
+                        stake_asset_id.clone(),
+                        AccountId::parse_encoded(
+                            &defaults::nexus::staking::stake_escrow_account_id(),
+                        )
+                        .expect("default escrow")
+                        .into_account_id(),
+                    ),
+                    Quantity::from(10_u32),
+                ),
             )
             .into(),
             ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),
         ]];
-        let (block, genesis_account, topology_vec, genesis_key_pair) =
+        let (block, genesis_account, topology_vec, genesis_key_pair, _) =
             super::build_minimal_genesis_unexecuted_with_post_topology(
                 Vec::new(),
                 post_topology_transactions,
@@ -2139,6 +2190,7 @@ mod tests {
                 None,
                 None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+                None,
             );
         let err = super::populate_genesis_results(
             &block,
@@ -2415,6 +2467,7 @@ mod tests {
             None,
             None,
             Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            None,
         );
         assert_eq!(embedded_manifest_crypto(&block), expected);
     }
@@ -2601,7 +2654,7 @@ mod tests {
         let expected = iroha_genesis::compute_genesis_vk_set_hash([&register])
             .expect("compute verifier set hash")
             .expect("active verifier registry hash");
-        let (block, _, _, _) = super::build_minimal_genesis_unexecuted_with_post_topology(
+        let (block, _, _, _, _) = super::build_minimal_genesis_unexecuted_with_post_topology(
             Vec::new(),
             vec![vec![register]],
             topology,

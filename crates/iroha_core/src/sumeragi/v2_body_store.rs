@@ -168,7 +168,7 @@ impl V2BodyStoreCapacity {
     }
 
     #[cfg(test)]
-    fn for_test(
+    pub(crate) fn for_test(
         max_body_entries: usize,
         max_body_frame_bytes: u64,
     ) -> Result<Self, V2BodyStoreError> {

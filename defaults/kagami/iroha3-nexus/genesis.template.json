@@ -155,6 +155,7 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "activation_lag_blocks": 1,
+              "xor_asset_definition_id": null,
               "epoch_length_blocks": 3600,
               "epoch_seed": "3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D",
               "evidence_horizon_blocks": 7200,

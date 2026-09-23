@@ -79,8 +79,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = test_network_id();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                network_id, 0, 0, 1, 100, &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -93,8 +95,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"test nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -1808,11 +1810,21 @@ mod tests {
         foreign_context.network_id =
             crate::sumeragi::synthetic_network_id("foreign-sumeragi-v2-body-store");
         (
-            foreign_context.kagemusha_mint_finality_epoch_id,
-            foreign_context.kagemusha_mint_finality_epoch_roster,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            foreign_context.kagemusha_mint_finality_authorization,
+            foreign_context.kagemusha_mint_finality_authority,
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
             foreign_context.network_id,
+            foreign_context.kagemusha_mint_finality_authority.generation,
             foreign_context.epoch,
+            if foreign_context.epoch == 0 {
+                1
+            } else {
+                foreign_context
+                    .kagemusha_mint_finality_authorization
+                    .first_height
+                    .max(2)
+            },
+            foreign_context.epoch_end_height,
             &foreign_context.roster,
         );
         foreign_context

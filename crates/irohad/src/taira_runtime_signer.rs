@@ -1,4 +1,4 @@
-//! Fixed-descriptor runtime signer used by the first-release Taira launcher.
+//! Fixed-descriptor runtime signer and shared Pasta seed custody for both daemon launchers.
 //!
 //! Taira keeps each validator's Soracloud runtime key in its deployment
 //! supervisor.  The supervisor opens the owner-only regular file and passes it
@@ -40,7 +40,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     soracloud::{
         SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
     },
@@ -252,6 +252,9 @@ fn validate_taira_storage_profile_v1(
 }
 
 fn validate_taira_launcher_config_v1(config: &Config) -> Result<(), String> {
+    if config.sumeragi.mint_finality_seed_fd.is_some() {
+        return Err("Taira launcher rejects a second configured Pasta seed source".to_owned());
+    }
     if config.nexus.storage.max_wsv_memory_bytes.get()
         != iroha_config::parameters::defaults::taira::NEXUS_MAX_WSV_MEMORY_BYTES
     {
@@ -449,7 +452,7 @@ fn load_mint_finality_seed_from_file(
 
 #[allow(
     unsafe_code,
-    reason = "the Taira launcher contract transfers unique ownership of fixed inherited descriptors"
+    reason = "the daemon launcher transfers unique ownership of fixed inherited descriptors"
 )]
 pub(crate) fn take_inherited_private_file(
     descriptor: RawFd,
@@ -523,53 +526,55 @@ fn load_inherited_key_pair() -> Result<KeyPair, TairaRuntimeSignerErrorV1> {
     load_key_pair_from_file(take_inherited_private_file(TAIRA_RUNTIME_SIGNER_FD_V1)?)
 }
 
-fn bind_taira_mint_finality_authority(
+fn bind_inherited_mint_finality_authority(
     network_id: NetworkId,
     local_validator: &PeerId,
-    epoch: &KagemushaMintFinalityEpochRosterV1,
+    epoch: &KagemushaMintFinalityAuthorityGenerationV1,
     seed: Zeroizing<[u8; 32]>,
 ) -> Result<KagemushaMintFinalityLocalAuthorityV1, String> {
     if epoch.network_id != network_id {
-        return Err("Taira mint-finality roster does not match the configured network".to_owned());
+        return Err("mint-finality roster does not match the configured network".to_owned());
     }
     let validator_index = epoch
         .validators
         .iter()
         .position(|entry| &entry.validator == local_validator)
-        .and_then(|index| u32::try_from(index).ok())
-        .ok_or_else(|| "Taira mint-finality roster has no exact local validator".to_owned())?;
-    KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(epoch.clone()), seed, validator_index)
-        .map_err(|_| {
-            "Taira mint-finality seed does not match its authenticated validator roster".to_owned()
-        })
+        .and_then(|index| u32::try_from(index).ok());
+    let authority = if let Some(validator_index) = validator_index {
+        KagemushaMintFinalityLocalAuthorityV1::new(Arc::new(epoch.clone()), seed, validator_index)
+    } else {
+        KagemushaMintFinalityLocalAuthorityV1::new_unseated(epoch, local_validator.clone(), seed)
+    };
+    authority.map_err(|_| {
+        "mint-finality seed or candidate identity does not match the authenticated genesis authority"
+            .to_owned()
+    })
 }
 
-fn resolve_taira_mint_finality_runtime(
+pub(crate) fn resolve_inherited_mint_finality_runtime(
     config: &Config,
     authenticated_genesis: &GenesisV2Bootstrap,
     dependencies: IrohaRuntimeDeps,
 ) -> Result<IrohaRuntimeDeps, String> {
     if dependencies.kagemusha_mint_finality_authority.is_some() {
-        return Err("Taira rejects a second mint-finality runtime authority".to_owned());
+        return Err("a second mint-finality runtime authority is forbidden".to_owned());
     }
     let context = authenticated_genesis.context();
     let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
     if context.network_id != network_id
         || config.common.peer.id.public_key() != config.common.key_pair.public_key()
     {
-        return Err(
-            "Taira mint-finality context does not match the configured local node".to_owned(),
-        );
+        return Err("mint-finality context does not match the configured local node".to_owned());
     }
     let seed = load_mint_finality_seed_from_file(
         take_inherited_private_file(TAIRA_MINT_FINALITY_SEED_FD_V1)
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let authority = bind_taira_mint_finality_authority(
+    let authority = bind_inherited_mint_finality_authority(
         network_id,
         &config.common.peer.id,
-        &context.kagemusha_mint_finality_epoch_roster,
+        &context.kagemusha_mint_finality_authority,
         seed,
     )?;
     Ok(dependencies.with_kagemusha_mint_finality_authority(Arc::new(authority)))
@@ -754,6 +759,9 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 /// read the descriptors. Every node-starting invocation resolves exactly the
 /// Soracloud signer and any explicitly configured global-beacon signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry() {
+    if crate::external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
+        return;
+    }
     if crate::beacon_bootstrap::dispatch_if_requested() {
         return;
     }
@@ -775,70 +783,11 @@ pub fn main_entry() {
     if let Err(report) = crate::run_with_runtime_provider_registry_and_config_guard(
         &registry,
         validate_taira_launcher_config_v1,
-        resolve_taira_mint_finality_runtime,
+        resolve_inherited_mint_finality_runtime,
     ) {
         eprintln!("{report:?}");
         std::process::exit(1);
     }
-}
-
-// This branch exists only in the existing feature-isolated native test daemon.
-// It reuses the production registry, private codecs and authenticated mint factory;
-// it does not attest Linux/Inrou hosting or alter the shipping launcher's guard.
-#[cfg(any(test, feature = "test-network-message-control"))]
-fn validate_production_beacon_fixture_profile(config: &Config) -> Result<(), String> {
-    let peers = config.common.trusted_peers.value();
-    if config.common.chain.as_ref() != TAIRA_CHAIN_ID_V1
-        || *config.common.chain_discriminant.value() != TAIRA_CHAIN_DISCRIMINANT_V1
-        || peers.others.len().saturating_add(1) != TAIRA_VALIDATOR_COUNT_V1
-        || peers.validator_roster_len() != TAIRA_VALIDATOR_COUNT_V1
-        || !config.soracloud_runtime.production_mode
-        || config.soracloud_runtime.inrou.enabled
-        || config.soracloud_runtime.inrou.portable_vm_uid.is_some()
-        || config.soracloud_runtime.inrou.portable_vm_gid.is_some()
-        || config
-            .soracloud_runtime
-            .inrou
-            .trusted_guest_artifact
-            .is_some()
-    {
-        return Err(
-            "production beacon fixture requires an exact four-seat Taira Core-only profile".into(),
-        );
-    }
-    Ok(())
-}
-#[cfg(feature = "test-network-message-control")]
-pub(crate) fn dispatch_production_beacon_fixture_if_requested() -> bool {
-    if !std::env::args_os().any(|arg| arg == "--test-network-production-beacon-custody") {
-        return false;
-    }
-    // A binary combining deterministic Parliament providers cannot represent this fixture.
-    if cfg!(feature = "test-network-parliament-signers") {
-        eprintln!("production beacon custody fixture rejects deterministic Parliament providers");
-        std::process::exit(1);
-    }
-    let result = if std::env::args_os().any(|arg| invocation_does_not_start_a_node(&arg)) {
-        crate::run_with_config_guard(validate_production_beacon_fixture_profile)
-    } else {
-        let registry = match TairaRuntimeProviderRegistryV1::from_inherited_descriptor() {
-            Ok(registry) => registry,
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        };
-        crate::run_with_runtime_provider_registry_and_config_guard(
-            &registry,
-            validate_production_beacon_fixture_profile,
-            resolve_taira_mint_finality_runtime,
-        )
-    };
-    if let Err(report) = result {
-        eprintln!("{report:?}");
-        std::process::exit(1);
-    }
-    true
 }
 
 #[cfg(test)]
@@ -1291,7 +1240,7 @@ mod tests {
         ));
     }
 
-    fn mint_runtime_roster() -> KagemushaMintFinalityEpochRosterV1 {
+    fn mint_runtime_roster() -> KagemushaMintFinalityAuthorityGenerationV1 {
         let mut peers = (1_u8..=4)
             .map(|index| {
                 PeerId::new(
@@ -1303,12 +1252,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         peers.sort();
-        KagemushaMintFinalityEpochRosterV1 {
+        KagemushaMintFinalityAuthorityGenerationV1 {
             version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id: NetworkId::from_genesis_hash(
                 iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
                     iroha_crypto::Hash::new(b"Taira mint seed admission fixture"))),
-            epoch: 0,
+            generation: 0,
             validators: peers.into_iter().enumerate().map(|(index, validator)| {
                 iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &[0x70 + u8::try_from(index).expect("four validators"); 32], 0, validator)
@@ -1321,17 +1270,23 @@ mod tests {
     fn mint_runtime_binds_only_exact_network_validator_and_private_seed() {
         let roster = mint_runtime_roster();
         let local = &roster.validators[1].validator;
-        let authority = bind_taira_mint_finality_authority(
+        let authority = bind_inherited_mint_finality_authority(
             roster.network_id,
             local,
             &roster,
             Zeroizing::new([0x71; 32]),
         )
         .expect("bind exact runtime seed");
-        assert_eq!(authority.signer().validator_index(), 1);
-        assert_eq!(authority.epoch(), &roster);
+        assert_eq!(
+            authority
+                .signer()
+                .expect("genesis signer")
+                .validator_index(),
+            1
+        );
+        assert_eq!(authority.authority(), Some(&roster));
         assert!(
-            bind_taira_mint_finality_authority(
+            bind_inherited_mint_finality_authority(
                 roster.network_id,
                 local,
                 &roster,
@@ -1345,8 +1300,13 @@ mod tests {
             )),
         );
         assert!(
-            bind_taira_mint_finality_authority(foreign, local, &roster, Zeroizing::new([0x71; 32]))
-                .is_err()
+            bind_inherited_mint_finality_authority(
+                foreign,
+                local,
+                &roster,
+                Zeroizing::new([0x71; 32])
+            )
+            .is_err()
         );
         let absent = PeerId::new(
             KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519)
@@ -1354,25 +1314,175 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-        assert!(
-            bind_taira_mint_finality_authority(
-                roster.network_id,
-                &absent,
-                &roster,
-                Zeroizing::new([0x71; 32])
-            )
-            .is_err()
-        );
+        let pending = bind_inherited_mint_finality_authority(
+            roster.network_id,
+            &absent,
+            &roster,
+            Zeroizing::new([0x71; 32]),
+        )
+        .expect("future candidate retains its own seed without a genesis vote");
+        assert!(pending.authority().is_none());
+        assert!(pending.signer().is_none());
         let mut wrong_epoch = roster.clone();
-        wrong_epoch.epoch = 1;
+        wrong_epoch.generation = 1;
         assert!(
-            bind_taira_mint_finality_authority(
+            bind_inherited_mint_finality_authority(
                 roster.network_id,
                 local,
                 &wrong_epoch,
                 Zeroizing::new([0x71; 32])
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn signed_genesis_seat_requires_exact_held_seed_before_startup() {
+        let roster = mint_runtime_roster();
+        let local = &roster.validators[1].validator;
+        assert!(
+            crate::verify_signed_genesis_mint_finality_source_before_providers(
+                roster.network_id,
+                local,
+                &roster,
+                false,
+                false,
+            )
+            .is_err()
+        );
+        for (configured_seed_fd, launcher_authority) in [(true, false), (false, true)] {
+            crate::verify_signed_genesis_mint_finality_source_before_providers(
+                roster.network_id,
+                local,
+                &roster,
+                configured_seed_fd,
+                launcher_authority,
+            )
+            .expect("one exact seed source may proceed to authenticated resolution");
+        }
+        assert!(
+            crate::verify_signed_genesis_mint_finality_custody(
+                roster.network_id,
+                local,
+                &roster,
+                None,
+            )
+            .is_err()
+        );
+        let held = bind_inherited_mint_finality_authority(
+            roster.network_id,
+            local,
+            &roster,
+            Zeroizing::new([0x71; 32]),
+        )
+        .expect("exact seated custody");
+        crate::verify_signed_genesis_mint_finality_custody(
+            roster.network_id,
+            local,
+            &roster,
+            Some(&held),
+        )
+        .expect("exact seated custody starts");
+        assert!(
+            crate::verify_signed_genesis_mint_finality_custody(
+                roster.network_id,
+                &roster.validators[0].validator,
+                &roster,
+                Some(&held),
+            )
+            .is_err()
+        );
+        let candidate = PeerId::new(
+            KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519)
+                .expect("candidate peer")
+                .public_key()
+                .clone(),
+        );
+        crate::verify_signed_genesis_mint_finality_source_before_providers(
+            roster.network_id,
+            &candidate,
+            &roster,
+            false,
+            false,
+        )
+        .expect("unseated candidate has no genesis seed-source obligation");
+        let candidate_holder = bind_inherited_mint_finality_authority(
+            roster.network_id,
+            &candidate,
+            &roster,
+            Zeroizing::new([0xA5; 32]),
+        )
+        .expect("retain an unseated candidate seed");
+        assert!(candidate_holder.authority().is_none());
+        assert!(candidate_holder.signer().is_none());
+        crate::verify_signed_genesis_mint_finality_custody(
+            roster.network_id,
+            &candidate,
+            &roster,
+            Some(&candidate_holder),
+        )
+        .expect("held candidate remains without a genesis vote");
+        let foreign = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"foreign genesis Pasta network",
+            )),
+        );
+        assert!(
+            crate::verify_signed_genesis_mint_finality_custody(
+                foreign,
+                local,
+                &roster,
+                Some(&held),
+            )
+            .is_err()
+        );
+        assert!(
+            crate::verify_signed_genesis_mint_finality_source_before_providers(
+                foreign, local, &roster, true, false,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn public_provider_registry_cannot_smuggle_a_pasta_seed_authority() {
+        struct SmuggledPastaAuthority(Arc<KagemushaMintFinalityLocalAuthorityV1>);
+        impl IrohaRuntimeProviderRegistryV1 for SmuggledPastaAuthority {
+            fn resolve(
+                &self,
+                _: &IrohaRuntimeProviderBindingsV1,
+            ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
+                Ok(IrohaRuntimeDeps::default()
+                    .with_kagemusha_mint_finality_authority(self.0.clone()))
+            }
+        }
+        let roster = mint_runtime_roster();
+        let held = bind_inherited_mint_finality_authority(
+            roster.network_id,
+            &roster.validators[1].validator,
+            &roster,
+            Zeroizing::new([0x71; 32]),
+        )
+        .expect("exact private fixture authority");
+        let registry = SmuggledPastaAuthority(Arc::new(held));
+        let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("pasta-smuggling-test");
+        assert!(matches!(
+            crate::runtime_provider_registry::resolve_runtime_deps_from_bindings(
+                &bindings,
+                Some(&registry),
+            ),
+            Err(IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
+        ));
+    }
+
+    #[test]
+    fn taira_launcher_rejects_a_second_configured_pasta_seed_source() {
+        let registry = fixture_registry();
+        let mut config = beacon_config(&registry, mint_runtime_roster().network_id, None);
+        config.sumeragi.mint_finality_seed_fd = Some(199);
+        assert_eq!(
+            validate_taira_launcher_config_v1(&config),
+            Err("Taira launcher rejects a second configured Pasta seed source".to_owned())
         );
     }
 
@@ -1640,33 +1750,6 @@ mod tests {
                 .expect("fixture Soracloud signer"),
             ),
         }
-    }
-
-    #[test]
-    fn production_beacon_fixture_guard_keeps_exact_core_only_taira_identity() {
-        let network = NetworkId::from_genesis_hash(
-            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"real-custody-fixture",
-            )),
-        );
-        let mut config = beacon_config(&fixture_registry(), network, None);
-        config.common.chain = TAIRA_CHAIN_ID_V1.into();
-        config.common.chain_discriminant =
-            iroha_config_base::WithOrigin::inline(TAIRA_CHAIN_DISCRIMINANT_V1);
-        config.soracloud_runtime.production_mode = true;
-        validate_production_beacon_fixture_profile(&config).expect("typed Core-only fixture");
-        let mut bad = config.clone();
-        bad.common.chain = "another-chain".into();
-        assert!(validate_production_beacon_fixture_profile(&bad).is_err());
-        let mut bad = config.clone();
-        bad.common.chain_discriminant = iroha_config_base::WithOrigin::inline(1);
-        assert!(validate_production_beacon_fixture_profile(&bad).is_err());
-        let mut bad = config.clone();
-        bad.soracloud_runtime.production_mode = false;
-        assert!(validate_production_beacon_fixture_profile(&bad).is_err());
-        let mut bad = config;
-        bad.soracloud_runtime.inrou.enabled = true;
-        assert!(validate_production_beacon_fixture_profile(&bad).is_err());
     }
 
     #[test]

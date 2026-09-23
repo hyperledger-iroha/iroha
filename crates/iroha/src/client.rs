@@ -19,11 +19,13 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
+mod staking_preparation;
 pub mod status;
 #[cfg(test)]
 mod status_http_tests;
 pub(crate) mod subscriptions;
 mod transaction_wait;
+mod validator_committee;
 pub use transaction_wait::TransactionFinalityFailure;
 #[cfg(test)]
 mod transaction_wait_tests;
@@ -13889,14 +13891,11 @@ mod evidence_http_tests {
             "unexpected error: {err}"
         );
     }
-    fn mint_finality_roster_fixture(
+    fn mint_finality_authority_fixture(
         roster: &[ValidatorPower],
-    ) -> (
-        [u8; 32],
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-    ) {
+    ) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
         use iroha_data_model::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
             KagemushaMintFinalityValidatorKeysV1,
         };
 
@@ -13917,10 +13916,10 @@ mod evidence_http_tests {
             "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
         ];
         assert_eq!(roster.len(), 4, "fixture has exactly four validators");
-        let epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id: test_network_id(),
-            epoch: 0,
+            generation: 0,
             validators: roster
                 .iter()
                 .enumerate()
@@ -13939,10 +13938,7 @@ mod evidence_http_tests {
                 })
                 .collect(),
         };
-        let epoch_id = epoch_roster
-            .finality_epoch_id()
-            .expect("valid exact mint-finality fixture roster");
-        (epoch_id, epoch_roster)
+        authority
     }
     fn sample_record() -> EvidenceRecord {
         let mut roster = (0..4)
@@ -13954,15 +13950,28 @@ mod evidence_http_tests {
             })
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            mint_finality_roster_fixture(&roster);
+        let kagemusha_mint_finality_authority = mint_finality_authority_fixture(&roster);
+        let kagemusha_mint_finality_authorization =
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+                version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id: test_network_id(),
+                epoch: 0,
+                first_height: 1,
+                last_height: 10,
+                authority_generation: 0,
+                authority_id: kagemusha_mint_finality_authority.authority_id().unwrap(),
+                beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+                previous_authorization_id: [0; 32],
+                transition_id: [0; 32],
+                decision: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+            };
         let context = HeightContext {
             network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
             height: 10,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authority,
+            kagemusha_mint_finality_authorization,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -14131,6 +14140,7 @@ mod evidence_http_tests {
         }
     }
     include!("client/activation_evidence_tests.rs");
+    include!("client/validator_committee_tests.rs");
     include!("client/activation_attestation_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))

@@ -1,12 +1,12 @@
 //! Fresh four-seat custody through the real native provisioning and provider boundary.
-//! The running daemon uses the explicit Core-only test seam; this is not Linux/Inrou qualification.
+//! Every running daemon uses its stock runtime-provider broker and held authority seed.
 use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
     beacon,
     kura::{BlockIndex, BlockStore},
 };
-use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
     consensus::GlobalThresholdBeaconChainAnchorV1,
@@ -15,36 +15,45 @@ use iroha_data_model::{
         ThresholdKeyLifecycleCertificateV1,
     },
     parameter::system::SumeragiNposParameters,
-    transaction::TransactionEntrypoint,
 };
-use iroha_test_network::{ReleasePrebuiltBinary, revalidate_release_prebuilt_binary};
+use iroha_test_network::{
+    DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, NativeGenesisProvisioningBundle,
+    Program, ReleasePrebuiltBinary, revalidate_release_prebuilt_binary,
+    run_disposable_genesis_dkg_from_configs,
+};
+use irohad::{
+    IrohaRuntimeProviderBindingsV1,
+    external_software_signer::{
+        encode_consensus_threshold_credential_bundle_v1,
+        global_beacon_partial_signer_public_inventory_digest_v1,
+    },
+};
 use std::{
     collections::BTreeSet,
     fs::File,
-    io::{Seek as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     os::{
         fd::{AsRawFd, RawFd},
         unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Component, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex as StdMutex},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt as _, AsyncWriteExt},
     process::{Child, Command},
 };
+use zeroize::Zeroizing;
 
 #[path = "production_beacon_canary_receipt.rs"]
 mod canary_receipt;
-#[path = "production_epoch_maintenance.rs"]
-mod epoch_maintenance;
 #[path = "production_beacon_prepare.rs"]
 mod prepare;
 #[path = "public_transaction_sequence.rs"]
 mod public_sequence;
 
 const CHAIN: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-const CREDENTIAL: &str = "iroha-global-beacon-partial-signer-v1.norito";
 const PHASE_BUDGET: Duration = Duration::from_secs(180);
 
 fn hex(bytes: &[u8]) -> String {
@@ -159,7 +168,7 @@ fn inherit(command: &mut Command, descriptors: &[(RawFd, RawFd)]) -> Result<()> 
     }
     Ok(())
 }
-fn consumed_copy(source: &Path, target: &Path, maximum: u64) -> Result<File> {
+fn consumed_copy(source: &Path, target: &Path, maximum: u64) -> Result<ConsumedCopy> {
     let before = fs::symlink_metadata(source)?;
     ensure!(
         before.is_file()
@@ -179,12 +188,16 @@ fn consumed_copy(source: &Path, target: &Path, maximum: u64) -> Result<File> {
         (opened.dev(), opened.ino(), opened.len()) == (before.dev(), before.ino(), before.len()),
         "credential source changed before copy"
     );
-    let mut output = private_file(target, &[])?;
+    let mut output = ConsumedCopy {
+        file: private_file(target, &[])?,
+        path: target.to_path_buf(),
+        maximum,
+    };
     ensure!(
-        std::io::copy(&mut input, &mut output)? == before.len(),
+        std::io::copy(&mut input, &mut output.file)? == before.len(),
         "credential source changed during copy"
     );
-    output.sync_all()?;
+    output.file.sync_all()?;
     let after = input.metadata()?;
     ensure!(
         (
@@ -202,8 +215,81 @@ fn consumed_copy(source: &Path, target: &Path, maximum: u64) -> Result<File> {
         ),
         "credential source changed after copy"
     );
-    output.rewind()?;
+    output.file.rewind()?;
     Ok(output)
+}
+#[derive(Debug)]
+struct ConsumedCopy {
+    file: File,
+    path: PathBuf,
+    maximum: u64,
+}
+impl Drop for ConsumedCopy {
+    fn drop(&mut self) {
+        let retire = (|| -> Result<()> {
+            let descriptor = self.file.metadata()?;
+            let path = fs::symlink_metadata(&self.path)?;
+            ensure!(
+                descriptor.is_file()
+                    && descriptor.dev() == path.dev()
+                    && descriptor.ino() == path.ino()
+                    && descriptor.uid() == nix::unistd::geteuid().as_raw()
+                    && descriptor.mode() & 0o7777 == 0o600
+                    && descriptor.nlink() == 1
+                    && descriptor.len() <= self.maximum,
+                "native one-shot credential changed before retirement"
+            );
+            if descriptor.len() != 0 {
+                self.file.rewind()?;
+                self.file
+                    .write_all(&vec![0; usize::try_from(descriptor.len())?])?;
+                self.file.sync_all()?;
+                self.file.set_len(0)?;
+                self.file.sync_all()?;
+            }
+            fs::remove_file(&self.path)?;
+            Ok(())
+        })();
+        if let Err(error) = retire {
+            eprintln!(
+                "failed to retire native one-shot credential {}: {error:#}",
+                self.path.display()
+            );
+        }
+    }
+}
+#[test]
+fn native_one_shot_copies_retire_without_consuming_the_retained_source() {
+    let root = tempfile::tempdir().expect("private test root");
+    let source = root.path().join("retained.seed");
+    private_file(&source, &[0x71; 32]).expect("retained private seed");
+    let first_path = root.path().join("first.fd199");
+    let mut first = consumed_copy(&source, &first_path, 32).expect("first one-shot copy");
+    assert_eq!(first.file.metadata().unwrap().len(), 32);
+    first.file.rewind().unwrap();
+    first.file.write_all(&[0; 32]).unwrap();
+    first.file.set_len(0).unwrap();
+    drop(first);
+    assert!(!first_path.exists(), "consumed child must be removed");
+    let failed_path = root.path().join("failed.fd199");
+    drop(consumed_copy(&source, &failed_path, 32).expect("failed-launch child copy"));
+    assert!(
+        !failed_path.exists(),
+        "failed child must be erased and removed"
+    );
+    let credential_source = root.path().join("retained-credential.norito");
+    private_file(&credential_source, &[0x53; 1024]).expect("retained credential");
+    let credential_child = root.path().join("credential-child.norito");
+    drop(
+        consumed_copy(&credential_source, &credential_child, 2048)
+            .expect("larger one-shot credential copy"),
+    );
+    assert!(
+        !credential_child.exists(),
+        "larger credential child must be erased and removed"
+    );
+    assert_eq!(fs::read(&credential_source).unwrap(), [0x53; 1024]);
+    assert_eq!(fs::read(&source).unwrap(), [0x71; 32]);
 }
 fn command(binary: &Path, directory: &Path) -> Command {
     let mut command = Command::new(binary);
@@ -384,6 +470,7 @@ async fn listeners_started(peers: &mut Peers, api: u16, deadline: Instant) -> Re
 }
 struct Peers {
     children: Vec<Child>,
+    private_copies: Vec<ConsumedCopy>,
 }
 impl Peers {
     async fn stop(&mut self, deadline: Instant) -> Result<()> {
@@ -401,6 +488,7 @@ impl Peers {
                 .wrap_err("fixture-owned validator did not stop")??;
         }
         self.children.clear();
+        self.private_copies.clear();
         Ok(())
     }
 }
@@ -408,16 +496,16 @@ fn spawn_peers(
     directory: &Path,
     daemon: &Path,
     roster: &[iroha_model_base::peer::PeerId],
-    ceremony: Option<&Path>,
     run_number: u16,
 ) -> Result<Peers> {
     let mut peers = Peers {
         children: Vec::new(),
+        private_copies: Vec::new(),
     };
     for index in 0..4 {
         let path = directory.join(format!("peer{index}.toml"));
         let native = config(&path)?;
-        let seat = roster
+        let _seat = roster
             .iter()
             .position(|peer| peer == &native.common.peer.id)
             .ok_or_else(|| eyre!("peer is outside signed genesis roster"))?
@@ -434,21 +522,11 @@ fn spawn_peers(
             &directory.join(format!("runtime/peer{index}-run{run_number}.fd199")),
             32,
         )?;
-        let beacon = ceremony
-            .map(|root| {
-                consumed_copy(
-                    &root.join(format!("seat-{seat}/{CREDENTIAL}")),
-                    &directory.join(format!("runtime/peer{index}-run{run_number}.fd200")),
-                    16 * 1024 * 1024,
-                )
-            })
-            .transpose()?;
         let mut child = command(daemon, directory);
         child
             .arg("--sora")
             .arg("--config")
             .arg(&path)
-            .arg("--test-network-production-beacon-custody")
             .stdout(private_file(
                 &directory.join(format!("peer{index}-run{run_number}-stdout.log")),
                 &[],
@@ -457,12 +535,11 @@ fn spawn_peers(
                 &directory.join(format!("peer{index}-run{run_number}-stderr.log")),
                 &[],
             )?);
-        let mut descriptors = vec![(signer.as_raw_fd(), 198), (mint.as_raw_fd(), 199)];
-        if let Some(beacon) = &beacon {
-            descriptors.push((beacon.as_raw_fd(), 200));
-        }
+        let descriptors = vec![(signer.file.as_raw_fd(), 198), (mint.file.as_raw_fd(), 199)];
         inherit(&mut child, &descriptors)?;
         peers.children.push(child.spawn()?);
+        peers.private_copies.push(signer);
+        peers.private_copies.push(mint);
     }
     Ok(peers)
 }
@@ -662,18 +739,41 @@ impl Canary<'_> {
     }
 }
 
-fn install_provider_configs(
+struct ProviderBroker {
+    child: Child,
+    _owner_root: Arc<tempfile::TempDir>,
+}
+
+impl ProviderBroker {
+    async fn stop(&mut self, deadline: Instant) -> Result<()> {
+        if let Some(pid) = self.child.id() {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(i32::try_from(pid)?),
+                nix::sys::signal::Signal::SIGTERM,
+            )?;
+        }
+        timeout_at(deadline, self.child.wait())
+            .await
+            .wrap_err("fixture-owned stock broker did not stop")??;
+        Ok(())
+    }
+}
+
+async fn stage_provider_brokers(
     directory: &Path,
+    broker_binary: &Path,
     bundle: &Value,
+    dkg: &DisposableGenesisDkgOutput,
     roster: &[iroha_model_base::peer::PeerId],
-) -> Result<Vec<PathBuf>> {
+) -> Result<(Vec<ProviderBroker>, Vec<PathBuf>)> {
     let providers = field(bundle, "providers")?
         .as_array()
         .ok_or_else(|| eyre!("public provider inventory is not an array"))?;
     ensure!(
-        providers.len() == 4,
-        "public bundle must bind all four providers"
+        providers.len() == 4 && dkg.seats.len() == 4 && roster.len() == 4,
+        "signed genesis must bind four independently provisioned providers"
     );
+    let mut brokers = Vec::new();
     let mut paths = Vec::new();
     for index in 0..4 {
         let path = directory.join(format!("peer{index}.toml"));
@@ -681,19 +781,86 @@ fn install_provider_configs(
         let seat = roster
             .iter()
             .position(|peer| peer == &native.common.peer.id)
-            .ok_or_else(|| eyre!("unbound peer"))?;
+            .ok_or_else(|| eyre!("unbound signed-genesis peer"))?;
+        let output = &dkg.seats[seat];
         let provider = &providers[seat];
         let peer: iroha_model_base::peer::PeerId =
             json::from_value(field(provider, "validator")?.clone())?;
-        ensure!(
-            peer == native.common.peer.id
-                && field(provider, "signer_index")?.as_u64() == Some((seat + 1) as u64),
-            "provider inventory changed roster seat"
-        );
         let digest: [u8; 32] = json::from_value(field(provider, "policy_digest")?.clone())?;
+        let expected_digest = global_beacon_partial_signer_public_inventory_digest_v1(
+            dkg.public_session.network_id,
+            &[(dkg.public_session.clone(), output.signer_index)],
+        )?;
         let revision = field(provider, "revision")?
             .as_u64()
             .ok_or_else(|| eyre!("provider revision absent"))?;
+        let handle = text(provider, "handle")?;
+        ensure!(
+            peer == native.common.peer.id
+                && peer == output.validator
+                && field(provider, "signer_index")?.as_u64() == Some((seat + 1) as u64)
+                && output.signer_index == u16::try_from(seat + 1)?
+                && handle == output.provider_handle
+                && revision == output.provider_revision
+                && digest == expected_digest,
+            "native provider inventory changed this exact signed DKG seat"
+        );
+        let catalog = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(
+            None,
+            CHAIN,
+            dkg.public_session.network_id,
+            handle,
+            revision,
+            digest,
+        )?
+        .export_canonical_v1()?;
+        let root = iroha_test_network::new_disposable_owner_private_root()?;
+        let catalog_path = root.path().join("catalog.norito");
+        let catalog_file = private_file(&catalog_path, &catalog)?;
+        catalog_file.set_permissions(fs::Permissions::from_mode(0o400))?;
+        catalog_file.sync_all()?;
+        let credential_path = root.path().join("credential.norito");
+        let mut credential_file =
+            consumed_copy(&output.credential_path, &credential_path, 16 * 1024 * 1024)?;
+        let mut credential = Zeroizing::new(Vec::new());
+        credential_file.read_to_end(&mut credential)?;
+        let credential_bundle = Zeroizing::new(encode_consensus_threshold_credential_bundle_v1(
+            Some(&credential),
+            None,
+        )?);
+        drop(credential_file);
+        let endpoint = root.path().join("runtime-provider-broker-v1.sock");
+        iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
+            endpoint.clone(),
+        )?;
+        let mut child = command(broker_binary, root.path());
+        child
+            .arg("--catalog")
+            .arg(&catalog_path)
+            .arg("--broker-endpoint")
+            .arg(&endpoint)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::from(private_file(
+                &root.path().join("broker-stderr.log"),
+                &[],
+            )?));
+        let mut child = child.spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| eyre!("stock broker stdin handoff absent"))?;
+        stdin.write_all(&credential_bundle).await?;
+        stdin.shutdown().await?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| eyre!("stock broker readiness pipe absent"))?;
+        let mut ready = [0_u8; 6];
+        timeout_at(Instant::now() + PHASE_BUDGET, stdout.read_exact(&mut ready)).await??;
+        ensure!(
+            ready == *b"READY\n" && child.try_wait()?.is_none(),
+            "stock broker did not qualify the exact one-seat credential"
+        );
         let mut table: toml::Table = toml::from_str(&fs::read_to_string(&path)?)?;
         let sumeragi = table
             .entry("sumeragi")
@@ -702,7 +869,7 @@ fn install_provider_configs(
             .ok_or_else(|| eyre!("sumeragi is not a table"))?;
         sumeragi.insert(
             "global_beacon_partial_signer_provider_handle".into(),
-            toml::Value::String(text(provider, "handle")?.into()),
+            toml::Value::String(handle.into()),
         );
         sumeragi.insert(
             "global_beacon_partial_signer_provider_revision".into(),
@@ -712,64 +879,24 @@ fn install_provider_configs(
             "global_beacon_partial_signer_provider_policy_digest_hex".into(),
             toml::Value::String(hex(&digest)),
         );
-        // These are exclusively fixture-owned files. The signed public provider
-        // binding comes from native assemble-install validation, never discovery.
+        let broker = table
+            .entry("runtime_provider_broker")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| eyre!("runtime_provider_broker is not a table"))?;
+        broker.insert(
+            "endpoint_path".into(),
+            toml::Value::String(endpoint.to_string_lossy().into_owned()),
+        );
         fs::write(&path, toml::to_string(&table)?)?;
+        config(&path)?;
+        brokers.push(ProviderBroker {
+            child,
+            _owner_root: root,
+        });
         paths.push(path);
     }
-    Ok(paths)
-}
-async fn sign_and_assemble(
-    binary: &Path,
-    directory: &Path,
-    ceremony: &Path,
-    roster: &[iroha_model_base::peer::PeerId],
-    deadline: Instant,
-) -> Result<PathBuf> {
-    let bundle = ceremony.join("public-bundle.json");
-    let mut signatures = Vec::new();
-    for seat in 0..3 {
-        let source = (0..4)
-            .map(|index| directory.join(format!("peer{index}.toml")))
-            .find(|path| config(path).is_ok_and(|native| native.common.peer.id == roster[seat]))
-            .ok_or_else(|| eyre!("authorization seat lacks a generated validator config"))?;
-        let copy = consumed_copy(
-            &source,
-            &directory.join(format!("runtime/lifecycle-seat{seat}.fd198")),
-            1024 * 1024,
-        )?;
-        let output = directory.join(format!("lifecycle-signature-{seat}.json"));
-        let mut child = command(binary, directory);
-        child
-            .args(["beacon-bootstrap", "sign-install", "--bundle"])
-            .arg(&bundle)
-            .args([
-                "--signer-index",
-                &seat.to_string(),
-                "--config-fd",
-                "198",
-                "--output",
-            ])
-            .arg(&output);
-        inherit(&mut child, &[(copy.as_raw_fd(), 198)])?;
-        run(child, deadline).await?;
-        ensure!(
-            copy.metadata()?.len() == 0,
-            "native signing did not consume its descriptor copy"
-        );
-        signatures.push(output);
-    }
-    let output = directory.join("install-instruction.json");
-    let mut child = command(binary, directory);
-    child
-        .args(["beacon-bootstrap", "assemble-install", "--bundle"])
-        .arg(bundle)
-        .arg("--signature")
-        .args(&signatures)
-        .arg("--output")
-        .arg(&output);
-    run(child, deadline).await?;
-    Ok(output)
+    Ok((brokers, paths))
 }
 async fn submit_install(
     client: &iroha::client::Client,
@@ -790,7 +917,8 @@ async fn submit_install(
     unsigned_certificate.signatures.clear();
     ensure!(
         unsigned_certificate == *expected_certificate
-            && unsigned_certificate.action == ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            && unsigned_certificate.action
+                == ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
         "assembled installation differs from the native bootstrap certificate"
     );
     let install_height = installation.certificate.effective_height;
@@ -850,11 +978,52 @@ fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
     store.read_block_data(index[0].start, &mut bytes)?;
     Ok(decode_framed_signed_block(&bytes)?)
 }
-fn verify_pulse(
-    peer_configs: &[PathBuf],
-    bundle: &Value,
-    maintenance_entrypoint_hash: HashOf<TransactionEntrypoint>,
-) -> Result<()> {
+
+fn read_exact_finality(
+    config_path: &Path,
+    height: u64,
+) -> Result<iroha_data_model::bridge::BridgeFinalityProof> {
+    use iroha_data_model::bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof};
+    let native = config(config_path)?;
+    let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+    let (block_header, finality_artifact) = store.read_verified_v2_finality(height)?;
+    ensure!(
+        block_header.height().get() == height && finality_artifact.height == height,
+        "retained native finality differs from the exact live DKG phase"
+    );
+    Ok(BridgeFinalityProof {
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+        block_header,
+        finality_artifact,
+    })
+}
+
+fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisProvisioningBundle> {
+    let manifest_json = fs::read(prepared.genesis_directory.join("genesis.json"))?;
+    let manifest = iroha_genesis::RawGenesisTransaction::from_path(
+        prepared.genesis_directory.join("genesis.json"),
+    )?;
+    let signed_wire = fs::read(prepared.genesis_directory.join("genesis.signed.nrt"))?;
+    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+        &signed_wire,
+        &manifest,
+        &prepared.genesis_public_key,
+        prepared.network_id.into_genesis_hash(),
+    )?;
+    ensure!(
+        validated.block().hash() == prepared.network_id.into_genesis_hash(),
+        "retained native manifest changed the exact signed genesis"
+    );
+    Ok(NativeGenesisProvisioningBundle {
+        manifest_sha256: iroha_crypto::sha256(&manifest_json),
+        manifest_json,
+        signed_wire,
+        public_key: prepared.genesis_public_key.clone(),
+        block_hash: validated.block().hash(),
+        chain_discriminant: manifest.chain_discriminant(),
+    })
+}
+fn verify_pulse(peer_configs: &[PathBuf], bundle: &Value) -> Result<()> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     iroha_genesis::init_instruction_registry();
     let record: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
@@ -881,10 +1050,8 @@ fn verify_pulse(
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
         epoch_length == 11,
-        "fixture must exercise real maintenance merge at mandatory height 10"
+        "fixture must exercise the mandatory pulse at height 10"
     );
-    let maintenance_tree: MerkleTree<TransactionEntrypoint> =
-        [maintenance_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -906,30 +1073,78 @@ fn verify_pulse(
         let native = config(config_path)?;
         let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
         ensure!(
-            store.read_index_count()? >= epoch_length,
+            store.read_index_count()? > epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact native maintenance
-        // transaction as Applied on all four peers. Bind it to the sole leaf of
-        // the execution-bearing merge at the mandatory pulse height, excluding
-        // unrelated transactions, QueuePlan admissions and anchor padding.
-        let context = block
-            .execution_context()
-            .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("first maintenance transaction did not execute on the mandatory pulse carrier")
-        })?;
+        // Authenticate the entire prefix from the independently pinned signed genesis,
+        // including the real successor authorization at the scheduling boundary.
+        use iroha_data_model::bridge::{
+            BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier,
+        };
+        use iroha_data_model::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+        let (header, initial) = store.read_verified_v2_finality(1)?;
         ensure!(
-            reference.execution_batch_hash.is_some()
-                && reference.entrypoint_count == Some(1)
-                && reference.entrypoint_merkle_root == maintenance_tree.root()
-                && block.external_entrypoint_count() == 0
-                && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native maintenance merge"
+            header.hash() == record.session.network_id.into_genesis_hash(),
+            "journal genesis differs from authenticated fixture genesis"
         );
+        let initial_authority = initial
+            .height_context
+            .kagemusha_mint_finality_authority
+            .clone();
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(record.session.network_id, initial.context_id());
+        verifier.verify(&BridgeFinalityProof {
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+            block_header: header,
+            finality_artifact: initial,
+        })?;
+        let mut prior_authorization = None;
+        for height in 2..=epoch_length + 1 {
+            let (header, artifact) = store.read_verified_v2_finality(height)?;
+            let context = &artifact.height_context;
+            ensure!(
+                context.kagemusha_mint_finality_authority == initial_authority,
+                "unchanged committee must retain the same immutable authority generation"
+            );
+            if height == epoch_length {
+                prior_authorization = Some(context.kagemusha_mint_finality_authorization.clone());
+            }
+            if height == epoch_length + 1 {
+                let authorization = &context.kagemusha_mint_finality_authorization;
+                ensure!(
+                    context.epoch == 1 && authorization.epoch == 1,
+                    "scheduling epoch must advance after retained boundary"
+                );
+                ensure!(
+                    authorization.decision == KagemushaMintFinalityEpochDecisionV1::Retain,
+                    "unchanged committee must authenticate a retain decision"
+                );
+                ensure!(
+                    authorization.beacon
+                        == BeaconEpochBindingV1::Installed(
+                            iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                                session_id: record.session.session_id,
+                                transcript_hash: record.session.transcript_hash
+                            }
+                        ),
+                    "retained epoch must bind the installed beacon authority"
+                );
+                authorization.validate_successor(
+                    prior_authorization
+                        .as_ref()
+                        .ok_or_else(|| eyre!("missing authenticated boundary authorization"))?,
+                )?;
+            }
+            verifier.verify(&BridgeFinalityProof {
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+                block_header: header,
+                finality_artifact: artifact,
+            })?;
+        }
         // Canonical QueuePlan admissions and autonomous anchors are genuine
         // protocol content even when they contain no external transaction row.
         ensure!(
@@ -1001,7 +1216,6 @@ struct Runtime<'a> {
     directory: &'a Path,
     daemon: &'a Path,
     roster: &'a [iroha_model_base::peer::PeerId],
-    ceremony: &'a Path,
     api: u16,
     clients: &'a [iroha::client::Client],
     peers: &'a mut Peers,
@@ -1014,13 +1228,7 @@ impl Runtime<'_> {
             .run
             .checked_add(1)
             .ok_or_else(|| eyre!("fixture run counter overflow"))?;
-        *self.peers = spawn_peers(
-            self.directory,
-            self.daemon,
-            self.roster,
-            Some(self.ceremony),
-            self.run,
-        )?;
+        *self.peers = spawn_peers(self.directory, self.daemon, self.roster, self.run)?;
         listeners_started(self.peers, self.api, deadline).await?;
         for index in 0..4 {
             ready(self.api + index, 200, deadline).await?;
@@ -1057,8 +1265,8 @@ impl Runtime<'_> {
             heights.iter().all(|height| *height >= applied_height),
             "shutdown snapshot regressed"
         );
-        // Restart uses newly consumed FD198/199/200 copies of the same retained
-        // production credentials, never the already-truncated launch copies.
+        // Restart uses newly consumed FD198/199 copies of retained signing
+        // custody and reconnects to each peer's still-running stock broker.
         self.restart(restart).await?;
         timeout_at(restart, async {
             loop {
@@ -1368,19 +1576,13 @@ async fn both_public_sequences(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse() -> Result<()> {
-    run_fresh_custody_bootstrap(epoch_maintenance::Driver::Finite).await
+    run_fresh_custody_bootstrap().await
 }
 
-async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Result<()> {
-    // Validate the same immutable identity used by the paid trust helper before
-    // artifact reads, custody creation, genesis generation, or child startup.
-    // Development identity is sufficient only for the finite driver. Supervised
-    // renewal must satisfy release-source admission before this expensive setup;
-    // signed source/artifact qualification still belongs to the outer gate.
-    let build_identity = driver.admit_build_identity(
-        iroha_core::compiled_build_identity!()
-            .wrap_err("production beacon fixture has invalid compiled build metadata")?,
-    )?;
+async fn run_fresh_custody_bootstrap() -> Result<()> {
+    // Bind the same immutable build identity used by the exact paid-operation trust helper.
+    let build_identity = iroha_core::compiled_build_identity!()
+        .wrap_err("production beacon fixture has invalid compiled build metadata")?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let daemon = binary(
@@ -1461,67 +1663,107 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         "beacon fixture starting four validators: budget={:.3}s",
         PHASE_BUDGET.as_secs_f64()
     );
-    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, None, 1)?;
-    let mut maintenance = None;
+    let broker_binary = Program::IrohadDisposableBroker.resolve_async().await?;
+    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, 1)?;
+    let mut brokers = Vec::new();
     let outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
         for offset in 0..4 { ready(api + offset, 503, startup).await?; }
         eprintln!("beacon fixture initial startup complete: elapsed={:.3}s", startup_started.elapsed().as_secs_f64());
         let ceremony_deadline = Instant::now() + PHASE_BUDGET;
-        let ceremony = directory.join("beacon-ceremony");
-        let (height_read, height_write) = nix::unistd::pipe()?;
-        let mut height_write = File::from(height_write);
-        let mut provision = command(&launcher, directory);
-        provision.args(["beacon-bootstrap", "provision", "--request"]).arg(&prepared.request)
-            .arg("--genesis-manifest").arg(prepared.genesis_directory.join("genesis.json"))
-            .arg("--genesis-signed").arg(prepared.genesis_directory.join("genesis.signed.nrt"))
-            .arg("--genesis-public-key").arg(prepared.genesis_directory.join("genesis.public_key"))
-            .args(["--observed-height", "1", "--height-fd", "197", "--output"]).arg(&ceremony)
-            .args(["--timeout-ms", "180000"]);
-        inherit(&mut provision, &[(height_read.as_raw_fd(), 197)])?;
-        let mut provision = provision.spawn()?;
-        drop(height_read);
-        let mut progress = tokio::io::BufReader::new(provision.stdout.take().ok_or_else(|| eyre!("native provision progress missing"))?);
-        let mut line = String::new();
-        timeout_at(ceremony_deadline, progress.read_line(&mut line)).await??;
-        ensure!(text(&json::from_str::<Value>(&line)?, "state")? == "sharing-ready", "native ceremony did not publish its sharing barrier");
-        let nonce = hex(&iroha_crypto::sha256(fs::read(&prepared.request)?))[..32].to_owned();
+        let signed_genesis = native_genesis_bundle(&prepared)?;
+        let first_finality = read_exact_finality(&directory.join("peer0.toml"), 1)?;
+        ensure!(
+            first_finality.block_header.hash() == signed_genesis.block_hash,
+            "live h1 finality differs from the retained signed genesis"
+        );
+        let seats = prepared
+            .roster
+            .iter()
+            .map(|validator| {
+                let config_path = (0..4)
+                    .map(|index| directory.join(format!("peer{index}.toml")))
+                    .find(|path| config(path).is_ok_and(|native| native.common.peer.id == *validator))
+                    .ok_or_else(|| eyre!("signed genesis voter has no native config"))?;
+                Ok(DisposableGenesisConfigSeat {
+                    validator: validator.clone(),
+                    config_path,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let genesis_sha256 = iroha_crypto::sha256(&signed_genesis.signed_wire);
+        let nonce = hex(&genesis_sha256)[..32].to_owned();
         let network_id = prepared.network_id;
-        let request_sha256 = hex(&iroha_crypto::sha256(fs::read(&prepared.request)?));
-        let authorization = hex(&iroha_crypto::sha256(json::to_vec(&norito::json!({"network_id": network_id, "request_sha256": request_sha256, "fixture": "fresh-production-beacon"}))?));
+        let authorization = hex(&iroha_crypto::sha256(json::to_vec(&norito::json!({"network_id": network_id, "signed_genesis_sha256": hex(&genesis_sha256), "fixture": "fresh-production-beacon"}))?));
         let expires_ms = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis())? + 180_000;
         let canary = Canary { binary: &cli, directory, config: &fresh, root: format!("http://127.0.0.1:{api}"), nonce, authorization, expires_ms, faucet };
-        let mut previous = None;
-        let mut last_proved_height = 1;
-        for operation in ["onboarding", "faucet", "final-canary"] {
-            let (envelope, proved_height) = canary.operation(operation, previous.as_deref(), ceremony_deadline).await?;
-            previous = Some(envelope);
-            ensure!(proved_height > last_proved_height, "proved useful operation did not strictly advance height");
-            wait_for_exact_height(&clients, proved_height, ceremony_deadline).await?;
-            last_proved_height = proved_height;
-            writeln!(height_write, "{proved_height}")?;
-            height_write.flush()?;
-        }
-        drop(height_write);
-        let status = timeout_at(ceremony_deadline, provision.wait()).await??;
-        ensure!(status.success(), "fresh native DKG provisioning failed");
-        let bundle: Value = json::from_slice(&fs::read(ceremony.join("public-bundle.json"))?)?;
-        ensure!(field(&bundle, "finalized_observed_height")?.as_u64() == Some(last_proved_height), "ceremony backdated its finalization");
-        let certificate: ThresholdKeyLifecycleCertificateV1 = json::from_value(field(&bundle, "certificate")?.clone())?;
-        let expected_install_height = last_proved_height.checked_add(1).ok_or_else(|| eyre!("installation height overflow"))?;
-        ensure!(certificate.effective_height == expected_install_height, "native certificate is not effective at the exact next proved height");
-        let instruction = sign_and_assemble(&launcher, directory, &ceremony, &prepared.roster, ceremony_deadline).await?;
+        let predecessor = Arc::new(StdMutex::new(None::<PathBuf>));
+        let canary_ref = &canary;
+        let clients_ref = &clients;
+        let dkg = run_disposable_genesis_dkg_from_configs(
+            signed_genesis,
+            network_id,
+            &seats,
+            &launcher,
+            &first_finality,
+            5,
+            move |expected| {
+                let predecessor = Arc::clone(&predecessor);
+                let first_config = directory.join("peer0.toml");
+                let canary = canary_ref;
+                let clients = clients_ref;
+                async move {
+                    let operation = match expected {
+                        2 => "onboarding",
+                        3 => "faucet",
+                        4 => "final-canary",
+                        _ => return Err(eyre!("unexpected native genesis DKG phase")),
+                    };
+                    let previous = predecessor
+                        .lock()
+                        .map_err(|_| eyre!("beacon canary predecessor lock poisoned"))?
+                        .clone();
+                    let (envelope, proved_height) = canary
+                        .operation(operation, previous.as_deref(), ceremony_deadline)
+                        .await?;
+                    ensure!(
+                        proved_height == expected,
+                        "live canary did not reach exact h{expected} DKG phase"
+                    );
+                    wait_for_exact_height(clients, expected, ceremony_deadline).await?;
+                    *predecessor
+                        .lock()
+                        .map_err(|_| eyre!("beacon canary predecessor lock poisoned"))? =
+                        Some(envelope);
+                    read_exact_finality(&first_config, expected)
+                }
+            },
+        )
+        .await?;
+        let bundle: Value = json::from_slice(&fs::read(&dkg.public_bundle_path)?)?;
+        ensure!(field(&bundle, "finalized_observed_height")?.as_u64() == Some(4), "ceremony backdated its finalization");
+        let certificate: ThresholdKeyLifecycleCertificateV1 = json::from_value(field(&bundle, "finalization_draft")?.clone())?;
+        ensure!(certificate.effective_height == 5, "native certificate is not effective at exact h5");
+        let instruction = &dkg.install_instruction_path;
         // Match the maintained controller: commit the certificate without a
         // local beacon provider, then activate custody on the same four ledgers.
         // Installation and provider restart share one unchanged phase deadline.
         let restart = Instant::now() + PHASE_BUDGET;
-        let install_height = submit_install(&clients[0], &instruction, &certificate, restart).await?;
+        let install_height = submit_install(&clients[0], instruction, &certificate, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 503, restart).await?; }
         peers.stop(restart).await?;
-        let peer_configs = install_provider_configs(directory, &bundle, &prepared.roster)?;
-        peers = spawn_peers(directory, &daemon, &prepared.roster, Some(&ceremony), 2)?;
+        let (active_brokers, peer_configs) = stage_provider_brokers(
+            directory,
+            &broker_binary,
+            &bundle,
+            &dkg,
+            &prepared.roster,
+        )
+        .await?;
+        brokers = active_brokers;
+        peers = spawn_peers(directory, &daemon, &prepared.roster, 2)?;
         listeners_started(&mut peers, api, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
@@ -1539,22 +1781,8 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         // Deployment uses the generated genesis-authorized client. The fresh
         // public account remains the onboarding/faucet/canary actor and receives
         // no deployment administration permissions.
-        let epoch_trust = directory.join("epoch-trust.json");
-        super::dataspace_deploy_cli::write_fixture_trust(&super::dataspace_deploy_cli::PaidDeploymentFixture {
-            binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
-            root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
-            genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
-        }, &epoch_trust)?;
-        maintenance = Some(match driver {
-            epoch_maintenance::Driver::Finite => epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?,
-            #[cfg(target_os = "linux")]
-            epoch_maintenance::Driver::Supervised => epoch_maintenance::Maintenance::start_supervisor(&cli, &kagami, &prepared, epoch_trust, build_identity)?,
-        });
-        let maintenance_deadline = Instant::now() + PHASE_BUDGET;
-        let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(maintenance_deadline).await?;
-        wait_for_exact_height(&clients, 10, maintenance_deadline).await?;
-        // Paid deployment still verifies its exact three signed operations and
-        // all-four finality; it does not carry or drive operator maintenance.
+        // Application transactions retain their independent exact fee and finality checks;
+        // epoch progress uses the authenticated retained authority without a key-schedule worker.
         super::dataspace_deploy_cli::run_paid_deployment(super::dataspace_deploy_cli::PaidDeploymentFixture {
             binary: &cli, build_identity, config: &directory.join("client.toml"), operator: &directory.join("runtime/operator-signer.key"),
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
@@ -1562,30 +1790,28 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         }).await?;
         {
             let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,
-                ceremony: &ceremony, api, clients: &clients, peers: &mut peers, run: 2 };
+                api, clients: &clients, peers: &mut peers, run: 2 };
             retained_catalog_recovery(&mut runtime, &prepared, &peer_configs).await?;
             both_public_sequences(&mut runtime, &peer_configs, &prepared.routed_client).await?;
         }
-        let operator = maintenance.as_mut().unwrap();
-        operator.stop(Instant::now() + Duration::from_secs(30)).await?;
-        operator.verify(&prepared, &clients, Instant::now() + PHASE_BUDGET).await?;
+        wait_for_exact_height(&clients, 12, Instant::now() + PHASE_BUDGET).await?;
         peers.stop(Instant::now() + PHASE_BUDGET).await?;
-        verify_pulse(&peer_configs, &bundle, maintenance_entrypoint_hash)?;
+        verify_pulse(&peer_configs, &bundle)?;
+        for broker in &mut brokers {
+            broker.stop(Instant::now() + Duration::from_secs(30)).await?;
+        }
         eprintln!("four fresh production-custody validators completed native onboarding/faucet/canary/install and paid deployment across a verified mandatory pulse");
         Ok(())
     }.await;
-    if let Some(operator) = &mut maintenance {
-        let stopped = operator
-            .stop(Instant::now() + Duration::from_secs(30))
-            .await;
-        if outcome.is_ok() {
-            stopped?;
-        }
-    }
     if !peers.children.is_empty() {
         let stopped = peers.stop(Instant::now() + Duration::from_secs(30)).await;
         if outcome.is_ok() {
             stopped?;
+        }
+    }
+    if outcome.is_err() {
+        for broker in &mut brokers {
+            let _ = broker.stop(Instant::now() + Duration::from_secs(10)).await;
         }
     }
     // Keep failure diagnostics and generated custody owner-private outside Git.

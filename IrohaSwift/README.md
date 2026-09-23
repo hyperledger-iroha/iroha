@@ -2337,3 +2337,10 @@ all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
 canonical Swift package always requires the real ABI23 NoritoBridge artifact.
+
+`ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
+authorizations, signed all-edge beacon DKG records, committee transitions,
+monetary plans, and peer rebinding. Its Rust-authored fixture is
+`fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
+truncated records and noncanonical quantity decimals. This structural codec
+does not verify signatures, custody, or committee activation.

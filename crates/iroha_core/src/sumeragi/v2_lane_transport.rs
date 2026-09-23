@@ -100,7 +100,8 @@ struct Fanout {
 }
 
 /// A fixed number of original packets; each has at most one frozen committee's
-/// destinations. Full admission leaves the original packet with the caller.
+/// destinations. Exact authenticated retransmissions rejoin that original fanout,
+/// preserving pending actor tickets and at most one new retry for each serviced peer. Full admission leaves the original packet with the caller.
 /// Neither global height rollover nor actor backpressure resets this owner.
 pub(crate) struct NativeLaneTransport {
     state: Arc<State>,
@@ -140,7 +141,7 @@ impl NativeLaneTransport {
         observed: &VerifiedLaneContexts,
         packet: LaneOutbound,
     ) -> NativeTransportAdmission {
-        if self.fanouts.len() == self.capacity.get() || !observed.is_current(&self.state) {
+        if !observed.is_current(&self.state) {
             return NativeTransportAdmission::Retry(packet);
         }
         let identity = super::v2_lane_driver::message_instance(&packet.envelope.message);
@@ -196,6 +197,36 @@ impl NativeLaneTransport {
         };
         let _lease = self.state.consensus_publication_lease();
         if !observed.is_current(&self.state) {
+            return NativeTransportAdmission::Retry(packet);
+        }
+        // Retransmission is another delivery attempt of the exact same signed control,
+        // not a second protocol obligation. Preserve every pending actor post and FIFO
+        // ticket, and requeue only already serviced peers on the original bounded fanout.
+        // Checking exact authenticated envelope equality (rather than its subject) prevents
+        // a changed vote, certificate or signature set from borrowing this custody.
+        if let Some(retained) = self.fanouts.iter_mut().find(|fanout| {
+            fanout.instance == id
+                && matches!(fanout.scope, FanoutScope::Control)
+                && matches!(fanout.message.as_message(), BlockMessage::NativeLane(original)
+                    if original == &packet.envelope)
+        }) {
+            for peer in packet.destinations {
+                if peer != self.local_peer
+                    && !retained
+                        .destinations
+                        .iter()
+                        .any(|pending| pending.peer == peer)
+                {
+                    retained.destinations.push_back(Destination {
+                        peer,
+                        returned: None,
+                        ticket: None,
+                    });
+                }
+            }
+            return NativeTransportAdmission::Retained;
+        }
+        if self.fanouts.len() == self.capacity.get() {
             return NativeTransportAdmission::Retry(packet);
         }
         let destinations = packet
@@ -370,7 +401,7 @@ impl NativeLaneTransport {
         self.poll_with(observed, Some(global), post)
     }
 
-    fn poll_with(
+    pub(in crate::sumeragi) fn poll_with(
         &mut self,
         observed: &VerifiedLaneContexts,
         global: Option<&VerifiedHeightContext>,

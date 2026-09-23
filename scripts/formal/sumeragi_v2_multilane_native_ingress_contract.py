@@ -13,9 +13,11 @@ from sumeragi_v2_multilane_geometry_evidence_contract import _code
 CORE = "crates/iroha_core/src/sumeragi/mod.rs"
 NATIVE = "crates/iroha_core/src/sumeragi/fair_v2_ingress_native.rs"
 POSITION = "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs"
+CARRIER = "crates/iroha_core/src/sumeragi/v2_runner/native_ingress_carrier.rs"
+RUNTIME = "crates/iroha_core/src/sumeragi/v2_runner/native_lane_runtime.rs"
 TESTS = "crates/iroha_core/src/sumeragi/tests/mod_native_ingress_rollover.rs"
 SOURCE_RELATIVES = tuple(map(Path, (
-    CORE, NATIVE, POSITION, TESTS,
+    CORE, NATIVE, POSITION, CARRIER, RUNTIME, TESTS,
     "scripts/formal/sumeragi_v2_multilane_native_ingress_contract.py",
     "pytests/scripts/sumeragi_v2_multilane_native_ingress_contract_test.py",
 )))
@@ -101,6 +103,82 @@ RETAINED_CAPACITY = """
     }
 """
 ORDERED = (
+    (CORE, "method", "FairV2IngressOwnershipEvidence::matches_message", (
+        "message.encode()",
+        "self.first.encoded_bytes.as_ref() == encoded.as_slice()",
+        "Some(self.first.message_kind) == FairV2IngressMessageKind::classify(message)",
+    )),
+    (CORE, "method", "FairV2IngressOwnershipEvidence::matches_semantic_origin", (
+        "self.validate_exact()",
+        "&self.first.semantic_origin == origin",
+    )),
+    (CORE, "method", "FairV2IngressOwnershipEvidence::matches_native_authenticated_hop", (
+        "self.validate_exact()",
+        "&self.first.authenticated_via == via",
+        "FairV2IngressSource::Native(peer) if peer == via",
+    )),
+    (CORE, "method", "FairV2IngressOwnershipEvidence::matches_reply_routes", (
+        "fair_v2_ingress_route_sets_same_exact_history(self.current_routes.as_ref(), routes)",
+    )),
+    (CARRIER, "method", "NativeFairIngressCarrier::from_checked_dequeue", (
+        "let exact = inbound.ingress_ownership().is_some_and(|ownership|",
+        "inbound.message().is_native_lane()",
+        "ownership.validate_exact()",
+        "ownership.matches_message(inbound.message())",
+        "ownership.matches_semantic_origin(inbound.sender())",
+        "ownership.matches_native_authenticated_hop(inbound.via())",
+        "ownership.matches_reply_routes(inbound.reply_routes())",
+        "ownership.leader_wire_token().is_none()",
+        "ownership.leader_wire_runtime_receipt().is_none()",
+        "if !exact {",
+        "return Err((",
+        "let InboundBlockMessage {",
+        "BlockMessage::NativeLane(envelope) => NativeLaneInput::Control(envelope)",
+        "BlockMessage::NativeLaneDecision(decision) => NativeLaneInput::Decision(*decision)",
+        "ownership: ingress_ownership.expect(\"validated Native dequeue has fair ownership\")",
+    )),
+    (CARRIER, "method", "NativeFairIngressCarrier::admit_with", (
+        "let Self { input, provenance } = self;",
+        "match admit(input) {",
+        "NativeLaneAdmission::Accepted => NativeFairIngressAdmission::Accepted",
+        "NativeLaneAdmission::Retry(input) => {",
+        "NativeFairIngressAdmission::Retry(Self { input, provenance })",
+        "NativeLaneAdmission::Rejected { input, reason } => {",
+        "carrier: Self { input, provenance }",
+    )),
+    (CARRIER, "method", "NativeIngressTransferFailStop::drop", (
+        "if !self.completed {",
+        "self.guard.close_admission_for_restart()",
+    )),
+    (CARRIER, "method", "NativeFairIngressPump::accept_checked_dequeue", (
+        "if self.pending.is_some()",
+        "self.guard.close_admission_for_restart()",
+        "NativeFairIngressCarrier::from_checked_dequeue(inbound)",
+        "self.guard.close_admission_for_restart()",
+        "self.pending = Some(carrier)",
+    )),
+    (CARRIER, "method", "NativeFairIngressPump::service_with", (
+        "if self.guard.restart_required()",
+        "let transfer = NativeIngressTransferFailStop {",
+        "if self.pending.is_none()",
+        "try_recv_if_checked(|candidate| candidate.message().is_native_lane())",
+        "self.accept_checked_dequeue(inbound)?",
+        "let carrier = self.pending.take()",
+        "match carrier.admit_with(admit)",
+        "NativeFairIngressAdmission::Retry(carrier)",
+        "self.pending = Some(carrier)",
+        "transfer.complete()",
+        "outcome",
+    )),
+    (CARRIER, "method", "NativeFairIngressPump::drop", (
+        "if self.pending.is_some()",
+        "self.guard.close_admission_for_restart()",
+    )),
+    (RUNTIME, "method", "NativeLaneRuntime::service_checked_fair_ingress", (
+        "let driver = &mut self.driver",
+        "self.fair_ingress",
+        ".service_with(ingress, |input| driver.admit(observed, input))",
+    )),
     (CORE, "method", "FairV2Ingress::try_push", (
         "self.try_push_at(inbound, Instant::now())",
     )),
@@ -196,6 +274,8 @@ def validate_owners(root: Path, errors: list[str], rust_binding_item: Callable) 
         if item is None:
             continue
         code, cursor = _code(item), 0
+        if symbol == "NativeFairIngressPump::service_with" and code.count(_code("transfer.complete()")) != 2:
+            errors.append("Native ingress NativeFairIngressPump::service_with must disarm only the empty and settled transfer paths")
         for relation in relations:
             needle = _code(relation)
             position = code.find(needle, cursor)

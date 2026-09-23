@@ -8121,7 +8121,6 @@ def up(
                 # The generated localnet start script can maintain a long-lived
                 # faucet reserve. A disposable deployment owns no predecessor
                 # state, so that retry loop only delays the authoritative smoke.
-                "IROHA_LOCALNET_FAUCET_RESERVE_RETRIES": "0",
             }
         )
         run(

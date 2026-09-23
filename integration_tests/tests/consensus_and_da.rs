@@ -12,6 +12,8 @@ mod sumeragi_localnet_smoke;
 mod sumeragi_lock_convergence;
 #[path = "sumeragi_npos_candidate.rs"]
 mod sumeragi_npos_candidate;
+#[path = "sumeragi_npos_committee_transition.rs"]
+mod sumeragi_npos_committee_transition;
 #[path = "sumeragi_npos_happy_path.rs"]
 mod sumeragi_npos_happy_path;
 #[path = "sumeragi_npos_liveness.rs"]

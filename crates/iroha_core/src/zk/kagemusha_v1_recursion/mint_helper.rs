@@ -178,8 +178,11 @@ impl KagemushaMintCertificateWitnessV1 {
             self.seal_bundle
                 .validate()
                 .map_err(|error| format!("invalid mint-finality seal bundle: {error}"))?;
-        } else if !self.seal_bundle.seals.is_empty() {
-            return Err("mint-authority bootstrap must not carry validator seals".into());
+        } else if !self.seal_bundle.seals.is_empty()
+            || self.seal_bundle.message.epoch_authorization.decision
+                != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+        {
+            return Err("mint-authority bootstrap requires unsigned genesis authorization".into());
         }
         if step == KagemushaMintAuthorityStepV1::FinalizedMint {
             self.membership
@@ -224,7 +227,7 @@ impl KagemushaMintCertificateWitnessV1 {
 
 /// Cells produced by the reusable mint-certificate relation.
 ///
-/// `roster_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
+/// `authorization_state_digest` and `epoch` must be consumed by the stable recursive authority carrier.
 /// Exposing only `mint_instances` without that recursive check is not monetary authority.
 pub(super) struct KagemushaAssignedMintCertificateV1<F: KagemushaPoseidonFieldV1> {
     pub(super) step: AssignedValue<F>,

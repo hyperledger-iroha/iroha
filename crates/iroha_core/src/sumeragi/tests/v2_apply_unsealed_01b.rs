@@ -1590,7 +1590,7 @@ v2_apply_test!(
     hash_admission_stays_local_and_preserves_exact_release_and_service_waker,
     {
         use super::super::v2_body_store::LocalValidationRefusal;
-        use crate::state::BlockHashAdmissionError;
+        use crate::state::StateStorageAdmissionError;
         use std::{
             future::Future,
             pin::Pin,
@@ -1604,12 +1604,12 @@ v2_apply_test!(
             let pool = mv::allocation::AllocationBudget::new(1);
             let occupied = pool.try_reserve_bytes(1).unwrap();
             let refusal = match case {
-                0 => BlockHashAdmissionError::Busy(notification.observe()),
-                1 => BlockHashAdmissionError::Changed(notification.observe()),
-                2 => BlockHashAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap()),
-                3 => BlockHashAdmissionError::ReadOnly,
-                4 => BlockHashAdmissionError::Poisoned,
-                _ => BlockHashAdmissionError::Capacity(
+                0 => StateStorageAdmissionError::Busy(notification.observe()),
+                1 => StateStorageAdmissionError::Changed(notification.observe()),
+                2 => StateStorageAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap()),
+                3 => StateStorageAdmissionError::ReadOnly,
+                4 => StateStorageAdmissionError::Poisoned,
+                _ => StateStorageAdmissionError::Capacity(
                     mv::allocation::AllocationRefusal::ExceedsLimit {
                         requested_bytes: 2,
                         limit_bytes: 1,
@@ -1617,7 +1617,7 @@ v2_apply_test!(
                 ),
             };
             let expected = refusal.release_wait().cloned();
-            let error = BlockValidationError::BlockHashAdmission(refusal);
+            let error = BlockValidationError::StateStorageAdmission(refusal);
             let classified =
                 fixture
                     .service

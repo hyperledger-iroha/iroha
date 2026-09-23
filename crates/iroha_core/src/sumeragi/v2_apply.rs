@@ -3527,9 +3527,26 @@ pub(crate) mod archive_reservations;
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "TODO: connect resource-admitted Native preparation to retained validation")
+    expect(
+        dead_code,
+        reason = "TODO: connect resource-admitted Native preparation to retained validation"
+    )
 )]
 mod native_preparation;
+#[cfg(test)]
+pub(crate) use native_preparation::{
+    NativeCandidateCaptureRefusal, NativeCarrierInstallError, NativePreExecutionRetainedSlots,
+    NativeRetainedSlotsError, ReadyNativeCarrierValidator,
+};
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained Apply only with complete consuming recovery"
+    )
+)]
+mod retained_lifecycle_apply;
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
@@ -4058,21 +4075,12 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
-        use crate::state::BlockHashAdmissionError;
-        if let BlockValidationError::BlockHashAdmission(refusal) = error {
-            let wait = match refusal {
-                BlockHashAdmissionError::Busy(wait) | BlockHashAdmissionError::Changed(wait) => {
-                    Some(wait)
-                }
-                BlockHashAdmissionError::Capacity(
-                    mv::allocation::AllocationRefusal::Capacity { release, .. },
-                ) => Some(release),
-                _ => None,
-            };
+        if let BlockValidationError::StateStorageAdmission(refusal) = error {
+            let wait = refusal.release_wait();
             return V2ApplyError::LocalValidation(match wait {
                 Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(
                     BodyValidationBusy::new(
-                        "block_hash_history",
+                        "state_storage",
                         wait.clone(),
                         self.queue.sumeragi_waker(),
                     ),
@@ -4090,7 +4098,7 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
-        if let BlockValidationError::BlockHashAdmission(reason) = error {
+        if let BlockValidationError::StateStorageAdmission(reason) = error {
             return V2ApplyError::LocalValidation(
                 super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
             );
@@ -4421,7 +4429,16 @@ impl V2ApplyService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
-        let current_head = artifact.height_context.kagemusha_mint_finality_epoch_id;
+        let current_head = artifact
+            .height_context
+            .kagemusha_mint_finality_authorization
+            .authorization_id()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 current scheduling authorization",
+                    &error,
+                )
+            })?;
         let load_checkpoint = |release_id| {
             if let Some(checkpoint) = self
                 .kura
@@ -4438,7 +4455,10 @@ impl V2ApplyService {
             let checkpoint = runtime
                 .prove_mint_authority_bootstrap(
                     release_id,
-                    &artifact.height_context.kagemusha_mint_finality_epoch_roster,
+                    &artifact.height_context.kagemusha_mint_finality_authority,
+                    &artifact
+                        .height_context
+                        .kagemusha_mint_finality_authorization,
                 )
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
@@ -4513,7 +4533,15 @@ impl V2ApplyService {
                     &error,
                 )
             })?
-            .and_then(|bundle| bundle.message.next_finality_epoch_id);
+            .and_then(|bundle| bundle.message.next_epoch_authorization)
+            .map(|authorization| authorization.authorization_id())
+            .transpose()
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 successor scheduling authorization",
+                    &error,
+                )
+            })?;
         if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
             return Err(V2ApplyError::committed_recovery_required(
                 "Kagemusha V1 mint-authority rotation",
@@ -4595,48 +4623,13 @@ impl V2ApplyService {
                 "completion_material",
             ],
         );
-        context.validate()?;
-        if task.subject() != task.certificate().subject
-            || task.certificate().phase != wire::GlobalPhase::Commit
-            || task.certificate().round.context_id != context.id()
-            || task.certificate().round.height != context.height
-        {
-            return Err(V2ApplyError::TaskMismatch);
-        }
-        task.certificate().execution_commitment.validate()?;
-        if task.certificate().execution_commitment
-            != task.validated_receipt().execution_commitment()
-        {
-            return Err(V2ApplyError::ExecutionCommitmentMismatch);
-        }
-        let body = body_store.load(task.validated_receipt().durable())?;
+        let retained_lifecycle_apply::AuthenticatedApplyBody {
+            body,
+            verified_artifact,
+            canonical_proposal_wire_hash,
+        } = self.authenticate_exact_apply_body(context, body_store, task)?;
         let proposal_block_hash = body.hash();
-        let canonical_proposal_wire_hash = body
-            .canonical_proposal_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        if !body.is_resultless_proposal()
-            || proposal_block_hash != task.subject().block_hash
-            || body.header().height().get() != context.height
-            || body.header().prev_block_hash() != task.subject().parent_block_hash
-            || canonical_proposal_wire_hash != task.subject().payload_hash
-        {
-            return Err(V2ApplyError::TaskMismatch);
-        }
-        // Authenticate the exact durable decision and its association with the selected body
-        // before pruning carrier sidecars or crossing either Kura/WSV commit boundary.
-        // `ApplyTask` deliberately retains the wire certificate, so this adapter must not rely
-        // only on the upstream reducer having verified it. A malformed decision remains a pure
-        // rejection, never a crash image whose canonical block/state lacks valid finality.
-        let verified_artifact =
-            VerifiedV2FinalityArtifact::verify(wire::finality::V2FinalityArtifact::new(
-                context.clone(),
-                task.subject(),
-                task.certificate().clone(),
-                self.validator_set_pops.clone(),
-            ))
-            .map_err(V2ApplyError::FinalityCryptography)?;
         let artifact = verified_artifact.artifact();
-        artifact.validate_for_header(&body.header())?;
         timings.record();
         let (ordinary_projection, live_lifecycle_projection) = match task {
             ExactApplyTaskRef::Ordinary(task) => {

@@ -1379,7 +1379,13 @@ mod tests {
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
             lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
-            upto_epoch: Some(9),
+            claim_plan: crate::nexus::PublicLaneRewardClaimPlanV1 {
+                network_scope: crate::nexus::PublicLaneMonetaryScopeV1::Genesis,
+                valid_until_height: 1,
+                expected_state: None,
+                records: vec![],
+                sources: vec![],
+            },
         });
     }
     #[test]

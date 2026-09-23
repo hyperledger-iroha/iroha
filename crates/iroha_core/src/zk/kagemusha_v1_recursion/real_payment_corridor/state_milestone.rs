@@ -276,7 +276,7 @@ fn mint_instances<F: KagemushaPoseidonFieldV1>(
         request.finality_certificate_binding,
         request.finality_authority_head,
         request.statement.lifecycle.release_id,
-        request.finality_genesis_roster_id,
+        request.finality_genesis_authorization_id,
         request.eq_protocol_digest,
         request.ep_protocol_digest,
         request.proof.eq_deferred_audit,
@@ -381,7 +381,8 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
                 && request.ep_protocol_digest == self.artifacts.mint_finality_ep_protocol_digest
                 && request.finality_certificate_binding == credit.finality_certificate_binding
                 && request.finality_authority_head == credit.finality_authority_head
-                && request.finality_genesis_roster_id == self.funded.genesis_roster_id
+                && request.finality_genesis_authorization_id
+                    == self.funded.genesis_authorization_id
                 && request.finality_proof_binding_digest == credit.finality_proof_binding_digest
                 && request.artifact_manifest_digest == self.artifacts.artifact_manifest_digest,
             "diagnostic finality statement/protocol/certificate substitution",

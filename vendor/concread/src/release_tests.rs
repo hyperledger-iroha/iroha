@@ -707,14 +707,14 @@ fn release_batch_coalesces_reacquisitions_without_allocating_or_early_wakes() {
     assert!(Pin::new(&mut first)
         .poll(&mut Context::from_waker(&waker))
         .is_pending());
-    let references = Arc::strong_count(&source.state);
+    let references = source.state.strong_count();
     for _ in 0..128 {
         without_allocations(|| {
             let guard = source.guard(physical.lock().unwrap());
             assert!(guard.try_release_into(&mut batch, drop).is_ok());
         });
     }
-    assert_eq!(Arc::strong_count(&source.state), references);
+    assert_eq!(source.state.strong_count(), references);
     assert_eq!(source.state.lock().unwrap().sequence, 0);
     // Observation after a reacquisition still waits on this same deferred cut.
     let guard = source.guard(physical.lock().unwrap());
@@ -892,4 +892,33 @@ fn retained_observed_release_preserves_poison_predating_normal_cleanup() {
     assert!(!observation.is_poisoned());
     drop(batch);
     assert!(observation.is_poisoned());
+}
+
+#[test]
+fn charged_notification_retains_original_control_through_observers_and_deferred_releases() {
+    struct Charge(Arc<AtomicUsize>);
+    impl Drop for Charge {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    assert_eq!(
+        ReleaseNotification::allocation_layout::<Charge>(),
+        Shared::<Mutex<State>, Charge>::layout(),
+    );
+    let refunds = Arc::new(AtomicUsize::new(0));
+    let source = ReleaseNotification::new_charged(Charge(Arc::clone(&refunds)));
+    let observation = source.observe();
+    let same = observation.clone();
+    let (_, deferred) = source.guard(()).release_deferred(drop);
+    drop(source);
+    assert_eq!(refunds.load(Ordering::SeqCst), 0);
+    drop(deferred);
+    assert_eq!(observation, same);
+    let mut future = observation.wait_for_release();
+    assert!(poll(&mut future, &Arc::new(WakeCount::default())).is_ready());
+    drop(future);
+    assert_eq!(refunds.load(Ordering::SeqCst), 0);
+    drop(same);
+    assert_eq!(refunds.load(Ordering::SeqCst), 1);
 }

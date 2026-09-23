@@ -19,6 +19,33 @@ enum SnapshotJsonField<'a> {
     Owned(json::Value),
 }
 impl<'a> SnapshotJsonField<'a> {
+    fn into_operation_index(
+        self, budget: mv::allocation::AllocationBudget,
+        refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
+    ) -> Result<OperationIndex, json::Error> {
+        let result = match self {
+            Self::Borrowed { raw } => super::kagemusha_operation_indexes::restore_json(raw, budget),
+            #[cfg(test)]
+            Self::Owned(json::Value::Object(mut fields)) => {
+                let revert = fields.remove("revert").ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
+                let blocks = fields.remove("blocks").ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
+                if !fields.is_empty() { return Err(json::Error::Message("unexpected fixed-index snapshot field".into())); }
+                let source = format!("{{\"revert\":{},\"blocks\":{}}}", json::to_json(&revert)?, json::to_json(&blocks)?);
+                super::kagemusha_operation_indexes::restore_json(&source, budget)
+            }
+            #[cfg(test)]
+            Self::Owned(_) => return Err(json::Error::Message("fixed-index snapshot must be an object".into())),
+        };
+        result.map_err(|error| match error {
+            super::kagemusha_operation_indexes::OperationIndexRestoreError::Encoding(error) => error,
+            super::kagemusha_operation_indexes::OperationIndexRestoreError::Admission(error) => {
+                refusal.borrow_mut().get_or_insert(error);
+                // Control flow only: the outer decoder returns the retained typed
+                // refusal, so this sentinel cannot authorize empty-state fallback.
+                json::Error::Message("original fixed-index restore allocation refused".into())
+            }
+        })
+    }
     fn decode_canonical<T>(self, field: &str) -> Result<T, json::Error>
     where
         T: JsonDeserialize + JsonSerialize,
@@ -208,12 +235,16 @@ fn canonical_world_field_order() -> &'static [&'static str] {
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
+    pub operation_index_budget: &'e mv::allocation::AllocationBudget,
+    pub operation_index_refusal: &'e std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     _marker: PhantomData<T>,
 }
 impl<'e, T> IvmSeed<'e, T> {
     pub fn cast<U>(&self) -> IvmSeed<'e, U> {
         IvmSeed {
             ivm: self.ivm,
+            operation_index_budget: self.operation_index_budget,
+            operation_index_refusal: self.operation_index_refusal,
             _marker: PhantomData,
         }
     }
@@ -224,7 +255,19 @@ impl IvmSeed<'_, TriggerSet> {
         value.decode_canonical("triggers")
     }
 }
+/// A local restore refusal is never malformed consensus data or replay authority.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SnapshotRestoreError {
+    /// Canonical encoding or authenticated semantic validation failed.
+    #[error(transparent)]
+    Encoding(#[from] json::Error),
+    /// The original configured finite pool refused a private restore.
+    #[error(transparent)]
+    Admission(#[from] mv::storage::AdmittedStorageError),
+}
+
 pub struct KuraSeed {
+    pub operation_index_budget: mv::allocation::AllocationBudget,
     pub kura: Arc<Kura>,
     /// Immutable configured manifest sources used before the first restored State view.
     pub lane_manifests: LaneManifestRegistryHandle,
@@ -234,7 +277,7 @@ pub struct KuraSeed {
 }
 impl KuraSeed {
     #[cfg(test)]
-    pub fn into_state_from_json(self, value: json::Value) -> Result<Box<State>, json::Error> {
+    pub fn into_state_from_json(self, value: json::Value) -> Result<Box<State>, SnapshotRestoreError> {
         self.into_state_from_json_with_recovery_mode(value, true)
     }
     /// Decode a canonical snapshot directly from its authenticated JSON bytes.
@@ -244,7 +287,7 @@ impl KuraSeed {
     /// so restoration never constructs a recursive full-state JSON tree.
     /// The restored State stays on the heap through validation and handoff;
     /// nested restore calls must not reserve a full State in each stack frame.
-    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<Box<State>, json::Error> {
+    pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<Box<State>, SnapshotRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, true)
     }
@@ -262,7 +305,7 @@ impl KuraSeed {
         snapshot_height: usize,
         snapshot_tip: Option<HashOf<BlockHeader>>,
         sccp_policy_hash: [u8; 32],
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, SnapshotRestoreError> {
         let block_hashes =
             emergency_fast_block_hashes(self.kura.as_ref(), snapshot_height, snapshot_tip)?;
         let nexus = iroha_config::parameters::actual::Nexus::default();
@@ -288,7 +331,7 @@ impl KuraSeed {
         let state = build_state(
             BuildStateInputs {
                 lane_manifests: self.lane_manifests,
-                world: World::default(),
+                world: World(Box::new(WorldData::try_new_with_operation_index_budget(self.operation_index_budget.clone())?)),
                 block_hashes,
                 transactions: TransactionsStorage::new(),
                 commit_topology: Cell::new(Vec::new()),
@@ -334,7 +377,7 @@ impl KuraSeed {
     pub(crate) fn into_state_from_json_str_without_durable_recovery(
         self,
         input: &str,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, SnapshotRestoreError> {
         let map = SnapshotJsonMap::parse(input, "state")?;
         self.into_state_from_snapshot_map(map, false)
     }
@@ -343,19 +386,32 @@ impl KuraSeed {
         self,
         value: json::Value,
         allow_durable_recovery: bool,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, SnapshotRestoreError> {
         let json::Value::Object(map) = value else {
             return Err(json::Error::InvalidField {
                 field: "state".into(),
                 message: "expected object".into(),
-            });
+            }.into());
         };
         self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
     }
     fn into_state_from_snapshot_map(
         self,
+        map: SnapshotJsonMap<'_>,
+        allow_durable_recovery: bool,
+    ) -> Result<Box<State>, SnapshotRestoreError> {
+        let refusal = std::cell::RefCell::new(None);
+        let result = self.into_state_from_snapshot_map_inner(map, allow_durable_recovery, &refusal);
+        match refusal.into_inner() {
+            Some(error) => Err(SnapshotRestoreError::Admission(error)),
+            None => result.map_err(SnapshotRestoreError::Encoding),
+        }
+    }
+    fn into_state_from_snapshot_map_inner(
+        self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
+        operation_index_refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     ) -> Result<Box<State>, json::Error> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -443,6 +499,8 @@ impl KuraSeed {
         }
         let ivm_runtime = IVM::new(0);
         let ivm_seed = IvmSeed {
+            operation_index_budget: &self.operation_index_budget,
+            operation_index_refusal,
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
@@ -468,11 +526,20 @@ impl KuraSeed {
             &mut map,
             "public_lane_reward_claims",
         )?
-        .decode("public_lane_reward_claims", |_: &(LaneId, AccountId), value: &PublicLaneRewardClaimStateV1| value.through_epoch.is_some())?;
+        .decode(
+            "public_lane_reward_claims",
+            |_: &(LaneId, AccountId), value: &PublicLaneRewardClaimStateV1| {
+                value.through_epoch.is_some()
+            },
+        )?;
         world.public_lane_reward_accruals = take_required::<snapshot_storage::SnapshotStorage>(
             &mut map,
             "public_lane_reward_accruals",
-        )?.decode("public_lane_reward_accruals", |_: &(LaneId, AccountId, AssetId), value: &Quantity| !value.is_zero())?;
+        )?
+        .decode(
+            "public_lane_reward_accruals",
+            |_: &(LaneId, AccountId, AssetId), value: &Quantity| !value.is_zero(),
+        )?;
         world.public_lane_reward_reserves = take_required::<snapshot_storage::SnapshotStorage>(
             &mut map,
             "public_lane_reward_reserves",
@@ -570,6 +637,29 @@ impl KuraSeed {
             })?;
         validate_replication_order_completion_anchors(&world, &block_hashes)?;
         validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
+        validator_committee::validate_committed_progress(
+            &world.view(),
+            network_id,
+            &block_hashes,
+            &self.kura,
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.validator_committee".to_owned(),
+            message,
+        })?;
+        if !block_hashes.is_empty() {
+            let previous_world = world.block_and_revert();
+            validator_committee::validate_committed_progress(
+                &previous_world,
+                network_id,
+                &block_hashes[..block_hashes.len() - 1],
+                &self.kura,
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.validator_committee.revert".to_owned(),
+                message,
+            })?;
+        }
         world
             .privacy_consensus_policy
             .view()

@@ -21,6 +21,13 @@ I105 strings without surrounding whitespace. For host tests, set
 built bridge. Android packages the bridge through the generated native artifact
 pipeline described in `CLAUDE.md`.
 
+`ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
+authorizations, signed all-edge beacon DKG records, committee transitions,
+monetary plans, and peer rebinding. Its Rust-authored fixture is
+`fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
+truncated records and noncanonical quantity decimals. Decoding preserves exact
+Norito bytes but does not verify signatures, custody, or committee activation.
+
 ## Artifacts
 
 Not published to Maven Central yet. Build locally and consume via `mavenLocal()`.

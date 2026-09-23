@@ -731,7 +731,7 @@ fn fixture_kagemusha_mint_finality_roster(
     epoch: u64,
     roster: &[wire::ValidatorPower],
     seed_base: u8,
-) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
     let validators = roster
         .iter()
         .enumerate()
@@ -746,10 +746,10 @@ fn fixture_kagemusha_mint_finality_roster(
             .expect("derive deterministic fixture Pasta keys")
         })
         .collect();
-    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation: epoch,
         validators,
     }
 }
@@ -771,18 +771,22 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         })
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
-    let kagemusha_mint_finality_epoch_roster =
+    let kagemusha_mint_finality_authority =
         fixture_kagemusha_mint_finality_roster(network_id, 0, &roster, 0xA0);
-    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .expect("derive fixture mint-finality epoch ID");
+    let kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+            &kagemusha_mint_finality_authority,
+            0,
+            1,
+            u64::MAX,
+        );
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height: u64::MAX,
         next_epoch_snapshot: None,
         mode: wire::ConsensusMode::Permissioned,
@@ -1018,6 +1022,7 @@ fn timeout_delivery_state_fixture(participants_per_lane: u8) -> (State, Vec<Peer
                     metadata: Default::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -1500,16 +1505,19 @@ fn start_timeout_delivery_constructor_for_test(
 ) -> Result<ProductionV2Services, String> {
     let mut context = template.context.clone();
     context.network_id = state.network_id;
-    context.kagemusha_mint_finality_epoch_roster = fixture_kagemusha_mint_finality_roster(
+    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_roster(
         context.network_id,
         context.epoch,
         &context.roster,
         0xA0,
     );
-    context.kagemusha_mint_finality_epoch_id = context
-        .kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .expect("constructor fixture finality epoch");
+    context.kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+            &context.kagemusha_mint_finality_authority,
+            context.epoch,
+            context.kagemusha_mint_finality_authorization.first_height,
+            context.epoch_end_height,
+        );
     context.validate().expect("constructor fixture context");
     let tag = EventTag::new(context.height, 0, Generation::new(context.height));
     let body_store =
@@ -1643,16 +1651,19 @@ fn timeout_certificate_constructor_rejects_wrong_prefix_and_recovers_decided() {
     // worker-spawn probe; source ordering puts this error before I/O spawn.
     let mut context = template.context.clone();
     context.network_id = state.network_id;
-    context.kagemusha_mint_finality_epoch_roster = fixture_kagemusha_mint_finality_roster(
+    context.kagemusha_mint_finality_authority = fixture_kagemusha_mint_finality_roster(
         context.network_id,
         context.epoch,
         &context.roster,
         0xA0,
     );
-    context.kagemusha_mint_finality_epoch_id = context
-        .kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .expect("reopened constructor fixture finality epoch");
+    context.kagemusha_mint_finality_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+            &context.kagemusha_mint_finality_authority,
+            context.epoch,
+            context.kagemusha_mint_finality_authorization.first_height,
+            context.epoch_end_height,
+        );
     drop(
         V2BodyStore::open(rejected_directory.path(), context)
             .expect("rejected body store remains valid"),

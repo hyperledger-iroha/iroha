@@ -34,6 +34,7 @@ pub(crate) struct KagamiProfileOptions {
     pub kagami_override: Option<PathBuf>,
     pub nexus_xor_asset_definition_id: Option<String>,
     pub kagemusha_mint_finality_parameters_dir: PathBuf,
+    pub xor_allocations_dir: PathBuf,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProfileSpec {
@@ -138,12 +139,135 @@ fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
     }
 }
 
+#[derive(Clone, Debug, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ProfileXorAllocationV1 {
+    account: AccountId,
+    amount: iroha_primitives::numeric::Quantity,
+}
+#[derive(Clone, Debug, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ProfileXorAllocationsV1 {
+    version: u8,
+    asset_definition_id: AssetDefinitionId,
+    allocations: Vec<ProfileXorAllocationV1>,
+}
+fn load_profile_xor_allocations(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    directory: &Path,
+    nexus_asset: Option<&str>,
+) -> AnyResult<ProfileXorAllocationsV1> {
+    let path = directory.join(format!("{}.json", spec.slug));
+    let metadata = fs::metadata(&path).map_err(|error| {
+        format!(
+            "explicit XOR genesis allocations required at {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return Err("XOR allocations must be a regular file no larger than 1MiB".into());
+    }
+    let allocations: ProfileXorAllocationsV1 = json::from_slice(&fs::read(&path)?)?;
+    let expected =
+        AssetDefinitionId::parse_address_literal(if spec.profile_flag == "iroha3-nexus" {
+            nexus_asset.ok_or(NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED)?
+        } else {
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        })?;
+    if allocations.version != 1
+        || allocations.asset_definition_id != expected
+        || allocations.allocations.is_empty()
+        || allocations.allocations.len() > 4096
+        || allocations
+            .allocations
+            .iter()
+            .any(|entry| entry.amount.is_zero())
+        || allocations
+            .allocations
+            .windows(2)
+            .any(|pair| pair[0].account >= pair[1].account)
+    {
+        return Err("XOR allocations require version1, exact network asset, and positive strictly ordered unique accounts".into());
+    }
+    for peer in peers {
+        let account = AccountId::new(peer.peer_id.public_key().clone());
+        if allocations
+            .allocations
+            .iter()
+            .find(|entry| entry.account == account)
+            .is_none_or(|entry| entry.amount < 10_000_u32.into())
+        {
+            return Err(format!("explicit XOR allocation for validator {account} must cover the 10000 genesis self bond").into());
+        }
+    }
+    Ok(allocations)
+}
+fn apply_explicit_xor_allocations(
+    manifest: RawGenesisTransaction,
+    allocations: &ProfileXorAllocationsV1,
+) -> AnyResult<RawGenesisTransaction> {
+    use iroha_data_model::{
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition, AssetId},
+        isi::{Mint, Register, RegisterBox},
+        parameter::system::SumeragiNposParameters,
+    };
+    let effective = manifest.effective_parameters()?;
+    let pinned = effective
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .ok_or("profile manifest requires committed NPoS XOR identity")?
+        .xor_asset_definition_id;
+    if allocations.asset_definition_id != pinned {
+        return Err("explicit allocations disagree with committed XOR identity".into());
+    }
+    let mut accounts = std::collections::BTreeSet::new();
+    let mut has_definition = false;
+    for instruction in manifest.instructions() {
+        if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+            match register {
+                RegisterBox::Account(value) => {
+                    accounts.insert(value.object.id.clone());
+                }
+                RegisterBox::AssetDefinition(value) if value.object.id == pinned => {
+                    has_definition = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut builder = manifest.into_builder().next_transaction();
+    if !has_definition {
+        builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+            pinned.clone(),
+            "XOR".to_owned(),
+            iroha_primitives::numeric::NumericSpec::fractional(9),
+            AssetBalancePolicy::Global,
+            None,
+        )));
+    }
+    for allocation in &allocations.allocations {
+        if accounts.insert(allocation.account.clone()) {
+            builder = builder
+                .append_instruction(Register::account(Account::new(allocation.account.clone())));
+        }
+        builder = builder.append_instruction(Mint::asset_quantity(
+            allocation.amount.clone(),
+            AssetId::new(pinned.clone(), allocation.account.clone()),
+        ));
+    }
+    Ok(builder.build_raw()?.with_consensus_meta())
+}
+
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
     preflight_required_profile_inputs(
         &specs,
         options.nexus_xor_asset_definition_id.as_deref(),
         &options.kagemusha_mint_finality_parameters_dir,
+        &options.xor_allocations_dir,
     )?;
     let kagami_bin = resolve_kagami_path(options.kagami_override.as_deref())?;
     fs::create_dir_all(&options.output)?;
@@ -154,6 +278,7 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
             &options.output,
             options.nexus_xor_asset_definition_id.as_deref(),
             &options.kagemusha_mint_finality_parameters_dir,
+            &options.xor_allocations_dir,
         )?;
     }
     Ok(())
@@ -162,11 +287,15 @@ fn preflight_required_profile_inputs(
     specs: &[ProfileSpec],
     nexus_xor_asset_definition_id: Option<&str>,
     kagemusha_mint_finality_parameters_dir: &Path,
+    xor_allocations_dir: &Path,
 ) -> AnyResult<()> {
     if specs.iter().any(|spec| spec.profile_flag == "iroha3-nexus") {
         let Some(asset_definition_id) = nexus_xor_asset_definition_id else {
             return Err(NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED.into());
         };
+        if asset_definition_id == "6TEAJqbb8oEPmLncoNiMRbLEK6tw" {
+            return Err("public Nexus requires operator-provisioned mainnet XOR; Taira testnet identity is forbidden".into());
+        }
         AssetDefinitionId::parse_address_literal(asset_definition_id).map_err(|err| {
             format!(
                 "invalid --nexus-xor-asset-definition-id `{asset_definition_id}`: {err}; \
@@ -180,6 +309,12 @@ fn preflight_required_profile_inputs(
             spec,
             &peers,
             kagemusha_mint_finality_parameters_dir,
+        )?;
+        load_profile_xor_allocations(
+            spec,
+            &peers,
+            xor_allocations_dir,
+            nexus_xor_asset_definition_id,
         )?;
     }
     Ok(())
@@ -210,6 +345,7 @@ fn write_profile_bundle(
     output_root: &Path,
     nexus_xor_asset_definition_id: Option<&str>,
     kagemusha_mint_finality_parameters_dir: &Path,
+    xor_allocations_dir: &Path,
 ) -> AnyResult<()> {
     fs::create_dir_all(output_root)?;
     let staging = tempfile::Builder::new()
@@ -232,6 +368,13 @@ fn write_profile_bundle(
         nexus_xor_asset_definition_id,
         &kagemusha_mint_finality,
     )?;
+    let allocations = load_profile_xor_allocations(
+        spec,
+        &peers,
+        xor_allocations_dir,
+        nexus_xor_asset_definition_id,
+    )?;
+    let genesis_json = apply_explicit_xor_allocations(genesis_json, &allocations)?;
     let patched_genesis = inject_topology(genesis_json, &peers)?;
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
@@ -447,7 +590,7 @@ fn load_profile_kagemusha_mint_finality_parameters(
         .collect::<Vec<_>>();
     expected_validators.sort();
     let current_validators = parameters
-        .epoch_roster
+        .authority_generation
         .validators
         .iter()
         .map(|entry| entry.validator.clone())
@@ -455,14 +598,6 @@ fn load_profile_kagemusha_mint_finality_parameters(
     if current_validators != expected_validators {
         return Err(format!(
             "operator-provisioned KAGEMUSHA mint-finality roster `{}` does not match the exact {} profile topology",
-            path.display(),
-            spec.slug
-        )
-        .into());
-    }
-    if parameters.next_epoch_roster.is_some() {
-        return Err(format!(
-            "operator-provisioned KAGEMUSHA mint-finality parameters `{}` must set `next_epoch_roster` to null because the fixed {} profile schedule does not end epoch zero at height one",
             path.display(),
             spec.slug
         )
@@ -1501,12 +1636,11 @@ mod tests {
             )
             .with_kagemusha_mint_finality_genesis_parameters(
                 iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
-                    epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                    authority_generation: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                         version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                        epoch: 0,
+                        generation: 0,
                         validators,
                     },
-                    next_epoch_roster: None,
                 },
             )
         }
@@ -1603,15 +1737,88 @@ mod tests {
         );
     }
     #[test]
-    fn profile_authority_rejects_a_successor_outside_the_fixed_schedule() {
+    fn profile_xor_allocations_are_explicit_exact_and_network_bound() {
+        use iroha_data_model::{isi::MintBox, parameter::system::SumeragiNposParameters};
+        let spec = &PROFILES[0];
+        let peers = build_peers(spec).expect("fixture peers");
+        let directory = tempdir().expect("allocation input directory");
+        assert!(load_profile_xor_allocations(spec, &peers, directory.path(), None).is_err());
+        let mut entries = peers
+            .iter()
+            .map(|peer| ProfileXorAllocationV1 {
+                account: AccountId::new(peer.peer_id.public_key().clone()),
+                amount: "10000.000000001".parse().unwrap(),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.account.cmp(&right.account));
+        let allocations = ProfileXorAllocationsV1 {
+            version: 1,
+            asset_definition_id: SumeragiNposParameters::default().xor_asset_definition_id,
+            allocations: entries,
+        };
+        let path = directory.path().join(format!("{}.json", spec.slug));
+        fs::write(&path, json::to_vec(&allocations).unwrap()).unwrap();
+        let loaded = load_profile_xor_allocations(spec, &peers, directory.path(), None)
+            .expect("explicit input");
+        let manifest = stub_genesis()
+            .into_builder()
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ))
+            .build_raw()
+            .unwrap()
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let funded = apply_explicit_xor_allocations(manifest.clone(), &loaded)
+            .expect("apply exact allocations");
+        let minted = funded
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) => {
+                        Some((mint.destination.account().clone(), mint.object.clone()))
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(minted.len(), peers.len());
+        for (account, amount) in minted {
+            let supplied = loaded
+                .allocations
+                .iter()
+                .find(|entry| entry.account == account)
+                .unwrap();
+            assert_eq!(amount, supplied.amount);
+        }
+        for invalid in 0..3 {
+            let mut bad = allocations.clone();
+            if invalid == 0 {
+                bad.allocations.pop();
+            }
+            if invalid == 1 {
+                bad.allocations[0].amount = 9_999_u32.into();
+            }
+            if invalid == 2 {
+                bad.allocations.swap(0, 1);
+            }
+            fs::write(&path, json::to_vec(&bad).unwrap()).unwrap();
+            assert!(load_profile_xor_allocations(spec, &peers, directory.path(), None).is_err());
+        }
+        let mut foreign = allocations;
+        foreign.asset_definition_id = AssetDefinitionId::derive_from_components(
+            iroha_data_model::domain::DomainId::parse_fully_qualified("foreign.universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        assert!(apply_explicit_xor_allocations(manifest, &foreign).is_err());
+    }
+    #[test]
+    fn profile_authority_requires_genesis_generation_zero() {
         let profile = PROFILES[0];
         let peers = build_peers(&profile).expect("build deterministic profile peers");
         let mut parameters = stub_genesis()
             .kagemusha_mint_finality_genesis_parameters()
             .clone();
-        let mut next_epoch_roster = parameters.epoch_roster.clone();
-        next_epoch_roster.epoch = 1;
-        parameters.next_epoch_roster = Some(next_epoch_roster);
+        parameters.authority_generation.generation = 1;
         let directory = tempdir().expect("profile authority directory");
         fs::write(
             directory.path().join(format!("{}.json", profile.slug)),
@@ -1621,12 +1828,8 @@ mod tests {
 
         let error =
             load_profile_kagemusha_mint_finality_parameters(&profile, &peers, directory.path())
-                .expect_err("fixed profile schedule must reject a successor roster");
-        assert!(
-            error
-                .to_string()
-                .contains("does not end epoch zero at height one")
-        );
+                .expect_err("genesis must reject a nonzero authority generation");
+        assert!(error.to_string().contains("genesis.authority_generation"));
     }
     #[test]
     fn profile_peer_builder_rejects_non_committee_sizes() {
@@ -2129,6 +2332,7 @@ mod tests {
             kagami_override: Some(kagami),
             nexus_xor_asset_definition_id: None,
             kagemusha_mint_finality_parameters_dir: temp.path().join("missing-authority"),
+            xor_allocations_dir: temp.path().join("missing-allocations"),
         })
         .expect_err("all-profile generation without the Nexus XOR id must fail");
         assert_eq!(error.to_string(), NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED);
@@ -2183,6 +2387,7 @@ mod tests {
             kagami_override: Some(temp.path().join("unused-kagami")),
             nexus_xor_asset_definition_id: Some("xor#universal".to_owned()),
             kagemusha_mint_finality_parameters_dir: temp.path().join("missing-authority"),
+            xor_allocations_dir: temp.path().join("missing-allocations"),
         })
         .expect_err("invalid Nexus XOR identity must fail before output mutation");
         assert!(

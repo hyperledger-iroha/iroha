@@ -28,9 +28,12 @@ fn captured(
 ) -> PreparedCarrierJournals<Reservation> {
     super::super::super::tests::prepare(state, proposal, topology, context)
         .unwrap_or_else(|(_, error)| panic!("actual carrier execution: {error}"))
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(released)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(Reservation(Arc::clone(released))),
+        )
         .unwrap_or_else(|error| panic!("capture original journals: {error}"))
 }
 

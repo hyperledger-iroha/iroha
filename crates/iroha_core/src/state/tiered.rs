@@ -134,13 +134,14 @@ impl TieredSnapshotPayload {
     /// expanded loop for every World field reserves their combined stack space
     /// in debug builds, even when those stores are empty.
     #[inline(never)]
-    pub(super) fn collect_storage<K, V>(
+    pub(super) fn collect_storage<K, V, M>(
         &mut self,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         key_handle: impl Fn(K) -> TieredKeyHandle,
     ) where
         K: Key,
         V: Value + json::JsonSerialize + MeasuredBytes,
+        M: mv::storage::StorageMode<K, V>,
     {
         if self.complete {
             for (key, value) in storage.iter() {
@@ -1936,6 +1937,16 @@ impl TieredStateBackend {
             TieredSegment::TimedOvnEvidence,
             TimedOvnEvidence,
             world.timed_ovn_evidence
+        );
+        collect_map!(
+            TieredSegment::ValidatorCandidateKeys,
+            ValidatorCandidateKeys,
+            world.validator_candidate_keys
+        );
+        collect_map!(
+            TieredSegment::ValidatorCommitteeTransitions,
+            ValidatorCommitteeTransition,
+            world.validator_committee_transitions
         );
         collect_map!(
             TieredSegment::GlobalBeaconDkg,
@@ -3848,6 +3859,45 @@ mod measured_bytes_impls {
                 .saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
+    impl MeasuredBytes for iroha_data_model::nexus::ValidatorCandidateKeysV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>()
+                .saturating_add(self.keys.validator.measured_bytes_extra())
+                .saturating_add(self.peer_signature.measured_bytes_extra())
+        }
+    }
+    impl MeasuredBytes for iroha_data_model::nexus::ValidatorCommitteeTransitionV1 {
+        fn measured_bytes(&self) -> usize {
+            let preparation = &self.preparation;
+            let mut bytes = size_of::<Self>()
+                .saturating_add(preparation.roster.capacity().saturating_mul(size_of::<
+                    iroha_data_model::block::consensus_v2::ValidatorPower,
+                >()))
+                .saturating_add(preparation.validator_set_pops.measured_bytes_extra())
+                .saturating_add(self.readiness.capacity().saturating_mul(size_of::<
+                    iroha_data_model::nexus::ValidatorCommitteeSeatReadinessV1,
+                >()));
+            for seat in &preparation.roster {
+                bytes = bytes.saturating_add(seat.validator.measured_bytes_extra());
+            }
+            if let Some(credentials) = &self.credentials {
+                bytes = bytes.saturating_add(
+                    credentials
+                        .authority
+                        .validators
+                        .capacity()
+                        .saturating_mul(size_of::<
+                        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1,
+                    >(
+                    )),
+                );
+                for keys in &credentials.authority.validators {
+                    bytes = bytes.saturating_add(keys.validator.measured_bytes_extra());
+                }
+            }
+            bytes
+        }
+    }
     impl MeasuredBytes for FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>()
@@ -4003,6 +4053,8 @@ enum TieredSegment {
     TleKeySessionLifecycles,
     TleActiveKeySession,
     TimedOvnEvidence,
+    ValidatorCandidateKeys,
+    ValidatorCommitteeTransitions,
     GlobalBeaconDkg,
     GlobalBeaconKeySessions,
     GlobalBeaconActiveSession,
@@ -4086,6 +4138,8 @@ impl TieredSegment {
             TieredSegment::TleKeySessionLifecycles => "tle_key_session_lifecycles",
             TieredSegment::TleActiveKeySession => "tle_active_key_session",
             TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
+            TieredSegment::ValidatorCandidateKeys => "validator_candidate_keys",
+            TieredSegment::ValidatorCommitteeTransitions => "validator_committee_transitions",
             TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
             TieredSegment::GlobalBeaconKeySessions => "global_beacon_key_sessions",
             TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
@@ -4181,6 +4235,8 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "tle_key_session_lifecycles" => TieredSegment::TleKeySessionLifecycles,
             "tle_active_key_session" => TieredSegment::TleActiveKeySession,
             "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
+            "validator_candidate_keys" => TieredSegment::ValidatorCandidateKeys,
+            "validator_committee_transitions" => TieredSegment::ValidatorCommitteeTransitions,
             "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
             "global_beacon_key_sessions" => TieredSegment::GlobalBeaconKeySessions,
             "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
@@ -4412,6 +4468,8 @@ pub(crate) enum TieredKeyHandle {
     TleKeySessionLifecycle(iroha_data_model::governance::types::TleKeySessionId),
     TleActiveKeySession(u64),
     TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
+    ValidatorCandidateKeys([u8; 32]),
+    ValidatorCommitteeTransition(u64),
     GlobalBeaconDkg([u8; 32]),
     GlobalBeaconKeySession([u8; 32]),
     GlobalBeaconActiveSession(u64),
@@ -4511,6 +4569,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::TleKeySessionLifecycle(_) => TieredSegment::TleKeySessionLifecycles,
             TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
             TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
+            TieredKeyHandle::ValidatorCandidateKeys(_) => TieredSegment::ValidatorCandidateKeys,
+            TieredKeyHandle::ValidatorCommitteeTransition(_) => {
+                TieredSegment::ValidatorCommitteeTransitions
+            }
             TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
             TieredKeyHandle::GlobalBeaconKeySession(_) => TieredSegment::GlobalBeaconKeySessions,
             TieredKeyHandle::GlobalBeaconActiveSession(_) => {
@@ -4622,6 +4684,10 @@ impl TieredKeyHandle {
             TieredKeyHandle::TleKeySessionLifecycle(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ValidatorCandidateKeys(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ValidatorCommitteeTransition(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconKeySession(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GlobalBeaconActiveSession(key) => {
@@ -4782,6 +4848,12 @@ impl TieredKeyHandle {
                 fetch!(world.tle_active_key_session, id)
             }
             TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
+            TieredKeyHandle::ValidatorCandidateKeys(id) => {
+                fetch!(world.validator_candidate_keys, id)
+            }
+            TieredKeyHandle::ValidatorCommitteeTransition(id) => {
+                fetch!(world.validator_committee_transitions, id)
+            }
             TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
             TieredKeyHandle::GlobalBeaconKeySession(id) => {
                 fetch!(world.global_beacon_key_sessions, id)
@@ -4950,6 +5022,12 @@ impl TieredKeyHandle {
                 fetch!(world.tle_active_key_session, id)
             }
             TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
+            TieredKeyHandle::ValidatorCandidateKeys(id) => {
+                fetch!(world.validator_candidate_keys, id)
+            }
+            TieredKeyHandle::ValidatorCommitteeTransition(id) => {
+                fetch!(world.validator_committee_transitions, id)
+            }
             TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
             TieredKeyHandle::GlobalBeaconKeySession(id) => {
                 fetch!(world.global_beacon_key_sessions, id)
@@ -5169,6 +5247,12 @@ impl fmt::Display for TieredKeyHandle {
                 write!(f, "tle_active_key_session:{id}")
             }
             TieredKeyHandle::TimedOvnEvidence(id) => write!(f, "timed_ovn_evidence:{id}"),
+            TieredKeyHandle::ValidatorCandidateKeys(id) => {
+                write!(f, "validator_candidate_keys:{id:?}")
+            }
+            TieredKeyHandle::ValidatorCommitteeTransition(id) => {
+                write!(f, "validator_committee_transitions:{id:?}")
+            }
             TieredKeyHandle::GlobalBeaconDkg(id) => {
                 write!(f, "global_beacon_dkg:{}", id.encode_hex::<String>())
             }

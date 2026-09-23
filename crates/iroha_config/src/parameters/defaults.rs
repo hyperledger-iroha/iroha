@@ -93,6 +93,23 @@ pub mod common {
         CHAIN_DISCRIMINANT
     }
 }
+/// Public endpoint used by the stock runtime-provider broker.
+pub mod runtime_provider_broker {
+    use super::PathBuf;
+
+    /// Default Unix socket path for the local runtime-provider broker.
+    #[cfg(target_os = "macos")]
+    pub const ENDPOINT_PATH: &str = "/private/var/iroha/run/runtime-provider-broker-v1.sock";
+    /// Default Unix socket path for the local runtime-provider broker.
+    #[cfg(not(target_os = "macos"))]
+    pub const ENDPOINT_PATH: &str =
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock";
+
+    /// Return the public default endpoint path.
+    pub fn endpoint_path() -> PathBuf {
+        PathBuf::from(ENDPOINT_PATH)
+    }
+}
 /// Canonical first-release Taira deployment policy shared by generators and launchers.
 pub mod taira {
     /// Canonical first-release Inrou canary guest CPU allocation.
@@ -3321,6 +3338,8 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
+        /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
+        pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).

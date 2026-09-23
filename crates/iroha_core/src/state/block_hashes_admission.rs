@@ -13,7 +13,7 @@ use concread::bptree::{
 pub enum StateBlockStartError<E: std::fmt::Debug> {
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
-    History(#[from] BlockHashAdmissionError),
+    Storage(#[from] StateStorageAdmissionError),
     /// The caller's original pristine/after-start failure.
     #[error("block start stage failed: {0:?}")]
     Stage(E),
@@ -21,15 +21,18 @@ pub enum StateBlockStartError<E: std::fmt::Debug> {
 impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitError {
     fn from(error: StateBlockStartError<MergeLedgerCommitError>) -> Self {
         match error {
-            StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            StateBlockStartError::Storage(error) => Self::StateStorageAdmission(error),
             StateBlockStartError::Stage(error) => error,
         }
     }
 }
 
-/// Local history acquisition failure; never a verdict on a block or transaction.
+/// Local State storage acquisition or mutation failure; never a verdict on a block or transaction.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum BlockHashAdmissionError {
+pub enum StateStorageAdmissionError {
+    /// Original finite-credit refusal from an admitted World index.
+    #[error(transparent)]
+    World(#[from] mv::storage::AdmittedStorageError),
     /// Another physical owner must release the original history lock.
     #[error("canonical hash history is busy")]
     Busy(concread::release::ReleaseWait),
@@ -50,10 +53,11 @@ pub enum BlockHashAdmissionError {
     ReadOnly,
 }
 
-impl BlockHashAdmissionError {
+impl StateStorageAdmissionError {
     /// The original release observation, only when releasing another owner can help.
     pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
+            Self::World(error) => error.release_wait(),
             Self::Busy(wait) | Self::Changed(wait) => Some(wait),
             Self::Capacity(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
                 Some(release)
@@ -66,7 +70,7 @@ impl<E: std::fmt::Debug> StateBlockStartError<E> {
     /// Preserve the original history release without retrying a deterministic stage failure.
     pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
-            Self::History(error) => error.release_wait(),
+            Self::Storage(error) => error.release_wait(),
             Self::Stage(_) => None,
         }
     }
@@ -128,13 +132,13 @@ impl BlockHashes {
         &self,
         error: MapAdmissionError<mv::allocation::AllocationRefusal>,
         wait: concread::release::ReleaseWait,
-    ) -> BlockHashAdmissionError {
+    ) -> StateStorageAdmissionError {
         match error {
-            MapAdmissionError::Busy => BlockHashAdmissionError::Busy(wait),
-            MapAdmissionError::Poisoned => BlockHashAdmissionError::Poisoned,
-            MapAdmissionError::Changed => BlockHashAdmissionError::Changed(wait),
-            MapAdmissionError::Planning(error) => BlockHashAdmissionError::Planning(error),
-            MapAdmissionError::Refused(error) => BlockHashAdmissionError::Capacity(error),
+            MapAdmissionError::Busy => StateStorageAdmissionError::Busy(wait),
+            MapAdmissionError::Poisoned => StateStorageAdmissionError::Poisoned,
+            MapAdmissionError::Changed => StateStorageAdmissionError::Changed(wait),
+            MapAdmissionError::Planning(error) => StateStorageAdmissionError::Planning(error),
+            MapAdmissionError::Refused(error) => StateStorageAdmissionError::Capacity(error),
         }
     }
     /// Restore exact ordered history with every tree allocation charged to this pool.
@@ -142,16 +146,23 @@ impl BlockHashes {
     pub(crate) fn try_new(
         initial: impl IntoIterator<Item = HashOf<BlockHeader>>,
         budget: mv::allocation::AllocationBudget,
-    ) -> Result<Self, BlockHashAdmissionError> {
+    ) -> Result<Self, StateStorageAdmissionError> {
         budget.with_deferred_refund_notifications(|_| {
+            let control_layout = ChargedBlockHashMap::layout();
+            let mut control_reservation = budget
+                .try_reserve(control_layout)
+                .map_err(StateStorageAdmissionError::Capacity)?;
+            let control_charge = control_reservation
+                .try_split(control_layout)
+                .expect("exact prepaid history owner layout");
             let map = BlockHashMap::try_new_with_node_custody(|demand| {
                 budget
                     .try_reserve_bytes(demand.bytes())
                     .map(BlockHashPolicy)
             })
-            .map_err(BlockHashAdmissionError::Capacity)?;
+            .map_err(StateStorageAdmissionError::Capacity)?;
             let owner = Self {
-                inner: BlockHashStorage::Owned(map),
+                inner: BlockHashStorage::Owned(ChargedBlockHashMap::new(map, control_charge)),
                 budget: budget.clone(),
                 released: concread::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),
@@ -180,17 +191,17 @@ impl BlockHashes {
     pub(crate) fn try_next_block(
         &self,
         replacement: bool,
-    ) -> Result<BlockHashesBlock<'_>, BlockHashAdmissionError> {
+    ) -> Result<BlockHashesBlock<'_>, StateStorageAdmissionError> {
         self.budget.with_deferred_refund_notifications(|_| {
-            let map = self.map().ok_or(BlockHashAdmissionError::ReadOnly)?;
+            let map = self.map().ok_or(StateStorageAdmissionError::ReadOnly)?;
             let wait = map.observe_reader_release();
             let view = self.try_view().map_err(|error| match error {
                 concread::bptree::OwnedWriteError::Busy => {
-                    BlockHashAdmissionError::Busy(wait.clone())
+                    StateStorageAdmissionError::Busy(wait.clone())
                 }
-                concread::bptree::OwnedWriteError::Poisoned => BlockHashAdmissionError::Poisoned,
+                concread::bptree::OwnedWriteError::Poisoned => StateStorageAdmissionError::Poisoned,
                 concread::bptree::OwnedWriteError::Changed => {
-                    BlockHashAdmissionError::Changed(wait.clone())
+                    StateStorageAdmissionError::Changed(wait.clone())
                 }
             })?;
             let prefix = if replacement {
@@ -206,7 +217,7 @@ impl BlockHashes {
             let wait = self.released.observe();
             let acquired = map
                 .try_acquire_writer()
-                .ok_or_else(|| BlockHashAdmissionError::Busy(wait.clone()))?;
+                .ok_or_else(|| StateStorageAdmissionError::Busy(wait.clone()))?;
             let writer = match self
                 .released
                 .poisoning_guard(acquired)
@@ -227,7 +238,7 @@ impl BlockHashes {
             };
             let (work, _) = writer.release_with(|(writer, previous)| (writer.detach(), previous));
             if !predecessor.matches(&work.predecessor()) {
-                return Err(BlockHashAdmissionError::Changed(wait));
+                return Err(StateStorageAdmissionError::Changed(wait));
             }
             Ok(BlockHashesBlock {
                 inner: self,

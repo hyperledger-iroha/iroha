@@ -484,63 +484,49 @@ impl LifecycleProducerClaimDispositionV1 {
 /// Closed result of one bounded Completion/Runtime/Ingress batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) struct LifecycleV2IngressDrainDispositionV1 {
-    producer_claim: LifecycleProducerClaimDispositionV1,
     retry_before_producer: bool,
     terminal_settlement_stops_runtime: bool,
     advance_executor_yield: Option<AdvanceExecutorYieldV1>,
 }
 
 impl LifecycleV2IngressDrainDispositionV1 {
-    const fn ready(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
+    const fn ready() -> Self {
         Self {
-            producer_claim,
             retry_before_producer: false,
             terminal_settlement_stops_runtime: false,
             advance_executor_yield: None,
         }
     }
 
-    const fn after_terminal_settlement(
-        producer_claim: LifecycleProducerClaimDispositionV1,
-    ) -> Self {
+    const fn after_terminal_settlement() -> Self {
         Self {
-            producer_claim,
             retry_before_producer: false,
             terminal_settlement_stops_runtime: true,
             advance_executor_yield: None,
         }
     }
 
-    const fn retry_before_producer(producer_claim: LifecycleProducerClaimDispositionV1) -> Self {
+    const fn retry_before_producer() -> Self {
         Self {
-            producer_claim,
             retry_before_producer: true,
             terminal_settlement_stops_runtime: false,
             advance_executor_yield: None,
         }
     }
 
-    const fn after_advance_executor_yield(
-        producer_claim: LifecycleProducerClaimDispositionV1,
-        advance_executor_yield: AdvanceExecutorYieldV1,
-    ) -> Self {
+    const fn after_advance_executor_yield(advance_executor_yield: AdvanceExecutorYieldV1) -> Self {
         Self {
-            producer_claim,
             retry_before_producer: advance_executor_yield.requires_completion_retry(),
             terminal_settlement_stops_runtime: false,
             advance_executor_yield: Some(advance_executor_yield),
         }
     }
 
-    /// Return this batch's last owner-derived scheduling observation.
-    #[cfg(test)]
-    pub(in crate::sumeragi) const fn producer_claim(self) -> LifecycleProducerClaimDispositionV1 {
-        self.producer_claim
-    }
-
-    /// Return whether this batch must yield before fresh Producer planning.
+    /// Return whether this batch owes a retry before fresh Producer planning.
+    /// The caller separately projects the current scheduling claim from the
+    /// launched lifecycle owner after this batch has completed.
     pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
-        self.retry_before_producer || self.producer_claim.requires_yield()
+        self.retry_before_producer
     }
 
     /// Return whether terminal settlement must precede all ordinary runtime service.
@@ -558,7 +544,6 @@ impl LifecycleV2IngressDrainDispositionV1 {
 
 fn recovered_output_drain_disposition(
     settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
-    producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Option<LifecycleV2IngressDrainDispositionV1> {
     match settlement {
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
@@ -566,33 +551,23 @@ fn recovered_output_drain_disposition(
             None
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
-            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ))
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer())
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                producer_claim,
-            ))
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement())
         }
     }
 }
 
 fn settled_apply_output_drain_disposition(
     settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
-    producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Option<LifecycleV2IngressDrainDispositionV1> {
-    debug_assert!(producer_claim.apply_terminal_settled());
     match settlement {
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
-            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ))
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer())
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                producer_claim,
-            ))
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement())
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
         | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => None,
@@ -603,9 +578,9 @@ const fn blocked_runtime_drain_disposition(
     producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> LifecycleV2IngressDrainDispositionV1 {
     if producer_claim.apply_terminal_settled() {
-        LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
+        LifecycleV2IngressDrainDispositionV1::after_terminal_settlement()
     } else {
-        LifecycleV2IngressDrainDispositionV1::ready(producer_claim)
+        LifecycleV2IngressDrainDispositionV1::ready()
     }
 }
 
@@ -665,9 +640,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
             },
         )?;
         if direct_output_woken {
-            return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                producer_claim,
-            ));
+            return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer());
         }
     }
     if producer_claim.apply_terminal_settled() {
@@ -686,9 +659,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 .map_err(V2RunnerError::from)
             },
         )?;
-        if let Some(disposition) =
-            settled_apply_output_drain_disposition(settlement, producer_claim)
-        {
+        if let Some(disposition) = settled_apply_output_drain_disposition(settlement) {
             return Ok(disposition);
         }
     }
@@ -715,7 +686,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 },
             )?;
             if let Some(disposition) =
-                recovered_output_drain_disposition(recovered_output_settlement, producer_claim)
+                recovered_output_drain_disposition(recovered_output_settlement)
             {
                 // A preceding completion may have exposed this exact ordinal as
                 // the new Ready minimum. Settle it before the turn driver can
@@ -818,31 +789,26 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     if selected.restart_required() || output_guard.restart_required() {
                         return Err(V2RunnerError::RestartRequired);
                     }
-                    producer_claim = activated.producer_claim_projection()?;
                     if completion_selection_retries_before_runtime(&selected) {
                         // The move-only published-successor token is retained
                         // ahead of physical completion classification. Yield
                         // this iteration so Runtime cannot precede its exact
                         // same-address consumption.
-                        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                            producer_claim,
-                        ));
+                        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer());
                     }
                     if completion_selection_stops_batch(&selected) {
                         // Settlement makes the adjacent ProducerTurn Ready.
                         // Let run_inner claim it before any Runtime or
                         // Ingress owner can add another Serve to the census.
                         return Ok(
-                            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
-                                producer_claim,
-                            ),
+                            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(),
                         );
                     }
                 }
                 if terminal_finalization_cut.is_some() {
                     // The sealed cut owns exactly the Completion-ranked turn.
                     // Return before asking the cursor for Runtime or Ingress.
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready());
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
@@ -885,9 +851,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     // Completion/Runtime so either the next pre-cut witness or
                     // the resulting WAL fence settles before any Producer or
                     // ordinary timeout turn.
-                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                        producer_claim,
-                    ));
+                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer());
                 }
                 if let Some(pre_timeout_cut) = pre_timeout_cut {
                     use super::super::v2_lifecycle_coordinator::ProductionPreTimeoutLockedPrepareQcIngressTurnV1 as PreTimeoutIngress;
@@ -919,9 +883,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             // remints the same timeout owner/cut and cannot see
                             // any later producer append.
                             return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(),
                             );
                         }
                         PreTimeoutIngress::ExactPrepareProgress(prepared) => {
@@ -963,9 +925,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             // decreased, so this cannot admit a post-cut
                             // carrier or defer the timeout forever.
                             return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(),
                             );
                         }
                     }
@@ -994,7 +954,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 )?;
                 producer_claim = activated.producer_claim_projection()?;
                 if installed_terminal {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready());
                 }
                 match executor_slice {
                     AdvanceExecutorSliceOutcomeV1::Idle
@@ -1002,14 +962,13 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     AdvanceExecutorSliceOutcomeV1::Yielded(advance_executor_yield) => {
                         return Ok(
                             LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
-                                producer_claim,
                                 advance_executor_yield,
                             ),
                         );
                     }
                 }
                 if producer_claim.blocks_ingress() {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready());
                 }
             }
             LifecycleRunnerRankTarget::Ingress => {
@@ -1054,12 +1013,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         if matches!(selected, ProductionLifecycleIngressSelectionV1::RestartRequired) {
                             return Err(ingress_restart_error(&output_guard));
                         }
-                        producer_claim = activated.producer_claim_projection()?;
                         if ingress_selection_retries_before_producer(&selected) {
                             return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(),
                             );
                         }
                         match selected {
@@ -1071,9 +1027,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeQueued
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal => {
-                                return Ok(LifecycleV2IngressDrainDispositionV1::ready(
-                                    producer_claim,
-                                ));
+                                return Ok(LifecycleV2IngressDrainDispositionV1::ready());
                             }
                             ProductionLifecycleIngressSelectionV1::RestartRequired => {
                                 return Err(ingress_restart_error(&output_guard));
@@ -1093,14 +1047,12 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
                 producer_claim = activated.producer_claim_projection()?;
                 if producer_claim.requires_yield() {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                    return Ok(LifecycleV2IngressDrainDispositionV1::ready());
                 }
             }
         }
     }
-    Ok(LifecycleV2IngressDrainDispositionV1::ready(
-        activated.producer_claim_projection()?,
-    ))
+    Ok(LifecycleV2IngressDrainDispositionV1::ready())
 }
 
 #[cfg(test)]
@@ -1448,38 +1400,31 @@ mod tests {
             ProductionLifecycleCompletionSelectionV1, RecoveredLifecycleOutputSettlementV1,
         };
 
-        let claim = LifecycleProducerClaimDispositionV1::initial();
-        let completed = recovered_output_drain_disposition(
-            RecoveredLifecycleOutputSettlementV1::Completed,
-            claim,
-        )
-        .expect("completed output stops the ordinary runtime suffix");
+        let completed =
+            recovered_output_drain_disposition(RecoveredLifecycleOutputSettlementV1::Completed)
+                .expect("completed output stops the ordinary runtime suffix");
         assert_eq!(
             completed,
-            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(claim)
+            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement()
         );
         assert!(completed.terminal_settlement_stops_runtime());
         assert!(!completed.requires_yield());
         let retained = recovered_output_drain_disposition(
             RecoveredLifecycleOutputSettlementV1::SourceRetained,
-            claim,
         )
         .expect("source-retained output requires a timed retry");
         assert!(retained.requires_yield());
         assert!(!retained.terminal_settlement_stops_runtime());
         assert_eq!(
             retained,
-            LifecycleV2IngressDrainDispositionV1::retry_before_producer(claim)
+            LifecycleV2IngressDrainDispositionV1::retry_before_producer()
         );
         assert_eq!(
-            recovered_output_drain_disposition(RecoveredLifecycleOutputSettlementV1::Empty, claim),
+            recovered_output_drain_disposition(RecoveredLifecycleOutputSettlementV1::Empty),
             None
         );
         assert_eq!(
-            recovered_output_drain_disposition(
-                RecoveredLifecycleOutputSettlementV1::Deferred,
-                claim,
-            ),
+            recovered_output_drain_disposition(RecoveredLifecycleOutputSettlementV1::Deferred),
             None
         );
 
@@ -1499,16 +1444,14 @@ mod tests {
 
     #[test]
     fn drain_disposition_preserves_exact_executor_yield_owner() {
-        let claim = LifecycleProducerClaimDispositionV1::initial();
         let reason = AdvanceExecutorYieldV1::new(
             AdvanceExecutorYieldCheckpointV1::AfterStep,
             AdvanceExecutorYieldCauseV1::SettledLifecycleOutput,
         );
         let disposition =
-            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(claim, reason);
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(reason);
 
         assert_eq!(disposition.advance_executor_yield(), Some(reason));
-        assert_eq!(disposition.producer_claim(), claim);
         assert!(!disposition.requires_yield());
 
         let completion_cut = AdvanceExecutorYieldV1::new(
@@ -1516,10 +1459,7 @@ mod tests {
             AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
         );
         let completion_disposition =
-            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
-                claim,
-                completion_cut,
-            );
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(completion_cut);
         assert_eq!(
             completion_disposition.advance_executor_yield(),
             Some(completion_cut)
@@ -1530,23 +1470,40 @@ mod tests {
             AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
         );
         assert!(
-            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
-                claim,
-                capacity_relief,
-            )
-            .requires_yield()
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(capacity_relief)
+                .requires_yield()
         );
         let delayed_apply = AdvanceExecutorYieldV1::new(
             AdvanceExecutorYieldCheckpointV1::BeforeStep,
             AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor,
         );
         assert!(
-            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
-                claim,
-                delayed_apply,
-            )
-            .requires_yield(),
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(delayed_apply)
+                .requires_yield(),
             "a blocked delayed Apply must retain Completion priority over Producer work"
+        );
+    }
+
+    #[test]
+    fn drain_batch_cannot_keep_a_superseded_owner_claim_blocked() {
+        use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1 as Completion;
+
+        let prior = LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        assert!(prior.requires_yield());
+        let current = prior
+            .observe_completion(&Completion::LifecycleValidateSidecarSuperseded)
+            .expect("the launched owner retired the exact sidecar wait");
+        assert_eq!(current, LifecycleProducerClaimDispositionV1::Eligible);
+
+        let settled_batch = LifecycleV2IngressDrainDispositionV1::ready();
+        assert!(
+            !settled_batch.requires_yield() && !current.requires_yield(),
+            "the fresh owner projection may resume ProducerTurn after a settled batch"
+        );
+        let retained_retry = LifecycleV2IngressDrainDispositionV1::retry_before_producer();
+        assert!(
+            retained_retry.requires_yield(),
+            "a concrete batch retry still precedes the newly eligible ProducerTurn"
         );
     }
 
@@ -1642,12 +1599,12 @@ mod tests {
             "an ordinary eligible claim cannot mint terminal output authority"
         );
         assert_eq!(
-            settled_apply_output_drain_disposition(OutputSettlement::Empty, claim),
+            settled_apply_output_drain_disposition(OutputSettlement::Empty),
             None,
             "an empty cold-output owner must fall through to the Ready classifier"
         );
         assert_eq!(
-            settled_apply_output_drain_disposition(OutputSettlement::Deferred, claim),
+            settled_apply_output_drain_disposition(OutputSettlement::Deferred),
             None,
             "a deferred cold-output owner must not hide registry-backed Ready work"
         );
@@ -1679,16 +1636,14 @@ mod tests {
             );
         }
 
-        let completed = settled_apply_output_drain_disposition(OutputSettlement::Completed, claim)
+        let completed = settled_apply_output_drain_disposition(OutputSettlement::Completed)
             .expect("a completed cold output retains the existing one-turn barrier");
         assert!(completed.terminal_settlement_stops_runtime());
-        assert_eq!(completed.producer_claim(), claim);
         let after_ready_refanout = blocked_runtime_drain_disposition(claim);
         assert!(
             after_ready_refanout.terminal_settlement_stops_runtime(),
             "a Ready refanout must not reopen the reducer/runtime suffix"
         );
-        assert_eq!(after_ready_refanout.producer_claim(), claim);
     }
 
     #[test]
@@ -2141,36 +2096,30 @@ mod tests {
         assert!(ingress_selection_retries_before_producer(
             &Ingress::CertifiedServeRetry
         ));
-        let retained_retry = LifecycleV2IngressDrainDispositionV1::retry_before_producer(fetch);
-        assert_eq!(
-            retained_retry.producer_claim(),
-            LifecycleProducerClaimDispositionV1::Eligible
-        );
+        let retained_retry = LifecycleV2IngressDrainDispositionV1::retry_before_producer();
         assert!(retained_retry.requires_yield());
-        let competing_ready = LifecycleV2IngressDrainDispositionV1::ready(
-            fetch
-                .observe_ingress(&Ingress::RecoveredDecisionFetchCompetingReady)
-                .expect("competing Ready work leaves the recovered response externally parked"),
-        );
+        let competing_ready_claim = fetch
+            .observe_ingress(&Ingress::RecoveredDecisionFetchCompetingReady)
+            .expect("competing Ready work leaves the recovered response externally parked");
         assert_eq!(
-            competing_ready.producer_claim(),
+            competing_ready_claim,
             LifecycleProducerClaimDispositionV1::Eligible
         );
+        let competing_ready = LifecycleV2IngressDrainDispositionV1::ready();
         assert!(
-            !competing_ready.requires_yield(),
+            !competing_ready.requires_yield() && !competing_ready_claim.requires_yield(),
             "a competing Ready Producer must run before the parked Fetch response retries"
         );
-        let competing_serve = LifecycleV2IngressDrainDispositionV1::ready(
-            eligible
-                .observe_ingress(&Ingress::CertifiedServeCompetingReady)
-                .expect("competing Ready Producer keeps the Serve request parked"),
-        );
+        let competing_serve_claim = eligible
+            .observe_ingress(&Ingress::CertifiedServeCompetingReady)
+            .expect("competing Ready Producer keeps the Serve request parked");
         assert_eq!(
-            competing_serve.producer_claim(),
+            competing_serve_claim,
             LifecycleProducerClaimDispositionV1::Eligible
         );
+        let competing_serve = LifecycleV2IngressDrainDispositionV1::ready();
         assert!(
-            !competing_serve.requires_yield(),
+            !competing_serve.requires_yield() && !competing_serve_claim.requires_yield(),
             "a current Serve request cannot starve an authenticated Ready Producer"
         );
         assert_eq!(

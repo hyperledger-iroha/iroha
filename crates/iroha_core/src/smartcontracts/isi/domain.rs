@@ -1843,9 +1843,19 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+            if let Some(((lane_id, claimant), _)) = state_transaction
                 .world
                 .public_lane_reward_claims
+                .iter()
+                .find(|((_, claimant), _)| claimant == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister account {account_id}: it has retained public-lane reward processing state (lane {lane_id}, account {claimant})").into(),
+                ).into());
+            }
+            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+                .world
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, claimant, asset_id), _)| {
                     claimant == &account_id || asset_id.account() == &account_id
@@ -2738,6 +2748,15 @@ pub mod isi {
                 )
                 .into());
             }
+            if state_transaction
+                .world
+                .sumeragi_npos_parameters()
+                .is_some_and(|params| params.xor_asset_definition_id == asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister asset definition {asset_definition_id}: it is the committed network XOR identity").into(),
+                ).into());
+            }
             if let Some(((lane_id, epoch), _)) = state_transaction
                 .world
                 .public_lane_rewards
@@ -2757,7 +2776,7 @@ pub mod isi {
             }
             if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                 .world
-                .public_lane_reward_claims
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, _, asset_id), _)| asset_id.definition() == &asset_definition_id)
             {
@@ -8618,6 +8637,7 @@ mod tests {
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                         activation_height: 1,
+                        election_exit_height: None,
                         deactivation_height: None,
                         last_reward_epoch: None,
                     },
@@ -8644,6 +8664,7 @@ mod tests {
                         metadata: Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                         activation_height: 1,
+                        election_exit_height: None,
                         deactivation_height: None,
                         last_reward_epoch: None,
                     },
@@ -8700,10 +8721,10 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
+    fn unregister_account_rejects_when_account_is_reward_accrual_asset_owner() {
         assert_account_unregister_guard(
             |tx, domain_id, authority, account_id| {
-                tx.world.public_lane_reward_claims.insert(
+                tx.world.public_lane_reward_accruals.insert(
                     (
                         LaneId::SINGLE,
                         authority.clone(),
@@ -8715,7 +8736,7 @@ mod tests {
                             account_id.clone(),
                         ),
                     ),
-                    1,
+                    Quantity::one(),
                 );
             },
             "account referenced by reward-claim asset owner must not be unregistered",

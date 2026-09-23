@@ -19,8 +19,8 @@ use iroha_data_model::{
         },
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
 };
@@ -54,11 +54,11 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation: epoch,
         validators: roster
             .iter()
             .enumerate()
@@ -247,20 +247,37 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let height = rng.next_u64().max(1);
+    let height = rng.next_u64().max(2);
     let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
-    let epoch = rng.next_u64();
+    let epoch = rng.next_u64().max(1);
     let mint_finality_roster = mint_finality_roster(network_id, epoch, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let mint_finality_authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch,
+            first_height: height,
+            last_height: height,
+            authority_generation: mint_finality_roster.generation,
+            authority_id: mint_finality_roster.authority_id().unwrap(),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
+                iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id: [0x71; 32],
+                    transcript_hash: [0x72; 32],
+                },
+            ),
+            previous_authorization_id: [0x73; 32],
+            transition_id: [0x74; 32],
+            decision:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+        };
     let context = HeightContext {
         network_id,
         protocol_version: V2_PROTOCOL_VERSION,
         height,
         epoch,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_roster,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -426,21 +443,20 @@ fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
     roster.sort();
     let template = |epoch| {
         let roster = mint_finality_roster(network_id, epoch, &roster);
-        KagemushaMintFinalityEpochRosterTemplateV1 {
+        KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: roster.version,
-            epoch: roster.epoch,
+            generation: roster.generation,
             validators: roster.validators,
         }
     };
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: template(0),
-        next_epoch_roster: Some(template(1)),
+        authority_generation: template(0),
     };
     parameters.validate().expect("valid genesis authority");
     assert_roundtrip(&parameters);
     assert_eq!(
         parameters
-            .epoch_roster
+            .authority_generation
             .bind_network_id(network_id)
             .expect("bind final network identity")
             .network_id,

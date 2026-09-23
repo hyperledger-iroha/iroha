@@ -87,10 +87,7 @@ use iroha_core::{
     beacon::{
         GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_governance_seed_v1,
         global_threshold_beacon_npos_successor_seed_v1, global_threshold_beacon_roster_hash_v1,
-        parliament_test_network_signer::{
-            deterministic_parliament_beacon_key_record_v1,
-            deterministic_parliament_beacon_successor_key_record_v1,
-        },
+        parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
         validate_global_threshold_beacon_session_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
@@ -1230,7 +1227,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         InstructionBox::from(lifecycle_certificate(
             &network,
             &ordered_roster,
-            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
             beacon_record.session.session_id,
             beacon_record.session.transcript_hash,
             norito::encode_canonical(&beacon_record)?,
@@ -2477,31 +2474,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let validated_beacon_session =
         validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
             .wrap_err("replay mandatory NPoS beacon transcript")?;
-    let successor_beacon_record = deterministic_parliament_beacon_successor_key_record_v1(
-        network.network_id(),
-        &ordered_roster,
-    )
-    .wrap_err("derive mandatory NPoS successor beacon fixture")?;
-    assert_ne!(
-        successor_beacon_record.session.session_id,
-        beacon_record.session.session_id,
-    );
-    assert_ne!(
-        successor_beacon_record.session.transcript_hash,
-        beacon_record.session.transcript_hash,
-    );
-    let successor_beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
-        network_id: successor_beacon_record.session.network_id,
-        session_id: successor_beacon_record.session.session_id,
-        roster_hash: successor_beacon_record.session.roster_hash,
-        transcript_hash: successor_beacon_record.session.transcript_hash,
-    };
-    let validated_successor_beacon_session = validate_global_threshold_beacon_session_v1(
-        successor_beacon_record.session.clone(),
-        &successor_beacon_binding,
-    )
-    .wrap_err("replay mandatory NPoS successor beacon transcript")?;
-
     let install_height = next_queue_plan_execution_height(
         &client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
@@ -2511,7 +2483,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
         beacon_record.session.session_id,
         beacon_record.session.transcript_hash,
         norito::encode_canonical(&beacon_record)?,
@@ -2535,33 +2507,13 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
-    assert_eq!(
-        activation_height.checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS),
-        Some(boundary_height),
-        "the exact fixture must rotate in the boundary block after one old-session pulse",
-    );
-    let rotation_certificate = lifecycle_certificate_replacing(
+    advance_to_autonomous_predecessor(
         &network,
-        &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-        Some(beacon_record.session.session_id),
-        successor_beacon_record.session.session_id,
-        successor_beacon_record.session.transcript_hash,
-        norito::encode_canonical(&successor_beacon_record)?,
-        boundary_height,
-    )?;
-    let rotation_transaction =
-        prepare_parliament_transaction(&client, [rotation_certificate]).await?;
-    let admitted_rotation = tokio::time::timeout(
-        OPERATION_TIMEOUT,
-        client
-            .account_client()
-            .submit_transaction(&rotation_transaction),
+        &client,
+        pulse_height,
+        "initial mandatory pre-boundary pulse",
     )
-    .await
-    .map_err(|_| eyre!("rotation admission deadline"))??;
-    assert_eq!(admitted_rotation, rotation_transaction.hash());
-    network.ensure_blocks(pulse_height - 1).await?;
+    .await?;
     assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
@@ -2608,7 +2560,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         [Log::new(
             Level::INFO,
-            "carry post-rotation successor progression".to_owned(),
+            "carry retained-authority successor progression".to_owned(),
         )],
     )
     .await?;
@@ -2616,20 +2568,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     assert_eq!(current_height(&client).await?, boundary_height);
     network.ensure_blocks(boundary_height + 1).await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);
-    read_on_dedicated_thread({
-        let client = client.client().clone();
-        move || {
-            client.wait_for_transaction_applied(
-                admitted_rotation,
-                iroha::client::TransactionWaitOptions {
-                    timeout: OPERATION_TIMEOUT,
-                    poll_interval: Duration::from_millis(100),
-                },
-            )
-        }
-    })
-    .await
-    .wrap_err("the exact scheduled rotation must be Applied after the boundary")?;
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
             let client = peer.client().client().clone();
@@ -2660,7 +2598,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &network,
         &client,
         successor_pulse_height,
-        "successor-session mandatory pre-boundary pulse",
+        "retained-session mandatory pre-boundary pulse",
     )
     .await?;
     network.ensure_blocks(successor_pulse_height).await?;
@@ -2671,25 +2609,22 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     assert!(successor_pulses.windows(2).all(|pair| pair[0] == pair[1]));
     let successor_pulse = &successor_pulses[0];
     assert_eq!(successor_pulse.height, successor_pulse_height);
-    assert_eq!(
-        successor_pulse.session_id,
-        successor_beacon_record.session.session_id
-    );
+    assert_eq!(successor_pulse.session_id, beacon_record.session.session_id);
     assert_eq!(
         successor_pulse.roster_hash,
-        successor_beacon_record.session.roster_hash
+        beacon_record.session.roster_hash
     );
     assert_eq!(
         successor_pulse.transcript_hash,
-        successor_beacon_record.session.transcript_hash
+        beacon_record.session.transcript_hash
     );
-    assert_ne!(successor_pulse.session_id, pulse.session_id);
+    assert_eq!(successor_pulse.session_id, pulse.session_id);
     verify_finalized_global_threshold_beacon_pulse_v1(
-        &validated_successor_beacon_session,
+        &validated_beacon_session,
         successor_pulse,
         successor_pulse.finalized_chain_anchor,
     )
-    .wrap_err("independently verify the successor-session mandatory pulse")?;
+    .wrap_err("independently verify the retained-session mandatory pulse")?;
 
     let second_boundary_height = boundary_height
         .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
@@ -2704,7 +2639,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &client,
         [Log::new(
             Level::INFO,
-            "carry the successor-session NPoS boundary".to_owned(),
+            "carry the retained-session NPoS boundary".to_owned(),
         )],
     )
     .await?;
@@ -2718,7 +2653,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .await?;
         status
             .validate()
-            .map_err(|error| eyre!("invalid rotated-session NPoS status: {error}"))?;
+            .map_err(|error| eyre!("invalid retained-session NPoS status: {error}"))?;
         assert!(!status.restart_required);
         assert!(status.last_committed_height >= second_boundary_height + 1);
         assert_eq!(status.height_context.epoch, second_successor_epoch);
@@ -2728,6 +2663,101 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
+
+    // NetworkId pins the signed genesis. Verify every contiguous successor from that
+    // anchor so a self-consistent server snapshot cannot establish a new authority.
+    let trusted_network = network.network_id();
+    let expected_roster = ordered_roster.clone();
+    let expected_session = beacon_record.session.session_id;
+    let expected_transcript = beacon_record.session.transcript_hash;
+    read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || -> Result<()> {
+            use iroha_data_model::{
+                bridge::BridgeFinalityVerifier,
+                isi::kagemusha_v1::{
+                    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+                    KagemushaMintFinalityEpochDecisionV1,
+                },
+            };
+            let (genesis, genesis_hash) =
+                client.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), trusted_network)?;
+            assert_eq!(genesis_hash, trusted_network.into_genesis_hash());
+            assert_eq!(
+                genesis
+                    .finality_artifact
+                    .height_context
+                    .roster
+                    .iter()
+                    .map(|seat| seat.validator.clone())
+                    .collect::<Vec<_>>(),
+                expected_roster
+            );
+            let authority = genesis
+                .finality_artifact
+                .height_context
+                .kagemusha_mint_finality_authority
+                .clone();
+            let mut verifier = BridgeFinalityVerifier::with_context(
+                trusted_network,
+                genesis.finality_artifact.context_id(),
+            );
+            verifier.verify(&genesis)?;
+            let mut frozen_attempt = None;
+            for height in 2..=second_boundary_height + 1 {
+                let proof = client.get_next_bridge_finality_proof(
+                    NonZeroU64::new(height).unwrap(),
+                    &mut verifier,
+                )?;
+                let context = &proof.finality_artifact.height_context;
+                assert_eq!(context.kagemusha_mint_finality_authority, authority);
+                assert_eq!(context.da_layout, recommended_data_availability_layout());
+                assert_eq!(context.quorum.min_signers, 3);
+                assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);
+                if height == boundary_height {
+                    frozen_attempt = context
+                        .next_epoch_snapshot
+                        .as_ref()
+                        .unwrap()
+                        .committee_preparation
+                        .clone();
+                }
+                if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
+                    let authorization = &context.kagemusha_mint_finality_authorization;
+                    assert_eq!(
+                        authorization.epoch,
+                        (height - 1) / MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
+                    );
+                    if height == second_boundary_height + 1 && frozen_attempt.is_some() {
+                        assert_eq!(
+                            authorization.decision,
+                            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+                        );
+                        assert_eq!(
+                            authorization.transition_id,
+                            frozen_attempt.as_ref().unwrap().transition_id().unwrap()
+                        );
+                    } else {
+                        assert_eq!(
+                            authorization.decision,
+                            KagemushaMintFinalityEpochDecisionV1::Retain
+                        );
+                        assert_eq!(authorization.transition_id, [0; 32]);
+                    }
+                    assert_eq!(
+                        authorization.beacon,
+                        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                            session_id: expected_session,
+                            transcript_hash: expected_transcript,
+                        })
+                    );
+                }
+            }
+            Ok(())
+        }
+    })
+    .await
+    .wrap_err("authenticate retained authority across both real scheduling boundaries")?;
 
     network.shutdown().await;
     Ok(())
@@ -2834,7 +2864,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let lifecycle_certificate = lifecycle_certificate(
         &network,
         &ordered_roster,
-        ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+        ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
         beacon_record.session.session_id,
         beacon_record.session.transcript_hash,
         norito::encode_canonical(&beacon_record)?,

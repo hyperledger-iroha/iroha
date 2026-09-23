@@ -156,9 +156,12 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     let execution = prepared.execution_prefix_commitment();
     let finality = fixture.finality(prepared.block(), execution);
     let journals = prepared
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&capture_released)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(Reservation(Arc::clone(&capture_released))),
+        )
         .unwrap();
     let original_effects = std::ptr::from_ref(journals.effects.as_ref());
     original.assert_retained(journals.native_source_for_test().unwrap());
@@ -252,11 +255,14 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     assert_eq!(state.state_view_generation(), generation + 2);
     // The production completion boundary moves the whole published owner. Only
     // after the worker handoff may the original driver borrow Apply authority.
-    let source_allocation = std::ptr::from_ref(published.source.native_for_test().unwrap()).addr();
+    let source_allocation =
+        std::ptr::from_ref::<NativeExecutionCustody>(published.source.native_for_test().unwrap())
+            .addr();
     let events_allocation = published.events().as_ptr().addr();
-    let published = handoff_published_carrier(published);
+    let mut published = handoff_published_carrier(published);
     assert_eq!(
-        std::ptr::from_ref(published.source.native_for_test().unwrap()).addr(),
+        std::ptr::from_ref::<NativeExecutionCustody>(published.source.native_for_test().unwrap())
+            .addr(),
         source_allocation
     );
     assert_eq!(published.events().as_ptr().addr(), events_allocation);
@@ -281,6 +287,26 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     let application = published
         .native_apply()
         .expect("actual Native publication proof");
+    let original_ids = application.original_instance_ids().unwrap();
+    assert_eq!(original_ids.len(), if atomic { 2 } else { 1 });
+    assert_eq!(
+        original_ids
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        local
+            .iter()
+            .map(|(lane, _)| lane.instance_id())
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+    let verified_publication =
+        crate::block::VerifiedV2FinalityArtifact::verify(finality.clone()).unwrap();
+    let original_receipt = published
+        .reauthenticate_exact_publication(state, &state.kura, &verified_publication)
+        .expect("the published original checkpoint and State family remain exact");
+    assert_eq!(
+        original_receipt.artifact_hash(),
+        iroha_crypto::HashOf::new(&finality)
+    );
     assert!(matches!(
         unready.settle_published_apply(&application).unwrap(),
         crate::sumeragi::v2_lane_instance::LaneApplySettlement::NotReady
@@ -407,6 +433,11 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     assert_eq!(capture_released.load(Ordering::SeqCst), 0);
     assert_eq!(binding_released.load(Ordering::SeqCst), 0);
     assert_eq!(installation_released.load(Ordering::SeqCst), 1);
+    let (committed_event, completion_events) = published.take_completion_events();
+    assert_eq!(committed_event.header, header);
+    assert_eq!(committed_event.status, BlockStatus::Committed);
+    assert!(!completion_events.is_empty());
+    assert!(published.events().is_empty());
     drop(published);
     assert_eq!(capture_released.load(Ordering::SeqCst), 1);
     assert_eq!(binding_released.load(Ordering::SeqCst), 1);
@@ -485,9 +516,19 @@ fn assert_native_effects(fixture: &NativePublicationFixture, block: &SignedBlock
 
 #[cfg(all(unix, not(target_os = "espidf")))]
 #[test]
-fn native_driver_settles_original_closed_apply_only_after_real_publication() {
-    let fixture = native_publication_fixture(true);
-    assert_native_driver_publication(fixture);
+fn native_runner_settles_original_closed_apply_only_after_real_publication() {
+    // This combines the original State publisher and the process-lived lane
+    // driver in one frame, as the production consensus worker does. Exercise it
+    // on that worker's configured stack instead of libtest's smaller default.
+    let worker = crate::sumeragi::sumeragi_thread_builder("native-published-apply")
+        .spawn(|| {
+            let fixture = native_publication_fixture(true);
+            assert_native_driver_publication(fixture);
+        })
+        .expect("spawn native publication on the production consensus stack");
+    if let Err(payload) = worker.join() {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[inline(never)]
@@ -520,7 +561,12 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
     assert_eq!(original.len(), 2, "all actual atomic legs are present");
     let finality = fixture.finality(prepared.block(), prepared.execution_prefix_commitment());
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
@@ -528,7 +574,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
         .unwrap_or_else(|refusal| panic!("exact global binding: {:?}", refusal.error));
     // The State moves once after detachment; every original storage identity is
     // retained. No replacement State or synthetic publication acknowledgement.
-    let (state, mut driver) = fixture.into_shared_driver();
+    let (state, mut driver) = fixture.into_shared_runtime();
     assert!(observed.is_current(&state));
     for (_, local) in &original {
         assert!(matches!(
@@ -539,7 +585,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
     let now = Instant::now();
     let deadline = now + Duration::from_secs(30);
     loop {
-        driver.poll(&observed, now).unwrap();
+        driver.poll_for_test(&observed, now, |_, _| Ok(())).unwrap();
         if original.iter().all(|(id, decision)| {
             driver.process().instance(*id).is_some_and(|owner| {
                 owner.native_decision().unwrap().as_ref() == Some(decision)
@@ -596,7 +642,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
     }));
     let close_deadline = Instant::now() + Duration::from_secs(30);
     while driver.process().occupancy().closed < original.len() {
-        driver.poll(&current, now).unwrap();
+        driver.poll_for_test(&current, now, |_, _| Ok(())).unwrap();
         assert!(
             Instant::now() < close_deadline,
             "actual original handles must finish their closed drain"
@@ -649,7 +695,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
     let original_closed = std::ptr::from_ref(closed.instance());
     let (returned, error) = match closed.retire_published(&application) {
         Err(refusal) => refusal,
-        Ok(()) => panic!("held Apply must use the actual reducer settlement"),
+        Ok(_) => panic!("held Apply must use the actual reducer settlement"),
     };
     closed = returned;
     assert!(error.to_string().contains("original Apply"));
@@ -678,14 +724,18 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
             .held_effects()
             .any(|effect| matches!(effect, core::Effect::Apply { .. }))
     );
-    closed
+    let second_retirement = closed
         .retire_published(&application)
         .unwrap_or_else(|(_, error)| panic!("settled original owner can retire: {error}"));
-    driver
+    assert!(second_retirement.matches(second, &application));
+    assert!(!second_retirement.matches(first, &application));
+    let first_retirement = driver
         .take_closed(first)
         .unwrap()
         .retire_published(&application)
         .unwrap_or_else(|(_, error)| panic!("first original settled owner can retire: {error}"));
+    assert!(first_retirement.matches(first, &application));
+    assert!(!first_retirement.matches(second, &application));
     driver.shutdown().join().unwrap();
 }
 
@@ -768,7 +818,12 @@ fn publish_unrelated_native_terminal_fixture(
     let prepared = fixture.prepare();
     let finality = fixture.finality(prepared.block(), prepared.execution_prefix_commitment());
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
@@ -857,7 +912,12 @@ fn assert_native_terminal_publication(
     );
     let finality = fixture.finality(prepared.block(), prepared.execution_prefix_commitment());
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
@@ -1089,7 +1149,7 @@ fn assert_native_terminal_publication(
     if conflict {
         let (returned, _) = match closed.retire_published(&proof) {
             Err(refusal) => refusal,
-            Ok(()) => panic!("known conflicting Decision must retain its exact closed owner"),
+            Ok(_) => panic!("known conflicting Decision must retain its exact closed owner"),
         };
         closed = returned;
         assert_eq!(std::ptr::from_ref(closed.instance()), original_owner);
@@ -1120,7 +1180,7 @@ fn assert_native_terminal_publication(
         let foreign_proof = foreign.native_apply().unwrap();
         let (returned, _) = match closed.retire_published(&foreign_proof) {
             Err(refusal) => refusal,
-            Ok(()) => panic!("another actual State publication is not this original owner"),
+            Ok(_) => panic!("another actual State publication is not this original owner"),
         };
         closed = returned;
         assert_eq!(std::ptr::from_ref(closed.instance()), original_owner);
@@ -1138,7 +1198,7 @@ fn assert_native_terminal_publication(
         let body_pointer = retired.body_bytes().unwrap().as_ptr();
         let (retired, _) = match retired.retire_published(&foreign_proof) {
             Err(refusal) => refusal,
-            Ok(()) => panic!("foreign publication cannot consume the taken original body"),
+            Ok(_) => panic!("foreign publication cannot consume the taken original body"),
         };
         assert_eq!(retired.body_bytes().unwrap().as_ptr(), body_pointer);
         assert_eq!(
@@ -1186,8 +1246,8 @@ fn assert_native_terminal_publication(
 
 /// Compile and exercise the crate-facing owned handoff on a different worker.
 fn handoff_published_carrier<A, B, I>(
-    published: crate::state::PublishedCarrier<A, B, I>,
-) -> crate::state::PublishedCarrier<A, B, I>
+    published: crate::state::carrier_preparation::PublishedCarrier<A, B, I>,
+) -> crate::state::carrier_preparation::PublishedCarrier<A, B, I>
 where
     A: Send + 'static,
     B: Send + 'static,

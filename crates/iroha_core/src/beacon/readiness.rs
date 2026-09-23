@@ -354,7 +354,10 @@ mod tests {
             GlobalThresholdBeaconCapabilityErrorV1, GlobalThresholdBeaconPartialSignatureV1,
             GlobalThresholdBeaconPartialSigningCapabilityV1,
             ValidatedGlobalThresholdBeaconSessionV1,
-            fixtures::{adaptive_beacon_fixture_for_session, adaptive_dkg_session_fixture},
+            fixtures::{
+                adaptive_beacon_fixture_for_session, adaptive_beacon_fixture_for_session_and_keys,
+                adaptive_dkg_session_fixture,
+            },
             global_threshold_beacon_roster_hash_v1,
         },
         kura::Kura,
@@ -377,7 +380,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut dkg = adaptive_dkg_session_fixture();
             dkg.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
-            (keys, adaptive_beacon_fixture_for_session(dkg).session)
+            let session = adaptive_beacon_fixture_for_session_and_keys(dkg, &keys).session;
+            (keys, session)
         });
 
     struct CapabilityProvider {
@@ -511,6 +515,7 @@ mod tests {
         state.push_block_hash_for_testing(next_hash);
         context.height += 1;
         context.epoch_end_height = 80;
+        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         let parent = context
             .parent_commit_qc
             .as_mut()
@@ -547,6 +552,7 @@ mod tests {
     fn readiness_requires_pending_session_to_cover_the_mandatory_pulse() {
         let (state, mut context, mut record) = fixture();
         context.epoch_end_height = 80;
+        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         context.validate().expect("valid later NPoS boundary");
         record.activated_at_height = Some(50);
         install(&state, &record);
@@ -583,6 +589,7 @@ mod tests {
     fn readiness_requires_both_current_parliament_and_future_npos_pulses() {
         let (state, mut context, mut record) = fixture();
         context.epoch_end_height = 80;
+        context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
         context.validate().expect("valid later NPoS boundary");
         {
             let mut world = state.world.block();

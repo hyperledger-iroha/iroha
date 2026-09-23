@@ -11,18 +11,39 @@ pub(super) fn beacon_fixture_network_id(marker: u8) -> NetworkId {
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(super) fn adaptive_dkg_session_fixture() -> GlobalThresholdBeaconDkgSessionV1 {
+    let roster = adaptive_fixture_signing_keys(4)
+        .into_iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
     GlobalThresholdBeaconDkgSessionV1 {
         version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
         network_id: beacon_fixture_network_id(0x81),
         session_id: [0x22; 32],
-        roster_hash: [0x33; 32],
+        attempt_id: [0x22; 32],
+        authority_generation: 0,
+        roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
         committee_size: 4,
         threshold: 2,
         start_height: 1,
-        sharing_end_height: 10,
-        complaints_end_height: 20,
-        responses_end_height: 30,
+        commitments_end_height: 10,
+        deliveries_end_height: 20,
+        acceptances_end_height: 30,
     }
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(super) fn adaptive_fixture_signing_keys(seats: u16) -> Vec<iroha_crypto::KeyPair> {
+    let mut keys = (1..=seats)
+        .map(|marker| {
+            iroha_crypto::KeyPair::try_from_seed(
+                vec![u8::try_from(marker).expect("fixture seats fit u8"); 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("deterministic fixture BLS key")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    keys
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -50,6 +71,7 @@ fn dealer_commitment_dto(
             commitment: *dealer.constant_proof().commitment_bytes(),
             response: *dealer.constant_proof().response_bytes(),
         },
+        signature: iroha_crypto::Signature::from_bytes(&[]),
     }
 }
 
@@ -62,25 +84,125 @@ pub(super) fn adaptive_beacon_fixture() -> AdaptiveBeaconFixture {
 pub(super) fn adaptive_beacon_fixture_for_session(
     dkg_session: GlobalThresholdBeaconDkgSessionV1,
 ) -> AdaptiveBeaconFixture {
+    adaptive_beacon_fixture_for_session_and_keys(
+        dkg_session,
+        &adaptive_fixture_signing_keys(dkg_session.committee_size),
+    )
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
+    signing_keys: &[iroha_crypto::KeyPair],
+) -> AdaptiveBeaconFixture {
+    assert_eq!(signing_keys.len(), usize::from(dkg_session.committee_size));
+    let roster = signing_keys
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dkg_session.roster_hash,
+        global_threshold_beacon_roster_hash_v1(&roster),
+        "fixture DKG must bind the exact signing roster"
+    );
     let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
     let parameters = adaptive_beacon_parameters(&dkg_session).expect("adaptive parameters");
     let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto)
         .expect("valid adaptive DKG state");
     let mut rng = StdRng::from_seed([0x5A; 32]);
+    let encryption_keys = (0..dkg_session.committee_size)
+        .map(|_| {
+            iroha_crypto::hybrid::HybridKeyPair::generate(&mut rng)
+                .expect("fixture hybrid recipient key")
+        })
+        .collect::<Vec<_>>();
+    let recipient_keys = signing_keys
+        .iter()
+        .zip(&encryption_keys)
+        .enumerate()
+        .map(|(offset, (signer, encryption))| {
+            sign_global_threshold_beacon_dkg_recipient_key_v1(
+                &dkg_session,
+                u16::try_from(offset + 1).expect("fixture recipient index"),
+                signer,
+                encryption.public(),
+            )
+            .expect("signed fixture recipient key")
+        })
+        .collect::<Vec<_>>();
+    for key in &recipient_keys {
+        state
+            .record_recipient_key(dkg_session.start_height, key.clone())
+            .expect("register signed fixture encryption key");
+    }
     let mut dealer_secrets = Vec::new();
     let mut dealer_commitments = Vec::new();
+    let mut dealer_dtos = Vec::new();
     for dealer_index in 1_u16..=dkg_session.committee_size {
         let (secret, commitment) =
             DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng)
                 .expect("generate adaptive dealer");
+        let dto = sign_global_threshold_beacon_dkg_dealer_commitment_v1(
+            &dkg_session,
+            &recipient_keys[usize::from(dealer_index - 1)],
+            &signing_keys[usize::from(dealer_index - 1)],
+            dealer_commitment_dto(&commitment),
+        )
+        .expect("sign fixture dealer broadcast");
         state
-            .record_dealer_commitment(1, dealer_commitment_dto(&commitment), &crypto)
+            .record_dealer_commitment(dkg_session.start_height, dto.clone(), &crypto)
             .expect("verify adaptive dealer broadcast");
         dealer_secrets.push(secret);
         dealer_commitments.push(commitment);
+        dealer_dtos.push(dto);
+    }
+    for (dealer_offset, (secret, commitment)) in
+        dealer_secrets.iter().zip(&dealer_commitments).enumerate()
+    {
+        for (recipient_offset, recipient_key) in recipient_keys.iter().enumerate() {
+            let recipient_index = u16::try_from(recipient_offset + 1).expect("fixture seat");
+            let share = secret
+                .private_share(&parameters, commitment, recipient_index)
+                .expect("fixture private contribution");
+            let edge = seal_global_threshold_beacon_dkg_private_edge_v1(
+                &dkg_session,
+                &recipient_keys[dealer_offset],
+                &signing_keys[dealer_offset],
+                &dealer_dtos[dealer_offset],
+                recipient_key,
+                &share,
+                dkg_session.commitments_end_height,
+            )
+            .expect("fixture encrypted contribution");
+            state
+                .record_encrypted_share(dkg_session.commitments_end_height, edge)
+                .expect("record encrypted fixture contribution");
+        }
+    }
+    let edges = state
+        .public_snapshot()
+        .expect("fixture delivery snapshot")
+        .encrypted_shares;
+    for edge in &edges {
+        let dealer_offset = usize::from(edge.dealer_index - 1);
+        let recipient_offset = usize::from(edge.recipient_index - 1);
+        let (_, acceptance) = accept_global_threshold_beacon_dkg_private_edge_v1(
+            &dkg_session,
+            &recipient_keys[dealer_offset],
+            &recipient_keys[recipient_offset],
+            &signing_keys[recipient_offset],
+            encryption_keys[recipient_offset].secret(),
+            &dealer_dtos[dealer_offset],
+            edge,
+            dkg_session.deliveries_end_height,
+        )
+        .expect("verify and accept fixture edge");
+        state
+            .record_share_acceptance(dkg_session.deliveries_end_height, acceptance)
+            .expect("record fixture acceptance");
     }
     let record = state
-        .finalize(dkg_session.responses_end_height, &crypto)
+        .finalize(dkg_session.acceptances_end_height, &crypto)
         .expect("finalize adaptive DKG")
         .clone();
     let binding = GlobalThresholdBeaconSessionBindingV1 {
@@ -119,7 +241,7 @@ pub fn signed_persisted_pulse_fixture_for_world(
     };
     let (key_record, mut pulses) = signed_pulses_fixture_with_binding(
         network_id,
-        adaptive_dkg_session_fixture().roster_hash,
+        &adaptive_fixture_signing_keys(4),
         &[anchor],
     );
     (
@@ -132,24 +254,24 @@ pub fn signed_persisted_pulse_fixture_for_world(
 #[cfg(test)]
 pub(crate) fn signed_pulses_fixture_for_roster_and_anchors(
     network_id: NetworkId,
-    roster: &[PeerId],
+    signing_keys: &[iroha_crypto::KeyPair],
     anchors: &[GlobalThresholdBeaconChainAnchorV1],
 ) -> (
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     Vec<FinalizedGlobalThresholdBeaconPulseV1>,
 ) {
-    assert_eq!(roster.len(), 4, "the adaptive fixture has four DKG seats");
-    signed_pulses_fixture_with_binding(
-        network_id,
-        global_threshold_beacon_roster_hash_v1(roster),
-        anchors,
-    )
+    assert_eq!(
+        signing_keys.len(),
+        4,
+        "the adaptive fixture has four DKG seats"
+    );
+    signed_pulses_fixture_with_binding(network_id, signing_keys, anchors)
 }
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn signed_pulses_fixture_with_binding(
     network_id: NetworkId,
-    roster_hash: [u8; 32],
+    signing_keys: &[iroha_crypto::KeyPair],
     anchors: &[GlobalThresholdBeaconChainAnchorV1],
 ) -> (
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
@@ -157,16 +279,21 @@ fn signed_pulses_fixture_with_binding(
 ) {
     let mut dkg_session = adaptive_dkg_session_fixture();
     dkg_session.network_id = network_id;
-    dkg_session.roster_hash = roster_hash;
-    dkg_session.sharing_end_height = 2;
-    dkg_session.complaints_end_height = 3;
-    dkg_session.responses_end_height = 4;
+    dkg_session.roster_hash = global_threshold_beacon_roster_hash_v1(
+        &signing_keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>(),
+    );
+    dkg_session.commitments_end_height = 2;
+    dkg_session.deliveries_end_height = 3;
+    dkg_session.acceptances_end_height = 4;
     dkg_session.session_id = Hash::new_from_chunks(&[
         b"iroha.beacon.world-test-session.v1\0",
         network_id.as_bytes(),
     ])
     .into();
-    let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+    let fixture = adaptive_beacon_fixture_for_session_and_keys(dkg_session, signing_keys);
     let mut pulses = Vec::new();
     for anchor in anchors {
         let height = anchor
@@ -211,4 +338,100 @@ fn signed_pulses_fixture_with_binding(
         .activate(fixture.session.record().adaptive_dkg.finalized_at_height)
         .expect("activate world-test key at DKG finalization");
     (key_record, pulses)
+}
+
+/// Produce a complete verified test DKG and zeroizing providers for every exact seat.
+#[cfg(test)]
+pub(crate) fn prepared_session_and_signers_fixture_v1(
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
+) -> (
+    ValidatedGlobalThresholdBeaconSessionV1,
+    Vec<InMemoryGlobalThresholdBeaconPartialSignerV1>,
+) {
+    let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+    let signers = (1..=dkg_session.committee_size)
+        .map(|recipient_index| {
+            let contributions = fixture
+                .dealer_secrets
+                .iter()
+                .zip(&fixture.dealer_commitments)
+                .map(|(secret, dealer)| {
+                    secret
+                        .private_share(&fixture.parameters, dealer, recipient_index)
+                        .expect("verified exact target DKG contribution")
+                })
+                .collect::<Vec<_>>();
+            let share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
+                &fixture.session.transcript,
+                &contributions,
+            )
+            .expect("complete target private share");
+            InMemoryGlobalThresholdBeaconPartialSignerV1::from_validated_share(
+                fixture.session.clone(),
+                share,
+            )
+            .expect("zeroizing provider for exact target seat")
+        })
+        .collect();
+    (fixture.session, signers)
+}
+
+/// Build an exact signed all-edge DKG fixture and one private seat credential.
+///
+/// The roster consists of deterministic, real BLS fixture keys in canonical
+/// public-key order. Production callers must use independently held seat keys.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn complete_beacon_dkg_fixture_for_seat_v1(
+    network_id: NetworkId,
+    session_id: [u8; 32],
+    committee_size: u16,
+    signer_index: u16,
+) -> (GlobalThresholdBeaconKeySessionV1, Zeroizing<[[u8; 32]; 3]>) {
+    assert!(signer_index > 0 && signer_index <= committee_size);
+    let keys = adaptive_fixture_signing_keys(committee_size);
+    let roster = keys
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    let mut session = adaptive_dkg_session_fixture();
+    session.network_id = network_id;
+    session.session_id = session_id;
+    session.attempt_id = session_id;
+    session.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
+    session.committee_size = committee_size;
+    session.threshold = (committee_size - 1) / 3 + 1;
+    session.commitments_end_height = 2;
+    session.deliveries_end_height = 3;
+    session.acceptances_end_height = 4;
+    complete_beacon_dkg_fixture_for_exact_session_v1(session, signer_index)
+}
+
+/// Build a fully signed test DKG for one exact session and deterministic roster.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn complete_beacon_dkg_fixture_for_exact_session_v1(
+    session: GlobalThresholdBeaconDkgSessionV1,
+    signer_index: u16,
+) -> (GlobalThresholdBeaconKeySessionV1, Zeroizing<[[u8; 32]; 3]>) {
+    assert!(signer_index > 0 && signer_index <= session.committee_size);
+    let keys = adaptive_fixture_signing_keys(session.committee_size);
+    let fixture = adaptive_beacon_fixture_for_session_and_keys(session, &keys);
+    let shares = fixture
+        .dealer_secrets
+        .iter()
+        .zip(&fixture.dealer_commitments)
+        .map(|(secret, dealer)| {
+            secret
+                .private_share(&fixture.parameters, dealer, signer_index)
+                .expect("verified fixture contribution")
+        })
+        .collect::<Vec<_>>();
+    let aggregate =
+        AdaptiveThresholdBlsSecretShare::from_dealer_shares(&fixture.session.transcript, &shares)
+            .expect("complete fixture seat share");
+    (
+        fixture.session.record().clone(),
+        aggregate.into_components_for_runtime_custody(),
+    )
 }

@@ -654,7 +654,9 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
     // Reward records, cursors and accruals are pruned with a retired/replaced lane. Its
     // recipients must receive every promised payment before that destructive
     // boundary, including rewards owed after all staking custody has drained.
-    if let Some(((lane, _, _), _)) = world.public_lane_reward_accruals().iter()
+    if let Some(((lane, _, _), _)) = world
+        .public_lane_reward_accruals()
+        .iter()
         .find(|((lane, _, _), _)| lanes_to_reset.contains(lane))
     {
         return Err(LaneLifecycleError::UnsafeRetirement {

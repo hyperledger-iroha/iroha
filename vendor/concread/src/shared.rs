@@ -29,6 +29,87 @@ pub struct Shared<T, Charge> {
     pointer: NonNull<Allocation<T, Charge>>,
 }
 
+/// One original shared owner with an allocation-free erased charge type.
+///
+/// The payload and its charge remain in their original concrete allocation.
+/// Erasure adds no Box, reference counter, or replacement allocation.
+pub(crate) struct ErasedShared<T> {
+    allocation: NonNull<()>,
+    value: NonNull<T>,
+    clone_owner: unsafe fn(NonNull<()>),
+    drop_owner: unsafe fn(NonNull<()>),
+}
+
+// Construction requires the erased charge to satisfy the same thread bounds.
+unsafe impl<T: Send + Sync> Send for ErasedShared<T> {}
+unsafe impl<T: Send + Sync> Sync for ErasedShared<T> {}
+
+impl<T> ErasedShared<T> {
+    pub(crate) fn new<Charge: Send + Sync + 'static>(value: T, charge: Charge) -> Self {
+        unsafe fn clone_owner<T, Charge>(pointer: NonNull<()>) {
+            let original = ManuallyDrop::new(Shared::<T, Charge> {
+                pointer: pointer.cast(),
+            });
+            // Retain exactly one additional strong reference in the same block.
+            std::mem::forget(Shared::clone(&original));
+        }
+        unsafe fn drop_owner<T, Charge>(pointer: NonNull<()>) {
+            drop(Shared::<T, Charge> {
+                pointer: pointer.cast(),
+            });
+        }
+        let owner = Shared::new(value, charge);
+        let value = NonNull::from(&*owner);
+        let owner = ManuallyDrop::new(owner);
+        Self {
+            allocation: owner.pointer.cast(),
+            value,
+            clone_owner: clone_owner::<T, Charge>,
+            drop_owner: drop_owner::<T, Charge>,
+        }
+    }
+
+    pub(crate) fn ptr_eq(left: &Self, right: &Self) -> bool {
+        left.allocation == right.allocation
+    }
+
+    #[cfg(test)]
+    pub(crate) fn strong_count(&self) -> usize {
+        // Allocation is repr(C), with this counter as its first field for every
+        // erased charge. This diagnostic does not grant unique ownership.
+        unsafe { self.allocation.cast::<AtomicUsize>().as_ref() }.load(Ordering::Acquire)
+    }
+}
+
+impl<T> Clone for ErasedShared<T> {
+    fn clone(&self) -> Self {
+        // SAFETY: the function and pointer are installed together by `new`,
+        // and this live reference prevents concurrent final destruction.
+        unsafe { (self.clone_owner)(self.allocation) };
+        Self {
+            allocation: self.allocation,
+            value: self.value,
+            clone_owner: self.clone_owner,
+            drop_owner: self.drop_owner,
+        }
+    }
+}
+
+impl<T> Deref for ErasedShared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: every erased owner retains one original initialized reference.
+        unsafe { self.value.as_ref() }
+    }
+}
+
+impl<T> Drop for ErasedShared<T> {
+    fn drop(&mut self) {
+        // SAFETY: this consumes exactly the original reference held by self.
+        unsafe { (self.drop_owner)(self.allocation) };
+    }
+}
+
 /// The uniquely owned payload and charge after their control block was freed.
 pub(crate) struct Reclaimed<T, Charge> {
     value: ManuallyDrop<T>,
@@ -99,7 +180,9 @@ impl<T, Charge> Shared<T, Charge> {
         left.pointer == right.pointer
     }
 
-    pub(crate) fn get_mut(&mut self) -> Option<&mut T> {
+    /// Borrow the payload only when this is its sole original strong reference.
+    /// No weak references exist, so another owner cannot race an upgrade.
+    pub fn get_mut(&mut self) -> Option<&mut T> {
         // No weak owner can race an upgrade. With one strong reference and an
         // exclusive borrow of it, no other owner can create a competing clone.
         if unsafe { self.pointer.as_ref() }
@@ -224,7 +307,7 @@ impl<T, Charge> fmt::Debug for Reserved<T, Charge> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Reserved, Shared};
+    use super::{ErasedShared, Reserved, Shared};
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::sync::Arc;
 
@@ -234,6 +317,26 @@ mod tests {
         fn drop(&mut self) {
             assert_eq!(self.0.fetch_add(1, SeqCst), 0);
         }
+    }
+
+    #[test]
+    fn erased_shared_preserves_original_pointer_and_charge_until_last_owner() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let original = ErasedShared::new(17_u64, Charge(Arc::clone(&dropped)));
+        let pointer = &*original as *const u64 as usize;
+        let other = original.clone();
+        assert!(ErasedShared::ptr_eq(&original, &other));
+        assert_eq!(original.strong_count(), 2);
+        drop(original);
+        assert_eq!(dropped.load(SeqCst), 0);
+        std::thread::spawn(move || {
+            let copy = other.clone();
+            assert_eq!(&*copy as *const u64 as usize, pointer);
+            assert_eq!(*copy, 17);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(dropped.load(SeqCst), 1);
     }
 
     #[test]

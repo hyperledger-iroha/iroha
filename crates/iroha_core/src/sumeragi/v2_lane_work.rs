@@ -52,6 +52,7 @@ use super::{
         check_production_in_flight_first_release_serve_late_body_transition,
         check_production_in_flight_first_release_transition,
     },
+    v2_runner::lane_engine_owner::LaneEngineLease,
     v2_runtime::round_timeout_for_view,
     v2_worker::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
@@ -3235,6 +3236,7 @@ pub(crate) struct V2LaneWorkAdapter {
     kura: Arc<Kura>,
     autonomous_lifecycle_process_generation: Option<AutonomousLifecycleProcessGenerationClaim>,
     output_guard: Arc<ConsensusOutputGuard>,
+    _production_lane_engine_lease: Option<LaneEngineLease>,
     limits: V2LaneWorkLimits,
     lane_sessions: LaneBlockSessionCache,
     lane_ready_authorizations: BTreeMap<LaneBlockSessionKey, LaneReadyAuthorization>,
@@ -3725,18 +3727,25 @@ impl V2LaneWorkAdapter {
         authenticated_genesis_nexus_amx_context: Option<AuthenticatedGenesisNexusAmxContext>,
         recovered_applied_height: Option<super::v2_recovery::PendingKuraApply>,
         output_guard: Arc<ConsensusOutputGuard>,
+        lane_engine_lease: LaneEngineLease,
         exact_output_handoff_owner: DurableExactOutputTransportOwner,
         retained_merge_sidecars: Option<RetainedMergeSidecars>,
         autonomous_lifecycle_process_generation: Option<AutonomousLifecycleProcessGenerationClaim>,
     ) -> Result<Self, V2LaneWorkError> {
         let context = verified_context.context().clone();
+        if !lane_engine_lease.matches_legacy(context.network_id, &local_peer) {
+            return Err(V2LaneWorkError::InvalidContext(
+                "lane-work signer does not hold this network and peer's legacy engine lease"
+                    .to_owned(),
+            ));
+        }
         let frozen_validator_pops = context
             .roster
             .iter()
             .zip(verified_context.proofs_of_possession())
             .map(|(entry, pop)| (entry.validator.public_key().clone(), pop.clone()))
             .collect();
-        Self::new_with_output_guard_and_transport_inner(
+        let mut adapter = Self::new_with_output_guard_and_transport_inner(
             context,
             frozen_validator_pops,
             local_peer,
@@ -3751,7 +3760,9 @@ impl V2LaneWorkAdapter {
             exact_output_handoff_owner,
             retained_merge_sidecars,
             autonomous_lifecycle_process_generation,
-        )
+        )?;
+        adapter._production_lane_engine_lease = Some(lane_engine_lease);
+        Ok(adapter)
     }
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -4005,6 +4016,7 @@ impl V2LaneWorkAdapter {
             kura,
             autonomous_lifecycle_process_generation,
             output_guard,
+            _production_lane_engine_lease: None,
             limits,
             lane_sessions: LaneBlockSessionCache::new(limits.session_capacity.get()),
             lane_ready_authorizations: BTreeMap::new(),
@@ -18344,7 +18356,7 @@ impl V2LaneWorkAdapter {
     ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
         match validation {
             Ok(()) => Ok(MergeCandidateValidation::Ready),
-            Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(error)) => {
+            Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(error)) => {
                 self.validated_merge_execution_candidate = None;
                 let Some(wait) = error.release_wait() else {
                     return Err(MergeCandidateValidationError::Frontier(error.to_string()));
@@ -18363,6 +18375,10 @@ impl V2LaneWorkAdapter {
                     super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), &wake),
                 ));
                 Ok(MergeCandidateValidation::Deferred)
+            }
+            Err(error @ crate::state::MergeLedgerCommitError::NativeResourceAdmission(_)) => {
+                self.validated_merge_execution_candidate = None;
+                Err(MergeCandidateValidationError::Frontier(error.to_string()))
             }
             Err(error) => Err(MergeCandidateValidationError::Invalid(error.to_string())),
         }
@@ -21761,10 +21777,13 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
                 network_id,
                 context_epoch,
+                context_epoch,
+                if context_epoch == 0 { 1 } else { 2 },
+                context_epoch_end_height,
                 &roster,
             );
         let mut context = wire::HeightContext {
@@ -21814,8 +21833,8 @@ pub(super) mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             )
@@ -21859,12 +21878,25 @@ pub(super) mod tests {
                         .saturating_add(1)
                         .saturating_mul(length)
                 });
+                parent_context
+                    .kagemusha_mint_finality_authorization
+                    .last_height = parent_context.epoch_end_height;
                 (
-                    parent_context.kagemusha_mint_finality_epoch_id,
-                    parent_context.kagemusha_mint_finality_epoch_roster,
-                ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+                    parent_context.kagemusha_mint_finality_authorization,
+                    parent_context.kagemusha_mint_finality_authority,
+                ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
                     network_id,
                     parent_context.epoch,
+                    parent_context.epoch,
+                    if parent_context.epoch == 0 {
+                        1
+                    } else {
+                        parent_context
+                            .kagemusha_mint_finality_authorization
+                            .first_height
+                            .max(2)
+                    },
+                    parent_context.epoch_end_height,
                     &parent_context.roster,
                 );
                 let signed_block: &SignedBlock = block.as_ref();
@@ -22214,8 +22246,8 @@ pub(super) mod tests {
             .install_lane_drain_queue(Arc::clone(&queue))
             .unwrap();
         let notification = concread::release::ReleaseNotification::default();
-        let error = crate::state::MergeLedgerCommitError::BlockHashAdmission(
-            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+        let error = crate::state::MergeLedgerCommitError::StateStorageAdmission(
+            crate::state::StateStorageAdmissionError::Busy(notification.observe()),
         );
         assert_eq!(
             adapter
@@ -22231,8 +22263,8 @@ pub(super) mod tests {
         assert!(matches!(
             adapter.classify_merge_state_validation(
                 3,
-                Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(
-                    crate::state::BlockHashAdmissionError::ReadOnly
+                Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(
+                    crate::state::StateStorageAdmissionError::ReadOnly
                 ))
             ),
             Err(MergeCandidateValidationError::Frontier(_))
@@ -22243,6 +22275,15 @@ pub(super) mod tests {
                 Err(crate::state::MergeLedgerCommitError::EmptyEntry)
             ),
             Err(MergeCandidateValidationError::Invalid(_))
+        ));
+        assert!(matches!(
+            adapter.classify_merge_state_validation(
+                3,
+                Err(crate::state::MergeLedgerCommitError::NativeResourceAdmission(
+                    mv::allocation::AllocationRefusal::DemandOverflow,
+                ))
+            ),
+            Err(MergeCandidateValidationError::Frontier(_))
         ));
     }
     #[test]
@@ -22741,11 +22782,21 @@ pub(super) mod tests {
                 wire::DualQuorum::from_roster(&successor.roster).expect("successor dual quorum");
         }
         (
-            successor.kagemusha_mint_finality_epoch_id,
-            successor.kagemusha_mint_finality_epoch_roster,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            successor.kagemusha_mint_finality_authorization,
+            successor.kagemusha_mint_finality_authority,
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
             successor.network_id,
+            successor.kagemusha_mint_finality_authority.generation,
             successor.epoch,
+            if successor.epoch == 0 {
+                1
+            } else {
+                successor
+                    .kagemusha_mint_finality_authorization
+                    .first_height
+                    .max(2)
+            },
+            successor.epoch_end_height,
             &successor.roster,
         );
         successor

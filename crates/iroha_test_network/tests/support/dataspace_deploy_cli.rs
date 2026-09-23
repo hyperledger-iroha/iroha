@@ -854,6 +854,19 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
                     account.clone(),
                     100_u32.into(),
                     Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        iroha_data_model::asset::AssetId::new(
+                            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                                .xor_asset_definition_id,
+                            account.clone(),
+                        ),
+                        iroha_data_model::asset::AssetId::new(
+                            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                                .xor_asset_definition_id,
+                            iroha_test_samples::ALICE_ID.clone(),
+                        ),
+                        100_u32.into(),
+                    ),
                 )
                 .into(),
             );

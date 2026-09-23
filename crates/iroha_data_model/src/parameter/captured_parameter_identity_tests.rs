@@ -32,12 +32,6 @@ macro_rules! parameter_owners {
             "4f219bd2d074bac5fb16250d0717b17c",
         );
         $check!(
-            super::system::KagemushaMintFinalityNextEpochParameterV1,
-            "iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1",
-            "9819b19e8a3e5f3735d92cd2822fb76e",
-            "9819b19e8a3e5f3735d92cd2822fb76e",
-        );
-        $check!(
             super::system::ConsensusHandshakeMetadata,
             "iroha_data_model::parameter::system::ConsensusHandshakeMetadata",
             "847eca5152f46ee278ecc4fb1e64d7fd",

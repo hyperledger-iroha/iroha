@@ -61,6 +61,7 @@ pub(crate) fn native_lane_batch_for_execution(
 
 /// Scratch has no authenticated control/context consumer. Refuse the complete
 /// carrier before State acquisition instead of silently dropping its controls.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn native_lane_batch_for_scratch(
     carrier: &SignedBlock,
 ) -> Result<&LaneDecisionBatchV1, String> {

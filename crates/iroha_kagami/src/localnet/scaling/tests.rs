@@ -534,7 +534,7 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
             assert_eq!(registrations.len(), 1);
             assert!(registrations[0].object.metadata.is_empty());
             let expected_asset = AssetId::new(
-                localnet_fee_asset_definition_id(),
+                localnet_xor_asset_definition_id(),
                 account.account_id.clone(),
             );
             let mints = manifest
@@ -609,7 +609,7 @@ fn fixed_command_signed_genesis_authenticates_every_lane_and_funded_account() {
             config.nexus.fees.per_gas_unit_fee,
             "0.00005".parse::<Quantity>().unwrap()
         );
-        assert_eq!(config.nexus.fees.fee_asset_id, localnet_fee_asset_literal());
+        assert_eq!(config.nexus.fees.fee_asset_id, localnet_xor_asset_literal());
         assert_eq!(
             config.nexus.fees.settlement_mode,
             actual::NexusFeeSettlementMode::Direct

@@ -25,12 +25,94 @@ use iroha_data_model::{
         TransactionAdmissionIntent, TransactionResult, error::TransactionRejectionReason,
     },
 };
-use std::{borrow::Cow, time::Duration};
+use mv::allocation::{AllocationBudget, AllocationCharge, AllocationRefusal};
+use std::{alloc::Layout, borrow::Cow, time::Duration};
 
 struct FrozenNetworkSource<'source> {
     pub(super) routing: RoutingDecision,
     admission: Option<Result<AcceptedTransaction<'source>, TransactionRejectionReason>>,
     quarantine: QuarantineAdmission,
+}
+
+/// Exact requested Native Network vectors, including temporary reveal ordering.
+#[derive(Clone, Copy)]
+struct NativeFrozenNetworkDemand {
+    sources: Layout,
+    order: Layout,
+    reveal_positions: Layout,
+    sorted_reveals: Layout,
+    quarantine_candidates: Layout,
+    total_bytes: usize,
+}
+
+impl NativeFrozenNetworkDemand {
+    fn plan(count: usize) -> Result<Self, AllocationRefusal> {
+        let sources = Layout::array::<FrozenNetworkSource<'static>>(count)
+            .map_err(|_| AllocationRefusal::DemandOverflow)?;
+        let order = Layout::array::<usize>(count).map_err(|_| AllocationRefusal::DemandOverflow)?;
+        let reveal_positions = order;
+        let sorted_reveals = Layout::array::<((u64, Hash, u64), usize)>(count)
+            .map_err(|_| AllocationRefusal::DemandOverflow)?;
+        let quarantine_candidates = Layout::array::<(HashOf<TransactionEntrypoint>, usize)>(count)
+            .map_err(|_| AllocationRefusal::DemandOverflow)?;
+        let total_bytes = [
+            sources,
+            order,
+            reveal_positions,
+            sorted_reveals,
+            quarantine_candidates,
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, layout| total.checked_add(layout.size()))
+        .ok_or(AllocationRefusal::DemandOverflow)?;
+        Ok(Self {
+            sources,
+            order,
+            reveal_positions,
+            sorted_reveals,
+            quarantine_candidates,
+            total_bytes,
+        })
+    }
+
+    fn try_reserve(
+        self,
+        budget: &AllocationBudget,
+    ) -> Result<NativeFrozenNetworkCharges, AllocationRefusal> {
+        let mut reservation = budget.try_reserve_bytes(self.total_bytes)?;
+        let sources = reservation
+            .try_split(self.sources)
+            .expect("prepaid source layout");
+        let order = reservation
+            .try_split(self.order)
+            .expect("prepaid order layout");
+        let reveal_positions = reservation
+            .try_split(self.reveal_positions)
+            .expect("prepaid reveal-position layout");
+        let sorted_reveals = reservation
+            .try_split(self.sorted_reveals)
+            .expect("prepaid sorted-reveal layout");
+        let quarantine_candidates = reservation
+            .try_split(self.quarantine_candidates)
+            .expect("prepaid quarantine layout");
+        assert_eq!(reservation.remaining_bytes(), 0);
+        Ok(NativeFrozenNetworkCharges {
+            _sources: sources,
+            _order: order,
+            _reveal_positions: reveal_positions,
+            _sorted_reveals: sorted_reveals,
+            _quarantine_candidates: quarantine_candidates,
+        })
+    }
+}
+
+/// These charges outlive all five corresponding requested vectors.
+struct NativeFrozenNetworkCharges {
+    _sources: AllocationCharge,
+    _order: AllocationCharge,
+    _reveal_positions: AllocationCharge,
+    _sorted_reveals: AllocationCharge,
+    _quarantine_candidates: AllocationCharge,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -49,6 +131,7 @@ pub(super) struct FrozenNetworkSources<'source> {
     sources: Vec<FrozenNetworkSource<'source>>,
     pub(super) order: Option<Vec<usize>>,
     quarantine_policy: FrozenQuarantinePolicy,
+    _native_charges: Option<NativeFrozenNetworkCharges>,
 }
 
 /// Actual admission identity captured before a transaction can remove its sealed
@@ -234,7 +317,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 quarantine: QuarantineAdmission::Normal,
             });
         }
-        self.freeze_network_order(sources)
+        self.freeze_network_order(sources, None)
     }
 
     /// Freeze native admission and its fitting prefix before the first economic
@@ -251,6 +334,16 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             ));
         };
         let groups = *groups;
+        let charges = NativeFrozenNetworkDemand::plan(groups.len())
+            .and_then(|demand| {
+                demand.try_reserve(
+                    self.native_host
+                        .as_ref()
+                        .expect("Native producer has original host admission")
+                        .budget(),
+                )
+            })
+            .map_err(MergeLedgerCommitError::NativeResourceAdmission)?;
         let mut sources = Vec::new();
         sources
             .try_reserve_exact(groups.len())
@@ -321,7 +414,8 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 quarantine: QuarantineAdmission::Normal,
             });
         }
-        self.freeze_network_order(sources).map_err(invalid)
+        self.freeze_network_order(sources, Some(charges))
+            .map_err(invalid)
     }
 
     /// Both source kinds share frozen reveal order and no-refill quarantine
@@ -329,6 +423,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
     fn freeze_network_order(
         &self,
         mut sources: Vec<FrozenNetworkSource<'source>>,
+        native_charges: Option<NativeFrozenNetworkCharges>,
     ) -> Result<FrozenNetworkSources<'source>, String> {
         let count = self.source.network_entrypoint_count();
         if sources.len() != count {
@@ -388,6 +483,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             sources,
             order: Some(order),
             quarantine_policy,
+            _native_charges: native_charges,
         })
     }
 
@@ -452,7 +548,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             ))?;
         let gas_before = self.state.gas_used_in_block;
         let gas_limit = self.state.gas_limit_per_block;
-        let mut attempt = OutputTransaction::new(self.state);
+        let mut attempt = OutputTransaction::new(self.state)?;
         let transaction = attempt
             .transaction
             .as_mut()
@@ -472,6 +568,9 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             ),
             Err(reason) => Err(reason),
         };
+        transaction
+            .require_storage_admission()
+            .map_err(|error| error.to_string())?;
         require_source(transaction, input, input_index, routing)?;
         transaction.require_completed_execution_effect_owner()?;
         let effect_limit_rejection = transaction.execution_effect_limit_exceeded();
@@ -511,7 +610,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 ));
                 penalty_committed = false;
             } else if !penalties.is_empty() {
-                let mut penalty = OutputTransaction::new(self.state);
+                let mut penalty = OutputTransaction::new(self.state)?;
                 let transaction = penalty
                     .transaction
                     .as_mut()
@@ -524,7 +623,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 match applied {
                     Ok(()) => {
                         require_rejection_fragment(transaction, input, input_index, routing)?;
-                        penalty.apply();
+                        penalty.apply()?;
                     }
                     Err(error) => {
                         drop(penalty);
@@ -548,7 +647,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     && chargeable
                     && let Some(basis) = rejection_fee
                 {
-                    let mut fee = OutputTransaction::new(self.state);
+                    let mut fee = OutputTransaction::new(self.state)?;
                     let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
                     bind_source(transaction, input, input_index, routing);
                     let charged = match basis.settle(transaction, signed) {
@@ -563,7 +662,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     match charged {
                         Ok(true) => {
                             require_rejection_fragment(transaction, input, input_index, routing)?;
-                            fee.apply();
+                            fee.apply()?;
                         }
                         Ok(false) => drop(fee),
                         Err(error) => {
@@ -646,7 +745,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     .into(),
                 );
             }
-            attempt.apply();
+            attempt.apply()?;
         } else {
             drop(attempt);
         }
@@ -717,4 +816,28 @@ fn require_rejection_fragment(
         return Err("rejection settlement retained rejected business capture".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod native_host_resource_tests {
+    use super::*;
+
+    #[test]
+    fn frozen_network_vectors_share_the_original_finite_pool() {
+        let demand = NativeFrozenNetworkDemand::plan(3).unwrap();
+        let short = AllocationBudget::new(demand.total_bytes - 1);
+        assert!(matches!(
+            demand.try_reserve(&short),
+            Err(AllocationRefusal::ExceedsLimit { .. })
+        ));
+        assert_eq!(short.reserved_bytes(), 0);
+
+        let budget = AllocationBudget::new(demand.total_bytes);
+        let charges = demand.try_reserve(&budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), demand.total_bytes);
+        assert_eq!(charges._sources.layout(), demand.sources);
+        assert_eq!(charges._order.layout(), demand.order);
+        drop(charges);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
 }

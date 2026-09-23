@@ -283,7 +283,7 @@ fn sign_consensus_request_with_kagemusha_authority(
             .to_owned()
     })?;
     let message = crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
-        &context.kagemusha_mint_finality_epoch_roster,
+        &context.kagemusha_mint_finality_authority,
         context,
         vote,
     )
@@ -292,7 +292,7 @@ fn sign_consensus_request_with_kagemusha_authority(
         "Kagemusha V1 authoritative Commit vote produced no mint-finality statement".to_owned()
     })?;
     let signer = authority
-        .signer_for_epoch(&context.kagemusha_mint_finality_epoch_roster)
+        .signer_for_authority(&context.kagemusha_mint_finality_authority)
         .map_err(|error| error.to_string())?;
     let seal =
         crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(&signer, &message)

@@ -199,7 +199,7 @@ pub(super) fn locks_for_host(host_identity: &str) -> Result<Locks> {
     // This bounded transition admits the observed absent supervisor only. It never creates
     // a new lock in an absent generation or bypasses an installed updater's ownership.
     need(
-        !storage::exists(Path::new(epoch_supervisor::STATE_ROOT))?,
+        !storage::exists(Path::new("/var/lib/taira-epoch-supervisor"))?,
         "epoch supervisor must remain absent",
     )?;
     Ok(Locks(held))
@@ -310,7 +310,7 @@ pub(super) fn validate_sealed_records(
 
 fn protected(plan: &Plan) -> Result<()> {
     need(
-        !storage::exists(Path::new(epoch_supervisor::STATE_ROOT))?,
+        !storage::exists(Path::new("/var/lib/taira-epoch-supervisor"))?,
         "supervisor appeared",
     )?;
     need(

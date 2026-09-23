@@ -51,9 +51,9 @@
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
 mod native_lane_carrier;
-pub(crate) use native_lane_carrier::{
-    native_lane_batch_for_execution, native_lane_batch_for_scratch,
-};
+pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -1818,6 +1818,66 @@ pub(crate) fn parse_asset_definition_literal_with_world(
                 .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
         })
 }
+/// Resolve an exact fee selector against the network's committed XOR identity.
+/// Chains without NPoS use the canonical default identity, never an arbitrary
+/// locally configured token. Staking itself additionally requires signed NPoS.
+pub(crate) fn resolve_network_xor_asset_definition(
+    world: &impl WorldReadOnly,
+    input: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    if input.trim() != input
+        || (input != "xor#universal" && AssetDefinitionId::parse_address_literal(input).is_err())
+    {
+        return None;
+    }
+    let asset = parse_asset_definition_literal_with_world(world, input, now_ms)?;
+    let pin = match world.sumeragi_npos_parameters() {
+        Some(params) => params.xor_asset_definition_id,
+        None => {
+            if world.parameters().custom().contains_key(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+            ) {
+                return None;
+            }
+            AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .ok()?
+        }
+    };
+    (asset == pin).then_some(asset)
+}
+#[cfg(test)]
+#[test]
+fn network_xor_resolver_requires_exact_committed_identity() {
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+    let world = crate::state::World::new();
+    let canonical = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+    let other = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("test", "universal").expect("test domain"),
+        "currency".parse().expect("name"),
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_some());
+    assert!(resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0).is_none());
+    let mut parameters = world.parameters.block();
+    parameters.get_mut().set_parameter(Parameter::Custom(
+        SumeragiNposParameters {
+            xor_asset_definition_id: other.clone(),
+            ..Default::default()
+        }
+        .into_custom_parameter(),
+    ));
+    parameters.commit();
+    assert_eq!(
+        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0),
+        Some(other)
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_none());
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &format!(" {canonical}"), 0).is_none()
+    );
+}
 #[cfg(test)]
 fn parse_account_from_access_key(
     world: &impl WorldReadOnly,
@@ -2662,7 +2722,9 @@ impl fmt::Display for AxtEnvelopeValidationDetails {
 impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockValidationError {
     fn from(error: crate::state::StateBlockStartError<Self>) -> Self {
         match error {
-            crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            crate::state::StateBlockStartError::Storage(error) => {
+                Self::StateStorageAdmission(error)
+            }
             crate::state::StateBlockStartError::Stage(error) => error,
         }
     }
@@ -2671,7 +2733,7 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
     /// Local hash-history admission failed before State execution: {0}
-    BlockHashAdmission(crate::state::BlockHashAdmissionError),
+    StateStorageAdmission(crate::state::StateStorageAdmissionError),
     /// Block has committed transactions
     HasCommittedTransactions,
     /// Block contained no committed overlays
@@ -2867,12 +2929,15 @@ impl BlockValidationError {
     ) -> Self {
         use crate::state::MergeLedgerCommitError;
         match error {
-            MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
+            MergeLedgerCommitError::StateStorageAdmission(error) => {
+                Self::StateStorageAdmission(error)
+            }
             MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
-            local @ (MergeLedgerCommitError::Persistence(_)
+            local @ (MergeLedgerCommitError::NativeResourceAdmission(_)
+            | MergeLedgerCommitError::Persistence(_)
             | MergeLedgerCommitError::LocalDrainObservation(_)) => {
                 Self::LocalStorageRecoveryRequired {
                     reason: format!("certified merge entry could not be staged: {local}"),
@@ -2883,6 +2948,15 @@ impl BlockValidationError {
             )),
         }
     }
+
+    /// Keep local resource refusal outside the deterministic NPoS verdict channel.
+    pub(crate) fn from_npos_application_error(error: eyre::Report, stage: &str) -> Self {
+        if let Some(local) = error.downcast_ref::<crate::state::StateStorageAdmissionError>() {
+            Self::StateStorageAdmission(local.clone())
+        } else {
+            Self::NposEffectsInvalid(format!("{stage}: {error}"))
+        }
+    }
 }
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
@@ -2891,6 +2965,19 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
         // not mistake local reconstruction failure for a malformed candidate.
         Self::DaIndexHydration(error.to_string())
     }
+}
+#[cfg(test)]
+#[test]
+fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
+    let error = BlockValidationError::from_certified_merge_stage_error(
+        crate::state::MergeLedgerCommitError::NativeResourceAdmission(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ),
+    );
+    assert!(matches!(
+        error,
+        BlockValidationError::LocalStorageRecoveryRequired { .. }
+    ));
 }
 /// Error during signature verification
 #[derive(Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, Error)]
@@ -5967,12 +6054,23 @@ pub(crate) mod valid {
                     "pristine effects have another carrier",
                 ));
             }
-            state_block.apply_pristine_npos_consensus_effects(
-                &self.effects, &self.prune_keys, self.expected_anchor, &self.roster,
-                self.header.height().get(), self.header.view_change_index(), self.header.creation_time_ms,
-            ).map(|_| ()).map_err(|error| ValidBlock::npos_effects_error(format!(
-                "NPoS consensus effects are not applicable to pristine parent state: {error}"
-            )))
+            state_block
+                .apply_pristine_npos_consensus_effects(
+                    &self.effects,
+                    &self.prune_keys,
+                    self.expected_anchor,
+                    &self.roster,
+                    self.header.height().get(),
+                    self.header.view_change_index(),
+                    self.header.creation_time_ms,
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    BlockValidationError::from_npos_application_error(
+                        error,
+                        "NPoS consensus effects are not applicable to pristine parent state",
+                    )
+                })
         }
     }
 
@@ -7221,9 +7319,10 @@ pub(crate) mod valid {
                             state_block
                                 .apply_verified_merge_beacon_pulse(capability)
                                 .map_err(|error| {
-                                    Self::npos_effects_error(format!(
-                                        "certified merge beacon composition failed: {error}"
-                                    ))
+                                    BlockValidationError::from_npos_application_error(
+                                        error,
+                                        "certified merge beacon composition failed",
+                                    )
                                 })
                         } else {
                             apply_npos(state_block)
@@ -7516,8 +7615,8 @@ pub(crate) mod valid {
                     Ok(has_work) => has_work,
                     Err(error) => {
                         let error = match error {
-                            crate::state::StateBlockStartError::History(error) => {
-                                BlockValidationError::BlockHashAdmission(error)
+                            crate::state::StateBlockStartError::Storage(error) => {
+                                BlockValidationError::StateStorageAdmission(error)
                             }
                             crate::state::StateBlockStartError::Stage(error) => {
                                 BlockValidationError::LocalStorageRecoveryRequired {
@@ -8305,9 +8404,10 @@ pub(crate) mod valid {
             let expected_actions = applier
                 .derive_npos_penalty_actions(&block.header())
                 .map_err(|err| {
-                    if let Some(local) = err.downcast_ref::<crate::state::BlockHashAdmissionError>()
+                    if let Some(local) =
+                        err.downcast_ref::<crate::state::StateStorageAdmissionError>()
                     {
-                        BlockValidationError::BlockHashAdmission(local.clone())
+                        BlockValidationError::StateStorageAdmission(local.clone())
                     } else {
                         Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
                     }
@@ -11468,10 +11568,15 @@ pub(crate) mod valid {
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
                 )
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
+                .map_err(|error| match error {
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Storage(
+                        error,
+                    ) => BlockValidationError::StateStorageAdmission(error),
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Instruction(
+                        error,
+                    ) => Self::execution_context_error(format!(
                         "SoraFS pin expiry maintenance failed: {error}"
-                    ))
+                    )),
                 })?;
             if expired != 0 {
                 iroha_logger::debug!(
@@ -11495,6 +11600,9 @@ pub(crate) mod valid {
             crate::sumeragi::witness::start_block();
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
+                crate::state::ExecutionOutputSealError::Storage(error) => {
+                    BlockValidationError::StateStorageAdmission(error)
+                }
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
                 }
@@ -12174,22 +12282,26 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
                 state.network_id,
                 0,
                 &roster,
             );
-            let mint_finality_epoch_id = mint_finality_roster
-                .finality_epoch_id()
-                .expect("cache fixture mint-finality roster is canonical");
+            let mint_finality_epoch_id =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+                    &mint_finality_roster,
+                    0,
+                    1,
+                    u64::MAX,
+                );
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let mut parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
-                kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+                kagemusha_mint_finality_authorization: mint_finality_epoch_id,
+                kagemusha_mint_finality_authority: mint_finality_roster,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -12639,9 +12751,14 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 7, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                    network_id,
+                    7,
+                    7,
+                    2,
+                    u64::MAX,
+                    &roster,
                 );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
@@ -12663,8 +12780,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("equal-vote fixture has a canonical quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -13906,10 +14023,13 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
                     state.network_id,
                     0,
+                    0,
+                    1,
+                    u64::MAX,
                     &roster,
                 );
             let context = if block.header().height().get() == 1 {
@@ -13928,8 +14048,8 @@ pub(crate) mod valid {
                     quorum: wire::DualQuorum::from_roster(&roster)
                         .expect("exact four-validator quorum"),
                     roster,
-                    kagemusha_mint_finality_epoch_id,
-                    kagemusha_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_authorization,
+                    kagemusha_mint_finality_authority,
                     nexus_amx_context_hash:
                         crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
                             .expect("valid committed catalog"),
@@ -14865,9 +14985,14 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 0, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                    network_id,
+                    0,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
                 network_id,
@@ -14882,8 +15007,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("fixture quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -19471,9 +19596,14 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 0, &roster,
+            let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                    network_id,
+                    0,
+                    0,
+                    1,
+                    u64::MAX,
+                    &roster,
                 );
             let context = consensus_v2::HeightContext {
                 network_id,
@@ -19487,8 +19617,8 @@ pub(crate) mod valid {
                 snapshot_bootstrap: Some(anchor),
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {
@@ -24179,7 +24309,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
-            | BlockValidationError::BlockHashAdmission(_) => return None,
+            | BlockValidationError::StateStorageAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions

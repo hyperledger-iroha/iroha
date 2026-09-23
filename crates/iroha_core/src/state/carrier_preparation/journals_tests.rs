@@ -108,10 +108,13 @@ fn enable_cold_tiered_capture(state: &mut State) -> tempfile::TempDir {
 #[test]
 fn retained_validation_match_binds_original_context_and_signed_proposal() {
     let (state, proposal, topology, context) = super::super::tests::fixture();
+    let (_, shell_bytes) = CarrierJournalShellReservation::<()>::demand().unwrap();
+    let budget = mv::allocation::AllocationBudget::new(shell_bytes);
+    let journal_shells = PreparedCarrier::reserve_journal_shells(&budget).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let journals = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"))
-        .prepare_journals(None, None, admit_journals_for_test)
+        .prepare_journals(journal_shells, None, None, admit_journals_for_test)
         .unwrap_or_else(|error| panic!("capture original candidate: {error}"));
 
     assert!(journals.matches_validation_candidate(&context, &proposal));
@@ -128,7 +131,12 @@ fn retained_validation_match_binds_original_context_and_signed_proposal() {
     assert_eq!(proposal.hash(), other_signed_proposal.hash());
     assert!(!journals.matches_validation_candidate(&context, &other_signed_proposal));
     assert!(journals.matches_validation_candidate(&context, &proposal));
+    assert_eq!(
+        budget.reserved_bytes(),
+        shell_bytes - std::alloc::Layout::new::<StagedCarrierCapture<()>>().size()
+    );
     drop(journals);
+    assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
@@ -145,14 +153,19 @@ fn journal_admission_refusal_prevents_cold_tiered_capture() {
             .unwrap_or_else(|(_, error)| panic!("prepare cold candidate: {error}"));
         assert_eq!(counts.captured(), 0, "preparation must await admission");
         let error = prepared
-            .prepare_journals(None, None, |original| {
-                assert_eq!(counts.captured(), 0);
-                assert_eq!(
-                    original.state.world.musubi_resolver_index_checkpoints.len(),
-                    1
-                );
-                Err::<(), _>("candidate memory exhausted")
-            })
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                None,
+                None,
+                |original| {
+                    assert_eq!(counts.captured(), 0);
+                    assert_eq!(
+                        original.state.world.musubi_resolver_index_checkpoints.len(),
+                        1
+                    );
+                    Err::<(), _>("candidate memory exhausted")
+                },
+            )
             .err()
             .expect("journal admission must refuse");
         assert!(matches!(
@@ -216,24 +229,29 @@ fn admitted_cold_tiered_capture_retains_exact_world_and_drops_before_reservation
         let prefix = prepared.execution_prefix_commitment();
         let released_first = Arc::new(AtomicUsize::new(0));
         let journals = prepared
-            .prepare_journals(None, None, |original| {
-                assert_eq!(counts.captured(), 0);
-                // Independent persistence of the exact immutable prepared World
-                // provides the full baseline reference, including untouched keys.
-                reference
-                    .record_world_snapshot_with_payload(
-                        &original
-                            .state
-                            .world
-                            .tiered_snapshot_payload_with_scope(true),
-                    )
-                    .unwrap();
-                admit_journals_for_test(original)?;
-                Ok::<_, std::convert::Infallible>(Reservation {
-                    counts: Arc::clone(&counts),
-                    snapshots_released_first: Arc::clone(&released_first),
-                })
-            })
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                None,
+                None,
+                |original| {
+                    assert_eq!(counts.captured(), 0);
+                    // Independent persistence of the exact immutable prepared World
+                    // provides the full baseline reference, including untouched keys.
+                    reference
+                        .record_world_snapshot_with_payload(
+                            &original
+                                .state
+                                .world
+                                .tiered_snapshot_payload_with_scope(true),
+                        )
+                        .unwrap();
+                    admit_journals_for_test(original)?;
+                    Ok::<_, std::convert::Infallible>(Reservation {
+                        counts: Arc::clone(&counts),
+                        snapshots_released_first: Arc::clone(&released_first),
+                    })
+                },
+            )
             .unwrap();
         assert_eq!(counts.captured(), 1);
         assert_eq!(counts.released(), 0);
@@ -332,35 +350,41 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         assert_eq!(original.publication_events.as_ptr(), events_pointer);
         assert_eq!(original.publication_events.capacity(), events_capacity);
     };
-    let result = prepared.prepare_journals(Some(original_archive), None, |original| {
-        inspect_original(&original);
-        assert!(original.provider.is_some());
-        assert!(original.reputation.is_none());
-        assert!(!called);
-        called = true;
-        assert_eq!(
-            original.state.canonical_runtime.mode(),
-            mv::BlockMode::Ordinary
-        );
-        assert_eq!(
-            original.state.world.musubi_resolver_index_checkpoints.len(),
-            1
-        );
-        assert_eq!(
-            original.state.commit_topology.get(),
-            &context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
-        );
-        Err::<(), _>(Capacity::Exhausted)
-    });
+    let result = prepared.prepare_journals(
+        crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+        Some(original_archive),
+        None,
+        |original| {
+            inspect_original(&original);
+            assert!(original.provider.is_some());
+            assert!(original.reputation.is_none());
+            assert!(!called);
+            called = true;
+            assert_eq!(
+                original.state.canonical_runtime.mode(),
+                mv::BlockMode::Ordinary
+            );
+            assert_eq!(
+                original.state.world.musubi_resolver_index_checkpoints.len(),
+                1
+            );
+            assert_eq!(
+                original.state.commit_topology.get(),
+                &context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>()
+            );
+            Err::<(), _>(Capacity::Exhausted)
+        },
+    );
     let Err(CarrierJournalPreparationError::JournalAdmission {
         carrier,
         provider,
         reputation,
         error: Capacity::Exhausted,
+        journal_shells,
     }) = result
     else {
         panic!("resource refusal returns every original owner");
@@ -396,7 +420,7 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { .. }));
     // Retry synchronously on the original borrowed owner; no second execution.
     let journals = carrier
-        .prepare_journals(provider, reputation, |original| {
+        .prepare_journals(journal_shells, provider, reputation, |original| {
             inspect_original(&original);
             admit_journals_for_test(original)
         })
@@ -530,17 +554,22 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     let released = Arc::new(AtomicUsize::new(0));
     let mut admissions = 0;
     let journals = prepared
-        .prepare_journals(None, None, |original| {
-            admissions += 1;
-            let original_state = original.state;
-            admit_journals_for_test(original)?;
-            assert_eq!(original_state.world.external_event_buf, original_events);
-            assert_eq!(
-                original_state.world.musubi_resolver_index_checkpoints.len(),
-                1
-            );
-            Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |original| {
+                admissions += 1;
+                let original_state = original.state;
+                admit_journals_for_test(original)?;
+                assert_eq!(original_state.world.external_event_buf, original_events);
+                assert_eq!(
+                    original_state.world.musubi_resolver_index_checkpoints.len(),
+                    1
+                );
+                Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released)))
+            },
+        )
         .unwrap();
     assert_eq!(admissions, 1);
     assert_eq!(released.load(Ordering::SeqCst), 0);
@@ -667,16 +696,21 @@ fn prepared_journals_capture_dirty_telemetry_from_original_world() {
         .musubi_replication_shortfall_releases
         .get_mut() = 17;
     let journals = prepared
-        .prepare_journals(None, None, |original| {
-            assert!(original.state.world.parliament_attempt_counts.is_dirty());
-            assert!(original.state.world.citizens.is_dirty());
-            assert_eq!(
-                *original.state.world.parliament_attempt_counts.get(),
-                counts
-            );
-            assert_eq!(original.state.world.citizens.len(), 1);
-            admit_journals_for_test(original)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |original| {
+                assert!(original.state.world.parliament_attempt_counts.is_dirty());
+                assert!(original.state.world.citizens.is_dirty());
+                assert_eq!(
+                    *original.state.world.parliament_attempt_counts.get(),
+                    counts
+                );
+                assert_eq!(original.state.world.citizens.len(), 1);
+                admit_journals_for_test(original)
+            },
+        )
         .unwrap();
     assert_eq!(
         journals.effects.committed_parliament_attempt_counts,
@@ -737,7 +771,12 @@ fn prepared_journals_preserve_clean_parliament_gauge_suppression() {
         .musubi_replication_shortfall_releases
         .get();
     let journals = prepared
-        .prepare_journals(None, None, admit_journals_for_test)
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            admit_journals_for_test,
+        )
         .unwrap();
     assert_eq!(journals.effects.committed_parliament_attempt_counts, None);
     assert_eq!(journals.effects.committed_citizens_total, None);
@@ -761,7 +800,12 @@ fn complete_carrier_journals_move_to_a_worker_after_the_original_state_is_droppe
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
     let prefix = prepared.execution_prefix_commitment();
     let journals = prepared
-        .prepare_journals(None, None, admit_journals_for_test)
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            admit_journals_for_test,
+        )
         .unwrap();
     drop(state);
     assert!(
@@ -811,9 +855,12 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
     let released = Arc::new(AtomicBool::new(false));
     let (carrier, error) = {
         let failure = prepared
-            .prepare_journals(Some(predecessor), None, |_| {
-                Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released)))
-            })
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                Some(predecessor),
+                None,
+                |_| Ok::<_, std::convert::Infallible>(Reservation(Arc::clone(&released))),
+            )
             .err()
             .expect("configured archive bound refuses");
         match failure {
@@ -1011,11 +1058,16 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
         let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
             .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
         let journals = prepared
-            .prepare_journals(Some(provider_owner), Some(reputation_owner), |original| {
-                assert!(original.provider.is_some());
-                assert!(original.reputation.is_some());
-                admit_journals_for_test(original)
-            })
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                Some(provider_owner),
+                Some(reputation_owner),
+                |original| {
+                    assert!(original.provider.is_some());
+                    assert!(original.reputation.is_some());
+                    admit_journals_for_test(original)
+                },
+            )
             .unwrap();
         assert!(journals.provider_capture.is_some());
         assert!(journals.reputation_capture.is_some());
@@ -1077,6 +1129,9 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
     );
     let provider_owner = reserve_provider_for_test(&provider, &state, &proposal, &context);
     let reputation_owner = reserve_reputation_for_test(&reputation, &state, &proposal, &context);
+    let (_, shell_bytes) = CarrierJournalShellReservation::<()>::demand().unwrap();
+    let budget = mv::allocation::AllocationBudget::new(shell_bytes);
+    let journal_shells = PreparedCarrier::reserve_journal_shells(&budget).unwrap();
     let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare archive candidate: {error}"));
     let prefix = prepared.execution_prefix_commitment();
@@ -1087,6 +1142,7 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
         let failure = reputation
             .with_index_reader_for_test(|| {
                 prepared.prepare_journals(
+                    journal_shells,
                     Some(provider_owner),
                     Some(reputation_owner),
                     admit_journals_for_test,
@@ -1114,6 +1170,7 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
             .poll(&mut Context::from_waker(Waker::noop())),
         Poll::Ready(())
     ));
+    assert_eq!(budget.reserved_bytes(), shell_bytes);
     let original_box = std::ptr::from_ref(carrier.as_ref());
     let provider_bytes = carrier
         .provider
@@ -1141,6 +1198,11 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
         .expect("another real reader still refuses the same owner");
     assert_eq!(std::ptr::from_ref(carrier.as_ref()), original_box);
     assert_eq!(
+        budget.reserved_bytes(),
+        shell_bytes,
+        "retry retains the same charged Box"
+    );
+    assert_eq!(
         carrier
             .provider
             .as_ref()
@@ -1155,6 +1217,10 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
     })
     .join()
     .unwrap();
+    assert_eq!(
+        budget.reserved_bytes(),
+        shell_bytes - std::alloc::Layout::new::<StagedCarrierCapture<()>>().size()
+    );
     assert_eq!(journals.execution_prefix_commitment(), prefix);
     assert!(Arc::ptr_eq(
         journals.source_prefix.inventory(),
@@ -1171,6 +1237,8 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
     ] {
         assert_eq!(std::fs::read_dir(root.join(relative)).unwrap().count(), 0);
     }
+    drop(journals);
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]
@@ -1212,7 +1280,12 @@ fn archive_original_capture_identity_refusal_retains_static_recovery_owner() {
             .unwrap_or_else(|(_, error)| panic!("prepare original candidate: {error}"));
         let prefix = prepared.execution_prefix_commitment();
         let failure = prepared
-            .prepare_journals(None, Some(owner), admit_journals_for_test)
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+                None,
+                Some(owner),
+                admit_journals_for_test,
+            )
             .err()
             .expect("reserved identity must match original State exactly");
         let CarrierJournalPreparationError::ArchivePreparation { carrier, error } = failure else {
@@ -1264,10 +1337,15 @@ fn journal_resource_refusal_precedes_geometry_projection() {
     assert!(prepared.state.prepare_carrier_geometry().is_err());
     let mut called = false;
     let error = prepared
-        .prepare_journals(None, None, |_| {
-            called = true;
-            Err::<(), _>(Capacity::Exhausted)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| {
+                called = true;
+                Err::<(), _>(Capacity::Exhausted)
+            },
+        )
         .err()
         .expect("local capture refusal");
     assert!(called);
@@ -1311,13 +1389,18 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
     let released = Arc::new(AtomicUsize::new(0));
     let originals_released_first = Arc::new(AtomicBool::new(false));
     let error = prepared
-        .prepare_journals(None, None, |_| {
-            Ok::<_, std::convert::Infallible>(Reservation {
-                state: &state,
-                released: Arc::clone(&released),
-                originals_released_first: Arc::clone(&originals_released_first),
-            })
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| {
+                Ok::<_, std::convert::Infallible>(Reservation {
+                    state: &state,
+                    released: Arc::clone(&released),
+                    originals_released_first: Arc::clone(&originals_released_first),
+                })
+            },
+        )
         .err()
         .expect("geometry drift refuses capture");
     assert!(matches!(error, CarrierJournalPreparationError::Geometry(_)));
@@ -1342,11 +1425,16 @@ fn carrier_journal_shell_plan_precedes_execution_and_survives_capture() {
     let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
     let journals = prepared
-        .prepare_journals(None, None, |inputs| {
-            assert_eq!(inputs.world_journal_shell_bytes().unwrap(), bytes);
-            assert_eq!(budget.reserved_bytes(), bytes);
-            Ok::<_, std::convert::Infallible>(reservation)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |inputs| {
+                assert_eq!(inputs.world_journal_shell_bytes().unwrap(), bytes);
+                assert_eq!(budget.reserved_bytes(), bytes);
+                Ok::<_, std::convert::Infallible>(reservation)
+            },
+        )
         .unwrap_or_else(|error| panic!("capture candidate: {error:?}"));
     assert_eq!(budget.reserved_bytes(), bytes);
     assert!(matches!(

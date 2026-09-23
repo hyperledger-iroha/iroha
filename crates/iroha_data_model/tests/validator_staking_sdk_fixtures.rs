@@ -1,0 +1,303 @@
+//! Rust-authored first-release validator and staking SDK codec fixtures.
+//!
+//! These rows pin DTO wire shape only. Cryptographic and committee activation
+//! validity is exercised by Core and disposable-network qualification.
+
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    asset::AssetId,
+    block::{BlockHeader, consensus_v2::ValidatorPower},
+    consensus::{
+        GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgConstantProofV1,
+        GlobalThresholdBeaconDkgDealerCommitmentV1, GlobalThresholdBeaconDkgEncryptedShareV1,
+        GlobalThresholdBeaconDkgRecipientKeyV1, GlobalThresholdBeaconDkgSessionV1,
+        GlobalThresholdBeaconDkgShareAcceptanceV1, GlobalThresholdBeaconDkgTranscriptV1,
+    },
+    isi::{
+        kagemusha_v1::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+            KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
+        },
+        staking::{PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer},
+    },
+    nexus::{
+        PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+        PublicLaneRegistrationPreconditionV1, ValidatorCommitteeCredentialsV1,
+        ValidatorCommitteePreparationV1, ValidatorCommitteeTransitionV1,
+    },
+    parameter::system::SumeragiNposParameters,
+};
+use iroha_model_base::{peer::PeerId, topology::LaneId};
+use iroha_primitives::numeric::Quantity;
+use norito::codec::Encode;
+
+fn key(seed: u8, algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("deterministic checked key")
+}
+
+fn network() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"validator-staking-sdk-wire-v1",
+    )))
+}
+
+fn peers() -> Vec<PeerId> {
+    let mut peers = (1_u8..=4)
+        .map(|seed| PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone()))
+        .collect::<Vec<_>>();
+    peers.sort();
+    peers
+}
+
+fn authority(
+    network_id: NetworkId,
+    peers: &[PeerId],
+    generation: u64,
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        generation,
+        validators: peers
+            .iter()
+            .enumerate()
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).unwrap(); 32],
+                ep_proof_public_key: [u8::try_from(index + 11).unwrap(); 32],
+            })
+            .collect(),
+    }
+}
+
+fn dkg_session(network_id: NetworkId) -> GlobalThresholdBeaconDkgSessionV1 {
+    GlobalThresholdBeaconDkgSessionV1 {
+        version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+        network_id,
+        session_id: [0x31; 32],
+        attempt_id: [0x32; 32],
+        authority_generation: 1,
+        roster_hash: [0x33; 32],
+        committee_size: 4,
+        threshold: 2,
+        start_height: 101,
+        commitments_end_height: 111,
+        deliveries_end_height: 121,
+        acceptances_end_height: 131,
+    }
+}
+
+fn dkg_transcript(
+    session: GlobalThresholdBeaconDkgSessionV1,
+    peers: &[PeerId],
+) -> GlobalThresholdBeaconDkgTranscriptV1 {
+    let signature = Signature::from_bytes(&[0x42; 96]);
+    let recipient_keys = peers
+        .iter()
+        .enumerate()
+        .map(
+            |(index, validator)| GlobalThresholdBeaconDkgRecipientKeyV1 {
+                recipient_index: u16::try_from(index + 1).unwrap(),
+                validator: validator.clone(),
+                x25519_public_key: [u8::try_from(index + 1).unwrap(); 32],
+                mlkem768_public_key: vec![u8::try_from(index + 7).unwrap(); 1184],
+                signature: signature.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    let dealer_commitments = (1_u16..=4)
+        .map(|dealer_index| GlobalThresholdBeaconDkgDealerCommitmentV1 {
+            dealer_index,
+            coefficient_commitments: vec![[u8::try_from(dealer_index).unwrap() + 0x10; 96]; 2],
+            constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
+                commitment: [u8::try_from(dealer_index).unwrap() + 0x20; 96],
+                response: [u8::try_from(dealer_index).unwrap() + 0x30; 32],
+            },
+            signature: signature.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut encrypted_shares = Vec::new();
+    let mut share_acceptances = Vec::new();
+    for dealer_index in 1_u16..=4 {
+        for recipient_index in 1_u16..=4 {
+            encrypted_shares.push(GlobalThresholdBeaconDkgEncryptedShareV1 {
+                dealer_index,
+                recipient_index,
+                dealer_commitment_hash: [u8::try_from(dealer_index).unwrap(); 32],
+                recipient_key_hash: [u8::try_from(recipient_index).unwrap(); 32],
+                delivery_height: 120,
+                ephemeral_x25519_public_key: [0x51; 32],
+                mlkem768_ciphertext: vec![0x52; 1088],
+                encrypted_share: vec![0x53; 128],
+                signature: signature.clone(),
+            });
+            share_acceptances.push(GlobalThresholdBeaconDkgShareAcceptanceV1 {
+                dealer_index,
+                recipient_index,
+                dealer_commitment_hash: [u8::try_from(dealer_index).unwrap(); 32],
+                encrypted_share_hash: [0x54; 32],
+                accepted_height: 130,
+                signature: signature.clone(),
+            });
+        }
+    }
+    GlobalThresholdBeaconDkgTranscriptV1 {
+        session,
+        generator_h: [0x55; 96],
+        generator_v: [0x56; 96],
+        dealer_commitments,
+        recipient_keys,
+        encrypted_shares,
+        share_acceptances,
+        qualified_dealers: vec![1, 2, 3, 4],
+        event_hash: [0x57; 32],
+        finalized_at_height: 131,
+    }
+}
+
+fn fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
+    let network_id = network();
+    let peers = peers();
+    let genesis_authority = authority(network_id, &peers, 0);
+    let successor_authority = authority(network_id, &peers, 1);
+    let genesis_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height: 100,
+        authority_generation: 0,
+        authority_id: genesis_authority.authority_id().unwrap(),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    let session = dkg_session(network_id);
+    let transcript = dkg_transcript(session, &peers);
+    let installed = InstalledBeaconEpochBindingV1 {
+        session_id: session.session_id,
+        transcript_hash: [0x58; 32],
+    };
+    let activation = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch: 2,
+        first_height: 201,
+        last_height: 300,
+        authority_generation: 1,
+        authority_id: successor_authority.authority_id().unwrap(),
+        beacon: BeaconEpochBindingV1::Installed(installed),
+        previous_authorization_id: [0x59; 32],
+        transition_id: [0x5a; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Activate,
+    };
+    let preparation = ValidatorCommitteePreparationV1 {
+        version: 1,
+        network_id,
+        selection_epoch: 0,
+        selection_height: 100,
+        selection_anchor: HashOf::from_untyped_unchecked(Hash::new(b"sdk-selection-anchor")),
+        target_epoch: 2,
+        first_height: 201,
+        last_height: 300,
+        authority_generation: 1,
+        preparing_authorization_id: [0x61; 32],
+        election_seed: [0x62; 32],
+        roster: peers
+            .iter()
+            .cloned()
+            .map(|validator| ValidatorPower {
+                validator,
+                power: 1,
+            })
+            .collect(),
+        validator_set_pops: vec![vec![0x63; 96]; 4],
+    };
+    let transition = ValidatorCommitteeTransitionV1 {
+        preparation,
+        credentials: Some(ValidatorCommitteeCredentialsV1 {
+            authority: successor_authority,
+            beacon: installed,
+        }),
+        readiness: Vec::new(),
+        outcome: Some(activation),
+    };
+    let staker = AccountId::new(key(0x71, Algorithm::Ed25519).public_key().clone());
+    let custody = AccountId::new(key(0x72, Algorithm::Ed25519).public_key().clone());
+    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let plan = PublicLaneMonetaryPlanV1 {
+        network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+        valid_until_height: 210,
+        source_asset: AssetId::new(xor.clone(), staker.clone()),
+        destination_asset: AssetId::new(xor, custody),
+        amount: Quantity::from(1000_u64),
+        precondition: PublicLaneMonetaryPreconditionV1::Registration(
+            PublicLaneRegistrationPreconditionV1 {
+                activation_height: 201,
+            },
+        ),
+    };
+    let new_peer_key = key(0x73, Algorithm::Ed25519);
+    let new_peer = PeerId::new(new_peer_key.public_key().clone());
+    let consent = PublicLanePeerBindingAuthorization::new(
+        network_id,
+        LaneId::SINGLE,
+        staker.clone(),
+        new_peer.clone(),
+        201,
+        peers[0].clone(),
+    );
+    let rebind = RebindPublicLaneValidatorPeer::new(
+        LaneId::SINGLE,
+        staker,
+        new_peer,
+        SignatureOf::try_new(new_peer_key.private_key(), &consent).unwrap(),
+    );
+    vec![
+        ("authority_generation", genesis_authority.encode()),
+        ("epoch_authorization", genesis_authorization.encode()),
+        ("dkg_session", session.encode()),
+        ("dkg_transcript", transcript.encode()),
+        ("committee_transition", transition.encode()),
+        ("monetary_plan", plan.encode()),
+        ("rebind_peer", rebind.encode()),
+    ]
+}
+
+#[test]
+fn committed_validator_staking_sdk_fixtures_match_current_rust_records() {
+    let committed = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/validator_staking/norito_v1.tsv"
+    ));
+    let rows = committed
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.split_once('\t').expect("kind and canonical hex"))
+        .collect::<Vec<_>>();
+    let expected = fixture_rows();
+    assert_eq!(rows.len(), expected.len(), "fixture row count changed");
+    for ((kind, bytes), (committed_kind, committed_hex)) in expected.into_iter().zip(rows) {
+        assert_eq!(committed_kind, kind, "fixture order or identity changed");
+        assert_eq!(
+            committed_hex,
+            hex::encode(bytes),
+            "{kind} Norito bytes drifted"
+        );
+    }
+}
+
+#[test]
+#[ignore = "regenerate fixtures/validator_staking/norito_v1.tsv after source model changes"]
+fn print_validator_staking_sdk_fixtures() {
+    for (kind, bytes) in fixture_rows() {
+        println!(
+            "VALIDATOR_STAKING_SDK_FIXTURE={kind}\t{}",
+            hex::encode(bytes)
+        );
+    }
+}

@@ -20,7 +20,7 @@ use iroha_data_model::{
         native_amx_application_manifest_empty_root,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
@@ -45,11 +45,11 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> KagemushaMintFinalityEpochRosterV1 {
-    KagemushaMintFinalityEpochRosterV1 {
+) -> KagemushaMintFinalityAuthorityGenerationV1 {
+    KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch,
+        generation: epoch,
         validators: roster
             .iter()
             .enumerate()
@@ -72,17 +72,29 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     let network_id = network_id(0x71);
-    let mint_finality_roster = mint_finality_roster(network_id, 2, &roster);
-    let mint_finality_epoch_id = mint_finality_roster
-        .finality_epoch_id()
-        .expect("valid fixture mint-finality roster");
+    let mint_finality_roster = mint_finality_roster(network_id, 0, &roster);
+    let mint_finality_authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            first_height: 1,
+            last_height: 100,
+            authority_generation: 0,
+            authority_id: mint_finality_roster.authority_id().unwrap(),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32],
+            transition_id: [0; 32],
+            decision:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+        };
     HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
-        epoch: 2,
-        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+        epoch: 0,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_roster,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

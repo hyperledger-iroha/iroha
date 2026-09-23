@@ -208,6 +208,16 @@ impl NativeLaneDriver {
         }
         match input {
             NativeLaneInput::Control(envelope) => {
+                // The existing occurrence still owns reducer delivery. Exact authenticated
+                // retransmissions do not create another queue entry or consume the space
+                // needed by a different quorum share while body work is backpressured.
+                if self
+                    .ingress
+                    .iter()
+                    .any(|(instance, original)| *instance == id && original == &envelope)
+                {
+                    return NativeLaneAdmission::Accepted;
+                }
                 if self.ingress.len() == self.limits.ingress.get() {
                     return NativeLaneAdmission::Retry(NativeLaneInput::Control(envelope));
                 }

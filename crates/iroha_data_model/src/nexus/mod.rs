@@ -27,6 +27,8 @@ use std::{
 };
 use thiserror::Error;
 mod axt;
+mod committee;
+mod committee_status;
 mod compliance;
 mod endorsement;
 mod fee_sponsor_program;
@@ -37,6 +39,8 @@ mod private_settlement;
 mod relay;
 mod runtime_catalog;
 pub use axt::*;
+pub use committee::*;
+pub use committee_status::*;
 pub use compliance::*;
 pub use endorsement::*;
 pub use fee_sponsor_program::*;
@@ -52,6 +56,8 @@ pub mod staking;
 pub use relay::*;
 pub use runtime_catalog::*;
 pub use staking::*;
+mod staking_preparation;
+pub use staking_preparation::*;
 /// Consensus-wide maximum number of simultaneously active execution lanes.
 ///
 /// This is a protocol admission bound shared by lifecycle catalogs, merge

@@ -1273,7 +1273,7 @@ fn successful_claim_fee_exempt_instructions(
     ) else {
         return false;
     };
-    let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
+    let Some(asset_def) = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
         observation_time_ms,
@@ -3993,7 +3993,7 @@ fn evaluate_nexus_fee_admission_payload(
     {
         reject_authority_lane_relay_burn_fee(&payload.authority)?;
     }
-    let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
+    let asset_definition_id = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
         observation_time_ms,
@@ -5123,7 +5123,7 @@ impl Executor {
         } else {
             NexusFeePayer::Payer
         };
-        let asset_def = crate::block::parse_asset_definition_literal_with_world(
+        let asset_def = crate::block::resolve_network_xor_asset_definition(
             &state_transaction.world,
             &cfg.fee_asset_id,
             state_transaction.block_unix_timestamp_ms(),
@@ -9913,7 +9913,7 @@ mod tests {
         let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
                 version: crate::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x31; 32]),
                 effective_height: 2,
                 network_id: executor_test_network_id(b"initial threshold lifecycle admission"),
@@ -10062,6 +10062,25 @@ mod tests {
             );
         }
     }
+    fn staking_classification_plan(
+        account: &AccountId,
+        precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1,
+    ) -> iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+        let asset = iroha_data_model::asset::AssetId::new(
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .expect("canonical network currency"),
+            account.clone(),
+        );
+        let mut plan = iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+            asset.clone(),
+            asset,
+            Quantity::one(),
+        );
+        plan.precondition = precondition;
+        plan
+    }
     #[test]
     fn initial_executor_validator_lifecycle_requires_owner_without_peer_management() {
         use iroha_data_model::isi::staking::{
@@ -10083,6 +10102,14 @@ mod tests {
                 authority.clone(),
                 Quantity::from(1_u64),
                 Metadata::default(),
+                staking_classification_plan(
+                    &authority,
+                    iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                            activation_height: 1,
+                        },
+                    ),
+                ),
             )
             .into(),
             ActivatePublicLaneValidator::new(lane, authority.clone()).into(),
@@ -10111,16 +10138,39 @@ mod tests {
 
         let validator = checked_account_id();
         let staker = checked_account_id();
-        let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
+        let rebind_key = checked_keypair();
+        let peer = iroha_model_base::peer::PeerId::new(rebind_key.public_key().clone());
+        let rebind_consent =
+            iroha_data_model::isi::staking::PublicLanePeerBindingAuthorization::new(
+                executor_test_network_id(b"staking-classification-rebind"),
+                iroha_model_base::topology::LaneId::SINGLE,
+                validator.clone(),
+                peer.clone(),
+                1,
+                iroha_model_base::peer::PeerId::new(validator.expect_single_signatory().clone()),
+            );
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
         let instructions: [InstructionBox; 5] = [
             RebindPublicLaneValidatorPeer::new(
                 iroha_model_base::topology::LaneId::SINGLE,
                 validator.clone(),
                 peer,
+                iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
+                    .expect("staking classification peer consent"),
             )
             .into(),
             BondPublicLaneStake {
+                monetary_plan: staking_classification_plan(
+                    &staker,
+                    iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Bond(
+                        iroha_data_model::nexus::PublicLaneBondPreconditionV1 {
+                            activation_height: 1,
+                            peer_id: iroha_model_base::peer::PeerId::new(
+                                validator.expect_single_signatory().clone(),
+                            ),
+                        },
+                    ),
+                ),
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator.clone(),
                 staker: staker.clone(),
@@ -10138,6 +10188,15 @@ mod tests {
             }
             .into(),
             FinalizePublicLaneUnbond {
+                monetary_plan: staking_classification_plan(
+                    &staker,
+                    iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
+                        iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 {
+                            activation_height: 1,
+                            request_hash: request_id,
+                        },
+                    ),
+                ),
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator,
                 staker: staker.clone(),
@@ -10147,7 +10206,13 @@ mod tests {
             ClaimPublicLaneRewards {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 account: staker,
-                upto_epoch: None,
+                claim_plan: iroha_data_model::nexus::PublicLaneRewardClaimPlanV1 {
+                    network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis,
+                    valid_until_height: 1,
+                    expected_state: None,
+                    records: vec![],
+                    sources: vec![],
+                },
             }
             .into(),
         ];
@@ -10192,8 +10257,10 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                network_id, 0, 0, 1, 1, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -10206,8 +10273,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
             execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -13292,6 +13359,19 @@ mod tests {
         state_transaction.nexus.fees.settlement_mode = settlement_mode;
         configure_pipeline_fee_snapshot(state_transaction, tech_account, asset_definition_id, 1);
     }
+    fn install_fee_fixture_network_currency(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        fee_asset: &AssetDefinitionId,
+    ) {
+        let mut parameters = state_transaction
+            .world
+            .sumeragi_npos_parameters()
+            .unwrap_or_default();
+        parameters.xor_asset_definition_id = fee_asset.clone();
+        state_transaction.world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(parameters.into_custom_parameter()),
+        );
+    }
     fn configure_direct_nexus_fee_snapshot(
         state_transaction: &mut StateTransaction<'_, '_>,
         fee_asset: &AssetDefinitionId,
@@ -13299,6 +13379,7 @@ mod tests {
         state_transaction.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(state_transaction, fee_asset);
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
@@ -14261,6 +14342,13 @@ mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = nexus_asset.canonical_address();
+        let mut params = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        params.xor_asset_definition_id = nexus_asset.clone();
+        let mut parameter_block = world.parameters.block();
+        parameter_block.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            params.into_custom_parameter(),
+        ));
+        parameter_block.commit();
         nexus.fees.fee_sink_account_id = sink.to_string();
         let mut pipeline = Pipeline::default();
         pipeline.gas.accepted_assets = vec![gas_asset.canonical_address()];
@@ -14422,6 +14510,7 @@ mod tests {
         state_tx.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         state_tx.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(&mut state_tx, &fee_asset);
         state_tx.nexus.fees.base_fee = Quantity::from(1_u32);
         state_tx.nexus.fees.per_byte_fee = Quantity::zero();
         state_tx.nexus.fees.per_instruction_fee = Quantity::zero();
@@ -14503,6 +14592,7 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(&mut state_transaction, &fee_asset);
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();

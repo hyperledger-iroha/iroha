@@ -857,10 +857,18 @@ def test_runtime_provider_deployment_markers_track_split_broker_modules() -> Non
         "mod launcher;",
         'include!("runtime_provider_broker/protocol.rs");',
     )
-    assert markers["crates/irohad/src/runtime_provider_broker/platform.rs"] == (
+    assert markers["crates/iroha_config/src/parameters/defaults.rs"] == (
         "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock",
         "/private/var/iroha/run/runtime-provider-broker-v1.sock",
+    )
+    assert markers["crates/irohad/src/runtime_provider_broker/platform.rs"] == (
+        'include!("platform_server_qualification.rs");',
         'include!("pop_recipient_client.rs");',
+    )
+    assert markers["crates/irohad/src/runtime_provider_broker/platform_server_qualification.rs"] == (
+        "EndpointPolicy",
+        "if policy.verify_all_ancestors {",
+        "verify_directory(ancestor, policy.expected_service_uid, true)?;",
     )
     assert markers[
         "crates/irohad/src/runtime_provider_broker/platform_server_transport.rs"

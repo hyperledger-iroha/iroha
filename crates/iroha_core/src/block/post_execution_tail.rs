@@ -115,15 +115,18 @@ impl ValidBlock {
         )
         .map_err(|error| Self::execution_context_error(error.to_string()))?;
         let source = state
-            .prepare_canonical_native_lane_batch_source(block)
-            .map_err(Self::execution_context_error)?;
+            .prepare_canonical_native_lane_batch_source(
+                block.clone(),
+                crate::state::NativeExecutionResourceAdmission::for_test_carrier(block),
+            )
+            .map_err(|error| Self::execution_context_error(error.to_string()))?;
         let crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) = source else {
             return Err(Self::execution_context_error(
                 "native execution requires current complete authenticated first sources",
             ));
         };
         let recorded = source
-            .record_execution(block.clone(), context)
+            .record_execution(context)
             .map_err(|error| Self::execution_context_error(error.to_string()))?
             .ok_or_else(|| {
                 Self::execution_context_error("native source observation changed before execution")

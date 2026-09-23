@@ -21,6 +21,7 @@ use iroha_config::parameters::{
 use iroha_data_model::NetworkId;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use std::fmt;
+mod beacon_provisioning;
 mod binding_collection;
 mod binding_types;
 mod catalog;
@@ -1125,9 +1126,7 @@ impl IrohaRuntimeProviderBindingV1 {
     }
     /// Return complete provider-scoped signer and independent observer public pins.
     #[must_use]
-    pub const fn stream_token_signer_binding(
-        &self,
-    ) -> Option<&StreamTokenSignerRuntimeBindingV1> {
+    pub const fn stream_token_signer_binding(&self) -> Option<&StreamTokenSignerRuntimeBindingV1> {
         self.stream_token_signer_binding.as_ref()
     }
     /// Return the exact public gateway-admission qualification.
@@ -5033,8 +5032,9 @@ mod tests {
             .expect("Ed25519 public key width");
         let tokens = &mut config.torii.sorafs_storage.stream_tokens;
         tokens.enabled = true;
-        tokens.signer =
-            Some(super::stream_token_signer_binding::tests::hardware_config(signer_public_key));
+        tokens.signer = Some(super::stream_token_signer_binding::tests::hardware_config(
+            signer_public_key,
+        ));
         tokens.admission_provider_handle =
             Some("sealed-cas://sorafs/stream-token/admission-primary".to_owned());
         tokens.admission_provider_revision = Some(4);

@@ -143,8 +143,9 @@ use iroha_data_model::{
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
         FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1, PublicLaneRewardRecord, PublicLaneStakeShare,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardClaimStateV1,
+        PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
@@ -154,10 +155,7 @@ use iroha_data_model::{
         DefiOracleAttestation, DefiOracleAttestationKey, FeedConfig, FeedId, OracleDispute,
         OracleDisputeId, OracleProviderKey, OracleProviderStats, TwitterBindingRecord,
     },
-    parameter::{
-        CustomParameterId, Parameters,
-        system::{KagemushaMintFinalityNextEpochParameterV1, SumeragiNposParameters},
-    },
+    parameter::{CustomParameterId, Parameters, system::SumeragiNposParameters},
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{CanonicalHistoryError, FindError, QueryExecutionFail},
@@ -309,13 +307,14 @@ fn append_merge_write_set_component(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(bytes);
 }
-fn append_merge_storage_delta<K, V>(
+fn append_merge_storage_delta<K, V, M>(
     out: &mut Vec<u8>,
     name: &'static str,
-    storage: &StorageBlock<'_, K, V>,
+    storage: &StorageBlock<'_, K, V, M>,
 ) where
     K: MvKey + Encode,
     V: MvValue + Encode,
+    M: mv::storage::StorageMode<K, V>,
 {
     if !storage.is_dirty() {
         return;
@@ -388,7 +387,9 @@ mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
 pub(crate) use carrier_preparation::{
-    PreparedCarrier, PublishedCarrier, PublishedNativeApply, RetainedCarrier,
+    CarrierArchivePreparationError, CarrierJournalInputs, CarrierJournalPreparationError,
+    CarrierJournalShellReservation, PreparedCarrier, PublishedCarrier, PublishedNativeApply,
+    RetainedCarrier,
 };
 mod committed_hash_journal;
 #[cfg(test)]
@@ -431,7 +432,11 @@ pub(crate) use lane_decision_batch::NativeExecutionCustody;
     )
 )]
 mod native_lane_batch_replay;
+mod native_execution_resources;
 mod native_lane_fastpq;
+pub(crate) use native_execution_resources::NativeExecutionResourceAdmission;
+#[cfg(test)]
+pub(crate) use native_execution_resources::NativeSourceStructuralDemand;
 pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
 #[cfg(test)]
 pub(crate) use native_lane_batch_replay::{
@@ -720,10 +725,9 @@ pub fn threshold_key_lifecycle_certificate_preimage_v1(
 ) -> Result<Vec<u8>, ThresholdKeyLifecycleCertificateErrorV1> {
     use iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleActionV1 as Action;
     let action = match certificate.action {
-        Action::InstallGlobalBeaconKey => 1,
-        Action::RetireGlobalBeaconKey => 2,
-        Action::InstallParliamentTleKey => 3,
-        Action::RetireParliamentTleKey => 4,
+        Action::FinalizeGlobalBeaconKey => 1,
+        Action::InstallParliamentTleKey => 2,
+        Action::RetireParliamentTleKey => 3,
     };
     let public_state_len = u64::try_from(certificate.public_state.len())
         .map_err(|_| ThresholdKeyLifecycleCertificateErrorV1::InvalidShape)?;
@@ -784,7 +788,7 @@ pub fn verify_threshold_key_lifecycle_certificate_v1(
     use iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleActionV1 as Action;
     let installing = matches!(
         certificate.action,
-        Action::InstallGlobalBeaconKey | Action::InstallParliamentTleKey
+        Action::FinalizeGlobalBeaconKey | Action::InstallParliamentTleKey
     );
     if certificate.version != THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1
         || certificate.effective_height != current_height
@@ -874,7 +878,7 @@ mod threshold_key_lifecycle_certificate_tests {
         let (roster, keys): (Vec<_>, Vec<_>) = validators.into_iter().unzip();
         let mut certificate = ThresholdKeyLifecycleCertificateV1 {
             version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-            action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+            action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
             expected_active_session_id: Some([0x41; 32]),
             effective_height: 17,
             network_id: network_id(0x31),
@@ -1019,18 +1023,20 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let kagemusha_mint_finality_epoch_roster =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                certificate.network_id,
-                0,
-                &election_roster,
-            );
+        let authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            certificate.network_id,
+            0,
+            &election_roster,
+        );
+        let authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&authority, 0, 1, 8);
         let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
             crate::sumeragi::v2_context::GenesisContextInputs {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_authority: authority,
+                    kagemusha_mint_finality_authorization: authorization,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -1091,16 +1097,34 @@ mod threshold_key_lifecycle_certificate_tests {
         let parent_roster = sorted_roster();
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
-        let (successor_mint_finality_epoch_id, successor_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id,
-                1,
-                &successor_roster,
+        let parent_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            network_id,
+            0,
+            &parent_roster,
+        );
+        let parent_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+            &parent_authority,
+            0,
+            1,
+            1,
+        );
+        let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            network_id,
+            1,
+            &successor_roster,
+        );
+        let successor_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &parent_authorization,
+                &successor_authority,
+                9,
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
             );
         let successor_snapshot = FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: 1,
-            kagemusha_mint_finality_epoch_id: successor_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization: successor_authorization,
+            kagemusha_mint_finality_authority: successor_authority,
             epoch_end_height: 9,
             mode: ConsensusMode::Npos,
             validator_set_pops: vec![vec![0x61]; successor_roster.len()],
@@ -1114,12 +1138,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_epoch_roster:
-                        crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                            network_id,
-                            0,
-                            &parent_roster,
-                        ),
+                    kagemusha_mint_finality_authority: parent_authority,
+                    kagemusha_mint_finality_authorization: parent_authorization,
                     epoch_end_height: 1,
                     mode: ConsensusMode::Npos,
                     roster: parent_roster.clone(),
@@ -1537,6 +1557,8 @@ macro_rules! with_world_overlay_fields {
             tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
+            validator_candidate_keys,
+            validator_committee_transitions,
             global_beacon_dkg,
             global_beacon_key_sessions,
             global_beacon_active_session,
@@ -1574,7 +1596,12 @@ pub(crate) fn inspect_trigger_world_capture_for_testing(
     original: WorldBlock<'_>,
     inspect: impl FnOnce(),
 ) {
-    let journals = original.try_detach_journals(|_| Ok::<(), ()>(())).unwrap();
+    let journals = original
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| Ok::<(), ()>(()),
+        )
+        .unwrap();
     inspect();
     drop(journals);
 }
@@ -1589,6 +1616,27 @@ mod world_attached_publication_tests;
 
 #[macro_use]
 mod world_acquisition;
+pub(crate) mod kagemusha_operation_indexes;
+use kagemusha_operation_indexes::{OperationIndex, OperationIndexMode};
+
+// Four fixed operation indexes admit child checkpoints through their original pool.
+macro_rules! world_field_transaction {
+    ($field:expr, kagemusha_mint_credit_operations) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, kagemusha_issuance_operations) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, kagemusha_redemption_id_operations) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, kagemusha_terminal_nullifier_operations) => {
+        $field.try_transaction_admitted()?
+    };
+    ($field:expr, $ordinary:ident) => {
+        $field.transaction()
+    };
+}
 
 macro_rules! build_world_transaction_from_fields {
     (
@@ -1607,9 +1655,9 @@ macro_rules! build_world_transaction_from_fields {
             dataspace_catalog: fields.dataspace_catalog.clone(),
             axt_last_authorization_identities: authorization_identities,
             axt_authorization_transitioned: BTreeSet::new(),
-            $($prefix: fields.$prefix.transaction(),)*
-            $($privacy: fields.$privacy.transaction(),)*
-            $($suffix: fields.$suffix.transaction(),)*
+            $($prefix: world_field_transaction!(fields.$prefix, $prefix),)*
+            $($privacy: world_field_transaction!(fields.$privacy, $privacy),)*
+            $($suffix: world_field_transaction!(fields.$suffix, $suffix),)*
             axt_lane_config: $axt_lane_config,
             axt_current_slot: $axt_current_slot,
             axt_lane_map: $axt_lane_map,
@@ -1675,7 +1723,9 @@ pub struct BlockHashes {
 #[path = "state/block_hashes_admission.rs"]
 mod block_hashes_admission;
 use block_hashes_admission::BlockHashPolicy;
-pub use block_hashes_admission::{BlockHashAdmissionError, StateBlockStartError};
+pub use block_hashes_admission::{StateBlockStartError, StateStorageAdmissionError};
+#[path = "state/local_storage_refusal.rs"]
+mod local_storage_refusal;
 type BlockHashMode = concread::bptree::Prepaid<BlockHashPolicy>;
 type BlockHashMap = concread::bptree::BptreeMap<usize, HashOf<BlockHeader>, BlockHashMode>;
 type BlockHashWork = concread::bptree::BptreeMapOwned<usize, HashOf<BlockHeader>, BlockHashMode>;
@@ -1703,8 +1753,10 @@ impl State {
             .map(|map| NativeLaneStateOwner(map.family()))
     }
 }
+/// The original history owner frees its exact control allocation before refund.
+type ChargedBlockHashMap = concread::shared::Shared<BlockHashMap, mv::allocation::AllocationCharge>;
 enum BlockHashStorage {
-    Owned(BlockHashMap),
+    Owned(ChargedBlockHashMap),
     EmergencyFastMapped(ReadOnlyMmap),
     EmergencyFastEmpty,
 }
@@ -1932,7 +1984,7 @@ impl BlockHashes {
     }
     fn map(&self) -> Option<&BlockHashMap> {
         match &self.inner {
-            BlockHashStorage::Owned(map) => Some(map),
+            BlockHashStorage::Owned(owner) => Some(&**owner),
             BlockHashStorage::EmergencyFastMapped(_) | BlockHashStorage::EmergencyFastEmpty => None,
         }
     }
@@ -1970,7 +2022,7 @@ impl BlockHashes {
     /// Capture the current immutable generation without copying history.
     pub fn view(&self) -> BlockHashesView<'_> {
         let inner = match &self.inner {
-            BlockHashStorage::Owned(map) => BlockHashesViewInner::Owned(map.read()),
+            BlockHashStorage::Owned(owner) => BlockHashesViewInner::Owned(owner.read()),
             BlockHashStorage::EmergencyFastMapped(mapping) => {
                 BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))
             }
@@ -1980,8 +2032,8 @@ impl BlockHashes {
     }
     fn try_view(&self) -> Result<BlockHashesView<'_>, concread::bptree::OwnedWriteError> {
         let inner = match &self.inner {
-            BlockHashStorage::Owned(map) => {
-                let view = map.try_read()?;
+            BlockHashStorage::Owned(owner) => {
+                let view = owner.try_read()?;
                 BlockHashesViewInner::Owned(view)
             }
             BlockHashStorage::EmergencyFastMapped(mapping) => {
@@ -3562,7 +3614,11 @@ pub(crate) fn certified_merge_queue_reservations(
 pub enum MergeLedgerCommitError {
     /// Local original hash-history admission refused before executing State effects.
     #[error(transparent)]
-    BlockHashAdmission(#[from] BlockHashAdmissionError),
+    StateStorageAdmission(#[from] StateStorageAdmissionError),
+    /// The original finite Native execution pool cannot fund a host allocation.
+    /// This is a local scheduling refusal, never a deterministic body verdict.
+    #[error("Native execution resource admission refused: {0}")]
+    NativeResourceAdmission(#[source] mv::allocation::AllocationRefusal),
     /// Local lane-drain evidence could not be observed or authenticated.
     /// This provenance never authorizes a deterministic proposal rejection.
     #[error("local lane drain observation requires recovery: {0}")]
@@ -5486,7 +5542,7 @@ impl json::FastJsonWrite for World {
 }
 
 /// Heap-owned storage fields of [`World`], serialized in canonical schema order.
-#[derive(Default, JsonSerialize)]
+#[derive(JsonSerialize)]
 pub struct WorldData {
     /// Iroha on-chain parameters.
     pub(crate) parameters: Cell<Parameters>,
@@ -6109,13 +6165,13 @@ pub struct WorldData {
     /// Idempotent Kagemusha V1 operation records keyed by operation id.
     pub(crate) kagemusha_reserve_operations: Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: OperationIndex,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: OperationIndex,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: OperationIndex,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: OperationIndex,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -6128,7 +6184,8 @@ pub struct WorldData {
     pub(crate) public_lane_rewards: Storage<(LaneId, u64), PublicLaneRewardRecord>,
     /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        Storage<(LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
     #[norito(skip)]
     pub(crate) public_lane_reward_accruals: Storage<(LaneId, AccountId, AssetId), Quantity>,
@@ -6224,6 +6281,12 @@ pub struct WorldData {
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: Storage<BallotAttemptId, TimedOvnLifecycleStateV1>,
     /// Public-only snapshots of active adaptive beacon DKG runs, keyed by session id.
+    /// Candidate generation publications keyed by exact network, peer and generation commitment.
+    pub(crate) validator_candidate_keys:
+        Storage<[u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
+    /// Immutable future elections and their preparation progress keyed by target epoch.
+    pub(crate) validator_committee_transitions:
+        Storage<u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
     pub(crate) global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public keys with activation and retirement metadata.
     pub(crate) global_beacon_key_sessions:
@@ -6991,13 +7054,17 @@ pub struct WorldBlockFields<'world> {
     pub(crate) kagemusha_reserve_operations:
         StorageField<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations: StorageField<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations:
+        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations: StorageField<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations:
+        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations: StorageField<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations:
+        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations: StorageField<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations:
+        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public lane validator registry.
     #[norito(skip)]
     pub(crate) public_lane_validators:
@@ -7011,10 +7078,12 @@ pub struct WorldBlockFields<'world> {
     pub(crate) public_lane_rewards: StorageField<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last completely processed reward record per lane and recipient.
     #[norito(skip)]
-    pub(crate) public_lane_reward_claims: StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        StorageField<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
     #[norito(skip)]
-    pub(crate) public_lane_reward_accruals: StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageField<'world, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     #[norito(skip)]
     pub(crate) public_lane_reward_reserves: StorageField<'world, AssetId, Quantity>,
@@ -7116,6 +7185,12 @@ pub struct WorldBlockFields<'world> {
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: StorageField<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
     /// Public-only snapshots of active adaptive beacon DKG runs.
+    /// Candidate generation publications keyed by exact network, peer and generation commitment.
+    pub(crate) validator_candidate_keys:
+        StorageField<'world, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
+    /// Immutable future elections and their preparation progress keyed by target epoch.
+    pub(crate) validator_committee_transitions:
+        StorageField<'world, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
     pub(crate) global_beacon_dkg:
         StorageField<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
@@ -7142,6 +7217,9 @@ pub struct WorldBlockFields<'world> {
     /// Block-local buffer of events pending publication to external subscribers.
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
+    // Last: every World sibling releases before original pool refunds can wake.
+    #[norito(skip)]
+    operation_index_scope: mv::allocation::OwnedAllocationScope,
 }
 impl WorldBlock<'_> {
     #[cfg(test)]
@@ -7300,6 +7378,11 @@ impl WorldBlock<'_> {
         collect_reverts!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_reverts!(self.tle_active_key_session, TleActiveKeySession);
         collect_reverts!(self.timed_ovn_evidence, TimedOvnEvidence);
+        collect_reverts!(self.validator_candidate_keys, ValidatorCandidateKeys);
+        collect_reverts!(
+            self.validator_committee_transitions,
+            ValidatorCommitteeTransition
+        );
         collect_reverts!(self.global_beacon_dkg, GlobalBeaconDkg);
         collect_reverts!(self.global_beacon_key_sessions, GlobalBeaconKeySession);
         collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
@@ -7426,6 +7509,11 @@ impl WorldBlock<'_> {
         collect_payload!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_payload!(self.tle_active_key_session, TleActiveKeySession);
         collect_payload!(self.timed_ovn_evidence, TimedOvnEvidence);
+        collect_payload!(self.validator_candidate_keys, ValidatorCandidateKeys);
+        collect_payload!(
+            self.validator_committee_transitions,
+            ValidatorCommitteeTransition
+        );
         collect_payload!(self.global_beacon_dkg, GlobalBeaconDkg);
         collect_payload!(self.global_beacon_key_sessions, GlobalBeaconKeySession);
         collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
@@ -7749,6 +7837,8 @@ impl WorldBlock<'_> {
             tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
+            validator_candidate_keys,
+            validator_committee_transitions,
             global_beacon_dkg,
             global_beacon_key_sessions,
             global_beacon_active_session,
@@ -8451,14 +8541,17 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) kagemusha_reserve_operations:
         StorageTransaction<'block, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations:
+        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations:
+        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations:
+        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from terminal nullifier to redemption operation id.
     pub(crate) kagemusha_terminal_nullifier_operations:
-        StorageTransaction<'block, [u8; 32], [u8; 32]>,
+        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -8469,7 +8562,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) public_lane_reward_claims:
         StorageTransaction<'block, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals: StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageTransaction<'block, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     pub(crate) public_lane_reward_reserves: StorageTransaction<'block, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
@@ -8555,6 +8649,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence:
         StorageTransaction<'block, BallotAttemptId, TimedOvnLifecycleStateV1>,
+    /// Candidate generation publications keyed by exact network, peer and generation commitment.
+    pub(crate) validator_candidate_keys:
+        StorageTransaction<'block, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
+    /// Immutable future elections and their preparation progress keyed by target epoch.
+    pub(crate) validator_committee_transitions:
+        StorageTransaction<'block, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
     pub(crate) global_beacon_dkg:
         StorageTransaction<'block, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     pub(crate) global_beacon_key_sessions:
@@ -10520,22 +10620,28 @@ pub struct WorldView<'world> {
     pub(crate) kagemusha_reserve_operations:
         StorageView<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations:
+        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations:
+        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations:
+        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations:
+        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
-    pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
+    pub(crate) public_lane_reward_claims:
+        StorageView<'world, (LaneId, AccountId), PublicLaneRewardClaimStateV1>,
     /// Positive accrued unpaid rewards, independently addressed by their exact source.
-    pub(crate) public_lane_reward_accruals: StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
+    pub(crate) public_lane_reward_accruals:
+        StorageView<'world, (LaneId, AccountId, AssetId), Quantity>,
     /// Unpaid reward obligations aggregated by exact custody asset.
     pub(crate) public_lane_reward_reserves: StorageView<'world, AssetId, Quantity>,
     /// Exact pinned escrow asset and positive held stake for each validator.
@@ -10622,6 +10728,12 @@ pub struct WorldView<'world> {
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: StorageView<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
     /// Public-only snapshots of active adaptive beacon DKG runs.
+    /// Candidate generation publications keyed by exact network, peer and generation commitment.
+    pub(crate) validator_candidate_keys:
+        StorageView<'world, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
+    /// Immutable future elections and their preparation progress keyed by target epoch.
+    pub(crate) validator_committee_transitions:
+        StorageView<'world, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
     pub(crate) global_beacon_dkg: StorageView<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
@@ -13922,6 +14034,8 @@ pub(crate) fn merge_beacon_parent_surface(world: &impl WorldReadOnly) -> Hash {
         )+};
     }
     capture!(
+        validator_candidate_keys,
+        validator_committee_transitions,
         global_beacon_dkg,
         global_beacon_key_sessions,
         global_beacon_active_session,
@@ -14002,6 +14116,8 @@ pub struct StateBlock<'state> {
 
 /// Original executing State fields, jointly retired by their enclosing owner.
 pub struct StateBlockFields<'state> {
+    /// First local storage refusal, sticky across every child rollback and error handler.
+    local_storage_refusal: Option<StateStorageAdmissionError>,
     /// Immutable policy inputs captured with this scope's actual predecessor.
     runtime_policy: canonical_runtime::CapturedRuntimePolicy,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
@@ -14295,7 +14411,7 @@ impl<'state> StateBlock<'state> {
                 "NPoS consensus effects must be applied exactly once before block lifecycle effects"
             ));
         }
-        let mut transaction = self.consensus_effects_transaction();
+        let mut transaction = self.consensus_effects_transaction()?;
         let outcome = crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             effects,
@@ -15517,6 +15633,8 @@ pub(crate) fn standalone_governance_ballot_instruction_v1(
 }
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
+    /// Borrow the original block refusal owner; dropping a child cannot clear it.
+    local_storage_refusal: &'block mut Option<StateStorageAdmissionError>,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
@@ -16530,13 +16648,11 @@ pub(crate) fn peer_consensus_key_gate_for_role(
     peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
 const GLOBAL_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] = &[ConsensusKeyRole::Validator];
-const PARTICIPANT_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] =
-    &[ConsensusKeyRole::Committee, ConsensusKeyRole::Validator];
+const PARTICIPANT_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] = &[ConsensusKeyRole::Committee];
 /// Return the ordered consensus-key roles accepted for one lane.
 ///
-/// Global consensus accepts only `Validator` keys. Participant lanes prefer
-/// the narrower `Committee` role but retain `Validator` compatibility for
-/// existing transparent lane deployments.
+/// Global consensus accepts only `Validator` keys. Participant lanes accept
+/// only purpose-specific `Committee` keys.
 pub(crate) fn consensus_key_roles_for_lane(lane_id: LaneId) -> &'static [ConsensusKeyRole] {
     if lane_id == LaneId::SINGLE {
         GLOBAL_LANE_CONSENSUS_KEY_ROLES
@@ -16844,12 +16960,16 @@ where
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        // A global seat must have one retained lane-zero staking owner. A
+        // participant-lane record cannot acquire global voting or slashing
+        // obligations merely because its peer also has a Validator-role key.
+        .filter(|(key, _)| key.0 == LaneId::SINGLE)
         .filter(|(key, _)| {
             replacement.is_none_or(|record| key.0 != record.lane_id || key.1 != record.validator)
         })
         .map(|(_, record)| record)
         .collect();
-    if let Some(record) = replacement {
+    if let Some(record) = replacement.filter(|record| record.lane_id == LaneId::SINGLE) {
         records.push(record);
     }
     let present_peers: std::collections::BTreeSet<PeerId> = world.peers().iter().cloned().collect();
@@ -17129,6 +17249,7 @@ mod stake_snapshot_tests {
             metadata: Metadata::default(),
             status,
             activation_height,
+            election_exit_height: deactivation_height,
             deactivation_height,
             last_reward_epoch: None,
         }
@@ -18168,7 +18289,7 @@ mod stake_snapshot_tests {
         );
     }
     #[test]
-    fn multi_lane_duplicate_peer_occupies_one_equal_vote_committee_seat() {
+    fn global_pool_requires_lane_zero_owner_and_deduplicates_equal_vote_peer() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
@@ -18196,20 +18317,26 @@ mod stake_snapshot_tests {
         }
         let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_b_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let participant_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let extra_peer_keys: Vec<_> = (0..2).map(|_| crate::state::checked_keypair()).collect();
         let peer_a = PeerId::from(peer_a_key.public_key().clone());
         let peer_b = PeerId::from(peer_b_key.public_key().clone());
+        let participant_peer = PeerId::from(participant_key.public_key().clone());
         let account_a_high = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
         let account_a_low = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
         let account_b = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+        let participant_account =
+            DMAccountId::of(crate::state::checked_keypair().public_key().clone());
         let mut wb = state.world.block();
         {
             let peers = wb.peers.get_mut();
             let _ = peers.push(peer_a.clone());
             let _ = peers.push(peer_b.clone());
+            let _ = peers.push(participant_peer.clone());
         }
         seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
         seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
+        seed_consensus_key(&mut wb, &participant_peer, ConsensusKeyStatus::Active, 0);
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, account_a_high.clone()),
             active_lane_validator_record(LaneId::SINGLE, &account_a_high, peer_a.clone(), 10_u32),
@@ -18222,6 +18349,15 @@ mod stake_snapshot_tests {
             (LaneId::SINGLE, account_b.clone()),
             active_lane_validator_record(LaneId::SINGLE, &account_b, peer_b.clone(), 5_u32),
         );
+        wb.public_lane_validators.insert(
+            (secondary_lane, participant_account.clone()),
+            active_lane_validator_record(
+                secondary_lane,
+                &participant_account,
+                participant_peer.clone(),
+                10_000_u32,
+            ),
+        );
         let extra_peers: Vec<_> = extra_peer_keys
             .iter()
             .map(|keypair| seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 3))
@@ -18231,6 +18367,15 @@ mod stake_snapshot_tests {
             Hash::new(b"multi-lane-duplicate-peer-active-height"),
         ));
         let sv = state.view();
+        let candidates = epoch_validator_candidate_peer_ids_from_world(
+            sv.world(),
+            sv.commit_topology.iter().cloned(),
+            1,
+            &sv.nexus,
+            None,
+        );
+        assert_eq!(candidates.len(), 4);
+        assert!(!candidates.contains(&participant_peer));
         let roster = sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
         assert_eq!(
@@ -19975,6 +20120,8 @@ use reward_reserves::validate_public_lane_reward_reserves;
 #[path = "state/stake_reserves.rs"]
 mod stake_reserves;
 use stake_reserves::validate_public_lane_stake_reserves;
+#[path = "state/validator_committee.rs"]
+pub(crate) mod validator_committee;
 
 impl World {
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -20326,7 +20473,7 @@ impl World {
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
-        let mut block = self.block();
+        let mut block = self.try_block().expect("fixture World admission");
         block.consensus_keys.insert(id.clone(), record);
         let pk = public_key.to_string();
         let mut by_pk = block
@@ -20585,6 +20732,57 @@ impl World {
         As: IntoIterator<Item = Asset>,
         N: IntoIterator<Item = Nft>,
     {
+        Self::with_assets_on(
+            WorldData::default(),
+            domains,
+            accounts,
+            asset_definitions,
+            assets,
+            nfts,
+        )
+    }
+    /// Construct World with one original configured pool for every fixed operation index.
+    /// Local resource refusal occurs before consuming the supplied entity iterators.
+    pub fn try_with_operation_index_budget<D, A, Ad>(
+        domains: D,
+        accounts: A,
+        asset_definitions: Ad,
+        budget: mv::allocation::AllocationBudget,
+    ) -> Result<Self, mv::storage::AdmittedStorageError>
+    where
+        D: IntoIterator<Item = Domain>,
+        A: IntoIterator<Item = Account>,
+        Ad: IntoIterator<Item = AssetDefinition>,
+    {
+        let fields = WorldData::try_new_with_operation_index_budget(budget)?;
+        Ok(Self::with_assets_on(
+            fields,
+            domains,
+            accounts,
+            asset_definitions,
+            [],
+            [],
+        ))
+    }
+    /// Retain the configured original pool for same-process restore and publication.
+    pub(crate) fn operation_index_budget(&self) -> &mv::allocation::AllocationBudget {
+        self.kagemusha_mint_credit_operations.allocation_budget()
+    }
+    fn with_assets_on<D, A, Ad, As, N>(
+        initial: WorldData,
+        domains: D,
+        accounts: A,
+        asset_definitions: Ad,
+        assets: As,
+        nfts: N,
+    ) -> Self
+    where
+        D: IntoIterator<Item = Domain>,
+        A: IntoIterator<Item = Account>,
+        Ad: IntoIterator<Item = AssetDefinition>,
+        As: IntoIterator<Item = Asset>,
+        N: IntoIterator<Item = Nft>,
+    {
         let domains: Storage<DomainId, Domain> = domains
             .into_iter()
             .map(|domain| (domain.id().clone(), domain))
@@ -20723,7 +20921,7 @@ impl World {
             governance_last_unlock_sweep_height: Cell::default(),
             governance_unlock_stats: Cell::default(),
             parliament_attempts: Storage::default(),
-            ..WorldData::default()
+            ..initial
         }));
         world
             .validate_numeric_asset_invariants()
@@ -21756,13 +21954,36 @@ impl World {
         }
         Ok(())
     }
-    /// Create struct to apply block's changes
-    pub fn block(&self) -> WorldBlock<'_> {
+    /// Acquire every original World field or return a local storage refusal.
+    pub fn try_block(&self) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Ordinary)
     }
-    /// Create struct to apply block's changes while reverting changes made in the latest block
-    pub fn block_and_revert(&self) -> WorldBlock<'_> {
+    /// Acquire the exact replacement overlay under the original finite pool.
+    pub fn try_block_and_revert(
+        &self,
+    ) -> Result<WorldBlock<'_>, mv::storage::AdmittedStorageError> {
         build_world_block!(self, mv::BlockMode::Replace)
+    }
+    /// Acquire a fixture World with its explicit finite default pool.
+    #[cfg(any(
+        test,
+        feature = "iroha-core-tests",
+        feature = "bench",
+        feature = "app_api"
+    ))]
+    pub fn block(&self) -> WorldBlock<'_> {
+        self.try_block().expect("fixture World admission")
+    }
+    /// Acquire a fixture replacement World under its original pool.
+    #[cfg(any(
+        test,
+        feature = "iroha-core-tests",
+        feature = "bench",
+        feature = "app_api"
+    ))]
+    pub fn block_and_revert(&self) -> WorldBlock<'_> {
+        self.try_block_and_revert()
+            .expect("fixture World replacement admission")
     }
     /// Create a point-in-time view of this world.
     pub fn view(&self) -> WorldView<'_> {
@@ -22798,6 +23019,10 @@ macro_rules! world_ro_accessors {
             /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
             storage timed_ovn_evidence:
                 BallotAttemptId => TimedOvnLifecycleStateV1;
+            /// Candidate generation publications keyed by exact network, peer and generation commitment.
+            storage validator_candidate_keys: [u8; 32] => iroha_data_model::nexus::ValidatorCandidateKeysV1;
+            /// Immutable future elections and their preparation progress keyed by target epoch.
+            storage validator_committee_transitions: u64 => iroha_data_model::nexus::ValidatorCommitteeTransitionV1;
             /// Active public-only adaptive beacon DKG snapshots by session id.
             storage global_beacon_dkg:
                 [u8; 32] => GlobalThresholdBeaconDkgSnapshotV1;
@@ -22826,12 +23051,6 @@ pub trait WorldReadOnly {
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
-    }
-    /// Decode the consensus-committed next Kagemusha V1 Pasta roster.
-    fn kagemusha_mint_finality_next_epoch_parameter(
-        &self,
-    ) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
-        kagemusha_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
     }
     world_ro_accessors!(identity, declaration);
     /// Iterate registered identifier policies.
@@ -24069,14 +24288,14 @@ impl<'world> WorldBlock<'world> {
         &mut self.verifying_keys_by_circuit
     }
     /// Create struct to apply transaction's changes
-    pub fn trasaction(
+    pub fn try_transaction(
         &mut self,
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
-    ) -> Box<WorldTransaction<'_, 'world>> {
+    ) -> Result<Box<WorldTransaction<'_, 'world>>, StateStorageAdmissionError> {
         let axt_lane_map = axt_lane_map_from_lane_config(&axt_lane_config);
-        self.trasaction_with_axt_lane_map(
+        self.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             telemetry,
             axt_lane_config,
@@ -24084,38 +24303,51 @@ impl<'world> WorldBlock<'world> {
             axt_lane_map,
         )
     }
-    fn trasaction_with_axt_lane_map(
+    fn try_transaction_with_axt_lane_map(
         &mut self,
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
         axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
-    ) -> Box<WorldTransaction<'_, 'world>> {
-        build_world_transaction!(
+    ) -> Result<Box<WorldTransaction<'_, 'world>>, StateStorageAdmissionError> {
+        Ok(build_world_transaction!(
             self,
             telemetry,
             axt_lane_config,
             axt_current_slot,
             axt_lane_map
-        )
+        ))
     }
-    /// Create struct to apply transaction changes without passing telemetry explicitly.
-    ///
-    /// This helper is intended for cross-crate tests and API scaffolding where the
-    /// `iroha_core` telemetry feature may differ from the caller crate feature set.
+    /// Open an explicitly test-owned World checkpoint through the admitted production path.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub fn transaction_without_telemetry(
         &mut self,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
     ) -> Box<WorldTransaction<'_, 'world>> {
-        #[cfg(feature = "telemetry")]
-        {
-            self.trasaction(None, axt_lane_config, axt_current_slot)
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            self.trasaction(axt_lane_config, axt_current_slot)
-        }
+        self.try_transaction(
+            #[cfg(feature = "telemetry")]
+            None,
+            axt_lane_config,
+            axt_current_slot,
+        )
+        .expect("test World child admission")
+    }
+    /// Open a test-only World checkpoint with explicit event telemetry.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    pub fn trasaction(
+        &mut self,
+        #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
+        axt_lane_config: LaneConfig,
+        axt_current_slot: u64,
+    ) -> Box<WorldTransaction<'_, 'world>> {
+        self.try_transaction(
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            axt_lane_config,
+            axt_current_slot,
+        )
+        .expect("test World child admission")
     }
     /// Publish every prepared original field before retiring any field.
     pub fn commit(mut self) {
@@ -24316,12 +24548,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
-        let kagemusha_next_roster_parameter_id =
-            KagemushaMintFinalityNextEpochParameterV1::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
-        executor_data_model
-            .parameters
-            .remove(&kagemusha_next_roster_parameter_id);
         executor_data_model
             .parameters
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
@@ -24599,10 +24826,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if prev_parameters == new_parameters {
             return;
         }
-        let consensus_owned_ids = [
-            SumeragiNposParameters::parameter_id(),
-            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
-        ];
+        let consensus_owned_ids = [SumeragiNposParameters::parameter_id()];
         let prev_ids: BTreeSet<_> = prev_parameters
             .keys()
             .filter(|id| !consensus_owned_ids.contains(id))
@@ -25923,9 +26147,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             if active_dkg.session != transcript.session
                 || active_dkg.generator_h != transcript.generator_h
                 || active_dkg.generator_v != transcript.generator_v
+                || active_dkg.recipient_keys != transcript.recipient_keys
                 || active_dkg.dealer_commitments != transcript.dealer_commitments
-                || active_dkg.complaints != transcript.complaints
-                || active_dkg.complaint_responses != transcript.complaint_responses
+                || active_dkg.encrypted_shares != transcript.encrypted_shares
+                || active_dkg.share_acceptances != transcript.share_acceptances
                 || active_dkg.last_updated_height > transcript.finalized_at_height
             {
                 return Err(GlobalThresholdBeaconError::PersistenceConflict);
@@ -26550,6 +26775,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             tle_key_session_lifecycles: _,
             tle_active_key_session: _,
             timed_ovn_evidence: _,
+            validator_candidate_keys: _,
+            validator_committee_transitions: _,
             global_beacon_dkg: _,
             global_beacon_key_sessions: _,
             global_beacon_active_session: _,
@@ -26751,6 +26978,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.tle_key_session_lifecycles.apply();
         self.tle_active_key_session.apply();
         self.timed_ovn_evidence.apply();
+        self.validator_candidate_keys.apply();
+        self.validator_committee_transitions.apply();
         self.global_beacon_dkg.apply();
         self.global_beacon_key_sessions.apply();
         self.global_beacon_active_session.apply();
@@ -29590,7 +29819,7 @@ impl State {
         let mut s = Self {
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
-                .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
+                .map_err(MergeLedgerCommitError::StateStorageAdmission)?,
             latest_block_header: PublicationRwLock::new(latest_block_header),
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
@@ -29975,16 +30204,20 @@ impl State {
                 .any(|(_, set)| set.get(&entry.dataspace_id).is_some())
         });
         if has_manifests && has_lane_overlap {
-            let mut wblock = s.world.block();
+            let mut wblock = s
+                .world
+                .try_block()
+                .map_err(StateStorageAdmissionError::World)?;
             #[cfg(feature = "telemetry")]
-            let mut wtx = wblock.trasaction_with_axt_lane_map(
+            let mut wtx = wblock.try_transaction_with_axt_lane_map(
                 Some(&s.telemetry),
                 lane_config.clone(),
                 0,
                 axt_lane_map,
-            );
+            )?;
             #[cfg(not(feature = "telemetry"))]
-            let mut wtx = wblock.trasaction_with_axt_lane_map(lane_config.clone(), 0, axt_lane_map);
+            let mut wtx =
+                wblock.try_transaction_with_axt_lane_map(lane_config.clone(), 0, axt_lane_map)?;
             let _ = wtx.rebuild_axt_policies_from_space_directory(&lane_config, 0);
             wtx.apply();
             wblock.commit();
@@ -30751,12 +30984,19 @@ impl State {
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
         let pinned_sortition_anchors =
-            crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
-                .unwrap_or_else(|error| {
+            match crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
+                &mut sb,
+            ) {
+                Ok(count) => count,
+                Err(crate::smartcontracts::isi::sorafs_moderation::SortitionAnchorPinError::Storage(error)) => {
+                    return Err(StateBlockStartError::Storage(error));
+                }
+                Err(crate::smartcontracts::isi::sorafs_moderation::SortitionAnchorPinError::Instruction(error)) => {
                     panic!(
                         "persisted SoraFS moderation anchor schedule became invalid at block start: {error}"
                     )
-                });
+                }
+            };
         if pinned_sortition_anchors != 0 {
             debug!(
                 count = pinned_sortition_anchors,
@@ -30798,17 +31038,23 @@ impl State {
         // continuation enters Network execution on this same block. Keeping
         // these independent owners in this constructor also keeps all of their
         // large stack slots live throughout that execution in debug builds.
-        Self::apply_block_start_private_settlement_expiry(&mut sb, now_h);
-        Self::apply_block_start_parliament_enactments(&mut sb, now_h);
+        Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_parliament_enactments(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
         let current_slot =
             current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
         // Keep independent transaction phases in separate frames. Unoptimized
         // builds otherwise reserve all of their large overlay temporaries for
         // this entire constructor, even when a phase has no work to apply.
-        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot);
-        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h);
-        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
-        Self::apply_block_start_confidential_policies(&mut sb, now_h);
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot)
+            .map_err(StateBlockStartError::Storage)?;
+        Self::apply_block_start_confidential_policies(&mut sb, now_h)
+            .map_err(StateBlockStartError::Storage)?;
         sb.start_of_block_effects_applied = true;
         sb.capture_execution_output_capacity();
         let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;
@@ -30816,7 +31062,10 @@ impl State {
     }
     /// Release expired private locks inside their original block transaction.
     #[inline(never)]
-    fn apply_block_start_private_settlement_expiry(sb: &mut StateBlock<'_>, now_h: u64) {
+    fn apply_block_start_private_settlement_expiry(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
         if sb
             .world
             .private_settlement_staged_locks
@@ -30832,7 +31081,7 @@ impl State {
                 )
             })
         {
-            let mut expiry = sb.transaction();
+            let mut expiry = sb.try_transaction()?;
             expiry
                 .reconcile_expired_private_settlement_staged_locks_v1()
                 .unwrap_or_else(|error| {
@@ -30842,13 +31091,17 @@ impl State {
                 });
             expiry.apply();
         }
+        Ok(())
     }
     /// Resolve due Parliament effects before entering after-start execution.
     ///
     /// A failed effect drops its original transaction before a separate
     /// transaction records the deterministic failure in the same block.
     #[inline(never)]
-    fn apply_block_start_parliament_enactments(sb: &mut StateBlock<'_>, now_h: u64) {
+    fn apply_block_start_parliament_enactments(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
         if let Some((enact_at_height, attempts)) =
             sb.world.parliament_certified_enactments.iter().next()
             && *enact_at_height < now_h
@@ -30869,7 +31122,7 @@ impl State {
             .cloned()
             .unwrap_or_default();
         for governance_attempt_id in due_parliament_certificates {
-            let mut enactment = sb.transaction();
+            let mut enactment = sb.try_transaction()?;
             match crate::smartcontracts::isi::world::isi::execute_due_parliament_certificate_v1(
                 governance_attempt_id,
                 &mut enactment,
@@ -30888,7 +31141,7 @@ impl State {
                     // Dropping this transaction is the atomic rollback boundary:
                     // no partial certified-effect write may escape into the block.
                     drop(enactment);
-                    let mut failure = sb.transaction();
+                    let mut failure = sb.try_transaction()?;
                     crate::smartcontracts::isi::world::isi::record_due_parliament_execution_failure_v1(
                         governance_attempt_id,
                         failure_root,
@@ -30913,20 +31166,25 @@ impl State {
                 "Parliament certified-enactment index retained a due bucket after block-start execution at height {now_h}"
             );
         }
+        Ok(())
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]
-    fn apply_block_start_world_transitions(sb: &mut StateBlock<'_>, now_h: u64, current_slot: u64) {
+    fn apply_block_start_world_transitions(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+        current_slot: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
         let sb = sb.fields.as_mut().expect("original executing State");
         let transitions = collect_confidential_transitions(&sb.world, now_h);
         let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-        let mut wtx = sb.world.trasaction_with_axt_lane_map(
+        let mut wtx = sb.world.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             Some(sb.telemetry),
             sb.nexus.lane_config.clone(),
             current_slot,
             axt_lane_map,
-        );
+        )?;
         // Scheduled sponsor-program activation heights are lower bounds.
         // Recheck older-revision spend leases at block start so legacy or
         // inconsistent persisted schedules cannot activate over live locks.
@@ -31193,12 +31451,16 @@ impl State {
             wtx.governance_referenda.insert(rid, record);
         }
         wtx.apply();
+        Ok(())
     }
 
     /// Release expired governance locks and publish the existing sweep audit atomically.
     #[inline(never)]
-    fn sweep_expired_governance_locks_at_block_start(sb: &mut StateBlock<'_>, now_h: u64) {
-        let mut stx = sb.transaction();
+    fn sweep_expired_governance_locks_at_block_start(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
+        let mut stx = sb.try_transaction()?;
         let mut expired_by_referendum = BTreeMap::<String, Vec<AccountId>>::new();
         for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
             for (referendum_id, owner) in bucket {
@@ -31317,20 +31579,25 @@ impl State {
             };
             stx.apply();
         }
+        Ok(())
     }
 
     /// Apply scheduled oracle changes and validate the resulting runtime ABI.
     #[inline(never)]
-    fn apply_block_start_oracle_changes(sb: &mut StateBlock<'_>, now_h: u64, current_slot: u64) {
+    fn apply_block_start_oracle_changes(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+        current_slot: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
         let sb = sb.fields.as_mut().expect("original executing State");
         let axt_lane_map = axt_active_lane_map_at_height(&sb.nexus, now_h);
-        let mut wtx = sb.world.trasaction_with_axt_lane_map(
+        let mut wtx = sb.world.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             Some(sb.telemetry),
             sb.nexus.lane_config.clone(),
             current_slot,
             axt_lane_map,
-        );
+        )?;
         update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
         crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
             |error| {
@@ -31340,11 +31607,15 @@ impl State {
             },
         );
         wtx.apply();
+        Ok(())
     }
 
     /// Apply due confidential policies without retaining their transaction in the constructor.
     #[inline(never)]
-    fn apply_block_start_confidential_policies(sb: &mut StateBlock<'_>, now_h: u64) {
+    fn apply_block_start_confidential_policies(
+        sb: &mut StateBlock<'_>,
+        now_h: u64,
+    ) -> Result<(), StateStorageAdmissionError> {
         let pending_assets: BTreeSet<_> = sb
             .world
             .confidential_policy_transition_index
@@ -31353,7 +31624,7 @@ impl State {
             .map(|(key, _)| key.1.clone())
             .collect();
         if !pending_assets.is_empty() {
-            let mut stx = sb.transaction();
+            let mut stx = sb.try_transaction()?;
             let block_height = stx.block_height();
             for asset_id in pending_assets {
                 if let Err(err) = apply_policy_if_due(&mut stx, &asset_id) {
@@ -31367,6 +31638,7 @@ impl State {
             }
             stx.apply();
         }
+        Ok(())
     }
     /// Create a non-committing block scope for deterministic merge pre-execution.
     ///
@@ -31377,7 +31649,7 @@ impl State {
     fn try_merge_preexecution_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
+    ) -> Result<StateBlock<'_>, StateStorageAdmissionError> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         let acquired = self.acquire_canonical_runtime_block(false)?;
@@ -31399,7 +31671,7 @@ impl State {
     pub(crate) fn consensus_effects_probe_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
+    ) -> Result<StateBlock<'_>, StateStorageAdmissionError> {
         self.try_merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
@@ -33227,6 +33499,15 @@ impl State {
         for key in stale_public_lane_reward_claim_keys {
             world.public_lane_reward_claims.remove(key);
         }
+        let accrual_keys: Vec<_> = world
+            .public_lane_reward_accruals
+            .iter()
+            .filter(|((lane, _, _), _)| lanes_to_reset.contains(lane))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in accrual_keys {
+            world.public_lane_reward_accruals.remove(key);
+        }
         let stale_verified_relay_keys = Self::verified_lane_relay_contract_state_keys_for_lanes(
             &world.smart_contract_state,
             lanes_to_reset,
@@ -33421,6 +33702,21 @@ impl State {
         if !stale_reward_claim_keys.is_empty() {
             let mut tx = self.world.public_lane_reward_claims.block();
             for key in stale_reward_claim_keys {
+                tx.remove(key);
+            }
+            tx.commit();
+        }
+        let accrual_keys: Vec<_> = self
+            .world
+            .public_lane_reward_accruals
+            .view()
+            .iter()
+            .filter(|((lane, _, _), _)| lanes_to_reset.contains(lane))
+            .map(|(key, _)| key.clone())
+            .collect();
+        if !accrual_keys.is_empty() {
+            let mut tx = self.world.public_lane_reward_accruals.block();
+            for key in accrual_keys {
                 tx.remove(key);
             }
             tx.commit();
@@ -34888,8 +35184,13 @@ impl State {
                     &source.input,
                     &mut ivm_cache,
                 )
-                .map_err(|message| {
-                    MergeLedgerCommitError::ExecutionDivergence(message.to_owned())
+                .map_err(|error| match error {
+                    crate::tx::LaneExecutionInputError::Storage(error) => {
+                        MergeLedgerCommitError::StateStorageAdmission(error)
+                    }
+                    crate::tx::LaneExecutionInputError::Invalid(message) => {
+                        MergeLedgerCommitError::ExecutionDivergence(message.to_owned())
+                    }
                 })?;
             let indices = raw_results
                 .iter()
@@ -35524,8 +35825,8 @@ impl State {
             frozen_mode,
         ) {
             return match error {
-                MergeLedgerCommitError::BlockHashAdmission(error) => {
-                    Err(StateBlockStartError::History(error))
+                MergeLedgerCommitError::StateStorageAdmission(error) => {
+                    Err(StateBlockStartError::Storage(error))
                 }
                 _ => Ok(None),
             };
@@ -35551,7 +35852,7 @@ impl State {
             consensus,
             frozen_mode,
         )
-        .map_err(StateBlockStartError::History)
+        .map_err(StateBlockStartError::Storage)
     }
     fn select_merge_execution_candidate_for_consensus(
         &self,
@@ -35559,7 +35860,7 @@ impl State {
         application_block_header: BlockHeader,
         consensus: &MergeConsensusSnapshot,
         frozen_mode: ConsensusMode,
-    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, StateStorageAdmissionError> {
         let Some((candidate_template, sources)) = (|| {
             let lifecycle = &consensus.lifecycle;
             let admission = &consensus.admission;
@@ -35748,8 +36049,8 @@ impl State {
         mut build_batch: impl FnMut(
             usize,
         )
-            -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError>,
-    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
+            -> Result<Option<MergeExecutionBatch>, StateStorageAdmissionError>,
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, StateStorageAdmissionError> {
         // Binary refinement bounds repeated deterministic pre-execution work. Each
         // trial restores canonical execution order, which can change result sizes;
         // therefore this finds a fitting prefix, not necessarily the largest one.
@@ -35780,7 +36081,7 @@ impl State {
         epoch_id: u64,
         application_block_header: BlockHeader,
         mut sources: Vec<MergeExecutionSource>,
-    ) -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError> {
+    ) -> Result<Option<MergeExecutionBatch>, StateStorageAdmissionError> {
         let Some((sources, total_entrypoints, base_state_height, base_state_hash)) = (|| {
             let total_entrypoints = sources
                 .iter()
@@ -35819,7 +36120,7 @@ impl State {
             .preexecute_merge_execution_sources(application_block_header.clone(), sources)
         {
             Ok(prepared) => prepared,
-            Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),
+            Err(MergeLedgerCommitError::StateStorageAdmission(error)) => return Err(error),
             Err(err) => {
                 warn!(?err, "merge execution pre-execution failed");
                 return Ok(None);
@@ -43709,7 +44010,7 @@ impl State {
         }
         let asset_def = {
             let world = self.world.view();
-            crate::block::parse_asset_definition_literal_with_world(
+            crate::block::resolve_network_xor_asset_definition(
                 &world,
                 &nexus.fees.fee_asset_id,
                 0,
@@ -43868,18 +44169,18 @@ impl State {
             let block_height = self.block_hashes.view().len() as u64;
             let axt_lane_map = axt_active_lane_map_at_height(&nexus, block_height);
             #[cfg(feature = "telemetry")]
-            let mut tx = world_block.trasaction_with_axt_lane_map(
+            let mut tx = world_block.try_transaction_with_axt_lane_map(
                 Some(&self.telemetry),
                 nexus.lane_config.clone(),
                 0,
                 axt_lane_map,
-            );
+            )?;
             #[cfg(not(feature = "telemetry"))]
-            let mut tx = world_block.trasaction_with_axt_lane_map(
+            let mut tx = world_block.try_transaction_with_axt_lane_map(
                 nexus.lane_config.clone(),
                 0,
                 axt_lane_map,
-            );
+            )?;
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate_burns {
                 let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
@@ -46134,6 +46435,21 @@ impl State {
             .collect();
         if !nexus_fee_asset_selector_is_xor(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
+        }
+        if let Some(params) = self.world.view().sumeragi_npos_parameters() {
+            // Runtime selectors cannot replace the identity authenticated by genesis.
+            // Aliases are resolved at execution; the literal XOR alias is only a
+            // routing convenience and every monetary use still checks this pin.
+            for selector in [&nexus.fees.fee_asset_id, &nexus.staking.stake_asset_id] {
+                if selector != "xor#universal"
+                    && AssetDefinitionId::parse_address_literal(selector)
+                        .ok()
+                        .as_ref()
+                        != Some(&params.xor_asset_definition_id)
+                {
+                    return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
+                }
+            }
         }
         if nexus.fees.fee_sink_account_id.trim().is_empty() {
             return Err(LaneLifecycleError::NexusFeeSinkAccountEmpty);
@@ -49284,8 +49600,8 @@ fn ensure_autoscale_managed_created_heights_not_future(
     Ok(())
 }
 fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
-    let default_xor = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-    value == default_xor || value == "xor#universal"
+    value.trim() == value
+        && (AssetDefinitionId::parse_address_literal(value).is_ok() || value == "xor#universal")
 }
 fn ensure_autoscale_managed_lane_in_range(
     lane: LaneId,
@@ -49838,34 +50154,6 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
             warn!(
                 ?error,
                 "Failed to decode `sumeragi_npos_parameters` custom parameter payload; payload_preview={payload_preview}"
-            );
-            None
-        }
-    }
-}
-fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
-    params: &Parameters,
-) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
-    let id = KagemushaMintFinalityNextEpochParameterV1::parameter_id();
-    let custom = params.custom().get(&id)?;
-    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom) {
-        return Some(parsed);
-    }
-    let payload = custom.payload();
-    let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<KagemushaMintFinalityNextEpochParameterV1>() {
-        Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
-        Ok(parsed) => {
-            warn!(
-                error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
-            );
-            None
-        }
-        Err(error) => {
-            warn!(
-                ?error,
-                "Failed to decode Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
             );
             None
         }
@@ -53405,8 +53693,15 @@ impl<'state> StateBlock<'state> {
         Ok(())
     }
     /// Create struct to store changes during transaction or trigger execution
-    pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
+    pub fn try_transaction(
+        &mut self,
+    ) -> Result<StateTransaction<'_, 'state>, StateStorageAdmissionError> {
         self.transaction_with_event_telemetry(true)
+    }
+    /// Open a test-owned transaction through the same fallible production constructor.
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+    pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
+        self.try_transaction().expect("test State child admission")
     }
     /// Open an isolated callback component fixture with an explicit root owner.
     ///
@@ -53428,13 +53723,16 @@ impl<'state> StateBlock<'state> {
         transaction
     }
     /// Create a finality-effects transaction that cannot publish speculative event telemetry.
-    pub(crate) fn consensus_effects_transaction(&mut self) -> StateTransaction<'_, 'state> {
+    pub(crate) fn consensus_effects_transaction(
+        &mut self,
+    ) -> Result<StateTransaction<'_, 'state>, StateStorageAdmissionError> {
         self.transaction_with_event_telemetry(false)
     }
     fn transaction_with_event_telemetry(
         &mut self,
         ingest_event_telemetry: bool,
-    ) -> StateTransaction<'_, 'state> {
+    ) -> Result<StateTransaction<'_, 'state>, StateStorageAdmissionError> {
+        self.require_storage_admission()?;
         #[cfg(not(feature = "telemetry"))]
         let _ = ingest_event_telemetry;
         let callback_journal =
@@ -53445,13 +53743,21 @@ impl<'state> StateBlock<'state> {
         let implicit_account_creations_in_block_so_far = fields.implicit_account_creations_in_block;
         let axt_lane_map =
             axt_active_lane_map_at_height(&fields.nexus, fields._curr_block.height().get());
-        let mut world = fields.world.trasaction_with_axt_lane_map(
+        let mut world = match fields.world.try_transaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
             ingest_event_telemetry.then_some(fields.telemetry),
             fields.nexus.lane_config.clone(),
             axt_current_slot,
             axt_lane_map,
-        );
+        ) {
+            Ok(world) => world,
+            Err(error) => {
+                if fields.local_storage_refusal.is_none() {
+                    fields.local_storage_refusal = Some(error.clone());
+                }
+                return Err(error);
+            }
+        };
         world.dataspace_catalog = fields.nexus.dataspace_catalog.clone();
         let executor_fuel_remaining = world.parameters.get().executor().fuel.get();
         let zk = fields.zk.clone();
@@ -53473,7 +53779,8 @@ impl<'state> StateBlock<'state> {
                 .expect("StateBlock constructors must freeze AXT authorization before use"),
         );
         let axt_next_handle_counters_after_block = fields.axt_next_handle_counters.clone();
-        StateTransaction {
+        Ok(StateTransaction {
+            local_storage_refusal: &mut fields.local_storage_refusal,
             canonical_runtime: fields.canonical_runtime.transaction(),
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
@@ -53608,7 +53915,7 @@ impl<'state> StateBlock<'state> {
             last_numeric_spec: None,
             last_mintable: None,
             accounts_snapshot_cache: OnceCell::new(),
-        }
+        })
     }
     fn stage_merge_carrier_entrypoints(
         &mut self,
@@ -55196,7 +55503,7 @@ impl<'state> StateBlock<'state> {
                 });
             }
         }
-        let mut tx = self.transaction();
+        let mut tx = self.try_transaction()?;
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
@@ -55246,7 +55553,7 @@ impl<'state> StateBlock<'state> {
             .iter()
             .map(|(source_id, _)| *source_id)
             .collect::<Vec<_>>();
-        let mut tx = self.transaction();
+        let mut tx = self.try_transaction()?;
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
             let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
@@ -55282,6 +55589,8 @@ impl<'state> StateBlock<'state> {
     /// Returns [`TransactionsBlockError`] when finalized FASTPQ source ownership is
     /// invalid or flushing the transaction batch fails.
     pub fn commit(self) -> Result<(), TransactionsBlockError> {
+        self.require_storage_admission()
+            .map_err(TransactionsBlockError::LocalStateStorage)?;
         self.commit_inner(None, None)
     }
     /// Commit only the staged world overlay for an explicit test or benchmark fixture.
@@ -55292,6 +55601,8 @@ impl<'state> StateBlock<'state> {
     /// finalized.
     #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub fn commit_world_overlay_for_testing(self) -> Result<(), TransactionsBlockError> {
+        self.require_storage_admission()
+            .map_err(TransactionsBlockError::LocalStateStorage)?;
         let mut publication_notice = self.state_ref.state_view_publication();
         let mut commit_fence = self.state_ref.state_commit_lock.defer_notifications();
         let mut write_fence = self.state_write_lock.defer_notifications();
@@ -55422,6 +55733,8 @@ impl<'state> StateBlock<'state> {
             &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
         >,
     ) -> Result<(), TransactionsBlockError> {
+        self.require_storage_admission()
+            .map_err(TransactionsBlockError::LocalStateStorage)?;
         let mut effect_cleanup = effect_publication::StateEffectLocks::new(self.state_ref);
         let mut lifecycle_index_releases = LaneLifecycleReleases::new(self.state_ref);
         let mut publication_notice = self.state_ref.state_view_publication();
@@ -55529,6 +55842,7 @@ impl<'state> StateBlock<'state> {
         // Borrow disjoint fields; the original State keeps its complete inventory
         // armed through every refusal, preparation and publication unwind.
         let StateBlockFields {
+            local_storage_refusal: _,
             // Keep the linear finality/output and native-source owners alive
             // through publication of every original journal below.
             execution_output_plan: _publication_owner,
@@ -57931,7 +58245,7 @@ impl<'state> StateBlock<'state> {
         self.world.external_event_buf.push(time_event.into());
         // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
-            let mut maintenance_tx = self.transaction();
+            let mut maintenance_tx = self.try_transaction().map_err(|error| error.to_string())?;
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
             let removed_asset_aliases = maintenance_tx
                 .world
@@ -57951,7 +58265,12 @@ impl<'state> StateBlock<'state> {
         // Owner-authorized alias lease renewal is native block maintenance, not a
         // synthetic client transaction or subscription trigger. The sweep is
         // bounded and advances a durable cursor in canonical storage-key order.
-        crate::sns::process_alias_auto_renewals(self);
+        if let Err(error) = crate::sns::process_alias_auto_renewals(self) {
+            if self.local_storage_refusal.is_none() {
+                self.local_storage_refusal = Some(error.clone());
+            }
+            return Err(error.to_string());
+        }
         Ok((time_event, max_time_trigger_invocations))
     }
     fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
@@ -58316,7 +58635,7 @@ mod public_lane_slash_observability_staging_tests {
         let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
 
         {
-            let mut transaction = block.consensus_effects_transaction();
+            let mut transaction = block.consensus_effects_transaction().unwrap();
             #[cfg(feature = "telemetry")]
             assert!(transaction.world.telemetry.is_none());
             *transaction
@@ -58343,7 +58662,7 @@ mod public_lane_slash_observability_staging_tests {
         }
 
         {
-            let mut transaction = block.consensus_effects_transaction();
+            let mut transaction = block.consensus_effects_transaction().unwrap();
             assert_eq!(
                 *transaction.world.governance_last_unlock_sweep_height, 9,
                 "a later consensus-effect transaction must observe earlier scratch writes"
@@ -58887,14 +59206,15 @@ mod tiered_snapshot_diff_tests {
     }
     fn decode_state_snapshot_value(
         value: norito::json::Value,
-    ) -> Result<Box<State>, norito::json::Error> {
+    ) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
         decode_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
     }
     fn decode_state_snapshot_value_with_kura(
         value: norito::json::Value,
         kura: Arc<Kura>,
-    ) -> Result<Box<State>, norito::json::Error> {
+    ) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
         deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura,
             query_handle: LiveQueryStore::start_test(),
@@ -59245,7 +59565,9 @@ mod tiered_snapshot_diff_tests {
         };
         world
     }
-    fn decode_sccp_world_snapshot(world: World) -> Result<Box<State>, norito::json::Error> {
+    fn decode_sccp_world_snapshot(
+        world: World,
+    ) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
         decode_state_snapshot_value(sccp_state_snapshot_value(world, SCCP_SNAPSHOT_CHAIN_ID))
     }
     #[test]
@@ -61522,7 +61844,7 @@ mod tiered_snapshot_diff_tests {
     fn hydrate_sccp_profile_test_state(
         world: World,
         chain_id: &str,
-    ) -> Result<Box<State>, norito::json::Error> {
+    ) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
         let has_outbound = world
             .sccp_outbound_pending_messages
             .view()
@@ -62675,6 +62997,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     let captured = crate::snapshot::CapturedStateSnapshot::capture(state)
         .wrap_err("failed to capture State for atomic replay prevalidation")?;
     let mut isolated = deserialize::KuraSeed {
+        operation_index_budget: state.world.operation_index_budget().clone(),
         lane_manifests: state.lane_manifests.read().clone(),
         kura: Arc::clone(kura),
         query_handle: state.query_handle.clone(),
@@ -65138,6 +65461,11 @@ impl StateTransaction<'_, '_> {
     /// not advance transaction identities, gas, settlement, FASTPQ, or any
     /// other ordinary-execution accumulator.
     pub(crate) fn apply_consensus_effects(self) {
+        if self.local_storage_refusal.is_some() {
+            *self.block_execution_output_plan =
+                Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+            return;
+        }
         if matches!(
             self.block_execution_output_plan,
             Some(
@@ -65167,6 +65495,11 @@ impl StateTransaction<'_, '_> {
     /// Apply transaction making it's changes visible
     #[allow(clippy::too_many_lines)]
     pub fn apply(self) {
+        if self.local_storage_refusal.is_some() {
+            *self.block_execution_output_plan =
+                Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+            return;
+        }
         if matches!(
             self.block_execution_output_plan,
             Some(
@@ -65184,6 +65517,7 @@ impl StateTransaction<'_, '_> {
         }
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
+            local_storage_refusal: _,
             canonical_runtime,
             committed_fragments,
             touched_lanes,

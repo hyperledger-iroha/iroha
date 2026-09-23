@@ -27,7 +27,12 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
         };
         // Only shell geometry is under test. Nested allocations in this isolated
         // World fixture are not a complete production carrier admission.
-        let retained = original.try_detach_journals(|_| Ok::<_, ()>(())).unwrap();
+        let retained = original
+            .try_detach_journals(
+                crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+                |_| Ok::<_, ()>(()),
+            )
+            .unwrap();
         let retained_pointer = retained.fields.as_ptr();
         let retained_boxes = retained
             .fields
@@ -42,7 +47,7 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
             demand.capture_bytes()
         );
         let prepared = retained
-            .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
+            .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
             .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
         {
             let (retry_vector, prepared_vector, prepared_layouts) =
@@ -58,7 +63,7 @@ fn world_shell_plan_matches_constructed_capture_and_installation_layouts() {
             assert_eq!(installation, demand.installation_bytes());
             assert_eq!(
                 demand.total_bytes(),
-                demand.capture_bytes() + installation,
+                demand.capture_bytes() + installation + demand.control_bytes(),
                 "original boxes remain allocated inside the prepared wrappers"
             );
         }
@@ -86,34 +91,32 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
     let demand = WorldJournalShellDemand::plan().unwrap();
     let too_small = AllocationBudget::new(demand.total_bytes() - 1);
     assert!(matches!(
-        demand.try_reserve(&too_small),
+        WorldJournalShellReservation::try_reserve(&too_small),
         Err(AllocationRefusal::ExceedsLimit { requested_bytes, limit_bytes })
             if requested_bytes == demand.total_bytes() && limit_bytes + 1 == requested_bytes
     ));
     assert_eq!(too_small.reserved_bytes(), 0);
     let budget = AllocationBudget::new(demand.total_bytes());
-    let reservation = demand.try_reserve(&budget).unwrap();
-    assert_eq!(reservation.remaining_bytes(), demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let world = World::default();
     let retained = world
         .block()
-        .try_detach_journals(move |_| Ok::<_, ()>(reservation))
+        .try_detach_journals(reservation, |_| Ok::<_, ()>(()))
         .unwrap();
-    assert_eq!(retained.admission().remaining_bytes(), demand.total_bytes());
     assert!(matches!(
-        demand.try_reserve(&budget),
+        WorldJournalShellReservation::try_reserve(&budget),
         Err(AllocationRefusal::Capacity { .. })
     ));
     let prepared = retained
-        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error, _)| panic!("fixture preparation refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let retained = prepared.abort().0;
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     let held_writer = world.soradns_last_publish_ms.block();
     let (retained, error, _cleanup) = retained
-        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
         .err()
         .expect("busy owner must preserve retained shells and reservation");
     drop(_cleanup);
@@ -121,12 +124,12 @@ fn world_shell_reservation_holds_capture_abort_retry_and_refunds_after_drop() {
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(held_writer);
     let prepared = retained
-        .try_prepare_publication(&world, None, |_, _| Ok::<_, ()>(()))
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error, _)| panic!("fixture retry refused: {error:?}"));
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(prepared);
     assert_eq!(budget.reserved_bytes(), 0);
-    let replacement = demand.try_reserve(&budget).unwrap();
+    let replacement = WorldJournalShellReservation::try_reserve(&budget).unwrap();
     assert_eq!(budget.reserved_bytes(), demand.total_bytes());
     drop(replacement);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -162,6 +165,7 @@ fn world_shell_planning_checks_each_sum_count_and_vector_layout_overflow() {
             capture_bytes: capture,
             installation_bytes: installation,
             total_bytes: 0,
+            control_bytes: planned.control_bytes,
         };
         let original = demand;
         assert_eq!(
@@ -185,8 +189,211 @@ fn world_shell_planning_checks_each_sum_count_and_vector_layout_overflow() {
             capture_bytes: usize::MAX,
             installation_bytes: 1,
             total_bytes: 0,
+            control_bytes: planned.control_bytes,
         }
         .finish(),
         Err(AllocationRefusal::DemandOverflow)
     ));
+}
+
+#[test]
+fn world_shell_cleanup_retains_credits_after_original_capture_is_dropped() {
+    let demand = WorldJournalShellDemand::plan().unwrap();
+    let budget = AllocationBudget::new(demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
+    let world = World::default();
+    let retained = world
+        .block()
+        .try_detach_journals(reservation, |_| Ok::<_, ()>(()))
+        .unwrap();
+    let prepared = retained
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("prepare: {error:?}"));
+    let (retained, cleanup) = prepared.abort();
+    drop(retained);
+    assert_eq!(
+        budget.reserved_bytes(),
+        demand.total_bytes(),
+        "delayed cleanup still owns real prepared shells"
+    );
+    assert!(matches!(
+        WorldJournalShellReservation::try_reserve(&budget),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    drop(cleanup);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn world_shell_retry_waits_for_original_cleanup_without_reacquiring_capacity() {
+    let demand = WorldJournalShellDemand::plan().unwrap();
+    let budget = AllocationBudget::new(demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
+    assert_eq!(
+        reservation
+            .capacity
+            ._layouts
+            .iter()
+            .flatten()
+            .map(|charge| charge.layout().size())
+            .sum::<usize>(),
+        demand.capture_bytes() + demand.installation_bytes()
+    );
+    let world = World::default();
+    let retained = world
+        .block()
+        .try_detach_journals(reservation, |_| Ok::<_, ()>(()))
+        .unwrap();
+    let original_vector = retained.fields.as_ptr();
+    let prepared = retained
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("prepare: {error:?}"));
+    let (retained, original_cleanup) = prepared.abort();
+    let (retained, refusal, empty_cleanup) = retained
+        .try_prepare_publication(&world, |_, _| -> Result<(), ()> {
+            panic!("old installation must retire before caller admission or writer acquisition")
+        })
+        .err()
+        .expect("same original installation capacity cannot be reused concurrently");
+    assert!(matches!(
+        refusal,
+        WorldPublicationError::ShellsNotRetired(_)
+    ));
+    drop(empty_cleanup);
+    assert_eq!(retained.fields.as_ptr(), original_vector);
+    assert_eq!(budget.reserved_bytes(), demand.total_bytes());
+    drop(original_cleanup);
+    assert_eq!(
+        budget.limit_bytes() - budget.reserved_bytes(),
+        0,
+        "retry must use original prepaid capacity"
+    );
+    let prepared = retained
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("retry: {error:?}"));
+    let (retained, cleanup) = prepared.abort();
+    assert_eq!(retained.fields.as_ptr(), original_vector);
+    drop(cleanup);
+    drop(retained);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn world_shell_publication_retains_all_credits_until_original_retirement() {
+    let demand = WorldJournalShellDemand::plan().unwrap();
+    let budget = AllocationBudget::new(demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
+    let world = World::default();
+    let retained = world
+        .block()
+        .try_detach_journals(reservation, |_| Ok::<_, ()>(()))
+        .unwrap();
+    let prepared = retained
+        .try_prepare_publication(&world, |_, _| Ok::<_, ()>(()))
+        .unwrap_or_else(|(_, error, _)| panic!("prepare: {error:?}"));
+    let (catalog, events, retirement, (), ()) = prepared.publish();
+    drop((catalog, events));
+    assert_eq!(budget.reserved_bytes(), demand.total_bytes());
+    drop(retirement);
+    assert_eq!(budget.reserved_bytes(), 0);
+    drop(world.block());
+}
+
+#[test]
+fn world_shell_admission_panic_releases_writers_before_refunding_capacity() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let demand = WorldJournalShellDemand::plan().unwrap();
+    let budget = AllocationBudget::new(demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
+    let world = World::default();
+    let retained = world
+        .block()
+        .try_detach_journals(reservation, |_| Ok::<_, ()>(()))
+        .unwrap();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let _ = retained.try_prepare_publication(&world, |_, _| -> Result<(), ()> {
+            panic!("isolated caller admission unwind")
+        });
+    }));
+    assert!(result.is_err());
+    assert_eq!(budget.reserved_bytes(), 0);
+    drop(world.block());
+}
+
+#[test]
+fn world_shell_refund_wake_observes_released_original_world_on_capture_refusal() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Wake, Waker},
+    };
+    struct Probe(Mutex<Box<dyn FnMut() + Send>>);
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            (self.0.lock().unwrap())();
+        }
+    }
+    let demand = WorldJournalShellDemand::plan().unwrap();
+    let budget = AllocationBudget::new(demand.total_bytes());
+    let reservation = WorldJournalShellReservation::try_reserve(&budget).unwrap();
+    let world = Arc::new(World::default());
+    let mut original_probe = Some(
+        world
+            .parameters
+            .block()
+            .try_detach(|_| Ok::<_, ()>(()))
+            .unwrap(),
+    );
+    let acquired = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicUsize::new(0));
+    let callback = Arc::new(Probe(Mutex::new(Box::new({
+        let world = Arc::clone(&world);
+        let acquired = Arc::clone(&acquired);
+        let blocked = Arc::clone(&blocked);
+        move || {
+            let Some(probe) = original_probe.take() else {
+                return;
+            };
+            match probe.try_prepare_publication(&world.parameters, |_, _| Ok::<_, ()>(())) {
+                Ok(prepared) => {
+                    acquired.fetch_add(1, Ordering::SeqCst);
+                    let (probe, cleanup) = prepared.abort();
+                    original_probe = Some(probe);
+                    drop(cleanup);
+                }
+                Err((probe, _, cleanup)) => {
+                    blocked.fetch_add(1, Ordering::SeqCst);
+                    original_probe = Some(probe);
+                    drop(cleanup);
+                }
+            }
+        }
+    }))));
+    let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
+        panic!("finite original pool is full");
+    };
+    let waker = Waker::from(callback);
+    let mut wait = release.wait_for_release();
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert!(matches!(
+        world
+            .block()
+            .try_detach_journals(reservation, |_| Err::<(), _>("refused")),
+        Err(CaptureError::Admission("refused"))
+    ));
+    assert!(acquired.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        blocked.load(Ordering::SeqCst),
+        0,
+        "capacity never wakes while the original World still owns its writer"
+    );
+    assert_eq!(budget.reserved_bytes(), 0);
 }

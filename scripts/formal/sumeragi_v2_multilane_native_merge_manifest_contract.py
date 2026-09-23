@@ -1042,7 +1042,11 @@ NATIVE_CANONICAL_PUBLICATION_FIXTURE_BINDINGS = (('crates/iroha_core/src/sumerag
    'copied.groups[0].payload.descriptor.slots[0].lane_incarnation =',
    'assert!(\n'
    '            restored\n'
-   '                .prepare_proposed_native_lane_batch_source(&candidate, &[])\n'
+   '                .prepare_proposed_native_lane_batch_source(\n'
+   '                    candidate.clone(),\n'
+   '                    &[],\n'
+   '                    crate::state::NativeExecutionResourceAdmission::for_test_carrier(&candidate)\n'
+   '                )\n'
    '                .is_err()',
    'assert_eq!(\n'
    '            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),\n'

@@ -427,7 +427,7 @@ impl State {
     pub(super) fn acquire_canonical_runtime_block(
         &self,
         replacement: bool,
-    ) -> Result<AcquiredRuntimeBlock<'_>, BlockHashAdmissionError> {
+    ) -> Result<AcquiredRuntimeBlock<'_>, StateStorageAdmissionError> {
         loop {
             let generation = self.state_view_generation();
             if generation % 2 != 0 {
@@ -450,7 +450,7 @@ impl State {
             let mut projection;
             let mut sccp_registry;
             let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);
-            pending.initialize(replacement);
+            pending.initialize(replacement)?;
             projection_result = self.project_canonical_runtime_with_manifests(
                 pending.canonical_runtime().get(),
                 pending.world(),

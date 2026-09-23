@@ -6,13 +6,14 @@ fn signed_candidate(
     stake: u64,
     lane_id: LaneId,
 ) -> RegisterPublicLaneCandidate {
-    let registration = RegisterPublicLaneValidator::new(
+    let mut registration = RegisterPublicLaneValidator::new(
         lane_id,
         validator.clone(),
         PeerId::new(peer_key.public_key().clone()),
         validator.clone(),
         Quantity::from(stake),
         Metadata::default(),
+        fixture_registration_plan(stx, lane_id, validator, &Quantity::from(stake)),
     );
     let registered = stx
         .world
@@ -30,15 +31,15 @@ fn signed_candidate(
                 .sumeragi
                 .key_activation_lead_blocks
     };
-    let activation_height = next_unfrozen_election_height(
-        key_height,
-        stx.world
-            .sumeragi_npos_parameters()
-            .expect("NPoS schedule")
-            .epoch_length_blocks
-            .get(),
-    )
-    .expect("election height");
+    let activation_height = if stx._curr_block.is_genesis() && stx.block_hashes.is_empty() {
+        stx.block_height()
+    } else {
+        validator_eligibility_height(stx, lane_id, stx.block_height(), key_height)
+            .expect("election height")
+    };
+    registration.monetary_plan.precondition = PublicLaneMonetaryPreconditionV1::Registration(
+        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 { activation_height },
+    );
     let authorization = PublicLaneCandidateAuthorization::new(
         *stx.network_id(),
         registration.clone(),
@@ -78,13 +79,13 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
         .public_lane_validators
         .get(&(LaneId::new(42), validator.clone()))
         .expect("candidate record");
-    assert_eq!(record.activation_height, 13);
+    assert_eq!(record.activation_height, 19);
     assert_eq!(
         record.status,
-        PublicLaneValidatorStatus::PendingActivation(13)
+        PublicLaneValidatorStatus::PendingActivation(19)
     );
-    assert!(!validator_election_eligible_at_height(record, 12));
-    assert!(validator_election_eligible_at_height(record, 13));
+    assert!(!validator_election_eligible_at_height(record, 18));
+    assert!(validator_election_eligible_at_height(record, 19));
     assert_eq!(stx.commit_topology.get(), &prior_topology);
     assert!(!stx.commit_topology.iter().any(|voter| voter == &peer));
     assert_eq!(
@@ -92,14 +93,14 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
         ConsensusKeyGate::NotYetActive
     );
     assert_eq!(
-        peer_consensus_key_gate_for_lane(&stx.world, &peer, 13, LaneId::new(42)),
+        peer_consensus_key_gate_for_lane(&stx.world, &peer, 19, LaneId::new(42)),
         ConsensusKeyGate::Live
     );
     assert!(
         !crate::state::peer_has_live_consensus_key_for_role(
             &stx.world,
             &peer,
-            13,
+            19,
             ConsensusKeyRole::Validator
         ),
         "participant enrollment cannot create a global voting key"
@@ -132,7 +133,7 @@ fn candidate_rejects_other_authority_tampered_consent_and_invalid_pop() {
     assert!(
         stx.world
             .public_lane_validators
-            .get(&(LaneId::new(42), validator))
+            .get(&(LaneId::new(42), validator.clone()))
             .is_none()
     );
 }
@@ -141,28 +142,55 @@ fn candidate_rejects_other_authority_tampered_consent_and_invalid_pop() {
 fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
-    let (validator, escrow, definition) = {
+    let (validator, delegator, escrow, definition, nexus) = {
         let mut stx = block.transaction();
-        let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
+        let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
+        let nexus = stx.nexus.clone();
         stx.apply();
-        (validator, escrow, definition)
+        (validator, delegator, escrow, definition, nexus)
     };
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(peer_key.public_key().clone());
     {
         let mut stx = block.transaction();
-        let candidate = signed_candidate(&stx, &validator, &peer_key, 100_000, LaneId::new(42));
+        stx.nexus = nexus.clone();
+        let lane = LaneId::new(42);
+        let candidate = signed_candidate(&stx, &validator, &peer_key, 1_000, lane);
+        crate::executor::Executor::Initial
+            .execute_instruction(&mut stx, &validator, candidate.into())
+            .expect("first transaction instruction bonds the candidate");
         assert!(
-            candidate.execute(&validator, &mut stx).is_err(),
-            "insufficient funds"
+            stx.world.peers.iter().any(|id| id == &peer),
+            "the rejected transaction must contain a successful peer write"
         );
         assert!(
-            !stx.world.peers.iter().any(|id| id == &peer),
-            "failed instruction must not publish an unbonded peer"
+            stx.world
+                .public_lane_stake_custody
+                .get(&(lane, validator.clone()))
+                .is_some(),
+            "the rejected transaction must contain a successful custody write"
         );
-        // Failed transaction is deliberately dropped rather than applied.
+        let unauthorized_bond = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &delegator, &Quantity::one()),
+            lane_id: lane,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            amount: Quantity::one(),
+            metadata: Metadata::default(),
+        };
+        let error = crate::executor::Executor::Initial
+            .execute_instruction(&mut stx, &validator, unauthorized_bond.into())
+            .expect_err("a later unauthorized bond rejects the whole transaction");
+        assert!(matches!(
+            error,
+            iroha_data_model::executor::ValidationFail::InstructionFailed(
+                Error::InvariantViolation(message)
+            ) if message.contains("authority must match staker")
+        ));
+        // A rejected multi-instruction transaction drops its entire StateTransaction.
     }
-    let stx = block.transaction();
+    let mut stx = block.transaction();
+    stx.nexus = nexus;
     assert!(!stx.world.peers.iter().any(|id| id == &peer));
     assert!(
         stx.world
@@ -173,14 +201,22 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
     assert!(
         stx.world
             .public_lane_validators
-            .get(&(LaneId::new(42), validator))
+            .get(&(LaneId::new(42), validator.clone()))
             .is_none()
     );
     assert!(
         stx.world
             .assets
-            .get(&AssetId::new(definition, escrow))
+            .get(&AssetId::new(definition.clone(), escrow))
             .is_none()
+    );
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&AssetId::new(definition, validator))
+            .expect("candidate's source balance after rollback")
+            .as_ref(),
+        &Quantity::from(10_000_u64)
     );
 }
 
@@ -190,17 +226,19 @@ fn activation_requires_validator_authority_after_genesis() {
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, intruder, _, _) = prepare_accounts(&mut stx);
+    let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
-        LaneId::SINGLE,
+        lane_id,
         validator.clone(),
         validator_peer_id(&validator),
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
+        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("registration");
-    let instruction = ActivatePublicLaneValidator::new(LaneId::SINGLE, validator.clone());
+    let instruction = ActivatePublicLaneValidator::new(lane_id, validator.clone());
     let error = instruction
         .clone()
         .execute(&intruder, &mut stx)
@@ -213,69 +251,41 @@ fn activation_requires_validator_authority_after_genesis() {
 }
 
 #[test]
-fn distinct_peer_binding_requires_consent_even_for_the_validator_owner() {
+fn registered_participant_peer_requires_consent_even_for_the_validator_owner() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
-    let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+    let (validator, _, _, _) = prepare_accounts(&mut stx);
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(peer_key.public_key().clone());
     stx.world.peers.push(peer.clone());
     stx.commit_topology.get_mut().push(peer.clone());
     seed_validator_consensus_key(&mut stx, &peer, ConsensusKeyStatus::Active);
-    let key_id = crate::state::derive_validator_key_id(peer.public_key());
+    let key_id = crate::state::derive_committee_key_id(peer.public_key());
     stx.world
         .consensus_keys
         .get_mut(&key_id)
         .expect("live key")
         .pop = Some(iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).expect("PoP"));
-    let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::SINGLE);
+    let lane_id = LaneId::new(42);
+    let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, lane_id);
     let error = candidate
         .registration
         .clone()
         .execute(&validator, &mut stx)
         .expect_err("plain registration cannot squat another consensus identity");
     assert!(error.to_string().contains("network-bound consent"));
-    let error = candidate
-        .clone()
-        .execute(&validator, &mut stx)
-        .expect_err("consent cannot add a previously ineligible global candidate");
-    assert!(error.to_string().contains("prepared epoch key transition"));
-    // A retained eligible record in another lane already contributes this peer
-    // to the global pool. The new binding is redundant for global election.
-    stx.world.public_lane_validators.insert(
-        (LaneId::new(42), ALICE_ID.clone()),
-        PublicLaneValidatorRecord {
-            lane_id: LaneId::new(42),
-            validator: ALICE_ID.clone(),
-            peer_id: peer,
-            stake_account: ALICE_ID.clone(),
-            total_stake: 1000_u64.into(),
-            self_stake: 1000_u64.into(),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_height: 1,
-            deactivation_height: None,
-            last_reward_epoch: None,
-        },
-    );
-    let mut other = stx
-        .world
-        .public_lane_validators
-        .get(&(LaneId::new(42), ALICE_ID.clone()))
-        .expect("backing record")
-        .clone();
-    other.lane_id = LaneId::SINGLE;
-    other.validator = delegator.clone();
-    other.stake_account = delegator.clone();
-    other.peer_id = validator_peer_id(&delegator);
-    stx.commit_topology.get_mut().push(other.peer_id.clone());
-    stx.world
-        .public_lane_validators
-        .insert((LaneId::SINGLE, delegator), other);
     candidate
         .execute(&validator, &mut stx)
-        .expect("signed redundant binding preserves the already-eligible global peer");
+        .expect("signed participant candidate owns its existing peer binding");
+    assert_eq!(
+        stx.world
+            .public_lane_validators
+            .get(&(lane_id, validator.clone()))
+            .expect("registered participant")
+            .peer_id,
+        peer
+    );
 }
 
 #[test]
@@ -285,13 +295,15 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
+    let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
-        LaneId::SINGLE,
+        lane_id,
         validator.clone(),
         validator_peer_id(&validator),
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
+        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("register owner-bound peer");
@@ -299,19 +311,18 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
     let replacement = PeerId::new(replacement_key.public_key().clone());
     stx.world.peers.push(replacement.clone());
     seed_validator_consensus_key(&mut stx, &replacement, ConsensusKeyStatus::Active);
-    let rebind =
-        RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, validator.clone(), replacement.clone());
-    let error = rebind
-        .clone()
-        .execute(&validator, &mut stx)
-        .expect_err("unsigned distinct peer");
-    assert!(error.to_string().contains("network-bound consent"));
+    let activation_height = stx
+        .world
+        .public_lane_validators
+        .get(&(lane_id, validator.clone()))
+        .expect("registered validator")
+        .activation_height;
     let payload = PublicLanePeerBindingAuthorization::new(
         *stx.network_id(),
-        LaneId::SINGLE,
+        lane_id,
         validator.clone(),
         replacement.clone(),
-        7,
+        activation_height,
         validator_peer_id(&validator),
     );
     let mut stale_payload = payload.clone();
@@ -319,11 +330,14 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
     let stale_signature =
         iroha_crypto::SignatureOf::try_new(replacement_key.private_key(), &stale_payload)
             .expect("future-tenure signature");
-    let error = rebind
-        .clone()
-        .with_peer_signature(stale_signature)
-        .execute(&validator, &mut stx)
-        .expect_err("consent from another validator tenure");
+    let error = RebindPublicLaneValidatorPeer::new(
+        lane_id,
+        validator.clone(),
+        replacement.clone(),
+        stale_signature,
+    )
+    .execute(&validator, &mut stx)
+    .expect_err("consent from another validator tenure");
     assert!(error.to_string().contains("replacement peer signature"));
     let mut wrong_previous = payload.clone();
     wrong_previous.previous_peer_id = replacement.clone();
@@ -331,22 +345,51 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
         iroha_crypto::SignatureOf::try_new(replacement_key.private_key(), &wrong_previous)
             .expect("wrong-binding signature");
     assert!(
-        rebind
-            .clone()
-            .with_peer_signature(stale_signature)
-            .execute(&validator, &mut stx)
-            .is_err()
+        RebindPublicLaneValidatorPeer::new(
+            lane_id,
+            validator.clone(),
+            replacement.clone(),
+            stale_signature,
+        )
+        .execute(&validator, &mut stx)
+        .is_err()
+    );
+    let mut wrong_network = payload.clone();
+    wrong_network.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"another-network")),
+    );
+    let wrong_network_signature =
+        iroha_crypto::SignatureOf::try_new(replacement_key.private_key(), &wrong_network)
+            .expect("wrong-network signature");
+    assert!(
+        RebindPublicLaneValidatorPeer::new(
+            lane_id,
+            validator.clone(),
+            replacement.clone(),
+            wrong_network_signature,
+        )
+        .execute(&validator, &mut stx)
+        .is_err()
     );
     let signature = iroha_crypto::SignatureOf::try_new(replacement_key.private_key(), &payload)
         .expect("replacement consent");
-    rebind
-        .with_peer_signature(signature)
+    let replay_signature = signature.clone();
+    RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement.clone(), signature)
         .execute(&validator, &mut stx)
         .expect("consenting replacement");
+    let replay = RebindPublicLaneValidatorPeer::new(
+        lane_id,
+        validator.clone(),
+        replacement.clone(),
+        replay_signature,
+    )
+    .execute(&validator, &mut stx)
+    .expect_err("old-binding consent cannot authorize a same-peer replay");
+    assert!(replay.to_string().contains("replacement peer signature"));
     assert_eq!(
         stx.world
             .public_lane_validators
-            .get(&(LaneId::SINGLE, validator))
+            .get(&(lane_id, validator))
             .expect("validator")
             .peer_id,
         replacement
@@ -354,17 +397,30 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
 }
 
 #[test]
-fn fresh_global_candidate_fails_closed_before_any_peer_or_custody_write() {
+fn global_candidate_without_authenticated_schedule_fails_before_any_write() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
     let peer_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::SINGLE);
+    let mut candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
+    candidate.registration.lane_id = LaneId::SINGLE;
+    let authorization = PublicLaneCandidateAuthorization::new(
+        *stx.network_id(),
+        candidate.registration.clone(),
+        candidate.activation_height,
+    );
+    candidate.peer_signature =
+        iroha_crypto::SignatureOf::try_new(peer_key.private_key(), &authorization)
+            .expect("exact candidate consent");
     let error = candidate
         .execute(&validator, &mut stx)
-        .expect_err("global roster has no prepared epoch key transition");
-    assert!(error.to_string().contains("prepared epoch key transition"));
+        .expect_err("global admission needs the exact committed finality anchor");
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated incumbent finality")
+    );
     assert!(
         !stx.world
             .peers
@@ -431,7 +487,7 @@ fn candidate_requires_committed_schedule_and_rejects_expired_tenure_consent() {
 }
 
 #[test]
-fn participant_binding_cannot_smuggle_global_validator_outside_prepared_topology() {
+fn participant_binding_does_not_enter_global_pool_even_with_validator_key() {
     let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
@@ -443,32 +499,47 @@ fn participant_binding_cannot_smuggle_global_validator_outside_prepared_topology
     let peer = PeerId::new(peer_key.public_key().clone());
     let _ = stx.world.peers.push(peer.clone());
     seed_validator_consensus_key(&mut stx, &peer, ConsensusKeyStatus::Active);
+    let committee_key = crate::state::derive_committee_key_id(peer.public_key());
+    stx.world
+        .consensus_keys
+        .get_mut(&committee_key)
+        .expect("participant consensus key")
+        .pop = Some(iroha_crypto::bls_normal_pop_prove(peer_key.private_key()).expect("PoP"));
     let candidate = signed_candidate(&stx, &validator, &peer_key, 1000, LaneId::new(42));
-    let error = candidate
+    candidate
         .execute(&validator, &mut stx)
-        .expect_err("nonzero lane must not bypass global transition gate");
-    assert!(error.to_string().contains("prepared epoch key transition"));
+        .expect("participant candidate can retain its own signed peer binding");
     assert!(
         stx.world
             .public_lane_validators
             .get(&(LaneId::new(42), validator))
-            .is_none()
+            .is_some()
     );
-    assert!(
+    assert_eq!(
         stx.world
             .assets
             .get(&AssetId::new(definition, escrow))
-            .is_none()
+            .expect("participant stake escrow")
+            .as_ref(),
+        &Quantity::from(1000_u64)
     );
+    let global_candidates = crate::state::epoch_validator_candidate_peer_ids_from_world(
+        &stx.world,
+        stx.commit_topology.iter().cloned(),
+        stx.block_height(),
+        &stx.nexus,
+        None,
+    );
+    assert!(!global_candidates.contains(&peer));
 }
 
 #[test]
-fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing() {
+fn participant_exit_and_unbonds_keep_reserved_custody_until_liability_ends() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
-    let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+    let (validator, delegator, escrow, definition) = prepare_accounts(&mut stx);
     let lane_id = LaneId::new(42);
     stx.nexus.staking.min_validator_stake = 1000_u64.into();
     stx.nexus.staking.unbonding_delay = Duration::ZERO;
@@ -479,21 +550,34 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
         validator.clone(),
         2000_u64.into(),
         Metadata::default(),
+        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(2000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator before topology freeze");
-    stx.commit_topology
-        .get_mut()
-        .push(validator_peer_id(&validator));
+    BondPublicLaneStake {
+        monetary_plan: fixture_bond_plan(
+            &stx,
+            lane_id,
+            &(validator.clone()),
+            &(delegator.clone()),
+            &(100_u64.into()),
+        ),
+        lane_id,
+        validator: validator.clone(),
+        staker: delegator.clone(),
+        amount: 100_u64.into(),
+        metadata: Metadata::default(),
+    }
+    .execute(&delegator, &mut stx)
+    .expect("delegation is admitted before the exit request");
     let release_at_ms = stx.block_unix_timestamp_ms();
-    let error = ExitPublicLaneValidator {
+    ExitPublicLaneValidator {
         lane_id,
         validator: validator.clone(),
         release_at_ms,
     }
     .execute(&validator, &mut stx)
-    .expect_err("cross-lane global voter cannot exit without transition");
-    assert!(error.to_string().contains("prepared epoch key transition"));
+    .expect("participant exit records a future election cutoff");
     let unbond = |staker: &AccountId, amount, label| SchedulePublicLaneUnbond {
         lane_id,
         validator: validator.clone(),
@@ -502,55 +586,52 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
         request_id: Hash::new(label),
         release_at_ms,
     };
-    unbond(&validator, 1000_u64, "global-safe-self-unbond")
+    unbond(&validator, 1000_u64, "participant-self-unbond-a")
         .execute(&validator, &mut stx)
-        .expect("self withdrawal retaining exact minimum");
-    let error = unbond(&validator, 1_u64, "global-unsafe-self-unbond")
+        .expect("owner may schedule a slashable withdrawal");
+    unbond(&validator, 1000_u64, "participant-self-unbond-b")
         .execute(&validator, &mut stx)
-        .expect_err("self withdrawal below minimum changes global eligibility");
-    assert!(error.to_string().contains("prepared epoch key transition"));
-    BondPublicLaneStake {
-        lane_id,
-        validator: validator.clone(),
-        staker: delegator.clone(),
-        amount: 100_u64.into(),
-        metadata: Metadata::default(),
-    }
-    .execute(&delegator, &mut stx)
-    .expect("delegation does not change global seat selection");
-    unbond(&delegator, 100_u64, "global-safe-delegator-unbond")
+        .expect("exit permits full principal to remain in pending slashable custody");
+    unbond(&delegator, 100_u64, "participant-delegator-unbond")
         .execute(&delegator, &mut stx)
-        .expect("delegator may withdraw without changing minimum self stake");
+        .expect("delegator may schedule a slashable withdrawal");
     let key = (lane_id, validator.clone());
     let record = stx
         .world
         .public_lane_validators
-        .get_mut(&key)
-        .expect("validator");
-    record.activation_height = 1;
-    record.deactivation_height = Some(2);
-    record.status = PublicLaneValidatorStatus::Exited;
-    unbond(&validator, 1000_u64, "global-ended-tenure-unbond")
-        .execute(&validator, &mut stx)
-        .expect("already finalized tenure may drain remaining custody");
+        .get(&key)
+        .expect("retained validator");
+    assert!(record.self_stake.is_zero());
+    assert!(record.election_exit_height.is_some());
+    assert!(record.deactivation_height.is_some());
+    let share = stx
+        .world
+        .public_lane_stake_shares
+        .get(&(lane_id, validator.clone(), validator))
+        .expect("retained pending self stake");
+    assert_eq!(share.pending_unbonds.len(), 2);
     assert!(
-        stx.world
-            .public_lane_validators
-            .get(&key)
-            .expect("retained custody")
-            .self_stake
-            .is_zero()
+        share
+            .pending_unbonds
+            .values()
+            .all(|pending| { pending.liability_release_height > pending.slashable_through_height })
     );
+    let escrow_balance = stx
+        .world
+        .assets
+        .get(&AssetId::new(definition, escrow))
+        .expect("principal remains in escrow");
+    assert_eq!(escrow_balance.as_ref(), &Quantity::from(2100_u64));
 }
 
 #[test]
-fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
+fn self_bond_restores_minimum_without_rewriting_candidate_identity() {
     let mut state = setup_state();
     set_epoch_length(&mut state, 6);
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, _, _, _) = prepare_accounts(&mut stx);
-    let lane_id = LaneId::SINGLE;
+    let lane_id = LaneId::new(42);
     RegisterPublicLaneValidator::new(
         lane_id,
         validator.clone(),
@@ -558,15 +639,27 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
         validator.clone(),
         1000_u64.into(),
         Metadata::default(),
+        fixture_registration_plan(&stx, lane_id, &validator, &Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");
-    stx.commit_topology
-        .get_mut()
-        .push(validator_peer_id(&validator));
-    // A governance minimum increase is external to ordinary owner staking.
+    let original_peer = stx
+        .world
+        .public_lane_validators
+        .get(&(lane_id, validator.clone()))
+        .expect("candidate")
+        .peer_id
+        .clone();
+    // A governance minimum increase may be met by a further exact self bond.
     stx.nexus.staking.min_validator_stake = 2000_u64.into();
-    let error = BondPublicLaneStake {
+    BondPublicLaneStake {
+        monetary_plan: fixture_bond_plan(
+            &stx,
+            lane_id,
+            &(validator.clone()),
+            &(validator.clone()),
+            &(1000_u64.into()),
+        ),
         lane_id,
         validator: validator.clone(),
         staker: validator.clone(),
@@ -574,106 +667,98 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
         metadata: Metadata::default(),
     }
     .execute(&validator, &mut stx)
-    .expect_err("owner cannot restore global eligibility without prepared keys");
-    assert!(error.to_string().contains("prepared epoch key transition"));
+    .expect("owner may restore the minimum without changing the peer binding");
     assert_eq!(
         stx.world
             .public_lane_validators
-            .get(&(lane_id, validator))
+            .get(&(lane_id, validator.clone()))
             .expect("validator")
             .self_stake,
-        Quantity::from(1000_u64)
+        Quantity::from(2000_u64)
+    );
+    assert_eq!(
+        stx.world
+            .public_lane_validators
+            .get(&(lane_id, validator.clone()))
+            .expect("candidate")
+            .peer_id,
+        original_peer
     );
 }
 
 #[test]
-fn global_pool_guard_checks_later_tenure_union_and_allows_permanent_redundancy() {
-    let mut state = setup_state();
-    set_epoch_length(&mut state, 6);
+fn frozen_global_binding_allows_requests_but_rejects_tenure_or_peer_rewrites() {
+    let state = setup_state();
     let mut block = state.block(block_header_with_height(2));
     let mut stx = block.transaction();
     let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-    let lane_id = LaneId::SINGLE;
-    RegisterPublicLaneValidator::new(
-        lane_id,
-        validator.clone(),
-        validator_peer_id(&validator),
-        validator.clone(),
-        1000_u64.into(),
-        Metadata::default(),
-    )
-    .execute(&validator, &mut stx)
-    .expect("seed retained validator");
-    stx.commit_topology
-        .get_mut()
-        .push(validator_peer_id(&validator));
-    let key = (lane_id, validator.clone());
-    let mut redundant = stx
-        .world
-        .public_lane_validators
-        .get(&key)
-        .expect("record")
-        .clone();
-    let mut lane_cover = redundant.clone();
-    lane_cover.validator = delegator.clone();
-    lane_cover.stake_account = delegator.clone();
-    lane_cover.peer_id = validator_peer_id(&delegator);
-    stx.commit_topology
-        .get_mut()
-        .push(lane_cover.peer_id.clone());
+    let original = PublicLaneValidatorRecord {
+        lane_id: LaneId::SINGLE,
+        validator: validator.clone(),
+        peer_id: validator_peer_id(&validator),
+        stake_account: validator.clone(),
+        total_stake: Quantity::from(1000_u64),
+        self_stake: Quantity::from(1000_u64),
+        metadata: Metadata::default(),
+        status: PublicLaneValidatorStatus::Active,
+        activation_height: 1,
+        election_exit_height: None,
+        deactivation_height: None,
+        last_reward_epoch: None,
+    };
+    let key = (LaneId::SINGLE, validator);
     stx.world
         .public_lane_validators
-        .insert((lane_id, delegator), lane_cover);
-    redundant.lane_id = LaneId::new(42);
-    redundant.validator = ALICE_ID.clone();
-    redundant.stake_account = ALICE_ID.clone();
-    redundant.deactivation_height = Some(13);
-    stx.world
-        .public_lane_validators
-        .insert((LaneId::new(42), ALICE_ID.clone()), redundant);
-    let mut replacement = stx
-        .world
-        .public_lane_validators
-        .get(&key)
-        .expect("record")
-        .clone();
-    replacement.deactivation_height = Some(7);
-    assert_eq!(
-        crate::state::epoch_validator_candidate_peer_ids_from_world(
-            &stx.world,
-            stx.commit_topology.iter().cloned(),
-            7,
-            &stx.nexus,
-            None
-        ),
-        crate::state::epoch_validator_candidate_peer_ids_from_world(
-            &stx.world,
-            stx.commit_topology.iter().cloned(),
-            7,
-            &stx.nexus,
-            Some(&replacement)
-        )
-    );
-    let error = ensure_global_candidate_pool_preserved(&stx, &replacement, "test_exit")
-        .expect_err("redundancy that ends later cannot hide future removal");
-    assert!(error.to_string().contains("prepared epoch key transition"));
-    stx.world
-        .public_lane_validators
-        .get_mut(&(LaneId::new(42), ALICE_ID.clone()))
-        .expect("redundant record")
-        .deactivation_height = None;
-    ensure_global_candidate_pool_preserved(&stx, &replacement, "test_exit")
-        .expect("permanent same-peer and lane redundancy preserves every future pool");
+        .insert(key.clone(), original.clone());
+    stx.commit_topology.get_mut().push(original.peer_id.clone());
+    let mut requested = original.clone();
+    requested.election_exit_height = Some(13);
+    requested.status = PublicLaneValidatorStatus::Exiting(0);
+    ensure_frozen_validator_binding_preserved(&stx, &requested, "request_exit")
+        .expect("an exit request cannot revoke the authenticated tenure");
+    for mutation in 0..3 {
+        let mut replacement = requested.clone();
+        match mutation {
+            0 => replacement.peer_id = validator_peer_id(&delegator),
+            1 => replacement.activation_height += 1,
+            _ => replacement.deactivation_height = Some(13),
+        }
+        let error = ensure_frozen_validator_binding_preserved(&stx, &replacement, "rewrite")
+            .expect_err("the current seat must retain its peer and actual tenure");
+        assert!(
+            error
+                .to_string()
+                .contains("current or frozen validator binding")
+        );
+        assert_eq!(stx.world.public_lane_validators.get(&key), Some(&original));
+    }
 }
 
 #[test]
-fn election_interval_union_rounds_boundaries_and_ignores_finished_custody() {
-    assert_eq!(
-        normalized_future_election_intervals([(1, Some(2)), (8, Some(20)), (19, None)], 7, 6),
-        vec![(13, u128::from(u64::MAX) + 1)]
-    );
-    assert_eq!(
-        normalized_future_election_intervals([(7, Some(13)), (13, Some(19))], 7, 6),
-        vec![(7, 19)]
-    );
+fn requested_exit_excludes_future_elections_without_ending_voting_or_slashing_tenure() {
+    let owner = ALICE_ID.clone();
+    let mut record = PublicLaneValidatorRecord {
+        lane_id: LaneId::SINGLE,
+        validator: owner.clone(),
+        peer_id: validator_peer_id(&owner),
+        stake_account: owner,
+        total_stake: Quantity::from(1000_u64),
+        self_stake: Quantity::from(1000_u64),
+        metadata: Metadata::default(),
+        status: PublicLaneValidatorStatus::Exiting(0),
+        activation_height: 1,
+        election_exit_height: None,
+        deactivation_height: None,
+        last_reward_epoch: None,
+    };
+    schedule_validator_deactivation(&mut record, 13, true).unwrap();
+    assert!(validator_election_eligible_at_height(&record, 12));
+    assert!(!validator_election_eligible_at_height(&record, 13));
+    assert!(validator_tenure_contains_height(&record, 100).unwrap());
+    assert_eq!(record.deactivation_height, None);
+    schedule_validator_deactivation(&mut record, 19, false).unwrap();
+    assert_eq!(record.election_exit_height, Some(13));
+    assert_eq!(record.deactivation_height, Some(19));
+    assert!(validator_tenure_contains_height(&record, 18).unwrap());
+    assert!(!validator_tenure_contains_height(&record, 19).unwrap());
 }

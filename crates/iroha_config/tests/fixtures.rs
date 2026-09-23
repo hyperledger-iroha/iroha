@@ -156,7 +156,11 @@ fn quic_datagram_buffers_default_to_one_mib() {
 fn minimal_config_snapshot() {
     let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
         .expect("config should be valid");
-    expect_file!["fixtures/minimal_config_snapshot.txt"].assert_debug_eq(&config);
+    let rendered = format!("{config:#?}").replace(
+        defaults::runtime_provider_broker::ENDPOINT_PATH,
+        "<platform-default broker endpoint>",
+    );
+    expect_file!["fixtures/minimal_config_snapshot.txt"].assert_eq(&format!("{rendered}\n"));
 }
 #[test]
 fn torii_receipt_signer_parses() {
@@ -707,6 +711,32 @@ fn nexus_storage_weights_require_full_budget() {
         .expect_err("invalid storage weights must be rejected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "nexus.storage.disk_budget_weights");
+}
+
+#[test]
+fn kagemusha_operation_index_pool_is_finite_and_preserves_operator_limit() {
+    use iroha_config::parameters::user::{Nexus, NexusStorage};
+    use iroha_config_base::util::{Bytes, Emitter};
+    for bytes in [0, 128 * 1024 * 1024] {
+        let nexus = Nexus {
+            storage: NexusStorage {
+                kagemusha_operation_index_bytes: Bytes(bytes),
+                ..NexusStorage::default()
+            },
+            ..Nexus::default()
+        };
+        let mut emitter = Emitter::<ParseError>::new();
+        let actual = nexus.parse(&mut emitter);
+        if bytes == 0 {
+            assert!(actual.is_none());
+            let error = emitter.into_result().expect_err("zero is not unlimited");
+            assert_contains!(format!("{error:?}"), "kagemusha_operation_index_bytes");
+        } else {
+            let actual = actual.expect("finite configured pool");
+            emitter.into_result().expect("valid configured pool");
+            assert_eq!(actual.storage.kagemusha_operation_index_bytes.get(), bytes);
+        }
+    }
 }
 #[test]
 fn nexus_storage_weights_require_positive_subsystem_shares() {

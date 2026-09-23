@@ -1006,7 +1006,12 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         Command::Taira(crate::taira::Command::PublicReset(_))
     ));
 
-    for retired in ["--journal-dir", "--canary-fee-payer"] {
+    for retired in [
+        "--journal-dir",
+        "--canary-fee-payer",
+        "--maintenance-admin-config",
+        "--epoch-seed-sources",
+    ] {
         let error = Args::try_parse_from([
             "iroha",
             "taira",
@@ -1034,15 +1039,6 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     let local = [
         "--runtime-client-config",
         "/private/runtime/client.toml",
-        "--maintenance-admin-config",
-        "/private/runtime/administrator.toml",
-        "--epoch-supervisor-plan",
-        "/private/runtime/supervisor-plan.json",
-        "--epoch-seed-sources",
-        "/private/runtime/epoch-seed-1",
-        "/private/runtime/epoch-seed-2",
-        "/private/runtime/epoch-seed-3",
-        "/private/runtime/epoch-seed-4",
         "--validator-client-config",
         "/private/runtime/client-1.toml",
         "/private/runtime/client-2.toml",

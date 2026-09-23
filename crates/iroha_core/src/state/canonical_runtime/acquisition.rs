@@ -207,13 +207,16 @@ impl<'state> RuntimeBlockAcquisition<'state> {
         }
     }
 
-    pub(super) fn initialize(&mut self, replacement: bool) {
+    pub(super) fn initialize(
+        &mut self,
+        replacement: bool,
+    ) -> Result<(), mv::storage::AdmittedStorageError> {
         assert!(!self.started, "original State acquisition is one-shot");
         self.started = true;
         self.world = Some(if replacement {
-            self.target.world.block_and_revert()
+            self.target.world.try_block_and_revert()?
         } else {
-            self.target.world.block()
+            self.target.world.try_block()?
         });
         self.transactions = Some(if replacement {
             self.target.transactions.block_and_revert()
@@ -226,6 +229,7 @@ impl<'state> RuntimeBlockAcquisition<'state> {
             BlockMode::Ordinary
         });
         self.complete = true;
+        Ok(())
     }
 
     pub(super) fn world(&self) -> &WorldBlock<'state> {

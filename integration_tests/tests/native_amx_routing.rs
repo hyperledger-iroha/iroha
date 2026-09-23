@@ -194,16 +194,24 @@ fn native_amx_account_fixtures_use_checked_seed_derivation() {
     );
 }
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    let definition: AssetDefinitionId = defaults::nexus::staking::stake_asset_id()
+        .parse()
+        .expect("canonical network XOR asset");
+    assert_eq!(definition.to_string(), "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    definition
 }
 fn fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("universal", "universal").expect("fee asset domain"),
-        "xor".parse().expect("fee asset name"),
-    )
+    defaults::nexus::fees::fee_asset_id()
+        .parse()
+        .expect("canonical Nexus fee XOR asset")
+}
+#[test]
+fn native_amx_staking_and_fees_use_the_real_network_xor() {
+    assert_eq!(stake_asset_definition_id(), fee_asset_definition_id());
+    assert_eq!(
+        stake_asset_definition_id(),
+        SumeragiNposParameters::default().xor_asset_definition_id
+    );
 }
 fn native_amx_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("lane count");
@@ -240,6 +248,7 @@ fn da_proof_policy_bundle() -> DaProofPolicyBundle {
 fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = fee_asset_definition_id();
+    assert_eq!(stake_asset_id, fee_asset_id);
     let gas_account_id = gas_account();
     let lane_ids = [
         LaneId::new(UNIVERSAL_LANE),
@@ -250,33 +259,17 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
         VALIDATOR_STAKE.saturating_mul(u32::try_from(lane_ids.len()).expect("lane count fits"));
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(
-            DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        ))
-        .into(),
-        Register::domain(Domain::new(
             DomainId::try_new("universal", "universal").expect("universal domain"),
         ))
         .into(),
         Register::account(Account::new(gas_account_id.clone())).into(),
-        Register::asset_definition({
-            let asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .into(),
-        Register::asset_definition({
-            let asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
+        Register::asset_definition(AssetDefinition::new(
+            stake_asset_id.clone(),
+            "XOR".to_owned(),
+            iroha_primitives::numeric::NumericSpec::fractional(9),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
         Mint::asset_quantity(
             VALIDATOR_FEE_SEED,
@@ -285,7 +278,7 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
         .into(),
         Mint::asset_quantity(
             VALIDATOR_FEE_SEED,
-            AssetId::new(fee_asset_id.clone(), gas_account_id),
+            AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
         )
         .into(),
     ];
@@ -316,6 +309,11 @@ fn genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Instructio
                     validator_id.clone(),
                     Quantity::from(VALIDATOR_STAKE),
                     Metadata::default(),
+                    iroha::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                        Quantity::from(VALIDATOR_STAKE),
+                    ),
                 )
                 .into(),
             );
@@ -373,7 +371,9 @@ fn localnet_builder() -> NetworkBuilder {
         .expect("canonical gas account literal");
     let stake_asset_literal = stake_asset_definition_id().to_string();
     let fee_asset_literal = fee_asset_definition_id().to_string();
+    assert_eq!(stake_asset_literal, fee_asset_literal);
     let mut npos = SumeragiNposParameters::default();
+    npos.xor_asset_definition_id = stake_asset_definition_id();
     npos.max_validators = PEERS as u32;
     npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
     NetworkBuilder::new()

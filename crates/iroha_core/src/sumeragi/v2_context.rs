@@ -17,8 +17,7 @@ use crate::{
     smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
-        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer_with_role,
-        nexus_active_lane_ids, public_lane_validator_record_matches_key,
+        live_consensus_key_pop_for_peer_with_role, public_lane_validator_record_matches_key,
     },
 };
 use iroha_crypto::{Algorithm, Hash};
@@ -27,7 +26,11 @@ use iroha_data_model::{
     block::{SignedBlock, consensus_v2 as wire},
     consensus::ConsensusKeyRole,
     isi::RegisterBox,
-    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    isi::kagemusha_v1::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1,
+    },
     parameter::system::ConsensusHandshakeMetadata,
     transaction::Executable,
 };
@@ -280,14 +283,13 @@ pub fn validate_signed_genesis_v2_authority(
     {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
-    let (signed_mint_roster, signed_next_mint_roster) =
-        bind_signed_mint_finality_rosters(&metadata, signed_network_id)?;
-    if signed_mint_roster != context.kagemusha_mint_finality_epoch_roster
-        || signed_next_mint_roster
-            != context
-                .next_epoch_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.kagemusha_mint_finality_epoch_roster.clone())
+    let (authority, authorization) = bind_signed_mint_finality_authority(
+        &metadata,
+        signed_network_id,
+        context.epoch_end_height,
+    )?;
+    if authority != context.kagemusha_mint_finality_authority
+        || authorization != context.kagemusha_mint_finality_authorization
     {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
@@ -301,35 +303,43 @@ pub fn validate_signed_genesis_v2_authority(
     Ok(())
 }
 
-fn bind_signed_mint_finality_rosters(
+fn bind_signed_mint_finality_authority(
     metadata: &ConsensusHandshakeMetadata,
     network_id: NetworkId,
+    last_height: u64,
 ) -> Result<
     (
-        KagemushaMintFinalityEpochRosterV1,
-        Option<KagemushaMintFinalityEpochRosterV1>,
+        KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityEpochAuthorizationV1,
     ),
     V2GenesisBootstrapError,
 > {
-    let bind = |template: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1|
-     -> Result<KagemushaMintFinalityEpochRosterV1, V2GenesisBootstrapError> {
-        let roster = template
-            .bind_network_id(network_id)
-            .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
-        crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(
-            &roster,
-        )
-        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
-        Ok(roster)
-    };
-    let epoch_roster = bind(&metadata.kagemusha_mint_finality.epoch_roster)?;
-    let next_epoch_roster = metadata
+    let authority = metadata
         .kagemusha_mint_finality
-        .next_epoch_roster
-        .as_ref()
-        .map(bind)
-        .transpose()?;
-    Ok((epoch_roster, next_epoch_roster))
+        .authority_generation
+        .bind_network_id(network_id)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(&authority)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: 1,
+        network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority
+            .authority_id()
+            .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?,
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(&authority)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
+    Ok((authority, authorization))
 }
 /// Verify the complete persisted height-one election against deterministically
 /// executed signed genesis state.
@@ -437,11 +447,11 @@ pub fn freeze_staged_genesis_v2(
             (epoch_length, parameters.epoch_seed())
         }
     };
-    let (signed_mint_roster, signed_next_mint_roster) =
-        bind_signed_mint_finality_rosters(&signed_metadata, network_id)?;
-    if signed_mint_roster.epoch != 0
-        || signed_mint_roster.validators.len() != roster.len()
-        || signed_mint_roster
+    let (authority, authorization) =
+        bind_signed_mint_finality_authority(&signed_metadata, network_id, epoch_end_height)?;
+    if authority.generation != 0
+        || authority.validators.len() != roster.len()
+        || authority
             .validators
             .iter()
             .zip(&roster)
@@ -451,30 +461,15 @@ pub fn freeze_staged_genesis_v2(
     }
     let election = FrozenElectionInputs {
         epoch: 0,
-        kagemusha_mint_finality_epoch_roster: signed_mint_roster,
+        kagemusha_mint_finality_authority: authority,
+        kagemusha_mint_finality_authorization: authorization,
         epoch_end_height,
         mode,
         roster,
         leader_seed,
     };
-    let next_epoch_snapshot = if election.epoch_end_height == 1 {
-        let roster = signed_next_mint_roster.ok_or_else(|| {
-            V2GenesisBootstrapError::Context(
-                V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId.to_string(),
-            )
-        })?;
-        Some(
-            finalized_next_epoch_snapshot_with_roster(staged, &network_id, 1, &election, roster)
-                .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?,
-        )
-    } else {
-        if signed_next_mint_roster.is_some() {
-            return Err(V2GenesisBootstrapError::Context(
-                V2ContextBuildError::UnexpectedNextKagemushaMintFinalityEpochRoster.to_string(),
-            ));
-        }
-        None
-    };
+    let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &network_id, 1, &election)
+        .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let staged_nexus_amx_context_hash =
         verify_staged_nexus_amx_context_hash(staged, signed_parameters.nexus_amx_context_hash)?;
     let staged_execution_policy_hash =
@@ -691,9 +686,10 @@ pub enum V2GenesisBootstrapError {
 pub(crate) struct FrozenElectionInputs {
     /// Election epoch number.
     pub epoch: u64,
-    /// Identifier of the paired-Pasta mint-finality roster for this epoch.
-    pub kagemusha_mint_finality_epoch_roster:
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
+    /// Immutable signing generation selected by the scheduling authorization.
+    pub kagemusha_mint_finality_authority: KagemushaMintFinalityAuthorityGenerationV1,
+    /// Exact epoch, interval, predecessor and beacon authorization.
+    pub kagemusha_mint_finality_authorization: KagemushaMintFinalityEpochAuthorizationV1,
     /// Final height governed by this snapshot.
     pub epoch_end_height: wire::Height,
     /// Genesis-selected consensus mode.
@@ -732,18 +728,15 @@ pub(crate) fn build_genesis_height_context(
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
     let quorum = inputs.election.quorum()?;
-    let kagemusha_mint_finality_epoch_id = inputs
-        .election
-        .kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: inputs.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: inputs.election.epoch,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: inputs.election.kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization: inputs
+            .election
+            .kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority: inputs.election.kagemusha_mint_finality_authority,
         epoch_end_height: inputs.election.epoch_end_height,
         next_epoch_snapshot: inputs.next_epoch_snapshot,
         mode: inputs.election.mode,
@@ -779,17 +772,13 @@ pub(crate) fn build_successor_height_context(
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
     let quorum = election.quorum()?;
-    let kagemusha_mint_finality_epoch_id = election
-        .kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: parent.height_context.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height,
         epoch: election.epoch,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster: election.kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization: election.kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority: election.kagemusha_mint_finality_authority,
         epoch_end_height: election.epoch_end_height,
         next_epoch_snapshot,
         mode: election.mode,
@@ -812,8 +801,9 @@ fn successor_election_inputs(
     let election = match parent.height_context.next_epoch_snapshot.as_ref() {
         Some(snapshot) => FrozenElectionInputs {
             epoch: snapshot.epoch,
-            kagemusha_mint_finality_epoch_roster: snapshot
-                .kagemusha_mint_finality_epoch_roster
+            kagemusha_mint_finality_authority: snapshot.kagemusha_mint_finality_authority.clone(),
+            kagemusha_mint_finality_authorization: snapshot
+                .kagemusha_mint_finality_authorization
                 .clone(),
             epoch_end_height: snapshot.epoch_end_height,
             mode: snapshot.mode,
@@ -822,9 +812,13 @@ fn successor_election_inputs(
         },
         None => FrozenElectionInputs {
             epoch: parent.height_context.epoch,
-            kagemusha_mint_finality_epoch_roster: parent
+            kagemusha_mint_finality_authority: parent
                 .height_context
-                .kagemusha_mint_finality_epoch_roster
+                .kagemusha_mint_finality_authority
+                .clone(),
+            kagemusha_mint_finality_authorization: parent
+                .height_context
+                .kagemusha_mint_finality_authorization
                 .clone(),
             epoch_end_height: parent.height_context.epoch_end_height,
             mode: parent.height_context.mode,
@@ -979,28 +973,6 @@ pub(crate) fn finalized_next_epoch_snapshot(
     if height != election.epoch_end_height {
         return Ok(None);
     }
-    let kagemusha_mint_finality_epoch_roster = state
-        .world()
-        .kagemusha_mint_finality_next_epoch_parameter()
-        .ok_or(V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId)?
-        .roster;
-    finalized_next_epoch_snapshot_with_roster(
-        state,
-        network_id,
-        height,
-        election,
-        kagemusha_mint_finality_epoch_roster,
-    )
-    .map(Some)
-}
-
-fn finalized_next_epoch_snapshot_with_roster(
-    state: &impl StateReadOnly,
-    network_id: &NetworkId,
-    height: wire::Height,
-    election: &FrozenElectionInputs,
-    kagemusha_mint_finality_epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-) -> Result<wire::finality::FinalizedNextEpochSnapshot, V2ContextBuildError> {
     let successor_height = height
         .checked_add(1)
         .ok_or(V2ContextBuildError::HeightOverflow)?;
@@ -1008,14 +980,6 @@ fn finalized_next_epoch_snapshot_with_roster(
         .epoch
         .checked_add(1)
         .ok_or(V2ContextBuildError::EpochOverflow)?;
-    if kagemusha_mint_finality_epoch_roster.network_id != *network_id
-        || kagemusha_mint_finality_epoch_roster.epoch != epoch
-    {
-        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster);
-    }
-    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let npos_params = if election.mode == wire::ConsensusMode::Npos {
         Some(
             super::v2_npos::committed_epoch_length_blocks(state.world()).map_err(|error| {
@@ -1041,66 +1005,24 @@ fn finalized_next_epoch_snapshot_with_roster(
     } else {
         None
     };
-    let roster = match election.mode {
-        wire::ConsensusMode::Permissioned => election.roster.clone(),
-        wire::ConsensusMode::Npos => {
-            let elected = epoch_validator_peer_ids_from_world_with_seed(
-                state.world(),
-                state.commit_topology().iter().cloned(),
-                successor_height,
-                state.nexus(),
-                epoch,
-                authenticated_npos_seed.expect(
-                    "NPoS branch authenticates the pre-boundary beacon before roster selection",
-                ),
-            )
-            .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
-            let active_lanes = nexus_active_lane_ids(state.nexus());
-            strict_v2_voting_roster(
-                state.world(),
-                &elected,
-                Some(&active_lanes),
-                successor_height,
-            )?
-        }
-    };
-    if kagemusha_mint_finality_epoch_roster.validators.len() != roster.len()
-        || kagemusha_mint_finality_epoch_roster
-            .validators
-            .iter()
-            .zip(&roster)
-            .any(|(mint, consensus)| mint.validator != consensus.validator)
-        || crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(
-            &kagemusha_mint_finality_epoch_roster,
-        )
-        .is_err()
-    {
-        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster);
-    }
-    let quorum = wire::DualQuorum::from_roster(&roster)?;
-    let validator_set_pops = roster
-        .iter()
-        .map(|entry| {
-            live_consensus_key_pop_for_peer_with_role(
-                state.world(),
-                &entry.validator,
-                successor_height,
-                ConsensusKeyRole::Validator,
-            )
-            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
-        .map_err(V2ContextBuildError::NextEpochCryptography)?;
+    // A deadline decides the already frozen attempt; it never rerolls its roster.
+    let mut roster = election.roster.clone();
+    let mut kagemusha_mint_finality_authority = election.kagemusha_mint_finality_authority.clone();
     let epoch_end_height = match election.mode {
         wire::ConsensusMode::Permissioned => u64::MAX,
         wire::ConsensusMode::Npos => {
             let epoch_length = npos_params.expect(
                 "NPoS branch validates the committed schedule before snapshot construction",
             );
-            height
-                .checked_add(epoch_length)
-                .ok_or(V2ContextBuildError::HeightOverflow)?
+            next_npos_epoch_end_height(
+                &election.kagemusha_mint_finality_authorization,
+                state
+                    .world()
+                    .validator_committee_transitions()
+                    .get(&epoch)
+                    .map(|transition| &transition.preparation),
+                epoch_length,
+            )?
         }
     };
     let leader_seed = match election.mode {
@@ -1113,18 +1035,364 @@ fn finalized_next_epoch_snapshot_with_roster(
         wire::ConsensusMode::Npos => authenticated_npos_seed
             .expect("NPoS branch authenticates the pre-boundary seed before roster selection"),
     };
-    Ok(wire::finality::FinalizedNextEpochSnapshot {
+    let mut beacon = match election.kagemusha_mint_finality_authorization.beacon {
+        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+            session_id,
+            transcript_hash,
+        }) => {
+            let active = state
+                .world()
+                .global_beacon_key_sessions()
+                .get(&session_id)
+                .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+            if !active.is_active_at(height) || active.session.transcript_hash != transcript_hash {
+                return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+            }
+            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id,
+                transcript_hash,
+            })
+        }
+        BeaconEpochBindingV1::Bootstrap => {
+            let session_id = state
+                .world()
+                .active_global_beacon_key_session()
+                .ok_or(V2ContextBuildError::MissingPreBoundaryBeaconPulse)?;
+            let active = state
+                .world()
+                .global_beacon_key_sessions()
+                .get(&session_id)
+                .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+            if !active.is_active_at(height) {
+                return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+            }
+            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id,
+                transcript_hash: active.session.transcript_hash,
+            })
+        }
+    };
+    let BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+        session_id,
+        transcript_hash,
+    }) = beacon
+    else {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    };
+    let active = state
+        .world()
+        .global_beacon_key_sessions()
+        .get(&session_id)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if state.world().active_global_beacon_key_session() != Some(session_id)
+        || !active.is_active_at(successor_height)
+        || active.session.network_id != *network_id
+        || active.session.transcript_hash != transcript_hash
+    {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    active
+        .validate()
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+        &active.session,
+        &roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let mut decision = KagemushaMintFinalityEpochDecisionV1::Retain;
+    let mut transition_id = [0; 32];
+    if let Some(transition) = state.world().validator_committee_transitions().get(&epoch) {
+        transition
+            .preparation
+            .validate_against_preparing_authorization(
+                &election.kagemusha_mint_finality_authorization,
+            )
+            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
+        crate::state::validator_committee::verify_progress(state.world(), transition)
+            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
+        if transition.outcome.is_some() {
+            return Err(V2ContextBuildError::InvalidCommitteeTransition);
+        }
+        transition_id = transition
+            .preparation
+            .transition_id()
+            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
+        decision = KagemushaMintFinalityEpochDecisionV1::RetainAndCancel;
+        if transition.readiness.len() == transition.preparation.roster.len()
+            && transition.preparation.roster.iter().all(|seat| {
+                eligible_global_candidate(state.world(), &seat.validator, successor_height, true)
+                    && live_consensus_key_pop_for_peer_with_role(
+                        state.world(),
+                        &seat.validator,
+                        successor_height,
+                        ConsensusKeyRole::Validator,
+                    )
+                    .is_some()
+            })
+        {
+            let credentials = transition
+                .credentials
+                .as_ref()
+                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
+            let target_beacon = state
+                .world()
+                .global_beacon_key_sessions()
+                .get(&credentials.beacon.session_id)
+                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
+            if target_beacon.activated_at_height.is_some()
+                || target_beacon.retired_at_height.is_some()
+            {
+                return Err(V2ContextBuildError::InvalidCommitteeTransition);
+            }
+            decision = KagemushaMintFinalityEpochDecisionV1::Activate;
+            roster = transition.preparation.roster.clone();
+            kagemusha_mint_finality_authority = credentials.authority.clone();
+            beacon = BeaconEpochBindingV1::Installed(credentials.beacon);
+        }
+    }
+    let quorum = wire::DualQuorum::from_roster(&roster)?;
+    let validator_set_pops = roster
+        .iter()
+        .map(|seat| {
+            live_consensus_key_pop_for_peer_with_role(
+                state.world(),
+                &seat.validator,
+                successor_height,
+                ConsensusKeyRole::Validator,
+            )
+            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
+        .map_err(V2ContextBuildError::NextEpochCryptography)?;
+    let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: 1,
+        network_id: *network_id,
         epoch,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        first_height: successor_height,
+        last_height: epoch_end_height,
+        authority_generation: kagemusha_mint_finality_authority.generation,
+        authority_id: kagemusha_mint_finality_authority
+            .authority_id()
+            .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?,
+        beacon,
+        previous_authorization_id: election
+            .kagemusha_mint_finality_authorization
+            .authorization_id()
+            .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?,
+        transition_id,
+        decision,
+    };
+    kagemusha_mint_finality_authorization
+        .validate_successor(&election.kagemusha_mint_finality_authorization)
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityAuthority)?;
+    let committee_preparation = if election.mode == wire::ConsensusMode::Npos {
+        freeze_future_committee(
+            state,
+            height,
+            &kagemusha_mint_finality_authorization,
+            leader_seed,
+        )?
+    } else {
+        None
+    };
+    Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation,
+        epoch,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         epoch_end_height,
         mode: election.mode,
         roster,
         validator_set_pops,
         quorum,
         leader_seed,
+    }))
+}
+/// A configuration update can change only intervals that have not been frozen.
+fn next_npos_epoch_end_height(
+    preparing: &KagemushaMintFinalityEpochAuthorizationV1,
+    frozen: Option<&iroha_data_model::nexus::ValidatorCommitteePreparationV1>,
+    configured_length: u64,
+) -> Result<u64, V2ContextBuildError> {
+    if let Some(preparation) = frozen {
+        preparation
+            .validate_against_preparing_authorization(preparing)
+            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
+        return Ok(preparation.last_height);
+    }
+    preparing
+        .last_height
+        .checked_add(configured_length)
+        .ok_or(V2ContextBuildError::HeightOverflow)
+}
+
+fn eligible_global_candidate(
+    world: &impl WorldReadOnly,
+    peer: &PeerId,
+    height: u64,
+    frozen: bool,
+) -> bool {
+    let Some(parameters) = world.sumeragi_npos_parameters() else {
+        return false;
+    };
+    world.public_lane_validators().iter().any(|(key, record)| {
+        record.lane_id == iroha_model_base::topology::LaneId::SINGLE
+            && public_lane_validator_record_matches_key(key, record)
+            && &record.peer_id == peer
+            && if frozen {
+                crate::smartcontracts::isi::staking::validator_tenure_contains_height(
+                    record, height,
+                )
+                .unwrap_or(false)
+            } else {
+                validator_election_eligible_at_height(record, height)
+            }
+            && record.self_stake >= parameters.min_self_bond
+            && !record.total_stake.is_zero()
+            && world
+                .public_lane_stake_custody()
+                .get(key)
+                .is_some_and(|(asset, held)| {
+                    asset.definition() == &parameters.xor_asset_definition_id
+                        && held >= &record.total_stake
+                })
     })
 }
+
+/// Freeze a new attempt using a separately domain-separated authenticated election seed.
+fn freeze_future_committee(
+    state: &impl StateReadOnly,
+    selecting_height: u64,
+    preparing: &KagemushaMintFinalityEpochAuthorizationV1,
+    authenticated_seed: [u8; 32],
+) -> Result<Option<iroha_data_model::nexus::ValidatorCommitteePreparationV1>, V2ContextBuildError> {
+    use iroha_data_model::nexus::ValidatorCommitteePreparationV1;
+    let parameters = state
+        .world()
+        .sumeragi_npos_parameters()
+        .ok_or(V2ContextBuildError::MissingNposParameters)?;
+    parameters
+        .validate()
+        .map_err(|_| V2ContextBuildError::InvalidNposParameters)?;
+    let target_epoch = preparing
+        .epoch
+        .checked_add(1)
+        .ok_or(V2ContextBuildError::EpochOverflow)?;
+    let first_height = preparing
+        .last_height
+        .checked_add(1)
+        .ok_or(V2ContextBuildError::HeightOverflow)?;
+    let last_height = preparing
+        .last_height
+        .checked_add(parameters.epoch_length_blocks.get())
+        .ok_or(V2ContextBuildError::HeightOverflow)?;
+    let authority_generation = preparing
+        .authority_generation
+        .checked_add(1)
+        .ok_or(V2ContextBuildError::EpochOverflow)?;
+    let election_seed: [u8; 32] = Hash::new_from_chunks(&[
+        b"sumeragi-v2:validator-election:E-plus-2:v1",
+        state.network_id().as_bytes(),
+        &authenticated_seed,
+        &selecting_height.to_le_bytes(),
+        &target_epoch.to_le_bytes(),
+    ])
+    .into();
+    let mut pool = BTreeMap::new();
+    for (_, record) in state.world().public_lane_validators().iter() {
+        let peer = &record.peer_id;
+        if !eligible_global_candidate(state.world(), peer, first_height, false) {
+            continue;
+        }
+        if let Some(pop) = live_consensus_key_pop_for_peer_with_role(
+            state.world(),
+            peer,
+            first_height,
+            ConsensusKeyRole::Validator,
+        ) {
+            pool.insert(peer.clone(), pop);
+        }
+    }
+    let cap = pool.len().min(parameters.max_validators as usize).min(31);
+    if cap < 4 {
+        return Ok(None);
+    }
+    let seats = ((cap - 1) / 3) * 3 + 1;
+    let mut ranked = pool
+        .into_iter()
+        .map(|(peer, pop)| {
+            let rank = Hash::new_from_chunks(&[
+                b"sumeragi-v2:validator-seat:v1",
+                &election_seed,
+                &peer.encode(),
+            ]);
+            (rank, peer, pop)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    ranked.truncate(seats);
+    ranked.sort_by(|a, b| a.1.cmp(&b.1));
+    let (roster, validator_set_pops) = ranked
+        .into_iter()
+        .map(|(_, validator, pop)| {
+            (
+                wire::ValidatorPower {
+                    validator,
+                    power: 1,
+                },
+                pop,
+            )
+        })
+        .unzip();
+    let prestate_count = state.block_hashes().hash_count();
+    if u64::try_from(prestate_count)
+        .ok()
+        .and_then(|n| n.checked_add(1))
+        != Some(selecting_height)
+    {
+        return Err(V2ContextBuildError::InvalidCommitteeTransition);
+    }
+    let selection_anchor = state
+        .block_hashes()
+        .hash_at(
+            prestate_count
+                .checked_sub(1)
+                .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?,
+        )
+        .copied()
+        .ok_or(V2ContextBuildError::InvalidCommitteeTransition)?;
+    let preparation = ValidatorCommitteePreparationV1 {
+        version: 1,
+        network_id: *state.network_id(),
+        selection_epoch: preparing.epoch - 1,
+        selection_height: selecting_height,
+        selection_anchor,
+        target_epoch,
+        first_height,
+        last_height,
+        authority_generation,
+        preparing_authorization_id: preparing
+            .authorization_id()
+            .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?,
+        election_seed,
+        roster,
+        validator_set_pops,
+    };
+    preparation
+        .validate_against_preparing_authorization(preparing)
+        .map_err(|_| V2ContextBuildError::InvalidCommitteeTransition)?;
+    wire::finality::verify_validator_power_roster_pops(
+        &preparation.roster,
+        &preparation.validator_set_pops,
+    )
+    .map_err(V2ContextBuildError::NextEpochCryptography)?;
+    Ok(Some(preparation))
+}
+
 /// Canonical height-context construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub(crate) enum V2ContextBuildError {
@@ -1140,20 +1408,12 @@ pub(crate) enum V2ContextBuildError {
     /// The current election epoch cannot be incremented.
     #[error("Sumeragi v2 epoch overflows u64")]
     EpochOverflow,
-    /// An epoch boundary omitted its committed next paired-Pasta roster.
-    #[error(
-        "Sumeragi v2 epoch boundary is missing the committed Kagemusha V1 next-roster parameter"
-    )]
-    MissingNextKagemushaMintFinalityEpochId,
-    /// Signed genesis supplied a next roster at a height which is not an epoch boundary.
-    #[error("signed Sumeragi v2 genesis supplied an unused next Kagemusha V1 roster")]
-    UnexpectedNextKagemushaMintFinalityEpochRoster,
     /// A supplied paired-Pasta roster is malformed or disagrees with the elected epoch.
     #[error("invalid Kagemusha mint-finality epoch roster")]
-    InvalidKagemushaMintFinalityEpochRoster,
-    /// NPoS state has no finalized roster for the imminent epoch.
-    #[error("Sumeragi v2 NPoS boundary is missing its finalized next-epoch roster")]
-    MissingFinalizedEpochRoster,
+    InvalidKagemushaMintFinalityAuthority,
+    /// A frozen attempt or its authenticated preparation evidence is inconsistent.
+    #[error("invalid authenticated validator committee preparation")]
+    InvalidCommitteeTransition,
     /// One selected next-epoch validator has no live pre-boundary PoP.
     #[error("Sumeragi v2 next-epoch roster is missing a live proof of possession")]
     MissingNextEpochProofOfPossession,
@@ -1188,7 +1448,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{BlockHashRead as _, State, World},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1205,8 +1465,7 @@ mod tests {
             Parameter,
             custom::CustomParameter,
             system::{
-                ConsensusFingerprint, ConsensusHandshakeMetadata,
-                KagemushaMintFinalityNextEpochParameterV1, SumeragiConsensusMode,
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
                 SumeragiNposParameters, consensus_metadata,
             },
         },
@@ -1241,41 +1500,70 @@ mod tests {
         entries.sort_by(|left, right| left.validator.cmp(&right.validator));
         entries
     }
+    fn fixture_election(
+        network_id: NetworkId,
+        epoch: u64,
+        first: u64,
+        last: u64,
+        mode: wire::ConsensusMode,
+        roster: Vec<wire::ValidatorPower>,
+        leader_seed: [u8; 32],
+    ) -> FrozenElectionInputs {
+        let authority =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
+        let authorization = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+            &authority, epoch, first, last,
+        );
+        FrozenElectionInputs {
+            epoch,
+            kagemusha_mint_finality_authority: authority,
+            kagemusha_mint_finality_authorization: authorization,
+            epoch_end_height: last,
+            mode,
+            roster,
+            leader_seed,
+        }
+    }
+    fn fixture_retention(
+        election: &FrozenElectionInputs,
+        last: u64,
+        seed: [u8; 32],
+        pops: Vec<Vec<u8>>,
+    ) -> wire::finality::FinalizedNextEpochSnapshot {
+        let authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &election.kagemusha_mint_finality_authorization,
+                &election.kagemusha_mint_finality_authority,
+                last,
+                KagemushaMintFinalityEpochDecisionV1::Retain,
+            );
+        wire::finality::FinalizedNextEpochSnapshot {
+            committee_preparation: None,
+            epoch: election.epoch + 1,
+            kagemusha_mint_finality_authority: election.kagemusha_mint_finality_authority.clone(),
+            kagemusha_mint_finality_authorization: authorization,
+            epoch_end_height: last,
+            mode: election.mode,
+            roster: election.roster.clone(),
+            validator_set_pops: pops,
+            quorum: election.quorum().unwrap(),
+            leader_seed: seed,
+        }
+    }
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
-        let roster = roster(powers);
         let network_id = test_network_id(0x41);
-        let kagemusha_mint_finality_epoch_roster =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster(network_id, 4, &roster);
+        let election = fixture_election(network_id, 0, 1, end, mode, roster(powers), [0x41; 32]);
         let next_epoch_snapshot = (end == 1).then(|| {
-            let next_roster = roster.clone();
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id,
-                    5,
-                    &next_roster,
-                );
-            wire::finality::FinalizedNextEpochSnapshot {
-                epoch: 5,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
-                epoch_end_height: 5,
-                mode,
-                quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
-                validator_set_pops: vec![vec![0x43]; next_roster.len()],
-                roster: next_roster,
-                leader_seed: [0x42; 32],
-            }
+            fixture_retention(
+                &election,
+                5,
+                [0x42; 32],
+                vec![vec![0x43]; election.roster.len()],
+            )
         });
         build_genesis_height_context(GenesisContextInputs {
             network_id,
-            election: FrozenElectionInputs {
-                epoch: 4,
-                kagemusha_mint_finality_epoch_roster,
-                epoch_end_height: end,
-                mode,
-                roster,
-                leader_seed: [0x41; 32],
-            },
+            election,
             next_epoch_snapshot,
             nexus_amx_context_hash: Hash::new(b"genesis nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
@@ -1502,9 +1790,14 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
-            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                    network_id, 0, &roster,
+            let kagemusha_mint_finality_authority =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authority(network_id, 0, &roster);
+            let kagemusha_mint_finality_authorization =
+                crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+                    &kagemusha_mint_finality_authority,
+                    0,
+                    1,
+                    u64::MAX,
                 );
             let signed_parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
             let context = wire::HeightContext {
@@ -1519,8 +1812,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("canonical quorum"),
                 roster,
-                kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster,
+                kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority,
                 nexus_amx_context_hash: Hash::prehashed(signed_parameters.nexus_amx_context_hash),
                 execution_policy_hash: Hash::prehashed(signed_parameters.execution_policy_hash),
                 da_layout: signed_parameters.da_layout,
@@ -1586,8 +1879,184 @@ mod tests {
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
+        }
+    }
+    #[test]
+    fn frozen_successor_interval_survives_epoch_length_changes() {
+        let fixture = crate::state::validator_committee::tests::fixture(4);
+        let authorization = fixture.authorization;
+        let preparation = &fixture.transition.preparation;
+        for configured_length in [1, 10, 99, u64::MAX] {
+            assert_eq!(
+                next_npos_epoch_end_height(&authorization, Some(preparation), configured_length)
+                    .unwrap(),
+                30
+            );
+        }
+        assert_eq!(
+            next_npos_epoch_end_height(&authorization, None, 99).unwrap(),
+            119
+        );
+        assert!(next_npos_epoch_end_height(&authorization, None, u64::MAX).is_err());
+        let mut substituted = preparation.clone();
+        substituted.first_height += 1;
+        assert!(next_npos_epoch_end_height(&authorization, Some(&substituted), 10).is_err());
+    }
+
+    #[test]
+    fn future_committee_selects_exact_geometry_from_noncommittee_candidate_pools() {
+        use iroha_data_model::{
+            IntoKeyValue as _,
+            asset::{Asset, AssetId},
+        };
+        let network = test_network_id(0x78);
+        for (pool_size, expected_seats) in [(3_usize, 0_usize), (5, 4), (8, 7)] {
+            let mut world = World::new();
+            let parameters = SumeragiNposParameters {
+                epoch_length_blocks: NonZeroU64::new(10).unwrap(),
+                max_validators: 31,
+                min_self_bond: Quantity::from(10_000_u64),
+                ..SumeragiNposParameters::default()
+            };
+            let xor = parameters.xor_asset_definition_id.clone();
+            let mut world_parameters = world.parameters.block();
+            world_parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
+            world_parameters.commit();
+            let keys = (1..=pool_size)
+                .map(|seed| KeyPair::from_seed(vec![seed as u8; 32], Algorithm::BlsNormal))
+                .collect::<Vec<_>>();
+            let mut peers = Vec::new();
+            for (index, key) in keys.iter().enumerate() {
+                let peer = PeerId::new(key.public_key().clone());
+                let record = lane_record(&peer, LaneId::SINGLE, 10_000);
+                let owner = record.validator.clone();
+                let custody = AssetId::new(xor.clone(), owner.clone());
+                let (asset_id, asset) =
+                    Asset::new(custody.clone(), Quantity::from(10_000_u64)).into_key_value();
+                world.assets.insert(asset_id, asset);
+                world.public_lane_stake_custody.insert(
+                    (LaneId::SINGLE, owner.clone()),
+                    (custody, Quantity::from(10_000_u64)),
+                );
+                world
+                    .public_lane_validators
+                    .insert((LaneId::SINGLE, owner), record);
+                let id =
+                    ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("candidate-{index}"));
+                world.consensus_keys.insert(
+                    id.clone(),
+                    ConsensusKeyRecord {
+                        id: id.clone(),
+                        public_key: key.public_key().clone(),
+                        pop: Some(iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap()),
+                        activation_height: 1,
+                        expiry_height: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    },
+                );
+                world
+                    .consensus_keys_by_pk
+                    .insert(key.public_key().to_string(), vec![id]);
+                peers.push(peer);
+            }
+            peers.sort();
+            let authority_roster = roster(&[1, 1, 1, 1]);
+            let authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+                network,
+                0,
+                &authority_roster,
+            );
+            let preparing = crate::kagemusha_v1_test_fixtures::mint_finality_authorization(
+                &authority, 1, 11, 20,
+            );
+            let state = State::new_with_chain_and_network_id_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                ChainId::from("future-selection"),
+                network,
+            );
+            let mut block = state.block(BlockHeader::new(
+                NonZeroU64::new(10).unwrap(),
+                None,
+                None,
+                0,
+                0,
+            ));
+            for height in 1_u64..=9 {
+                block
+                    .block_hashes
+                    .push(HashOf::from_untyped_unchecked(Hash::new(
+                        height.to_le_bytes(),
+                    )));
+            }
+            let first = freeze_future_committee(&block, 10, &preparing, [1; 32]).unwrap();
+            if expected_seats == 0 {
+                assert!(first.is_none());
+                continue;
+            }
+            let first = first.unwrap();
+            assert_eq!(
+                (first.target_epoch, first.first_height, first.last_height),
+                (2, 21, 30)
+            );
+            assert_eq!(first.roster.len(), expected_seats);
+            assert_eq!(
+                first.selection_anchor,
+                *block.block_hashes().hash_at(8).unwrap()
+            );
+            assert!(
+                first
+                    .roster
+                    .iter()
+                    .all(|seat| peers.contains(&seat.validator))
+            );
+            assert!(
+                first
+                    .roster
+                    .windows(2)
+                    .all(|pair| pair[0].validator < pair[1].validator)
+            );
+            assert_eq!(
+                first,
+                freeze_future_committee(&block, 10, &preparing, [1; 32])
+                    .unwrap()
+                    .unwrap()
+            );
+            assert!(
+                (2_u8..=16).any(
+                    |seed| freeze_future_committee(&block, 10, &preparing, [seed; 32])
+                        .unwrap()
+                        .unwrap()
+                        .roster
+                        != first.roster
+                ),
+                "extra candidates must participate in selection"
+            );
+            let selected = &first.roster[0].validator;
+            let owner = AccountId::new(selected.public_key().clone());
+            block
+                .world
+                .public_lane_validators
+                .get_mut(&(LaneId::SINGLE, owner))
+                .unwrap()
+                .election_exit_height = Some(21);
+            assert!(!eligible_global_candidate(
+                &block.world,
+                selected,
+                21,
+                false
+            ));
+            assert!(
+                eligible_global_candidate(&block.world, selected, 21, true),
+                "an exit request cannot revoke an already frozen seat"
+            );
         }
     }
     fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
@@ -1868,16 +2337,20 @@ mod tests {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_roster = roster(&[1, 1, 1, 1]);
         let next_epoch = parent_context.epoch + 1;
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                parent_context.network_id,
-                next_epoch,
-                &next_roster,
+        let kagemusha_mint_finality_authority =
+            parent_context.kagemusha_mint_finality_authority.clone();
+        let kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &parent_context.kagemusha_mint_finality_authorization,
+                &kagemusha_mint_finality_authority,
+                5,
+                KagemushaMintFinalityEpochDecisionV1::Retain,
             );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: next_epoch,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             epoch_end_height: 5,
             mode: parent_context.mode,
             quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
@@ -1889,7 +2362,7 @@ mod tests {
         let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
             .expect("epoch successor");
         assert_eq!(successor.height, 2);
-        assert_eq!(successor.epoch, 5);
+        assert_eq!(successor.epoch, 1);
         assert_eq!(successor.epoch_end_height, 5);
         assert_eq!(successor.roster, next_roster);
         assert_eq!(successor.leader_seed, [0x77; 32]);
@@ -1904,16 +2377,20 @@ mod tests {
         let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let next_epoch = boundary_context.epoch + 1;
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                boundary_context.network_id,
-                next_epoch,
-                &boundary_context.roster,
+        let kagemusha_mint_finality_authority =
+            boundary_context.kagemusha_mint_finality_authority.clone();
+        let kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &boundary_context.kagemusha_mint_finality_authorization,
+                &kagemusha_mint_finality_authority,
+                9,
+                KagemushaMintFinalityEpochDecisionV1::Retain,
             );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: next_epoch,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             epoch_end_height: 9,
             mode: boundary_context.mode,
             roster: boundary_context.roster.clone(),
@@ -1935,30 +2412,9 @@ mod tests {
             next_pops
         );
     }
-    fn install_next_mint_roster(
-        world: &World,
-        network_id: NetworkId,
-        epoch: u64,
-        roster: &[wire::ValidatorPower],
-    ) {
-        let parameter = KagemushaMintFinalityNextEpochParameterV1 {
-            roster: crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                network_id, epoch, roster,
-            ),
-        };
-        parameter
-            .validate()
-            .expect("valid separately finalized next-epoch mint roster");
-        let mut block = world.block();
-        block.parameters.get_mut().custom.insert(
-            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
-            parameter.into_custom_parameter(),
-        );
-        block.commit();
-    }
     #[test]
     fn next_epoch_snapshot_obeys_successor_key_activation_and_expiry() {
-        const BOUNDARY_HEIGHT: u64 = 7;
+        const BOUNDARY_HEIGHT: u64 = 40;
         const SUCCESSOR_HEIGHT: u64 = BOUNDARY_HEIGHT + 1;
         let mut keys = (1_u8..=4)
             .map(|seed| {
@@ -2002,7 +2458,18 @@ mod tests {
                     .consensus_keys_by_pk
                     .insert(record.public_key.to_string(), vec![id]);
             }
-            install_next_mint_roster(&world, network_id, 5, &roster);
+            let mut beacon = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
+                network_id, [0x31; 32], &keys,
+            );
+            beacon
+                .activate(30)
+                .expect("activate finalized fixture beacon");
+            world
+                .global_beacon_key_sessions
+                .insert(beacon.session.session_id, beacon);
+            world
+                .global_beacon_active_session
+                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, [0x31; 32]);
             State::new_with_chain_and_network_id_for_testing(
                 world,
                 Kura::blank_kura_for_testing(),
@@ -2055,20 +2522,25 @@ mod tests {
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
         );
-        let kagemusha_mint_finality_epoch_roster =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                *expiring_view.network_id(),
-                4,
-                &roster,
-            );
-        let election = FrozenElectionInputs {
-            epoch: 4,
-            kagemusha_mint_finality_epoch_roster,
-            epoch_end_height: BOUNDARY_HEIGHT,
-            mode: wire::ConsensusMode::Permissioned,
-            roster: roster.clone(),
-            leader_seed: [0x72; 32],
-        };
+        let mut election = fixture_election(
+            *expiring_view.network_id(),
+            4,
+            2,
+            BOUNDARY_HEIGHT,
+            wire::ConsensusMode::Permissioned,
+            roster.clone(),
+            [0x72; 32],
+        );
+        let beacon = expiring_view
+            .world()
+            .global_beacon_key_sessions()
+            .get(&[0x31; 32])
+            .unwrap();
+        election.kagemusha_mint_finality_authorization.beacon =
+            BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: beacon.session.session_id,
+                transcript_hash: beacon.session.transcript_hash,
+            });
         assert!(matches!(
             finalized_next_epoch_snapshot(
                 &expiring_view,
@@ -2103,7 +2575,6 @@ mod tests {
         let network_id = test_network_id(0x73);
         let election_roster = roster(&[1, 1, 1, 1]);
         let world = World::new();
-        install_next_mint_roster(&world, network_id, 4, &election_roster);
         {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
@@ -2124,19 +2595,15 @@ mod tests {
             network_id,
         );
         let view = state.view();
-        let election = FrozenElectionInputs {
-            epoch: 3,
-            kagemusha_mint_finality_epoch_roster:
-                crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                    *view.network_id(),
-                    3,
-                    &election_roster,
-                ),
-            epoch_end_height: BOUNDARY_HEIGHT,
-            mode: wire::ConsensusMode::Npos,
-            roster: election_roster,
-            leader_seed: [0x63; 32],
-        };
+        let election = fixture_election(
+            *view.network_id(),
+            3,
+            2,
+            BOUNDARY_HEIGHT,
+            wire::ConsensusMode::Npos,
+            election_roster,
+            [0x63; 32],
+        );
         assert_eq!(
             finalized_next_epoch_snapshot(&view, view.network_id(), BOUNDARY_HEIGHT, &election,),
             Err(V2ContextBuildError::MissingPreBoundaryBeaconPulse)
@@ -2148,19 +2615,15 @@ mod tests {
         let election_roster = roster(&[1, 2, 1, 1]);
         let error = build_genesis_height_context(GenesisContextInputs {
             network_id,
-            election: FrozenElectionInputs {
-                epoch: 0,
-                kagemusha_mint_finality_epoch_roster:
-                    crate::kagemusha_v1_test_fixtures::mint_finality_roster(
-                        network_id,
-                        0,
-                        &election_roster,
-                    ),
-                epoch_end_height: 10,
-                mode: wire::ConsensusMode::Permissioned,
-                roster: election_roster,
-                leader_seed: [0; 32],
-            },
+            election: fixture_election(
+                network_id,
+                0,
+                1,
+                10,
+                wire::ConsensusMode::Permissioned,
+                election_roster,
+                [0; 32],
+            ),
             next_epoch_snapshot: None,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),

@@ -10,8 +10,8 @@ fault or advanced product qualification.
 
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux additionally selects OpenSSH descriptor custody, native worker
-identity, and generation controls. The runner's selected regression census is
+production. Linux additionally selects OpenSSH descriptor custody, native process
+identity, and credential custody controls. The runner's selected regression census is
 authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
@@ -31,21 +31,19 @@ Before the four-peer fixture, both scopes check that paid lane authorities come
 from registered and activated accounts bound to peers in signed genesis, and
 that failure summaries retain public phase status without transaction payloads.
 
-Both scopes select the seven native single-epoch derivation controls and four
-bounded public epoch-schedule controls. They cover exact network, epoch and
-validator binding, range and fee bounds, explicit public CLI inputs, one private
-pipe consumption, descriptor closure, wiped inputs and complete public output.
-These producer controls do not establish committed maintenance or authorize a
-live transaction; the operator workflow requires its separate lifecycle checks.
+Both scopes select public authority-generation and independent candidate
+provisioning controls. They cover exact network, generation and peer binding,
+paired Pasta possession, signed peer consent, bounded inherited-pipe inputs,
+descriptor closure and wiping. Exact `3f + 1` authority bundles support 4–31
+validators; individual candidate provisioning imposes no committee-sized pool.
+The offline readiness producer additionally verifies actual pending beacon-share
+custody for the immutable selected seat. These producer controls establish no
+activation or runtime credential installation by themselves.
 
-Both scopes require the native epoch-maintenance controls for authenticated
-current-height observation, bounded roster schedules, actual-epoch and carrier
-deadlines, fee and lifetime binding, durable single dispatch across renewal, and
-staking admission. The two fixture controls reject unsafe seed-pipe custody and
-noncontiguous or incorrectly bound public schedules before peer startup. The
-complete four-peer network selector remains unchanged. These gate selections do
-not claim operational maintainer startup or supervision; those remain deployment
-prerequisites.
+The complete four-peer production fixture checks scheduling-boundary retention
+of the same authority generation and beacon session, anchored finality, a fresh
+verified pulse, and the separate exact fee-paid deployment effects. The removed
+rolling epoch schedule and worker are not qualification or startup paths.
 
 Both scopes qualify production beacon capability against the exact public session
 and validator seat, consumed runtime credentials, genesis-bound bootstrap and

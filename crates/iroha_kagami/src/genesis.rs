@@ -18,7 +18,7 @@ pub(super) fn ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topolo
     expected.sort();
     let parameters = manifest.kagemusha_mint_finality_genesis_parameters();
     let current = parameters
-        .epoch_roster
+        .authority_generation
         .validators
         .iter()
         .map(|entry| entry.validator.clone())
@@ -66,7 +66,7 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
     use iroha_data_model::{
         block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
         },
     };
@@ -87,12 +87,11 @@ pub(crate) fn complete_test_genesis_builder_for_peers(
     builder
         .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
         .with_kagemusha_mint_finality_genesis_parameters(KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         })
 }
 
@@ -121,14 +120,9 @@ impl CompleteTestGenesisBuilder for iroha_genesis::GenesisBuilder {
 mod authority_tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        },
-        parameter::{
-            Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters},
-        },
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     };
     use iroha_genesis::GenesisBuilder;
     use iroha_model_base::chain::ChainId;
@@ -153,85 +147,51 @@ mod authority_tests {
         peers
     }
 
-    fn next_epoch_roster(validators: Vec<PeerId>) -> KagemushaMintFinalityEpochRosterTemplateV1 {
-        KagemushaMintFinalityEpochRosterTemplateV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch: 1,
-            validators: validators
-                .into_iter()
-                .enumerate()
-                .map(|(index, validator)| {
-                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                        &[0xC0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
-                        1,
-                        validator,
-                    )
-                    .expect("derive deterministic epoch-one Pasta keys")
-                })
-                .collect(),
+    #[test]
+    fn genesis_topology_checks_generation_zero_independently_of_epoch_length() {
+        let current = test_peers(0x30);
+        for epoch_length in [3, 3_600] {
+            let mut npos = SumeragiNposParameters::default();
+            npos.epoch_length_blocks = NonZeroU64::new(epoch_length).unwrap();
+            npos.evidence_horizon_blocks = 1;
+            npos.slashing_delay_blocks = 1;
+            let manifest = complete_test_genesis_builder_for_peers(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("generation-zero-authority"),
+                    PathBuf::from("."),
+                )
+                .append_parameter(Parameter::Custom(npos.into_custom_parameter())),
+                current.clone(),
+            )
+            .build_raw()
+            .expect("complete generation-zero fixture")
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+                &manifest, &current,
+            )
+            .expect("generation-zero authority matches the genesis topology");
+            ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
+                .expect("scheduling epochs do not create extra key generations");
         }
     }
 
     #[test]
-    fn epoch_zero_topology_check_allows_distinct_epoch_one_authority() {
-        let current = test_peers(0x30);
-        let next = test_peers(0x50);
-        let mut npos_parameters = SumeragiNposParameters::default();
-        npos_parameters.epoch_length_blocks = NonZeroU64::new(1).expect("non-zero epoch length");
-        npos_parameters.evidence_horizon_blocks = 1;
-        npos_parameters.slashing_delay_blocks = 1;
-        let manifest = complete_test_genesis_builder_for_peers(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("epoch-one-authority"),
-                PathBuf::from("."),
-            )
-            .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter())),
-            current.clone(),
-        )
-        .build_raw()
-        .expect("build authority test manifest")
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
-        let error = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect_err("height-one NPoS boundary requires a successor authority");
-        assert!(error.to_string().contains("must be present"));
-
-        let mut parameters = manifest
-            .kagemusha_mint_finality_genesis_parameters()
-            .clone();
-        parameters.next_epoch_roster = Some(next_epoch_roster(next));
-        let manifest = manifest.with_kagemusha_mint_finality_genesis_parameters(parameters);
-
-        ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(&manifest, &current)
-            .expect("epoch-one authority is checked against its finalized successor snapshot");
-        ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect("height-one NPoS boundary carries a successor authority");
-    }
-
-    #[test]
-    fn schedule_rejects_successor_authority_outside_height_one_boundary() {
+    fn genesis_topology_check_rejects_another_authority() {
         let current = test_peers(0x70);
         let manifest = complete_test_genesis_builder_for_peers(
             GenesisBuilder::new_without_executor(
-                ChainId::from("unexpected-epoch-one-authority"),
+                ChainId::from("wrong-genesis-authority"),
                 PathBuf::from("."),
-            )
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            )),
+            ),
             current,
         )
         .build_raw()
-        .expect("build authority schedule test manifest")
-        .with_consensus_mode(SumeragiConsensusMode::Npos);
-        let mut parameters = manifest
-            .kagemusha_mint_finality_genesis_parameters()
-            .clone();
-        parameters.next_epoch_roster = Some(next_epoch_roster(test_peers(0x90)));
-        let manifest = manifest.with_kagemusha_mint_finality_genesis_parameters(parameters);
-
-        let error = ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
-            .expect_err("successor authority is forbidden outside a height-one boundary");
-        assert!(error.to_string().contains("must be null unless"));
+        .expect("complete authority fixture");
+        ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+            &manifest,
+            &test_peers(0x90),
+        )
+        .expect_err("another committee cannot replace the genesis authority");
     }
 }
 mod embed_pop;

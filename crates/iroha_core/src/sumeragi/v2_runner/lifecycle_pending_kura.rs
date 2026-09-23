@@ -887,6 +887,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
     ingress_ready: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
+    lane_engine_owner: LaneEngineOwner,
     consensus_frame_byte_capacity: usize,
     block_sync_frame_byte_capacity: usize,
     verified_context: crate::sumeragi::v2::VerifiedHeightContext,
@@ -1203,6 +1204,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
         }
         false
     };
+    let lane_engine_lease = lane_engine_owner
+        .claim_legacy()
+        .map_err(V2RunnerError::Service)?;
     let mut prepared = pending.prepare_lane_recovery(
         &mut setup_runner,
         &queue,
@@ -1218,6 +1222,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
                 None,
                 Some(expected),
                 Arc::clone(&output_guard),
+                lane_engine_lease,
                 exact_output_transport_owner,
                 retained_merge_sidecars.take(),
                 lifecycle_process_generation.clone(),
@@ -1310,6 +1315,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         shutdown_signal,
         ingress_ready,
         output_guard,
+        lane_engine_owner,
         consensus_frame_byte_capacity,
         block_sync_frame_byte_capacity,
         successor.verified_context,

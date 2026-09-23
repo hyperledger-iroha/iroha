@@ -68,26 +68,19 @@ fn image(journal: &Journal) -> Vec<(u64, Option<u64>, Option<u64>)> {
 }
 
 #[test]
-fn prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writers() {
+fn prepaid_world_storage_adapter_refuses_foreign_owned_scope_before_writers() {
     let budget = AllocationBudget::new(1024 * 1024);
     let foreign = AllocationBudget::new(1024 * 1024);
-    let (target, mut journal) = fixture(&budget);
+    let (target, journal) = fixture(&budget);
     let expected = image(&journal);
     let retained_bytes = budget.reserved_bytes();
-    let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, None);
-    assert!(matches!(
-        <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot),
-        Err(PublicationPreparationError::Admission(
-            AdmittedStorageError::ScopeIdentity
-        ))
-    ));
-    journal = <Mode as WorldStorageMode<u64, u64>>::recover_original(&mut slot);
-    drop(slot);
-    assert_eq!(image(&journal), expected);
-    assert_eq!(budget.reserved_bytes(), retained_bytes);
-    foreign.with_deferred_refund_notifications(|scope| {
-        let mut slot =
-            <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, Some(scope));
+    let foreign_scope = foreign.try_owned_refund_scope().unwrap();
+    foreign.with_deferred_refund_notifications(|_| {
+        let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(
+            journal,
+            &target,
+            &foreign_scope,
+        );
         assert!(matches!(
             <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot),
             Err(PublicationPreparationError::Admission(
@@ -108,10 +101,12 @@ fn prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writer
             drop(journal);
         });
         drop(slot);
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
     });
     assert_eq!(target.view().get(&7), Some(&70));
     drop(target);
     assert_eq!(budget.reserved_bytes(), 0);
+    drop(foreign_scope);
     assert_eq!(foreign.reserved_bytes(), 0);
 }
 
@@ -120,11 +115,15 @@ fn prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publi
     let budget = AllocationBudget::new(1024 * 1024);
     let (target, journal) = fixture(&budget);
     let expected = image(&journal);
+    let original_scope = budget.try_owned_refund_scope().unwrap();
     let reader = target.view();
     let retained_bytes = budget.reserved_bytes();
-    let journal = budget.with_deferred_refund_notifications(|scope| {
-        let mut slot =
-            <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, Some(scope));
+    let journal = budget.with_deferred_refund_notifications(|_| {
+        let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(
+            journal,
+            &target,
+            &original_scope,
+        );
         <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot).unwrap();
         let prepared = <Mode as WorldStorageMode<u64, u64>>::into_prepared(slot);
         let (journal, cleanup) = <Mode as WorldStorageMode<u64, u64>>::abort(prepared);
@@ -137,9 +136,12 @@ fn prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publi
         retained_bytes,
         "abort does not reconstruct the pair"
     );
-    budget.with_deferred_refund_notifications(|scope| {
-        let mut slot =
-            <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, Some(scope));
+    budget.with_deferred_refund_notifications(|_| {
+        let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(
+            journal,
+            &target,
+            &original_scope,
+        );
         <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot).unwrap();
         let prepared = <Mode as WorldStorageMode<u64, u64>>::into_prepared(slot);
         let published = <Mode as WorldStorageMode<u64, u64>>::publish(prepared);
@@ -154,6 +156,7 @@ fn prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publi
     drop(snapshot);
     drop(reader);
     drop(target);
+    drop(original_scope);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 
@@ -168,12 +171,16 @@ fn prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values() {
         })
         .unwrap();
     let expected = image(&journal);
+    let original_scope = budget.try_owned_refund_scope().unwrap();
     let journal = budget.with_deferred_refund_notifications(|scope| {
         let held = sibling
             .try_prepare_admitted(scope, &target)
             .unwrap_or_else(|(_, error, _)| panic!("held original: {error:?}"));
-        let mut slot =
-            <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, Some(scope));
+        let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(
+            journal,
+            &target,
+            &original_scope,
+        );
         assert!(matches!(
             <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot),
             Err(PublicationPreparationError::Busy(_))
@@ -186,9 +193,12 @@ fn prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values() {
         drop(sibling);
         journal
     });
-    budget.with_deferred_refund_notifications(|scope| {
-        let mut slot =
-            <Mode as WorldStorageMode<u64, u64>>::publication_slot(journal, &target, Some(scope));
+    budget.with_deferred_refund_notifications(|_| {
+        let mut slot = <Mode as WorldStorageMode<u64, u64>>::publication_slot(
+            journal,
+            &target,
+            &original_scope,
+        );
         <Mode as WorldStorageMode<u64, u64>>::try_prepare(&mut slot).unwrap();
         // Exercise the ordinary recovery transition after complete preparation.
         let journal = <Mode as WorldStorageMode<u64, u64>>::recover_original(&mut slot);
@@ -199,5 +209,6 @@ fn prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values() {
     });
     assert_eq!(target.view().get(&7), Some(&70));
     drop(target);
+    drop(original_scope);
     assert_eq!(budget.reserved_bytes(), 0);
 }

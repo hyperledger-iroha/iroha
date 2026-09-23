@@ -131,8 +131,17 @@ def test_broker_rejects_disconnected_or_unvalidated_attestation(
 ) -> None:
     """Routing and each typed input, authority, and result binding stay connected."""
     sources = {DISPATCH: guard.read(DISPATCH), CONSENSUS: guard.read(CONSENSUS)}
-    assert sources[path].count(before) == 1
-    sources[path] = sources[path].replace(before, after, 1)
+    if path == CONSENSUS:
+        # The adjacent global-beacon handler has its own attestation result.
+        # Mutate only Parliament's handler and keep the sibling unchanged.
+        handler = guard.section(sources[path],
+                                "pub(super) fn parliament_tle_capability_attest(",
+                                "pub(super) fn global_beacon_capability_attest(", CONSENSUS)
+        assert handler.count(before) == 1
+        sources[path] = sources[path].replace(handler, handler.replace(before, after, 1), 1)
+    else:
+        assert sources[path].count(before) == 1
+        sources[path] = sources[path].replace(before, after, 1)
     with pytest.raises(RuntimeError):
         guard.require_parliament_broker_dispatch(sources[DISPATCH], sources[CONSENSUS])
 
@@ -140,13 +149,15 @@ def test_broker_rejects_disconnected_or_unvalidated_attestation(
 def test_broker_rejects_requalification_before_attestation() -> None:
     """Requalification must follow the backend call before its result is encoded."""
     consensus = guard.read(CONSENSUS)
-    prefix, handler = consensus.split("pub(super) fn parliament_tle_capability_attest(", 1)
+    prefix, rest = consensus.split("pub(super) fn parliament_tle_capability_attest(", 1)
+    handler, suffix = rest.split("pub(super) fn global_beacon_capability_attest(", 1)
     assert handler.count("requalify()?;") == 1
     handler = handler.replace("    requalify()?;\n", "", 1)
     handler = handler.replace(
         "    let attestation = backend", "    requalify()?;\n    let attestation = backend", 1
     )
-    mutated = prefix + "pub(super) fn parliament_tle_capability_attest(" + handler
+    mutated = (prefix + "pub(super) fn parliament_tle_capability_attest(" + handler
+               + "pub(super) fn global_beacon_capability_attest(" + suffix)
     with pytest.raises(RuntimeError, match="validate and requalify before encoding"):
         guard.require_parliament_broker_dispatch(guard.read(DISPATCH), mutated)
 

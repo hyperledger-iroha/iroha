@@ -2350,7 +2350,13 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
         let encoded = match message {
             BlockMessage::V2(message) => message.encode(),
-            message if message.is_lane_local() || message.is_live_auxiliary() => message.encode(),
+            message
+                if message.is_lane_local()
+                    || message.is_live_auxiliary()
+                    || message.is_native_lane() =>
+            {
+                message.encode()
+            }
             _ => return false,
         };
         self.first.encoded_bytes.as_ref() == encoded.as_slice()
@@ -2360,6 +2366,15 @@ impl FairV2IngressOwnershipEvidence {
     /// retained inbound sender.
     pub(crate) fn matches_semantic_origin(&self, origin: &PeerId) -> bool {
         self.validate_exact() && &self.first.semantic_origin == origin
+    }
+    /// Whether this Native occurrence still names its original charged transport hop.
+    pub(crate) fn matches_native_authenticated_hop(&self, via: &PeerId) -> bool {
+        self.validate_exact()
+            && &self.first.authenticated_via == via
+            && matches!(
+                &self.first.authenticated_source,
+                FairV2IngressSource::Native(peer) if peer == via
+            )
     }
     /// Decode the exact canonical v2 envelope retained by this ownership
     /// carrier. The full carrier is validated before any projection is

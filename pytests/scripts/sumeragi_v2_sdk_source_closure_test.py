@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 914
+    assert len(grouped_record_lines) == 919
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 918
+    assert len(diagnostics_records.stdout.splitlines()) == 926
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -557,6 +557,7 @@ def test_regeneration_rejects_missing_overlapping_and_unsafe_output_roots(
 
     unsafe = tmp_path / "unsafe"
     unsafe.mkdir(mode=0o755)
+    unsafe.chmod(0o755)
     safe = _private_directory(tmp_path / "safe")
     unsafe_result = _check_regeneration(
         ROOT, "native-amx-v2-grouped", "rust-fixtures", unsafe, safe

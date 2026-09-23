@@ -100,13 +100,15 @@ fn deterministic_session_v1(
         version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
         network_id,
         session_id,
+        attempt_id: session_id,
+        authority_generation: 0,
         roster_hash,
         committee_size: EXACT_TEST_VALIDATORS_V1 as u16,
         threshold: EXACT_TEST_THRESHOLD_V1,
         start_height: 1,
-        sharing_end_height: 2,
-        complaints_end_height: 3,
-        responses_end_height: 4,
+        commitments_end_height: 2,
+        deliveries_end_height: 3,
+        acceptances_end_height: 4,
     })
 }
 
@@ -124,6 +126,7 @@ fn dealer_commitment_dto_v1(
             commitment: *dealer.constant_proof().commitment_bytes(),
             response: *dealer.constant_proof().response_bytes(),
         },
+        signature: iroha_crypto::Signature::from_bytes(&[]),
     }
 }
 
@@ -160,7 +163,7 @@ fn deterministic_fixture_v1(
         dealer_commitments.push(commitment);
     }
     let record = state
-        .finalize(dkg_session.responses_end_height, &crypto)
+        .finalize(dkg_session.acceptances_end_height, &crypto)
         .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?
         .clone();
     let binding = GlobalThresholdBeaconSessionBindingV1 {

@@ -827,7 +827,8 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
                 Self::LocalStorageRecoveryRequired { reason }
             }""")
     if symbol == "BlockValidationError::from_certified_merge_stage_error":
-        require("""local @ (MergeLedgerCommitError::Persistence(_)
+        require("""local @ (MergeLedgerCommitError::NativeResourceAdmission(_)
+            | MergeLedgerCommitError::Persistence(_)
             | MergeLedgerCommitError::LocalDrainObservation(_)) => {
                 Self::LocalStorageRecoveryRequired {
                     reason: format!("certified merge entry could not be staged: {local}"),

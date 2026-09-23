@@ -12,10 +12,14 @@
 //! publisher to the sole production validation/Apply path, retiring the old
 //! economic signers before opening native carrier admission.
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use super::lane_decision_batch::PreparedLaneDecisionBatchV1;
+use super::native_execution_resources::NativeSourceBox;
 use super::{
     AuthenticatedLaneAdmittedInputSourceV1, LaneDecisionGroupPreparationV1, MergeLedgerCommitError,
-    State, VerifiedFirstLaneAdmittedInputV1, VerifiedLaneContexts, VerifiedLaneDecisionGroupV1,
-    lane_decision_batch::{PreparedLaneDecisionBatchV1, RecordedNativeLaneBatchV1},
+    NativeExecutionResourceAdmission, State, VerifiedFirstLaneAdmittedInputV1,
+    VerifiedLaneContexts, VerifiedLaneDecisionGroupV1,
+    lane_decision_batch::RecordedNativeLaneBatchV1,
 };
 use crate::kura::FinalizedNativeLaneBatchV1;
 use iroha_crypto::HashOf;
@@ -23,10 +27,10 @@ use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SignedBlock, lane_decision_batch::LaneDecisionBatchV1},
 };
-use std::sync::Arc;
 
 /// Both entry points retain the exact first-source recovery dependency.
 /// The caller keeps its carrier and every completed private input until replay ends.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) enum NativeLaneBatchReplayV1<'state> {
     /// Actual disposable execution; neither State nor Kura has been published.
     Ready(PreparedLaneDecisionBatchV1<'state>),
@@ -49,8 +53,137 @@ pub(crate) struct PreparedNativeLaneBatchSourceV1<'state> {
     state: &'state State,
     observed: VerifiedLaneContexts,
     generation: u64,
-    input: Arc<SignedBlock>,
+    input: NativeSourceBox,
     groups: Vec<VerifiedLaneDecisionGroupV1>,
+    admission: NativeExecutionResourceAdmission,
+}
+
+/// The one unexecuted carrier retains its original admission across every
+/// authenticated dependency wait and changed State observation.
+pub(crate) struct PendingNativeLaneSource {
+    carrier: PendingNativeCarrier,
+    admission: NativeExecutionResourceAdmission,
+}
+
+enum PendingNativeCarrier {
+    Proposed(SignedBlock),
+    Finalized(FinalizedNativeLaneBatchV1),
+}
+
+impl PendingNativeLaneSource {
+    fn proposed(carrier: SignedBlock, admission: NativeExecutionResourceAdmission) -> Self {
+        Self {
+            carrier: PendingNativeCarrier::Proposed(carrier),
+            admission,
+        }
+    }
+
+    fn finalized(
+        included: FinalizedNativeLaneBatchV1,
+        admission: NativeExecutionResourceAdmission,
+    ) -> Self {
+        Self {
+            carrier: PendingNativeCarrier::Finalized(included),
+            admission,
+        }
+    }
+
+    /// Borrow the exact original while resolving its first-source dependency.
+    pub(crate) fn carrier(&self) -> &SignedBlock {
+        match &self.carrier {
+            PendingNativeCarrier::Proposed(carrier) => carrier,
+            PendingNativeCarrier::Finalized(included) => included.carrier(),
+        }
+    }
+
+    fn expected_network(&self, state: &State) -> NetworkId {
+        match &self.carrier {
+            PendingNativeCarrier::Proposed(_) => *state.network_id_ref(),
+            PendingNativeCarrier::Finalized(included) => {
+                included.finality().height_context.network_id
+            }
+        }
+    }
+
+    fn into_ready_parts(self) -> (SignedBlock, NativeExecutionResourceAdmission) {
+        let carrier = match self.carrier {
+            PendingNativeCarrier::Proposed(carrier) => carrier,
+            PendingNativeCarrier::Finalized(included) => included.into_carrier(),
+        };
+        (carrier, self.admission)
+    }
+}
+
+/// A source refusal returns the original carrier and finite reservation.
+pub(crate) struct NativeLaneSourcePreparationError {
+    failure: NativeLaneSourceFailure,
+    pending: PendingNativeLaneSource,
+}
+
+enum NativeLaneSourceFailure {
+    Invalid(String),
+    HostAllocation(std::collections::TryReserveError),
+}
+
+impl NativeLaneSourcePreparationError {
+    fn new(reason: String, pending: PendingNativeLaneSource) -> Self {
+        Self {
+            failure: NativeLaneSourceFailure::Invalid(reason),
+            pending,
+        }
+    }
+
+    fn host_allocation(
+        error: std::collections::TryReserveError,
+        pending: PendingNativeLaneSource,
+    ) -> Self {
+        Self {
+            failure: NativeLaneSourceFailure::HostAllocation(error),
+            pending,
+        }
+    }
+
+    /// Resume or discard the same original after diagnosing a local refusal.
+    pub(crate) fn into_pending(self) -> PendingNativeLaneSource {
+        self.pending
+    }
+}
+
+impl std::fmt::Display for NativeLaneSourcePreparationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.failure {
+            NativeLaneSourceFailure::Invalid(reason) => std::fmt::Display::fmt(reason, formatter),
+            NativeLaneSourceFailure::HostAllocation(error) => {
+                write!(formatter, "Native source host allocation refused: {error}")
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for NativeLaneSourcePreparationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeLaneSourcePreparationError")
+            .field("failure", &self.to_string())
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::error::Error for NativeLaneSourcePreparationError {}
+
+enum SourceAuthentication {
+    Ready {
+        observed: VerifiedLaneContexts,
+        generation: u64,
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
+    },
+    FirstInputRecoveryRequired {
+        execution_index: usize,
+        source: AuthenticatedLaneAdmittedInputSourceV1,
+    },
+    ObservationChanged,
+    AdmissionMismatch,
+    HostAllocation(std::collections::TryReserveError),
 }
 
 /// Source preparation retains exact indexed recovery custody without an overlay.
@@ -62,22 +195,35 @@ pub(crate) enum NativeLaneBatchSourcePreparationV1<'state> {
     FirstInputRecoveryRequired {
         execution_index: usize,
         source: AuthenticatedLaneAdmittedInputSourceV1,
+        /// Original proposal/finality and source admission, unchanged.
+        pending: PendingNativeLaneSource,
     },
     /// Refresh the complete observation; no physical/economic owner was consumed.
-    ObservationChanged,
+    ObservationChanged { pending: PendingNativeLaneSource },
+    /// The caller supplied another source count's finite reservation.
+    /// This is a local scheduling refusal, never an invalid-body verdict.
+    AdmissionMismatch { pending: PendingNativeLaneSource },
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
         match self {
             Self::Ready(source) => source.replay_scratch(),
             Self::FirstInputRecoveryRequired {
                 execution_index,
                 source,
+                ..
             } => Ok(NativeLaneBatchReplayV1::FirstInputRecoveryRequired {
                 execution_index,
                 source,
             }),
-            Self::ObservationChanged => Ok(NativeLaneBatchReplayV1::ObservationChanged),
+            Self::ObservationChanged { .. } => Ok(NativeLaneBatchReplayV1::ObservationChanged),
+            Self::AdmissionMismatch { .. } => {
+                Err(MergeLedgerCommitError::ExecutionRecorderConflict(
+                    "Native source admission differs from the exact batch count".into(),
+                ))
+            }
         }
     }
 }
@@ -119,7 +265,6 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     /// owner remains unpublished and does not authenticate the global proposal.
     pub(crate) fn record_execution(
         self,
-        carrier: SignedBlock,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     ) -> Result<Option<RecordedNativeLaneBatchV1<'state>>, MergeLedgerCommitError> {
         // A recorder-owning caller must not wait for a State writer which may
@@ -129,17 +274,15 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         if !self.is_current() {
             return Ok(None);
         }
-        if carrier != *self.input {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "recorded Native carrier differs from the prepared source".into(),
-            ));
-        }
-        // The equality check joins the complete retained source to the moved
-        // carrier. Release its duplicate bytes before actual execution begins.
-        drop(self.input);
-        let recorded = self
-            .state
-            .record_native_lane_decision_batch(carrier, self.groups, context);
+        // Move the sole authenticated source value into execution, freeing only
+        // its prepaid Box backing. No second candidate is accepted here.
+        let carrier = self.input.into_inner();
+        let recorded = self.state.record_native_lane_decision_batch(
+            carrier,
+            self.groups,
+            self.admission,
+            context,
+        );
         if !super::is_stable_state_view_generation(
             self.generation,
             self.state.state_view_generation(),
@@ -155,6 +298,11 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         &self.groups
     }
 
+    /// Attach later output demand to this original source before writers.
+    pub(crate) fn execution_admission_mut(&mut self) -> &mut NativeExecutionResourceAdmission {
+        &mut self.admission
+    }
+
     fn is_current(&self) -> bool {
         self.observed.is_current(self.state)
             && super::is_stable_state_view_generation(
@@ -163,6 +311,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
             )
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn replay_scratch(self) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
         self.stage_with_start_hooks()
     }
@@ -174,6 +323,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     /// it cannot be flattened into a terminal input error.
     /// Scratch execution remains disposable: its native seal alone never grants
     /// the complete captured witness or exact durable finality needed to commit.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn stage_with_start_hooks(
         self,
     ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
@@ -201,9 +351,12 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
                 "native prepared source no longer matches its exact applying base".into(),
             ));
         }
-        let prepared =
-            self.state
-                .replay_lane_decision_batch(&self.input.header(), batch, self.groups);
+        let prepared = self.state.replay_lane_decision_batch_with_admission(
+            &self.input.header(),
+            batch,
+            self.groups,
+            self.admission,
+        );
         if !super::is_stable_state_view_generation(
             self.generation,
             self.state.state_view_generation(),
@@ -329,6 +482,7 @@ impl State {
     /// tokens and are rejoined through the unchanged all-route group boundary.
     /// Retain all completed inputs across a second missing source; partial recovery
     /// must not restart the first request forever. Positions are strict and unique.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn replay_finalized_native_lane_batch(
         &self,
         included: &FinalizedNativeLaneBatchV1,
@@ -336,9 +490,13 @@ impl State {
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
-        self.prepare_finalized_native_lane_batch_source(included, recovered)
-            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
-            .replay_scratch()
+        self.prepare_finalized_native_lane_batch_source(
+            included.clone(),
+            recovered,
+            NativeExecutionResourceAdmission::for_test(included.batch().groups.len()),
+        )
+        .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?
+        .replay_scratch()
     }
 
     /// Authenticate/re-execute one unfinalized proposed native economic carrier.
@@ -348,6 +506,7 @@ impl State {
     /// SignedBlock itself has no network field: every source is joined to this
     /// State's exact network through finalized first-carrier and current-set proof.
     /// The returned overlay is private/disposable, not acceptance or publication.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn replay_proposed_native_lane_batch(
         &self,
         carrier: &SignedBlock,
@@ -355,21 +514,28 @@ impl State {
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
-        self.prepare_proposed_native_lane_batch_source(carrier, recovered)
+        let group_count = crate::block::native_lane_batch_for_execution(carrier)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
-            .replay_scratch()
+            .groups
+            .len();
+        self.prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            recovered,
+            NativeExecutionResourceAdmission::for_test(group_count),
+        )
+        .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?
+        .replay_scratch()
     }
 
     /// Prepare exact finalized source authority without holding an execution overlay.
     pub(crate) fn prepare_finalized_native_lane_batch_source(
         &self,
-        included: &FinalizedNativeLaneBatchV1,
+        included: FinalizedNativeLaneBatchV1,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
-    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
-        self.prepare_native_lane_batch_from_pre_state(
-            included.carrier(),
-            included.batch(),
-            included.finality().height_context.network_id,
+        admission: NativeExecutionResourceAdmission,
+    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, NativeLaneSourcePreparationError> {
+        self.resume_native_lane_batch_source(
+            PendingNativeLaneSource::finalized(included, admission),
             recovered,
         )
     }
@@ -378,45 +544,115 @@ impl State {
     /// Raw carrier bytes still never construct a verified roster or group directly.
     pub(crate) fn prepare_proposed_native_lane_batch_source(
         &self,
-        carrier: &SignedBlock,
+        carrier: SignedBlock,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
-    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
-        if !carrier.is_resultless_proposal() {
-            return Err("live native replay requires an exact resultless proposal".into());
-        }
-        let batch = crate::block::native_lane_batch_for_execution(carrier)?;
-        self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, recovered)
+        admission: NativeExecutionResourceAdmission,
+    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, NativeLaneSourcePreparationError> {
+        self.resume_native_lane_batch_source(
+            PendingNativeLaneSource::proposed(carrier, admission),
+            recovered,
+        )
     }
 
     /// Authenticate native sources for the sole global execution owner. Carrier
     /// controls are shape-checked here and authenticated separately by ValidBlock.
     pub(crate) fn prepare_canonical_native_lane_batch_source(
         &self,
-        carrier: &SignedBlock,
-    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
-        let batch = crate::block::native_lane_batch_for_execution(carrier)?;
-        self.prepare_native_lane_batch_from_pre_state(carrier, batch, self.network_id, &[])
+        carrier: SignedBlock,
+        admission: NativeExecutionResourceAdmission,
+    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, NativeLaneSourcePreparationError> {
+        self.resume_native_lane_batch_source(
+            PendingNativeLaneSource::proposed(carrier, admission),
+            &[],
+        )
+    }
+
+    /// Retry the same original proposal and reservation after authenticating a
+    /// missing first body or refreshing a changed State observation.
+    pub(crate) fn resume_native_lane_batch_source(
+        &self,
+        pending: PendingNativeLaneSource,
+        recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
+    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, NativeLaneSourcePreparationError> {
+        let expected_network = pending.expected_network(self);
+        let authenticated = (|| {
+            let carrier = pending.carrier();
+            if !carrier.is_resultless_proposal() {
+                return Err("live native replay requires an exact resultless proposal".into());
+            }
+            let batch = crate::block::native_lane_batch_for_execution(carrier)?;
+            self.authenticate_native_lane_batch_from_pre_state(
+                carrier,
+                batch,
+                expected_network,
+                recovered,
+                &pending.admission,
+            )
+        })();
+        match authenticated {
+            Ok(SourceAuthentication::Ready {
+                observed,
+                generation,
+                groups,
+            }) => {
+                let (carrier, mut admission) = pending.into_ready_parts();
+                Ok(NativeLaneBatchSourcePreparationV1::Ready(
+                    PreparedNativeLaneBatchSourceV1 {
+                        state: self,
+                        observed,
+                        generation,
+                        input: admission.fund_source_box(carrier),
+                        groups,
+                        admission,
+                    },
+                ))
+            }
+            Ok(SourceAuthentication::FirstInputRecoveryRequired {
+                execution_index,
+                source,
+            }) => Ok(
+                NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired {
+                    execution_index,
+                    source,
+                    pending,
+                },
+            ),
+            Ok(SourceAuthentication::ObservationChanged) => {
+                Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged { pending })
+            }
+            Ok(SourceAuthentication::AdmissionMismatch) => {
+                Ok(NativeLaneBatchSourcePreparationV1::AdmissionMismatch { pending })
+            }
+            Ok(SourceAuthentication::HostAllocation(error)) => Err(
+                NativeLaneSourcePreparationError::host_allocation(error, pending),
+            ),
+            Err(reason) => Err(NativeLaneSourcePreparationError::new(reason, pending)),
+        }
     }
 
     /// Sole source authentication kernel. Raw arguments to this
     /// private method grant no authority: the wrapper establishes its carrier
     /// shape/inclusion, and each source still traverses the private input/group join.
-    fn prepare_native_lane_batch_from_pre_state(
+    fn authenticate_native_lane_batch_from_pre_state(
         &self,
         carrier: &SignedBlock,
         batch: &LaneDecisionBatchV1,
         expected_network: NetworkId,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
-    ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
+        admission: &NativeExecutionResourceAdmission,
+    ) -> Result<SourceAuthentication, String> {
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()?;
+        if !admission.matches_group_count(batch.groups.len()) {
+            return Ok(SourceAuthentication::AdmissionMismatch);
+        }
         let header = carrier.header();
         let generation = self.state_view_generation();
         if generation % 2 != 0 {
-            return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            return Ok(SourceAuthentication::ObservationChanged);
         }
         let (height, hash, network, expected_policy_hash) = {
             let Some(view) = self.try_view_once().map_err(|error| error.to_string())? else {
-                return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+                return Ok(SourceAuthentication::ObservationChanged);
             };
             (
                 view.block_hashes.len() as u64,
@@ -429,7 +665,7 @@ impl State {
             )
         };
         if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            return Ok(SourceAuthentication::ObservationChanged);
         }
         // Both wrappers bind the source bytes to this actual carrier header.
         // The active DA policy is authenticated from the exact applying pre-State.
@@ -442,12 +678,12 @@ impl State {
         let base_hash = match self.lane_execution_state_hash() {
             Ok(hash) => hash,
             Err(error) if error.is_observation_changed() => {
-                return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+                return Ok(SourceAuthentication::ObservationChanged);
             }
             Err(error) => return Err(error.to_string()),
         };
         if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            return Ok(SourceAuthentication::ObservationChanged);
         }
         if network != expected_network
             || height != batch.base_state_height
@@ -479,11 +715,14 @@ impl State {
         // This reader drops all State/MV guards before authenticating Kura proof.
         let observation = self.verified_lane_consensus_contexts();
         if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-            return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            return Ok(SourceAuthentication::ObservationChanged);
         }
         let observed = observation?
             .ok_or_else(|| "native replay pre-State has no published context proof".to_owned())?;
-        let mut groups = Vec::with_capacity(batch.groups.len());
+        let mut groups = Vec::new();
+        if let Err(error) = groups.try_reserve_exact(batch.groups.len()) {
+            return Ok(SourceAuthentication::HostAllocation(error));
+        }
         for (index, execution) in batch.groups.iter().enumerate() {
             let result = match recovered.iter().find(|(position, _)| *position == index) {
                 Some((_, input)) => {
@@ -492,20 +731,18 @@ impl State {
                 _ => self.import_lane_decision_group(&observed, execution),
             };
             if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
-                return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+                return Ok(SourceAuthentication::ObservationChanged);
             }
             match result? {
                 LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group),
                 LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source) => {
-                    return Ok(
-                        NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired {
-                            execution_index: index,
-                            source,
-                        },
-                    );
+                    return Ok(SourceAuthentication::FirstInputRecoveryRequired {
+                        execution_index: index,
+                        source,
+                    });
                 }
                 LaneDecisionGroupPreparationV1::ObservationChanged => {
-                    return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+                    return Ok(SourceAuthentication::ObservationChanged);
                 }
                 // A proposed or included batch cannot wait on a lane which did
                 // not own this exact pre-State head. The source is invalid for
@@ -520,16 +757,12 @@ impl State {
         if !observed.is_current(self)
             || !super::is_stable_state_view_generation(generation, self.state_view_generation())
         {
-            return Ok(NativeLaneBatchSourcePreparationV1::ObservationChanged);
+            return Ok(SourceAuthentication::ObservationChanged);
         }
-        Ok(NativeLaneBatchSourcePreparationV1::Ready(
-            PreparedNativeLaneBatchSourceV1 {
-                state: self,
-                observed,
-                generation,
-                input: Arc::new(carrier.clone()),
-                groups,
-            },
-        ))
+        Ok(SourceAuthentication::Ready {
+            observed,
+            generation,
+            groups,
+        })
     }
 }

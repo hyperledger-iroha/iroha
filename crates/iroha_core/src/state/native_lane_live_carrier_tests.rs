@@ -424,7 +424,7 @@ state_test! { sync live_native_batch_capacity_refusal_preserves_fitting_prefix_a
     bind_candidate(&mut carrier, &groups);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("exact finalized sources are available"); };
     assert!(matches!(source.stage_with_start_hooks(),
         Err(MergeLedgerCommitError::ExecutionBatchFull {

@@ -19,15 +19,21 @@ pub(super) fn outstanding_rewards(
             ));
         }
         for share in &record.shares {
-            let claimed = world.public_lane_reward_claims().get(&(
-                key.0,
-                share.account.clone(),
-                asset.clone(),
-            ));
-            if claimed.is_some_and(|epoch| *epoch >= key.1) {
+            let claimed = world
+                .public_lane_reward_claims()
+                .get(&(key.0, share.account.clone()));
+            if claimed
+                .and_then(|state| state.through_epoch)
+                .is_some_and(|epoch| epoch >= key.1)
+            {
                 continue;
             }
             outstanding = quantity_add(outstanding, share.amount.clone())?;
+        }
+    }
+    for ((_, _, source), amount) in world.public_lane_reward_accruals().iter() {
+        if source == asset {
+            outstanding = quantity_add(outstanding, amount.clone())?;
         }
     }
     Ok(outstanding)

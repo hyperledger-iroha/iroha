@@ -287,7 +287,7 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
     let snapshot = norito::json::to_value(state).expect("native State snapshot");
     let height = NonZeroUsize::new(carrier.header().height().get() as usize).unwrap();
     let restore = |lane_manifests: LaneManifestRegistryHandle| {
-        deserialize::KuraSeed {
+        deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             kura: Arc::clone(&state.kura),
             lane_manifests,
             query_handle: LiveQueryStore::start_test(),
@@ -317,7 +317,7 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             norito::json::to_value(&vec![foreign]).unwrap()
         };
         cell.insert("blocks".to_owned(), value);
-        let error = deserialize::KuraSeed {
+        let error = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             kura: Arc::clone(&state.kura),
             lane_manifests: Arc::clone(&baseline),
             query_handle: LiveQueryStore::start_test(),

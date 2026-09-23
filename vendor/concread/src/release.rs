@@ -1,5 +1,7 @@
 //! Lock-release observations for retrying local publication without a timer.
 
+use crate::shared::{ErasedShared, Shared};
+
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
@@ -22,8 +24,9 @@ struct State {
 /// if the blocking owner released before the caller registered an async waiter.
 /// Readers that exclude writers must also be wrapped. Signals grant no mutation
 /// authority: every retry must acquire the lock and authenticate its predecessor.
+#[derive(Clone)]
 pub struct ReleaseNotification {
-    state: Arc<Mutex<State>>,
+    state: ErasedShared<Mutex<State>>,
 }
 
 impl std::fmt::Debug for ReleaseNotification {
@@ -35,7 +38,7 @@ impl std::fmt::Debug for ReleaseNotification {
 
 impl Default for ReleaseNotification {
     fn default() -> Self {
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = ErasedShared::new(Mutex::new(State::default()), ());
         // Some platforms allocate native mutex storage on first acquisition.
         // Pay that construction cost here, before allocation-free observations
         // or a release that may itself be returning exhausted capacity.
@@ -45,6 +48,21 @@ impl Default for ReleaseNotification {
 }
 
 impl ReleaseNotification {
+    /// Exact original notification-state allocation, including its counter and charge.
+    /// Native mutex internals and pending waiter storage are separate owners.
+    pub fn allocation_layout<Charge>() -> std::alloc::Layout {
+        Shared::<Mutex<State>, Charge>::layout()
+    }
+
+    /// Construct the original notification state with prepaid control custody.
+    /// Observations and deferred releases retain this same allocation and charge.
+    /// This does not admit native mutex internals or future waiter allocations.
+    pub fn new_charged<Charge: Send + Sync + 'static>(charge: Charge) -> Self {
+        let state = ErasedShared::new(Mutex::new(State::default()), charge);
+        drop(state.lock().unwrap_or_else(|p| p.into_inner()));
+        Self { state }
+    }
+
     /// Observe releases before probing this notification's physical lock.
     pub fn observe(&self) -> ReleaseWait {
         let sequence = self
@@ -53,7 +71,7 @@ impl ReleaseNotification {
             .unwrap_or_else(|p| p.into_inner())
             .sequence;
         ReleaseWait {
-            state: Arc::clone(&self.state),
+            state: self.state.clone(),
             sequence,
         }
     }
@@ -64,7 +82,7 @@ impl ReleaseNotification {
     pub fn deferred_batch(&self) -> DeferredReleaseBatch {
         DeferredReleaseBatch {
             notification: ReleaseNotification {
-                state: Arc::clone(&self.state),
+                state: self.state.clone(),
             },
             released: false,
             poisoned: false,
@@ -166,7 +184,7 @@ impl ReleaseNotification {
 /// allocates nothing; a polled pending future retains one registration and waker.
 #[derive(Clone)]
 pub struct ReleaseWait {
-    state: Arc<Mutex<State>>,
+    state: ErasedShared<Mutex<State>>,
     sequence: u64,
 }
 
@@ -178,7 +196,7 @@ impl std::fmt::Debug for ReleaseWait {
 
 impl PartialEq for ReleaseWait {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state) && self.sequence == other.sequence
+        ErasedShared::ptr_eq(&self.state, &other.state) && self.sequence == other.sequence
     }
 }
 impl Eq for ReleaseWait {}
@@ -329,7 +347,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         batch: &mut DeferredReleaseBatch,
         release: impl FnOnce(T) -> R,
     ) -> Result<R, Self> {
-        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
             return Err(self);
         }
         struct Record<'a> {
@@ -364,7 +382,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         let mut retirement = self.release_retaining(release);
         let notification = DeferredRelease {
             notification: ReleaseNotification {
-                state: Arc::clone(&retirement.notification.state),
+                state: retirement.notification.state.clone(),
             },
             poisoned,
         };
@@ -383,7 +401,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         release: impl FnOnce(T) -> R,
         observe_poison: impl Fn() -> bool,
     ) -> Result<R, Self> {
-        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
             return Err(self);
         }
         struct Record<'a, F: Fn() -> bool> {
@@ -421,7 +439,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         consume: impl FnOnce(T) -> Result<R, (T, E)>,
         observe_poison: impl Fn() -> bool,
     ) -> Result<Result<ReleaseGuard<'owner, R>, (Self, E)>, Self> {
-        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {
+        if !ErasedShared::ptr_eq(&self.notification.state, &batch.notification.state) {
             return Err(self);
         }
         struct Record<'a, F: Fn() -> bool> {

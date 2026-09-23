@@ -2704,7 +2704,8 @@ impl GlobalBeaconBrokerPartialSigner {
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
         expected_signer_index: u16,
-    ) -> Result<iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1, BrokerError> {
+    ) -> Result<iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1, BrokerError>
+    {
         retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
             iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
                 session,
@@ -2772,6 +2773,58 @@ impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBr
                     iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::NotOwned
                 }
             })
+    }
+
+    fn prove_seat_readiness(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+        context: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
+    ) -> Result<
+        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+        iroha_core::beacon::seat_readiness::GlobalThresholdBeaconSeatReadinessErrorV1,
+    > {
+        use iroha_core::beacon::seat_readiness::{
+            GlobalThresholdBeaconSeatReadinessErrorV1 as ReadyError,
+            global_threshold_beacon_seat_readiness_challenge_v1,
+            verify_global_threshold_beacon_seat_readiness_v1,
+        };
+        global_threshold_beacon_seat_readiness_challenge_v1(session, authority, context)?;
+        retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            let request = GlobalBeaconSeatReadinessRequestWireV1 {
+                session: session.record().clone(),
+                authority: authority.clone(),
+                context: *context,
+            };
+            let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)?;
+            let result = provider_call!(
+                self,
+                call,
+                OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1,
+                request_payload,
+                false,
+            )?;
+            let signed = self
+                .session
+                .decode_result::<GlobalBeaconPartialSignResultWireV1>(&result)?;
+            verify_global_threshold_beacon_seat_readiness_v1(
+                session,
+                authority,
+                context,
+                &signed.partial,
+            )
+            .map_err(|_| {
+                self.session.poison();
+                BrokerError::Rejected
+            })?;
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            Ok(signed.partial)
+        })
+        .map_err(|error| match error {
+            BrokerError::Rejected | BrokerError::Conflict => ReadyError::InvalidProof,
+            _ => ReadyError::CustodyUnavailable,
+        })
     }
 
     fn sign_partial(
@@ -3142,7 +3195,8 @@ fn resolve_with_decode_pool(
                     .stream_token_signer_binding
                     .as_ref()
                     .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-                signer_backend.validate_network(&session.chain_id, session.network_id.as_bytes())?;
+                signer_backend
+                    .validate_network(&session.chain_id, session.network_id.as_bytes())?;
                 let client = Arc::new(StreamTokenSignerBrokerClient {
                     session: Arc::clone(&session),
                     binding: binding.clone(),
@@ -4048,21 +4102,23 @@ fn resolve_with_decode_pool(
     }
     Ok(dependencies)
 }
-/// Serve the stock catalog on the platform-fixed endpoint.
+/// Serve the stock catalog on one validated endpoint.
 pub(super) fn serve(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
     serve_with_policy(
         bindings,
         backends,
-        &EndpointPolicy::production(),
+        &EndpointPolicy::production(endpoint_path),
         Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
     )
 }
 /// Serve the stock catalog with a fallible readiness publication.
 pub(super) fn serve_with_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -4073,7 +4129,7 @@ where
     serve_with_policy_and_fallible_readiness(
         bindings,
         backends,
-        &EndpointPolicy::production(),
+        &EndpointPolicy::production(endpoint_path),
         lifecycle,
         on_ready,
     )

@@ -429,18 +429,29 @@ impl SignedBlock {
     /// payload, signatures, and proposal-only header.
     #[must_use]
     pub fn canonical_resultless_proposal(&self) -> Self {
-        let mut proposal = self.clone();
-        proposal.result = None;
-        proposal
+        self.clone().into_resultless_proposal()
+    }
+    /// Consume the original block and discard only its execution result.
+    ///
+    /// This preserves the proposal payload and signatures without cloning any
+    /// nested transaction or consensus evidence allocation.
+    #[must_use]
+    pub fn into_resultless_proposal(mut self) -> Self {
+        self.result = None;
+        self
     }
     /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
     ///
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.canonical_resultless_proposal()
-            .encode_wire()
-            .map(|wire| Hash::new(&wire))
+        if self.is_resultless_proposal() {
+            self.encode_wire().map(|wire| Hash::new(&wire))
+        } else {
+            self.canonical_resultless_proposal()
+                .encode_wire()
+                .map(|wire| Hash::new(&wire))
+        }
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
@@ -2962,6 +2973,7 @@ mod tests {
         let mut block = fixture::proposal(0);
         let proposal = block.clone();
         let proposal_hash = block.canonical_proposal_wire_hash().unwrap();
+        assert_eq!(proposal_hash, Hash::new(&proposal.encode_wire().unwrap()));
         assert!(!block.has_results());
         assert!(block.is_resultless_proposal());
         assert_eq!(block.executed_block_wire_hash().unwrap(), proposal_hash);
@@ -2969,6 +2981,7 @@ mod tests {
         assert!(block.has_results());
         assert!(!block.is_resultless_proposal());
         assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.clone().into_resultless_proposal(), proposal);
         assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
         let executed = block.executed_block_wire_hash().unwrap();
         fixture::install(&mut block, vec![], 1).unwrap();

@@ -6,7 +6,9 @@
 #[path = "finality_test_support.rs"]
 mod finality;
 #[cfg(test)]
-pub(crate) use finality::torii_proof_finality_for_block;
+pub(crate) use finality::{
+    torii_proof_finality_for_block, torii_proof_finality_for_block_with_context,
+};
 
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
@@ -628,6 +630,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 pops: std::collections::BTreeMap::new(),
             }),
             chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
+        },
+        runtime_provider_broker: A::RuntimeProviderBroker {
+            endpoint_path: A::RuntimeProviderBrokerEndpointPath::try_new(
+                defaults::runtime_provider_broker::endpoint_path(),
+            )
+            .expect("default runtime-provider broker endpoint is valid"),
         },
         network: A::Network {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),

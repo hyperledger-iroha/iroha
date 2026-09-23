@@ -17,11 +17,14 @@ pub(super) fn validate_plan_context(
         PublicLaneMonetaryScopeV1::Genesis => {
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()
         }
-        PublicLaneMonetaryScopeV1::Network(network_id) => network_id == state_transaction.network_id(),
+        PublicLaneMonetaryScopeV1::Network(network_id) => {
+            network_id == state_transaction.network_id()
+        }
     };
     if !scope_matches {
         return Err(Error::InvariantViolation(
-            "staking monetary plan does not match this authenticated genesis or network scope".into(),
+            "staking monetary plan does not match this authenticated genesis or network scope"
+                .into(),
         ));
     }
     let parameters = state_transaction
@@ -33,7 +36,9 @@ pub(super) fn validate_plan_context(
             )
         })?;
     parameters.validate().map_err(|error| {
-        Error::InvariantViolation(format!("invalid staking monetary plan epoch parameters: {error}").into())
+        Error::InvariantViolation(
+            format!("invalid staking monetary plan epoch parameters: {error}").into(),
+        )
     })?;
     let height = state_transaction.block_height();
     let latest = height
@@ -59,7 +64,11 @@ pub(super) fn verify_transfer_plan(
     amount: &Quantity,
     precondition: &PublicLaneMonetaryPreconditionV1,
 ) -> Result<(), Error> {
-    validate_plan_context(state_transaction, &plan.network_scope, plan.valid_until_height)?;
+    validate_plan_context(
+        state_transaction,
+        &plan.network_scope,
+        plan.valid_until_height,
+    )?;
     if !plan.has_canonical_shape()
         || &plan.source_asset != source_asset
         || &plan.destination_asset != destination_asset
@@ -94,15 +103,48 @@ pub(super) fn prepare_reward_claim(
     recipient: &AccountId,
     plan: &PublicLaneRewardClaimPlanV1,
 ) -> Result<PreparedRewardClaim, Error> {
-    validate_plan_context(state_transaction, &plan.network_scope, plan.valid_until_height)?;
+    validate_plan_context(
+        state_transaction,
+        &plan.network_scope,
+        plan.valid_until_height,
+    )?;
     if !plan.has_canonical_shape(recipient) {
         return Err(Error::InvariantViolation(
             "reward claim plan is not bounded and canonical".into(),
         ));
     }
-    let world = &state_transaction.world;
+    let prepared = evaluate_reward_claim(
+        &state_transaction.world,
+        &state_transaction.nexus.staking.reward_dust_threshold,
+        lane_id,
+        recipient,
+        plan,
+    )?;
+    for source in &plan.sources {
+        let expected = prepared
+            .payouts
+            .iter()
+            .find(|(asset, _, _)| asset == &source.source_asset)
+            .map_or_else(Quantity::zero, |(_, _, amount)| amount.clone());
+        if source.payout != expected {
+            return Err(Error::InvariantViolation(
+                "reward claim payout does not match its exact accrued entitlement and dust threshold".into(),
+            ));
+        }
+    }
+    Ok(prepared)
+}
+
+/// Shared entitlement calculation for read-only preparation and signed execution.
+pub(super) fn evaluate_reward_claim(
+    world: &impl WorldReadOnly,
+    dust_threshold: &Quantity,
+    lane_id: LaneId,
+    recipient: &AccountId,
+    plan: &PublicLaneRewardClaimPlanV1,
+) -> Result<PreparedRewardClaim, Error> {
     let claim_key = (lane_id, recipient.clone());
-    if world.public_lane_reward_claims.get(&claim_key) != plan.expected_state.as_ref() {
+    if world.public_lane_reward_claims().get(&claim_key) != plan.expected_state.as_ref() {
         return Err(Error::InvariantViolation(
             "reward claim processing cursor changed after signing".into(),
         ));
@@ -110,14 +152,17 @@ pub(super) fn prepare_reward_claim(
     let mut accrued = BTreeMap::new();
     for source in &plan.sources {
         let key = (lane_id, recipient.clone(), source.source_asset.clone());
-        if world.public_lane_reward_accruals.get(&key) != source.expected_accrued.as_ref() {
+        if world.public_lane_reward_accruals().get(&key) != source.expected_accrued.as_ref() {
             return Err(Error::InvariantViolation(
                 "reward claim source accrual changed after signing".into(),
             ));
         }
         accrued.insert(
             source.source_asset.clone(),
-            source.expected_accrued.clone().unwrap_or_else(Quantity::zero),
+            source
+                .expected_accrued
+                .clone()
+                .unwrap_or_else(Quantity::zero),
         );
     }
     let lower = plan
@@ -127,10 +172,9 @@ pub(super) fn prepare_reward_claim(
         .map_or(std::ops::Bound::Included((lane_id, 0)), |epoch| {
             std::ops::Bound::Excluded((lane_id, epoch))
         });
-    let mut records = world.public_lane_rewards.range((
-        lower,
-        std::ops::Bound::Included((lane_id, u64::MAX)),
-    ));
+    let mut records = world
+        .public_lane_rewards()
+        .range((lower, std::ops::Bound::Included((lane_id, u64::MAX))));
     let mut touched_sources = std::collections::BTreeSet::new();
     let mut state_after = plan.expected_state.clone();
     for reference in &plan.records {
@@ -147,21 +191,27 @@ pub(super) fn prepare_reward_claim(
         })?;
         if key.1 != reference.epoch || record_hash != reference.record_hash {
             return Err(Error::InvariantViolation(
-                "reward claim must bind the exact consecutive reward records after its cursor".into(),
+                "reward claim must bind the exact consecutive reward records after its cursor"
+                    .into(),
             ));
         }
         touched_sources.insert(record.asset.clone());
         let source_accrued = accrued.get_mut(&record.asset).ok_or_else(|| {
-            Error::InvariantViolation("reward claim omits a processed record's custody source".into())
+            Error::InvariantViolation(
+                "reward claim omits a processed record's custody source".into(),
+            )
         })?;
-        for share in record.shares.iter().filter(|share| &share.account == recipient) {
+        for share in record
+            .shares
+            .iter()
+            .filter(|share| &share.account == recipient)
+        {
             *source_accrued = quantity_add(source_accrued.clone(), share.amount.clone())?;
         }
         state_after = Some(PublicLaneRewardClaimStateV1 {
             through_epoch: Some(key.1),
         });
     }
-    let dust_threshold = &state_transaction.nexus.staking.reward_dust_threshold;
     let mut accrued_updates = Vec::with_capacity(plan.sources.len());
     let mut payouts = Vec::with_capacity(plan.sources.len());
     for source in &plan.sources {
@@ -170,17 +220,14 @@ pub(super) fn prepare_reward_claim(
                 "reward claim includes a source with neither a processed record nor retained accrual".into(),
             ));
         }
-        let available = accrued.remove(&source.source_asset).expect("every signed source was seeded");
+        let available = accrued
+            .remove(&source.source_asset)
+            .expect("every signed source was seeded");
         let expected_payout = if &available >= dust_threshold {
             available.clone()
         } else {
             Quantity::zero()
         };
-        if source.payout != expected_payout {
-            return Err(Error::InvariantViolation(
-                "reward claim payout does not match its exact accrued entitlement and dust threshold".into(),
-            ));
-        }
         accrued_updates.push((
             source.source_asset.clone(),
             quantity_sub(available, expected_payout.clone())?,
@@ -193,7 +240,11 @@ pub(super) fn prepare_reward_claim(
             ));
         }
     }
-    Ok(PreparedRewardClaim { state_after, accrued_updates, payouts })
+    Ok(PreparedRewardClaim {
+        state_after,
+        accrued_updates,
+        payouts,
+    })
 }
 
 /// One-shot payout capability minted only after exact signed claim recomputation.
@@ -209,7 +260,11 @@ impl VerifiedStakingRewardPayouts {
         binding: Vec<u8>,
         payouts: Vec<(AssetId, AssetId, Quantity)>,
     ) -> Self {
-        Self { recipient, binding, payouts }
+        Self {
+            recipient,
+            binding,
+            payouts,
+        }
     }
 
     /// Consume the exact authorized payout set without exposing a reusable constructor.
@@ -257,37 +312,51 @@ pub(super) fn execute_reward_claim(
     // preflight. Every other reward and stake liability remains reserved.
     for (source, _, after) in &reserve_changes {
         if after.is_zero() {
-            state_transaction.world.public_lane_reward_reserves.remove(source.clone());
+            state_transaction
+                .world
+                .public_lane_reward_reserves
+                .remove(source.clone());
         } else {
-            state_transaction.world.public_lane_reward_reserves.insert(source.clone(), after.clone());
+            state_transaction
+                .world
+                .public_lane_reward_reserves
+                .insert(source.clone(), after.clone());
         }
     }
-    let capability = VerifiedStakingRewardPayouts::new(
-        instruction.account.clone(),
-        binding,
-        prepared.payouts,
-    );
-    if let Err(error) = crate::smartcontracts::isi::asset::isi::execute_verified_staking_reward_payouts(
-        state_transaction,
-        capability,
-    ) {
+    let capability =
+        VerifiedStakingRewardPayouts::new(instruction.account.clone(), binding, prepared.payouts);
+    if let Err(error) =
+        crate::smartcontracts::isi::asset::isi::execute_verified_staking_reward_payouts(
+            state_transaction,
+            capability,
+        )
+    {
         for (source, before, _) in reserve_changes {
-            state_transaction.world.public_lane_reward_reserves.insert(source, before);
+            state_transaction
+                .world
+                .public_lane_reward_reserves
+                .insert(source, before);
         }
         return Err(error);
     }
     if let Some(after) = prepared.state_after {
-        state_transaction.world.public_lane_reward_claims.insert(
-            (instruction.lane_id, instruction.account.clone()),
-            after,
-        );
+        state_transaction
+            .world
+            .public_lane_reward_claims
+            .insert((instruction.lane_id, instruction.account.clone()), after);
     }
     for (source, after) in prepared.accrued_updates {
         let key = (instruction.lane_id, instruction.account.clone(), source);
         if after.is_zero() {
-            state_transaction.world.public_lane_reward_accruals.remove(key);
+            state_transaction
+                .world
+                .public_lane_reward_accruals
+                .remove(key);
         } else {
-            state_transaction.world.public_lane_reward_accruals.insert(key, after);
+            state_transaction
+                .world
+                .public_lane_reward_accruals
+                .insert(key, after);
         }
     }
     Ok(())

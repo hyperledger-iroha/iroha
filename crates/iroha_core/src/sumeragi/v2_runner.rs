@@ -116,6 +116,8 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use thiserror::Error;
 
+#[path = "v2_runner/lane_engine_owner.rs"]
+pub(crate) mod lane_engine_owner;
 #[path = "v2_runner/lifecycle_height_driver.rs"]
 mod lifecycle_height_driver;
 #[path = "v2_runner/lifecycle_pending_kura.rs"]
@@ -124,10 +126,26 @@ mod lifecycle_pending_kura;
 pub(in crate::sumeragi) mod lifecycle_run_inner;
 #[path = "v2_runner/lifecycle_runner_authority.rs"]
 mod lifecycle_runner_authority;
+#[path = "v2_runner/native_ingress_carrier.rs"]
+#[expect(
+    dead_code,
+    reason = "TODO: activate only with funded Native Validate-to-Apply and legacy signer retirement"
+)]
+pub(crate) mod native_ingress_carrier;
+#[path = "v2_runner/native_lane_runtime.rs"]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: atomic native runner activation requires complete reserved validation and old signer retirement"
+    )
+)]
+pub(crate) mod native_lane_runtime;
 #[path = "v2_runner/ordinary_ingress_consumer.rs"]
 pub(in crate::sumeragi) mod ordinary_ingress_consumer;
 #[path = "v2_runner/preactivation_ingress.rs"]
 mod preactivation_ingress;
+use lane_engine_owner::LaneEngineOwner;
 pub(in crate::sumeragi) use lifecycle_height_driver::{
     LifecycleApplyTerminalReadyBroadcastPermitV1, LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
     LifecycleDecidedLaneRecoveryPermitV1, LifecycleProducerClaimDispositionV1,
@@ -1194,6 +1212,14 @@ fn run_inner(
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
+    // This one slot belongs to the recovered Sumeragi worker, not to a global
+    // process singleton or an individual height. It survives PendingKura and
+    // every successor so a replacement engine cannot coexist with the old
+    // per-height signer during durable rollover.
+    let lane_engine_owner = LaneEngineOwner::new(
+        verified_context.context().network_id,
+        common_config.peer.id().clone(),
+    );
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
             build_identity,
@@ -1216,6 +1242,7 @@ fn run_inner(
             shutdown_signal,
             ingress_ready,
             output_guard,
+            lane_engine_owner,
             consensus_frame_byte_capacity,
             block_sync_frame_byte_capacity,
             verified_context,
@@ -1262,6 +1289,7 @@ fn run_inner(
             shutdown_signal,
             ingress_ready,
             output_guard,
+            lane_engine_owner,
             consensus_frame_byte_capacity,
             block_sync_frame_byte_capacity,
             verified_context,
@@ -2912,10 +2940,11 @@ fn candidate_attachments(
         )
         .derive_npos_consensus_effects(round_header)
         .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::BlockHashAdmissionError>() {
+            if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()
+            {
                 V2RunnerError::CandidateBuild(
                     super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::History(refusal.clone()),
+                        crate::state::StateBlockStartError::Storage(refusal.clone()),
                     ),
                 )
             } else {

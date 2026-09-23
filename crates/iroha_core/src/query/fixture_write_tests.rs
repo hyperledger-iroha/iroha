@@ -19,7 +19,7 @@ use iroha_data_model::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     proof::{
@@ -303,10 +303,10 @@ fn phase_vote_evidence() -> Evidence {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0xA1; 32]),
     ));
-    let mint_roster = KagemushaMintFinalityEpochRosterV1 {
+    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .zip(1..=4_u8)
@@ -322,8 +322,9 @@ fn phase_vote_evidence() -> Evidence {
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_epoch_id: mint_roster.finality_epoch_id().expect("mint roster"),
-        kagemusha_mint_finality_epoch_roster: mint_roster,
+        kagemusha_mint_finality_authorization:
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&mint_roster, 0, 1, 2),
+        kagemusha_mint_finality_authority: mint_roster,
         epoch_end_height: 2,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

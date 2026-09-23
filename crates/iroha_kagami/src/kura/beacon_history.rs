@@ -19,11 +19,10 @@ use iroha_data_model::{
         lane_admission::LaneAdmittedInputV1,
     },
     isi::{
-        InstructionBox, SetParameter,
+        InstructionBox,
         consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1},
     },
     merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-    parameter::system::{KagemushaMintFinalityNextEpochParameterV1, Parameter},
     transaction::{Executable, ExecutableBatchItem, signed::TransactionEntrypoint},
 };
 use norito::json::{self, Value};
@@ -93,15 +92,14 @@ impl Projection {
         {
             let cert = &isi.certificate;
             let action = match cert.action {
-                ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey => {
-                    "install_global_beacon_key"
+                ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey => {
+                    "finalize_global_beacon_key"
                 }
-                ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey => "retire_global_beacon_key",
                 _ => return Ok(()),
             };
             // Output only typed public identity fields. Opaque certificate bytes are never emitted.
             let public_record = if cert.action
-                == ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey
+                == ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey
             {
                 let decoded = norito::decode_canonical_with_limits::<
                     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
@@ -135,7 +133,7 @@ impl Projection {
                 "kind": "global_beacon_lifecycle_candidate", "occurrence": (occurrence.clone()),
                 "instruction_path": path, "action": action, "certificate_version": (cert.version),
                 "network_id": (cert.network_id.to_string()), "effective_height": (cert.effective_height),
-                "next_height_effective_at": (cert.effective_height.checked_add(1)),
+                "bootstrap_activation_height": (cert.expected_active_session_id.is_none().then(|| cert.effective_height.checked_add(1)).flatten()),
                 "expected_active_session_id": (cert.expected_active_session_id.map(hex::encode)),
                 "session_id": (hex::encode(cert.session_id)), "roster_hash": (hex::encode(cert.roster_hash)),
                 "transcript_hash": (hex::encode(cert.transcript_hash)),
@@ -144,24 +142,6 @@ impl Projection {
                 "public_state_hash": (Hash::new(&cert.public_state).to_string()),
                 "public_record": public_record, "certificate_authority_verified": false
             }))?;
-        } else if let Some(isi) = instruction.as_any().downcast_ref::<SetParameter>() {
-            if let Parameter::Custom(custom) = isi.inner()
-                && custom.id() == &KagemushaMintFinalityNextEpochParameterV1::parameter_id()
-            {
-                let parsed =
-                    KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom);
-                let roster = parsed.map(|parameter| {
-                    norito::json!({
-                        "epoch": (parameter.roster.epoch),
-                        "roster": (parameter.roster)
-                    })
-                });
-                self.record(norito::json!({
-                    "kind": "mint_finality_next_roster_candidate", "occurrence": (occurrence.clone()),
-                    "instruction_path": path, "parameter_id": (custom.id().to_string()),
-                    "typed_valid_roster": roster
-                }))?;
-            }
         }
         Ok(())
     }
@@ -676,7 +656,7 @@ mod tests {
         ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
                 version: 1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
                 expected_active_session_id: Some([3; 32]),
                 effective_height: 19,
                 network_id: network(),
@@ -793,7 +773,7 @@ mod tests {
         let mut output = Vec::new();
         inspect(&mut output, dir.path(), Some(0), &options()).expect("inspect");
         let text = String::from_utf8(output).expect("UTF8");
-        assert!(text.contains("retire_global_beacon_key"));
+        assert!(text.contains("finalize_global_beacon_key"));
         assert!(text.contains(&block.hash().to_string()));
         assert!(!text.contains("unrelated-private-sentinel"));
         assert!(!text.contains("public_state\":[]"));
@@ -1262,14 +1242,14 @@ mod tests {
             .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
             .expect("typed fixture")
             .clone();
-        install.certificate.action = ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey;
+        install.certificate.action = ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey;
         install.certificate.public_state = b"opaque-private-sentinel".to_vec();
         let mut projection = Projection::default();
         projection
             .instruction(&install.into(), &Value::Null, "instructions/0".to_owned())
             .expect("candidate");
         let text = json::to_json(&projection.records).expect("render projection");
-        assert!(text.contains("install_global_beacon_key"));
+        assert!(text.contains("finalize_global_beacon_key"));
         assert!(!text.contains("opaque-private-sentinel"));
         assert_eq!(
             projection.records[0]["public_record"]["decoded"].as_bool(),

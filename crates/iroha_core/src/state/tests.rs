@@ -2744,8 +2744,9 @@ fn state_with_snapshot_nexus_runtime() -> State {
 fn deserialize_state_snapshot_value_with_kura(
     value: norito::json::Value,
     kura: Arc<Kura>,
-) -> Result<Box<State>, json::Error> {
+) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
     deserialize::KuraSeed {
+        operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura,
         query_handle: LiveQueryStore::start_test(),
@@ -2754,7 +2755,9 @@ fn deserialize_state_snapshot_value_with_kura(
     }
     .into_state_from_json(value)
 }
-fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<Box<State>, json::Error> {
+fn deserialize_state_snapshot_value(
+    value: norito::json::Value,
+) -> Result<Box<State>, deserialize::SnapshotRestoreError> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
 }
 state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_canonical_root
@@ -4132,6 +4135,7 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         },
@@ -5228,7 +5232,7 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
             "derived account index `{derived_field}` must not be serialized"
         );
     }
-    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5499,7 +5503,7 @@ state_test! { sync asset_definition_alias_bindings_roundtrip_through_state_json
     seed_snapshot_asset_incarnations(&mut world);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5607,7 +5611,7 @@ state_test! { sync asset_escrow_record_roundtrips_through_state_json
     world.asset_escrows.insert(public_id, public_record.clone());
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -5622,6 +5626,20 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut world = World::default();
+    let validator = ALICE_ID.clone();
+    let staker = BOB_ID.clone();
+    let mismatched_lane = LaneId::new(99);
+    let stake_asset_definition = SumeragiNposParameters::default().xor_asset_definition_id;
+    let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
+    for account in [validator.clone(), staker.clone()] {
+        let (id, value) = Account::new(account.clone()).build(&account).into_key_value();
+        world.accounts.insert(id, value);
+    }
+    world = reward_reserves::registered_custody_world_for_test(
+        world,
+        &reward_asset,
+        Quantity::from(1_477_u64),
+    );
     {
         let mut parameters = world.parameters.block();
         parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
@@ -5634,20 +5652,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         ));
         parameters.commit();
     }
-    let validator = ALICE_ID.clone();
-    let staker = BOB_ID.clone();
-    let mismatched_lane = LaneId::new(99);
-    let_row! { stake_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").expect("stake asset domain"), "stake".parse().expect("stake asset name"), ) };
-    let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
-    for account in [validator.clone(), staker.clone()] {
-        let (id, value) = Account::new(account.clone()).build(&account).into_key_value();
-        world.accounts.insert(id, value);
-    }
-    world = reward_reserves::registered_custody_world_for_test(
-        world,
-        &reward_asset,
-        Quantity::from(1_477_u64),
-    );
     let request_id = Hash::new("unbond-request");
     world.public_lane_validators.insert(
         (LaneId::SINGLE, validator.clone()),
@@ -5661,6 +5665,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: Some(7),
         },
@@ -5726,7 +5731,8 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         };
     world
         .public_lane_reward_claims
-        .insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+        .insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(7) });
+    world.public_lane_reward_accruals.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), Quantity::from(77_u32));
     world.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(77_u32));
     world.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
     world.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
@@ -5742,7 +5748,8 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         block.public_lane_stake_shares.insert(key, record);
         let record = block.public_lane_rewards.get(&(LaneId::SINGLE, 7)).unwrap().clone();
         block.public_lane_rewards.insert((LaneId::SINGLE, 7), record);
-        block.public_lane_reward_claims.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+        block.public_lane_reward_claims.insert((LaneId::SINGLE, validator.clone()), PublicLaneRewardClaimStateV1 { through_epoch: Some(7) });
+        block.public_lane_reward_accruals.insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), Quantity::from(77_u32));
         block.public_lane_reward_reserves.insert(reward_asset.clone(), Quantity::from(77_u32));
         block.public_lane_stake_custody.insert((LaneId::SINGLE, validator.clone()), (reward_asset.clone(), Quantity::from(1_400_u32)));
         block.public_lane_stake_reserves.insert(reward_asset.clone(), Quantity::from(1_400_u32));
@@ -5750,10 +5757,10 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         block.commit();
     }
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
-    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
+    for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_accruals", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
         assert_eq!(roundtrip.as_object().unwrap().get(field), json_value.as_object().unwrap().get(field),
             "{field} retains its exact current entries, preimages and absence markers");
         assert!(!json_value.as_object().unwrap().get(field).unwrap().as_object().unwrap()
@@ -5774,6 +5781,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: Some(7),
         }
@@ -5794,8 +5802,8 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     );
     assert_eq!(
         view.public_lane_reward_claims()
-            .get(&(LaneId::SINGLE, validator, reward_asset)),
-        Some(&6)
+            .get(&(LaneId::SINGLE, validator)),
+        Some(&PublicLaneRewardClaimStateV1 { through_epoch: Some(7) })
     );
     assert!(
         view.public_lane_rewards()
@@ -6491,7 +6499,7 @@ state_test! { sync proof_status_index_roundtrips_through_state_json
     );
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.view();
     let_row! { verified_ids = FindProofRecordsByStatus { status: ProofStatus::Verified, } .execute(CompoundPredicate::PASS, &view) .expect("query verified proof records") .map(|record| record.id) .collect::<Vec<_>>() };
@@ -15462,11 +15470,9 @@ fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
     let retained_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let_row! { reward_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("sameblockrewards", "universal").expect("reward asset domain"), "autoscale".parse().expect("reward asset name"), ) };
     let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
-    let_row! { embedded_reward_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("sameblockembeddedrewards", "universal") .expect("embedded reward asset domain"), "autoscale".parse().expect("embedded reward asset name"), ) };
-    let embedded_reward_asset = AssetId::new(embedded_reward_asset_definition, validator.clone());
-    let_row! { retired_keys = ( (retired_lane_id, validator.clone(), retired_staker.clone()), (retired_lane_id, 7), (retired_lane_id, validator.clone(), reward_asset.clone()), ) };
-    let_row! { embedded_retired_keys = ( ( LaneId::SINGLE, validator.clone(), embedded_retired_staker.clone(), ), (LaneId::SINGLE, 9), ( LaneId::SINGLE, validator.clone(), embedded_reward_asset.clone(), ), ) };
-    let_row! { retained_keys = ( (LaneId::SINGLE, validator.clone(), retained_staker.clone()), (LaneId::SINGLE, 8), (LaneId::SINGLE, validator.clone(), reward_asset.clone()), ) };
+    let_row! { retired_keys = ( (retired_lane_id, validator.clone(), retired_staker.clone()), (retired_lane_id, 7), (retired_lane_id, validator.clone()), ) };
+    let_row! { embedded_retired_keys = ( ( LaneId::SINGLE, validator.clone(), embedded_retired_staker.clone(), ), (LaneId::SINGLE, 9), (LaneId::SINGLE, embedded_retired_staker.clone()), ) };
+    let_row! { retained_keys = ( (LaneId::SINGLE, validator.clone(), retained_staker.clone()), (LaneId::SINGLE, 8), (LaneId::SINGLE, validator.clone()), ) };
     let_row! { stake_record = |lane_id: LaneId, staker: AccountId| PublicLaneStakeShare { lane_id, validator: validator.clone(), staker, bonded: iroha_primitives::numeric::Quantity::from(1_000_u32), pending_unbonds: BTreeMap::new(), metadata: Metadata::default(), } };
     let_row! { reward_record = |lane_id: LaneId, epoch: u64| PublicLaneRewardRecord { lane_id, epoch, asset: reward_asset.clone(), total_reward: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), shares: vec![PublicLaneRewardShare { account: validator.clone(), role: PublicLaneRewardRole::Validator, amount: iroha_primitives::numeric::Quantity::from(epoch.saturating_add(1)), }], metadata: Metadata::default(), } };
     let_row! { retirement = prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id) };
@@ -15485,6 +15491,7 @@ fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Exited,
                 activation_height: 1,
+                election_exit_height: Some(2),
                 deactivation_height: Some(2),
                 last_reward_epoch: None,
             },
@@ -15506,18 +15513,22 @@ fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
         retired_keys.1,
         reward_record(retired_lane_id, retired_keys.1.1),
     );
-    state_block
-        .world
-        .public_lane_reward_claims
-        .insert(retired_keys.2.clone(), 6);
+    state_block.world.public_lane_reward_claims.insert(
+        retired_keys.2.clone(),
+        PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(6),
+        },
+    );
     state_block.world.public_lane_rewards.insert(
         embedded_retired_keys.1,
         reward_record(retired_lane_id, embedded_retired_keys.1.1),
     );
-    state_block
-        .world
-        .public_lane_reward_claims
-        .insert(embedded_retired_keys.2.clone(), 8);
+    state_block.world.public_lane_reward_claims.insert(
+        embedded_retired_keys.2.clone(),
+        PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(8),
+        },
+    );
     state_block.world.public_lane_stake_shares.insert(
         retained_keys.0.clone(),
         stake_record(LaneId::SINGLE, retained_staker),
@@ -15526,10 +15537,12 @@ fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
         retained_keys.1,
         reward_record(LaneId::SINGLE, retained_keys.1.1),
     );
-    state_block
-        .world
-        .public_lane_reward_claims
-        .insert(retained_keys.2.clone(), 7);
+    state_block.world.public_lane_reward_claims.insert(
+        retained_keys.2.clone(),
+        PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(7),
+        },
+    );
     assert!(
         state_block
             .world
@@ -15664,6 +15677,7 @@ state_test! { sync autoscale_commit_rejects_live_validator_staged_after_lifecycl
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Exited,
             activation_height: 1,
+            election_exit_height: Some(2),
             deactivation_height: Some(2),
             last_reward_epoch: None,
         }
@@ -18107,8 +18121,8 @@ state_test! { sync public_lane_economic_cleanup_keys_treat_key_or_record_lane_as
     let reward_key_owned = (reset_lane, 1);
     let reward_record_owned = (retained_lane, 2);
     let reward_retained = (retained_lane, 3);
-    let claim_reset = (reset_lane, validator.clone(), reward_asset.clone());
-    let claim_retained = (retained_lane, retained_staker.clone(), reward_asset.clone());
+    let claim_reset = (reset_lane, validator.clone());
+    let claim_retained = (retained_lane, retained_staker.clone());
     {
         let mut stake_tx = world.public_lane_stake_shares.block();
         stake_tx.insert(
@@ -18134,8 +18148,8 @@ state_test! { sync public_lane_economic_cleanup_keys_treat_key_or_record_lane_as
     }
     {
         let mut claim_tx = world.public_lane_reward_claims.block();
-        claim_tx.insert(claim_reset.clone(), 1);
-        claim_tx.insert(claim_retained.clone(), 1);
+        claim_tx.insert(claim_reset.clone(), PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
+        claim_tx.insert(claim_retained.clone(), PublicLaneRewardClaimStateV1 { through_epoch: Some(1) });
         claim_tx.commit();
     }
     let lanes_to_reset = BTreeSet::from([reset_lane]);
@@ -18225,7 +18239,7 @@ fn seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
         | PublicLaneValidatorStatus::Slashed(_) => Some(activation_height.saturating_add(1)),
         PublicLaneValidatorStatus::PendingActivation(_) | PublicLaneValidatorStatus::Active => None,
     };
-    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_height, deactivation_height, last_reward_epoch: None, } };
+    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_height, election_exit_height: deactivation_height, deactivation_height, last_reward_epoch: None, } };
     let mut block = state.world.block();
     block
         .public_lane_validators
@@ -18249,7 +18263,7 @@ fn seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
 type PublicLaneEconomicKeys = (
     (LaneId, AccountId, AccountId),
     (LaneId, u64),
-    (LaneId, AccountId, AssetId),
+    (LaneId, AccountId),
 );
 fn seed_public_lane_economic_state_for_lifecycle_test(
     state: &State,
@@ -18273,7 +18287,7 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
     let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
     let stake_key = (key_lane_id, validator.clone(), staker.clone());
     let reward_key = (key_lane_id, epoch);
-    let claim_key = (key_lane_id, validator.clone(), reward_asset.clone());
+    let claim_key = (key_lane_id, validator.clone());
     let reward_amount = Quantity::from(epoch.saturating_add(1));
     let mut block = state.world.block();
     if key_lane_id == record_lane_id {
@@ -18289,6 +18303,7 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Exited,
                 activation_height: 1,
+                election_exit_height: Some(2),
                 deactivation_height: Some(2),
                 last_reward_epoch: None,
             },
@@ -18320,9 +18335,12 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
             metadata: Metadata::default(),
         },
     );
-    block
-        .public_lane_reward_claims
-        .insert(claim_key.clone(), epoch.saturating_sub(1));
+    block.public_lane_reward_claims.insert(
+        claim_key.clone(),
+        PublicLaneRewardClaimStateV1 {
+            through_epoch: Some(epoch.saturating_sub(1)),
+        },
+    );
     block.commit();
     (stake_key, reward_key, claim_key)
 }
@@ -18603,6 +18621,7 @@ state_test! { sync apply_lane_lifecycle_rejects_exited_validator_before_deactiva
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Exited,
             activation_height: 1,
+            election_exit_height: Some(100),
             deactivation_height: Some(100),
             last_reward_epoch: None,
         },
@@ -20802,10 +20821,7 @@ state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_cu
     for pending_only in [false, true] {
         let (validator, keypair) = bls_account_in("emergency-staking");
         let custody_asset = AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("retained", "universal").unwrap(),
-                "stake".parse().unwrap(),
-            ),
+            SumeragiNposParameters::default().xor_asset_definition_id,
             validator.clone(),
         );
         let mut world = World::default();
@@ -21645,7 +21661,7 @@ state_test! { sync set_nexus_recreation_preserves_lineage_across_snapshot_and_ac
         })
         .expect("retire lane1 before simulating a restart and recreation");
     let retired_snapshot = norito::json::to_value(&state).expect("serialize retired state");
-    let_row! { mut restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
+    let_row! { mut restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(retired_snapshot) .expect("restore retired state with retained incarnation lineage") };
     assert_eq!(
         restarted.lane_incarnation_lineage_snapshot()[&LaneId::new(1)],
         historical_lineage,
@@ -25819,6 +25835,7 @@ fn insert_active_public_lane_validator_for_test(
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 0,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         },
@@ -26160,14 +26177,17 @@ fn finalize_lane_relay_batch_for_state_test(
     let_row! { mut validators = validator_keypairs .iter() .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair)) .collect::<Vec<_>>() };
     validators.sort_by(|left, right| left.0.cmp(&right.0));
     let_row! { roster = validators .iter() .map(|(validator, _)| wire::ValidatorPower { validator: validator.clone(), power: 1, }) .collect::<Vec<_>>() };
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
             *state.network_id_ref(),
             0,
+            0,
+            1,
+            height.saturating_add(100),
             &roster,
         );
     let_row! { snapshot_bootstrap = (height > 1).then(|| { let parent_height = NonZeroUsize::new(usize::try_from(height - 1).expect("relay parent height fits usize")) .expect("relay parent height is non-zero"); let parent = state .kura .get_block(parent_height) .expect("non-genesis relay finality requires a canonical parent"); wire::SnapshotBootstrapAnchor { snapshot_height: height - 1, snapshot_block_hash: parent.hash(), snapshot_block_creation_time_ms: parent.header().creation_time_ms, snapshot_state_hash: Hash::new(b"state-test-relay-snapshot-state"), } }) };
-    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
+    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
     let_row! { subject = wire::BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("encode relay finality proposal"), } };
     let_row! { executed_block_wire_len = u64::try_from( block .canonical_wire() .expect("encode relay finality carrier") .as_framed() .len(), ) .expect("relay finality carrier length fits u64") };
     let_row! { mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
@@ -27066,7 +27086,7 @@ fn merge_candidates_ignore_verified_lane_relay_record_for_future_created_autosca
 lane_relay_state_test! { merge_candidates_restart_hydrates_only_active_verified_lane_relay_records let (state, validator_keypairs) = setup_lane_relay_burn_state(); let_row! { validator_ids: Vec<_> = validator_keypairs .iter() .map(|keypair| AccountId::new(keypair.public_key().clone())) .collect() }; let signers: Vec<&KeyPair> = validator_keypairs.iter().collect(); let signers_bitmap = full_signer_bitmap(validator_keypairs.len()); let future_created_lane = LaneId::new(1);
    // The active relay belongs to the canonical single-lane snapshot. The
    // future and unknown routes below are independent adversarial records.
-let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_snapshot_metadata_through_height_for_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
+let_row! { active_envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { stale_unknown_envelope = sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap) .with_manifest_root(Some([0x77; 32])) }; let_row! { future_created_envelope = sample_lane_relay_envelope( 2, future_created_lane, &signers, full_signer_bitmap(validator_keypairs.len()), ) .with_manifest_root(Some([0x88; 32])) }; seed_snapshot_metadata_through_height_for_test(&state, 1); let active_record = sample_verified_lane_relay_record(&active_envelope); let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope); let future_created_record = sample_verified_lane_relay_record(&future_created_envelope); let mut snapshot_nexus = state.nexus_snapshot(); snapshot_nexus.autoscale.enabled = false; snapshot_nexus.lane_catalog = LaneCatalog::default(); snapshot_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&state, snapshot_nexus); let_row! { active_key = State::verified_lane_relay_state_key(&active_envelope).expect("active state key") }; let_row! { stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope) .expect("stale unknown state key") }; let_row! { future_created_key = State::verified_lane_relay_state_key(&future_created_envelope) .expect("future-created state key") }; insert_verified_lane_relay_record_state(&state, active_key.clone(), &active_record); insert_verified_lane_relay_record_state( &state, stale_unknown_key.clone(), &stale_unknown_record, ); insert_verified_lane_relay_record_state( &state, future_created_key.clone(), &future_created_record, ); assert_eq!( state .verified_lane_relay_records_from_contract_state() .len(), 3, "test setup must persist all relay records before restart" ); assert!( state.lane_relay_snapshot().is_empty(), "contract-state persistence alone must not populate the runtime relay cache" ); seed_autoscale_sample_history_for_snapshot_test(&state); let json_value = norito::json::to_value(&state).expect("serialize state snapshot"); let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") }; { let mut nexus = restarted.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } install_autoscale_elastic_catalog_for_test( &restarted, autoscale_elastic_catalog_lane_for_test(future_created_lane, 7), ); install_lane_manifest_registry( &restarted, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)], ); assert_eq!( restarted .verified_lane_relay_records_from_contract_state() .len(), 3, "restart should recover all persisted canonical relay records before hydration filters apply" ); assert!(restarted.lane_relay_snapshot().is_empty()); assert!(restarted.merge_active_lane_authority_snapshot(2).is_err(), "a future-created catalog lane must prevent an incomplete global authority catalog"); let mut repaired_nexus = restarted.nexus_snapshot(); repaired_nexus.autoscale.enabled = false; repaired_nexus.lane_catalog = LaneCatalog::default(); repaired_nexus.lane_config = RuntimeLaneConfig::default(); install_existing_nexus_geometry_for_test(&restarted, repaired_nexus);
    install_lane_manifest_registry_for_keypairs(&restarted, &[LaneId::SINGLE], &validator_keypairs);
    let carrier_height = u64::try_from(restarted.committed_height()).expect("fixture height fits u64") + 1;
    assert_eq!(carrier_height, 2, "restored relay source supplies the next global carrier parent");
@@ -27204,7 +27224,7 @@ fn merge_candidates_restart_rejects_replayed_verified_relay_from_old_lane_incarn
     }
     seed_autoscale_sample_history_for_snapshot_test(&state);
     let json_value = norito::json::to_value(&state).expect("serialize state snapshot");
-    let_row! { restarted = deserialize::KuraSeed { lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
+    let_row! { restarted = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: state.lane_manifests.read().clone(), kura: Arc::clone(&state.kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(json_value) .expect("deserialize restarted state") };
     {
         let mut nexus = restarted.nexus.write();
         nexus.fees.settlement_mode =
@@ -27794,6 +27814,7 @@ state_test! { sync lane_relay_validator_pool_uses_stake_when_no_manifest
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 0,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         },
@@ -28289,6 +28310,7 @@ state_test! { sync lifecycle_rejects_full_dataspace_retirement_with_exited_pendi
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Exited,
                 activation_height: 0,
+                election_exit_height: Some(2),
                 deactivation_height: Some(2),
                 last_reward_epoch: None,
             },
@@ -28681,6 +28703,7 @@ state_test! { sync authoritative_lane_peers_for_stake_elected_lane_require_prese
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 0,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -30063,6 +30086,7 @@ state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         },
@@ -32166,7 +32190,7 @@ state_test! { sync both_state_constructors_account_exactly_for_distinct_journal_
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
         let expected = seed_distinct_state_journal_main_and_temp_files(&kura);
-        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
+        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(), lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
         assert_eq!(state.query_index_status_snapshot(), expected.query_index);
         assert_eq!(
             state.query_projection_checkpoint_snapshot(),
@@ -39095,7 +39119,7 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
         &lane_config,
     )
     .expect("reopen Fast Kura fixture");
-    let seed = || deserialize::KuraSeed {
+    let seed = || deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura: Arc::clone(&fast_kura),
         query_handle: LiveQueryStore::start_test(),
@@ -40517,6 +40541,7 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },

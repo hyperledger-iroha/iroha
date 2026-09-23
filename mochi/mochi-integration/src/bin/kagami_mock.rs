@@ -366,7 +366,7 @@ mod tests {
     use iroha_data_model::{
         block::decode_framed_signed_block,
         isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         },
     };
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
@@ -408,12 +408,11 @@ mod tests {
             })
             .collect();
         let parameters = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         };
         parameters
             .validate()

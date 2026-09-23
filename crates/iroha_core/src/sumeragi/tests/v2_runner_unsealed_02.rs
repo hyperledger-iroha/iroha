@@ -1671,8 +1671,8 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
         None,
     );
     let notification = concread::release::ReleaseNotification::default();
-    let error = crate::state::StateBlockStartError::<()>::History(
-        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+    let error = crate::state::StateBlockStartError::<()>::Storage(
+        crate::state::StateStorageAdmissionError::Busy(notification.observe()),
     );
     let wake = std::task::Waker::noop();
     let mut state = LocalProposalState::default();
@@ -1684,8 +1684,8 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
     drop(notification.guard(()));
     assert!(!state.history_admission_pending(owner, wake));
     assert!(state.is_pristine());
-    let error = crate::state::StateBlockStartError::<()>::History(
-        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+    let error = crate::state::StateBlockStartError::<()>::Storage(
+        crate::state::StateStorageAdmissionError::Busy(notification.observe()),
     );
     assert!(state.defer_history_admission(owner, &error, wake));
     state.reconcile(next);

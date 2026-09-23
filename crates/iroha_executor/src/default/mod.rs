@@ -3722,9 +3722,47 @@ pub mod asset {
         #[test]
         fn public_staking_lifecycle_and_custody_reach_core_for_ordinary_accounts() {
             use crate::data_model::isi::staking::*;
-            let (_, asset) = StubExecutor::new(2);
-            let owner = asset.account().clone();
+            use crate::data_model::nexus::{
+                PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1,
+                PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+                PublicLaneRegistrationPreconditionV1, PublicLaneRewardClaimPlanV1,
+                PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbondPreconditionV1,
+            };
+            let (_, sample_asset) = StubExecutor::new(2);
+            let owner = sample_asset.account().clone();
+            let asset = AssetId::new(
+                crate::data_model::parameter::system::SumeragiNposParameters::default()
+                    .xor_asset_definition_id,
+                owner.clone(),
+            );
             let peer = PeerId::new(owner.expect_single_signatory().clone());
+            let network_id = crate::data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"executor-staking-routing",
+                )),
+            );
+            let registration_plan = PublicLaneMonetaryPlanV1 {
+                network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+                valid_until_height: 2,
+                source_asset: asset.clone(),
+                destination_asset: asset.clone(),
+                amount: Quantity::from(1_u64),
+                precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                    PublicLaneRegistrationPreconditionV1 {
+                        activation_height: 3,
+                    },
+                ),
+            };
+            let rebind_key = fixture_key_pair(44);
+            let rebind_peer = PeerId::new(rebind_key.public_key().clone());
+            let rebind_consent = PublicLanePeerBindingAuthorization::new(
+                network_id,
+                LaneId::SINGLE,
+                owner.clone(),
+                rebind_peer.clone(),
+                3,
+                peer.clone(),
+            );
             let request_id = iroha_crypto::Hash::new(b"staking-withdrawal");
             let instructions: Vec<InstructionBox> = vec![
                 RegisterPublicLaneValidator::new(
@@ -3734,6 +3772,7 @@ pub mod asset {
                     owner.clone(),
                     Quantity::from(1_u64),
                     Metadata::default(),
+                    registration_plan.clone(),
                 )
                 .into(),
                 ActivatePublicLaneValidator::new(LaneId::SINGLE, owner.clone()).into(),
@@ -3743,13 +3782,29 @@ pub mod asset {
                     release_at_ms: 1,
                 }
                 .into(),
-                RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, owner.clone(), peer).into(),
+                RebindPublicLaneValidatorPeer::new(
+                    LaneId::SINGLE,
+                    owner.clone(),
+                    rebind_peer,
+                    iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
+                        .expect("executor staking rebind consent"),
+                )
+                .into(),
                 BondPublicLaneStake {
                     lane_id: LaneId::SINGLE,
                     validator: owner.clone(),
                     staker: owner.clone(),
                     amount: Quantity::from(1_u64),
                     metadata: Metadata::default(),
+                    monetary_plan: PublicLaneMonetaryPlanV1 {
+                        precondition: PublicLaneMonetaryPreconditionV1::Bond(
+                            PublicLaneBondPreconditionV1 {
+                                activation_height: 3,
+                                peer_id: peer.clone(),
+                            },
+                        ),
+                        ..registration_plan.clone()
+                    },
                 }
                 .into(),
                 SchedulePublicLaneUnbond {
@@ -3766,12 +3821,27 @@ pub mod asset {
                     validator: owner.clone(),
                     staker: owner.clone(),
                     request_id,
+                    monetary_plan: PublicLaneMonetaryPlanV1 {
+                        precondition: PublicLaneMonetaryPreconditionV1::Unbond(
+                            PublicLaneUnbondPreconditionV1 {
+                                activation_height: 3,
+                                request_hash: request_id,
+                            },
+                        ),
+                        ..registration_plan
+                    },
                 }
                 .into(),
                 ClaimPublicLaneRewards {
                     lane_id: LaneId::SINGLE,
                     account: owner.clone(),
-                    upto_epoch: None,
+                    claim_plan: PublicLaneRewardClaimPlanV1 {
+                        network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
+                        valid_until_height: 2,
+                        expected_state: None,
+                        records: vec![],
+                        sources: vec![],
+                    },
                 }
                 .into(),
                 RecordPublicLaneRewards {
@@ -3779,7 +3849,11 @@ pub mod asset {
                     epoch: 0,
                     reward_asset: asset,
                     total_reward: Quantity::from(1_u64),
-                    shares: Vec::new(),
+                    shares: vec![PublicLaneRewardShare {
+                        account: owner,
+                        role: PublicLaneRewardRole::Validator,
+                        amount: Quantity::from(1_u64),
+                    }],
                     metadata: Metadata::default(),
                 }
                 .into(),
@@ -3809,8 +3883,13 @@ pub mod asset {
         }
         #[test]
         fn visit_instruction_dispatches_register_public_lane_validator() {
-            let (mut executor, asset) = StubExecutor::new(1);
-            let validator = asset.account().clone();
+            let (mut executor, sample_asset) = StubExecutor::new(1);
+            let validator = sample_asset.account().clone();
+            let asset = AssetId::new(
+                crate::data_model::parameter::system::SumeragiNposParameters::default()
+                    .xor_asset_definition_id,
+                validator.clone(),
+            );
             let instruction = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator.clone(),
@@ -3818,6 +3897,11 @@ pub mod asset {
                 validator,
                 Quantity::from(1_u64),
                 Metadata::default(),
+                crate::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    asset.clone(),
+                    asset,
+                    Quantity::from(1_u64),
+                ),
             );
             let instruction_box: InstructionBox = instruction.into();
             visit_instruction(&mut executor, &instruction_box);
@@ -4139,6 +4223,13 @@ pub mod parameter {
     }
     /// Applies a network parameter change when genesis or a parameter manager invokes it.
     pub fn visit_set_parameter<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &SetParameter) {
+        // Preparation commands have exact validator-owner authorization in Core and
+        // never change a parameter or grant committee activation authority.
+        if matches!(isi.inner(), Parameter::Custom(custom)
+            if custom.id() == &iroha_data_model::nexus::ValidatorCommitteeOperationV1::parameter_id())
+        {
+            execute!(executor, isi);
+        }
         if updates_sccp_governance(isi) {
             deny!(
                 executor,

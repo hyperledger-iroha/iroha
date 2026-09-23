@@ -54,7 +54,7 @@ pub(crate) use persistence::{
 };
 pub(crate) use process::{
     LaneClosedInstance, LanePhysicalPool, LanePhysicalShutdown, LaneProcessLimits,
-    LaneProcessOwner, LaneProcessProgress, LaneWorkerClass,
+    LaneProcessOwner, LaneProcessProgress, LaneWorkerClass, NativeLaneRetirementReceipt,
 };
 #[cfg(test)]
 pub(crate) use process::{LanePhysicalCompletion, LaneProcessOccupancy};

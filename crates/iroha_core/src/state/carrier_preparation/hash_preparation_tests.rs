@@ -230,7 +230,11 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
             state
                 .world
                 .block()
-                .try_detach_journals(|_| Ok::<_, ()>(()))
+                .try_detach_journals(
+                    crate::state::world_journals::resources::WorldJournalShellReservation::for_test(
+                    ),
+                    |_| Ok::<_, ()>(()),
+                )
                 .unwrap()
         };
         let mut observation = Some(capture_world());

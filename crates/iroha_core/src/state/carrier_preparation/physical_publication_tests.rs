@@ -57,12 +57,16 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
         context: &HeightContext,
         body: &SignedBlock,
     ) -> Result<Self::Owner, Self::Error> {
+        let journal_shells = crate::state::PreparedCarrier::reserve_journal_shells_for_test();
         self.calls.fetch_add(1, Ordering::SeqCst);
         let prepared = prepare(&self.state, body.clone(), &self.topology, context)
             .map_err(|(_, error)| error.to_string())?;
-        match prepared.prepare_journals(self.provider.take(), self.reputation.take(), |_| {
-            Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases)))
-        }) {
+        match prepared.prepare_journals(
+            journal_shells,
+            self.provider.take(),
+            self.reputation.take(),
+            |_| Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases))),
+        ) {
             Ok(journals) => Ok(RetainedPhase::Validated(journals)),
             Err(super::super::super::CarrierJournalPreparationError::ArchivePreparation {
                 carrier,
@@ -859,7 +863,12 @@ fn decided<A, B>(
 ) -> CheckpointDecision<A, B> {
     let journals = prepare(state, proposal, topology, context)
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(admission))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(admission),
+        )
         .unwrap();
     bind_and_persist(state, context, journals, binding)
 }
@@ -951,9 +960,12 @@ fn fixture_archive_decision() -> (
         .unwrap();
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real archive execution: {error}"))
-        .prepare_journals(Some(provider_candidate), Some(reputation_candidate), |_| {
-            Ok::<_, Infallible>(())
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            Some(provider_candidate),
+            Some(reputation_candidate),
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let decision = bind_and_persist(&state, &context, journals, ());
     (directory, state, decision, provider, reputation)
@@ -1455,7 +1467,12 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
         ]);
     let mut foreign = prepare(&foreign_state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("foreign real execution: {error}"))
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let generation = state.state_view_generation();
@@ -1847,7 +1864,10 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     let world_probe = state
         .world
         .block()
-        .try_detach_journals(|_| Ok::<_, Infallible>(()))
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let runtime_probe = super::super::super::runtime_journals::RuntimeJournals::capture(
         state.canonical_runtime.block(),
@@ -1873,7 +1893,7 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
-        world_probe.try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(())),
+        world_probe.try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(())),
         Err((_, WorldPublicationError::Field(_), _))
     ));
     assert!(matches!(
@@ -2740,11 +2760,14 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
         let competitor = state
             .world
             .block()
-            .try_detach_journals(|_| Ok::<_, Infallible>(()))
+            .try_detach_journals(
+                crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+                |_| Ok::<_, Infallible>(()),
+            )
             .unwrap();
         let prepared = acquire(decision, &state);
         let (competitor, error, _cleanup) = competitor
-            .try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(()))
             .err()
             .unwrap();
         drop(_cleanup);

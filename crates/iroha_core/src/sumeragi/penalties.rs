@@ -324,7 +324,7 @@ impl<'a> PenaltyApplier<'a> {
                         slash_id,
                         amount,
                     };
-                    let mut transaction = scratch.consensus_effects_transaction();
+                    let mut transaction = scratch.consensus_effects_transaction()?;
                     apply_indexed_slash_to_validator_without_observability(
                         &mut transaction,
                         slash.lane_id,
@@ -414,7 +414,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
     current_view: u64,
     now_ms: u64,
 ) -> Result<()> {
-    let mut tx = state_block.consensus_effects_transaction();
+    let mut tx = state_block.consensus_effects_transaction()?;
     apply_npos_consensus_effects_to_transaction_inner(
         &mut tx,
         effects,
@@ -872,6 +872,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -1063,8 +1064,10 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
+                network_id, 0, 0, 1, 100, &roster,
+            );
         HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -1077,8 +1080,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1775,7 +1778,9 @@ mod tests {
             let mut scratch = state
                 .consensus_effects_probe_block(penalty_header(2))
                 .unwrap();
-            let mut transaction = scratch.consensus_effects_transaction();
+            let mut transaction = scratch
+                .consensus_effects_transaction()
+                .expect("fixture consensus-effects transaction admission");
             apply_slash_to_validator_without_observability(
                 &mut transaction,
                 LaneId::SINGLE,
@@ -2256,7 +2261,9 @@ mod tests {
 
         let witness_guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,

@@ -1,9 +1,8 @@
 //! Daemon dependency admission simulations; no metadata value qualifies physical signer.
 use super::*;
 use iroha_torii::sorafs::{
-    StreamTokenApprovedCustodyAnchorV1, StreamTokenSignerCallErrorV1,
-    StreamTokenSignerClientV1, StreamTokenSignerReceiptV1, StreamTokenObserverReplyV1,
-    StreamTokenStateObserverClientV1,
+    StreamTokenApprovedCustodyAnchorV1, StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1,
+    StreamTokenSignerClientV1, StreamTokenSignerReceiptV1, StreamTokenStateObserverClientV1,
 };
 use sorafs_manifest::{
     StreamTokenBodyV1,

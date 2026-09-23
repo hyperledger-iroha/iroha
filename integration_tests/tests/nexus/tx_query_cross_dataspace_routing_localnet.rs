@@ -39,6 +39,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
@@ -78,10 +79,7 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
 const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    nexus_fee_asset_definition_id()
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
@@ -347,19 +345,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 __asset_definition_id.clone(),
-                "xor".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .into(),
-        Register::asset_definition({
-            let __asset_definition_id = fee_asset_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "xor".to_owned(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -435,6 +424,11 @@ fn npos_multilane_genesis_post_topology_transactions(
                 validator_id.clone(),
                 Quantity::from(VALIDATOR_STAKE),
                 Metadata::default(),
+                iroha::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                    AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    AssetId::new(stake_asset_id.clone(), routing_probe_gas_account_id()),
+                    Quantity::from(VALIDATOR_STAKE),
+                ),
             )
             .into(),
         );
@@ -1595,14 +1589,14 @@ mod tests {
         assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
     #[test]
-    fn fixture_asset_helpers_keep_stake_and_fee_ids_distinct() {
+    fn fixture_asset_helpers_use_one_real_network_xor() {
         let stake_definition_id = stake_asset_definition_id();
         let fee_definition_id = nexus_fee_asset_definition_id();
         assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
-        assert_ne!(
+        assert_eq!(stake_definition_id, fee_definition_id);
+        assert_eq!(
             stake_definition_id.to_string(),
-            fee_definition_id.to_string(),
-            "stake and fee helpers should preserve their separate asset-definition domains"
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         );
     }
     #[test]
@@ -1637,7 +1631,7 @@ mod tests {
         let topology = deterministic_topology(TOTAL_PEERS);
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
         assert_eq!(transactions.len(), 1);
-        assert_eq!(transactions[0].len(), 12 + LANE_VALIDATOR_COUNT * 5);
+        assert_eq!(transactions[0].len(), 11 + LANE_VALIDATOR_COUNT * 5);
         let lane_registrations = transactions[0]
             .iter()
             .filter_map(|instruction| {

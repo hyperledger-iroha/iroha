@@ -165,3 +165,7 @@ path = "tests/json_object_key_contract.rs"
 [[test]]
 name = "manual_frame_identity"
 path = "tests/manual_frame_identity.rs"
+
+[[test]]
+name = "validator_staking_sdk_fixtures"
+path = "tests/validator_staking_sdk_fixtures.rs"

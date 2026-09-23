@@ -294,6 +294,7 @@ fn native_economic_fixture_from_state_with_initializer(
     );
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
+    seed_committee_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
         &state,
         &[

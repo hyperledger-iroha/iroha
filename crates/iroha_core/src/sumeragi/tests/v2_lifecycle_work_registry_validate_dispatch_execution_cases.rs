@@ -4916,10 +4916,8 @@ mod retained_dispatch {
         let wait = dispatch.wait_token_for_test();
         let (mut service, observed) = service(&store, &durable, true);
         let mut allocation = None;
-        for fault in [
-            fail_next_marker_file_sync as fn(),
-            fail_next_marker_directory_sync,
-        ] {
+        let faults: [fn(); 2] = [fail_next_marker_file_sync, fail_next_marker_directory_sync];
+        for fault in faults {
             fault();
             let (error, returned) = dispatch
                 .execute_retained(&mut store, &mut service)
@@ -5127,11 +5125,13 @@ mod retained_dispatch {
     fn retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner() {
         let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xC5);
         let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
-        store
+        let outcome = store
             .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                 Ok::<_, DetachedValidationError>(commitment)
             })
             .unwrap();
+        assert_eq!(outcome.durable_body(), &durable);
+        assert!(outcome.validated_receipt().is_some());
         let mut coordinator = claimed_durable_validate_coordinator(&fixture);
         let mut holder = take_dispatch_registry(&mut fixture);
         let dispatch = coordinator

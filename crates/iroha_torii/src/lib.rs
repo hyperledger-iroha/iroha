@@ -75,6 +75,8 @@ mod parliament_tle_release;
 pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
+mod staking_preparation;
+mod validator_committee;
 #[cfg(test)]
 use iroha_data_model::events::trigger_completed::TriggerCompletedEvent;
 mod canonical_history;
@@ -88,6 +90,8 @@ mod vpn;
 #[cfg(test)]
 use ledger_state_finality::StateFinalityResponse;
 use ledger_state_finality::{handler_ledger_state_proof, handler_ledger_state_root};
+use staking_preparation::handler_staking_preparation;
+use validator_committee::handler_validator_committee_status;
 pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -44403,6 +44407,8 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            NEXUS_VALIDATOR_COMMITTEE_GET => public_get(handler_validator_committee_status);
+            NEXUS_STAKING_PREPARATION_POST => limited_public_post(handler_staking_preparation, iroha_data_model::nexus::PUBLIC_LANE_PREPARATION_REQUEST_MAX_BYTES);
             NFT_OFFER_CAPABILITIES => public_get(handler_nft_offer_capabilities);
             NFT_OFFER_LIST => public_get(handler_nft_offer_list);
             NFT_OFFER_GET => public_get(handler_nft_offer_get);

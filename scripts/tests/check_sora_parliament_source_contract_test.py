@@ -94,6 +94,124 @@ def test_complete_source_contract_baseline() -> None:
     assert guard.main() == 0
 
 
+def test_encrypted_beacon_dkg_source_baseline() -> None:
+    """The current public model and reducer require signed private edges."""
+    guard.require_encrypted_beacon_dkg_source(
+        guard.read("crates/iroha_data_model/src/consensus.rs"),
+        guard.read("crates/iroha_core/src/beacon.rs"),
+    )
+
+
+@pytest.mark.parametrize(
+    "original,replacement",
+    (
+        ("pub mlkem768_public_key: Vec<u8>,", "pub legacy_key: Vec<u8>,"),
+        ("pub encrypted_share: Vec<u8>,", "pub revealed_share: Vec<u8>,"),
+        ("pub share_acceptances: Vec<GlobalThresholdBeaconDkgShareAcceptanceV1>,",
+         "pub complaint_responses: Vec<GlobalThresholdBeaconDkgShareAcceptanceV1>,"),
+    ),
+)
+def test_encrypted_beacon_dkg_rejects_retired_public_layout(
+    original: str, replacement: str
+) -> None:
+    """No legacy key, plaintext share or complaint-response alias is admitted."""
+    model = guard.read("crates/iroha_data_model/src/consensus.rs")
+    core = guard.read("crates/iroha_core/src/beacon.rs")
+    assert original in model
+    with pytest.raises(RuntimeError, match="retired public DKG layout|exact signed encrypted DKG fields"):
+        guard.require_encrypted_beacon_dkg_source(
+            model.replace(original, replacement, 1), core
+        )
+
+
+@pytest.mark.parametrize(
+    "original,replacement",
+    (
+        ("|| self.encrypted_shares.len() != all_edges",
+         "&& self.encrypted_shares.len() != all_edges"),
+        ("|| self.share_acceptances.len() != all_edges",
+         "&& self.share_acceptances.len() != all_edges"),
+        ("|| transcript.share_acceptances.len() != all_edges",
+         "&& transcript.share_acceptances.len() != all_edges"),
+    ),
+)
+def test_encrypted_beacon_dkg_rejects_partial_finalization(
+    original: str, replacement: str
+) -> None:
+    """Neither public finalization nor readback can accept incomplete edges."""
+    model = guard.read("crates/iroha_data_model/src/consensus.rs")
+    core = guard.read("crates/iroha_core/src/beacon.rs")
+    assert original in core
+    with pytest.raises(RuntimeError, match="missing modeled source binding"):
+        guard.require_encrypted_beacon_dkg_source(
+            model, core.replace(original, replacement, 1)
+        )
+
+
+def test_signed_staking_fee_boundary_baseline() -> None:
+    """Opaque nested staking is rejected before the optional fee-policy return."""
+    guard.require_signed_staking_fee_boundary(
+        guard.read("crates/iroha_core/src/validation_fee.rs"),
+        guard.read("crates/iroha_core/src/validation_fee/committee_effects.rs"),
+        guard.read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
+    )
+
+
+@pytest.mark.parametrize(
+    "path,original,replacement",
+    (
+        (
+            "crates/iroha_core/src/validation_fee.rs",
+            "committee_effects::reject_opaque_committee_operations_with(",
+            "committee_effects::unchecked_opaque_operations(",
+        ),
+        (
+            "crates/iroha_core/src/validation_fee/committee_effects.rs",
+            "staking_effects::monetary_staking_wire_id(instruction)",
+            "None::<&'static str>",
+        ),
+        (
+            "crates/iroha_core/src/validation_fee/committee_effects.rs",
+            "Executable::IvmProved(proved)",
+            "Executable::IvmProved(_)\n                if false",
+        ),
+        (
+            "crates/iroha_core/src/validation_fee/staking_effects.rs",
+            "        BondPublicLaneStake,\n        FinalizePublicLaneUnbond,\n        SlashPublicLaneValidator,",
+            "        BondPublicLaneStake,\n        NonMonetaryWithdrawal,\n        SlashPublicLaneValidator,",
+        ),
+        (
+            "crates/iroha_core/src/validation_fee/staking_effects.rs",
+            "native_staking_leg: true,", "native_staking_leg: false,",
+        ),
+        (
+            "crates/iroha_core/src/validation_fee.rs",
+            "transfer.native_staking_leg", "false",
+        ),
+    ),
+)
+def test_signed_staking_fee_boundary_rejects_omitted_guards(
+    path: str, original: str, replacement: str
+) -> None:
+    """Policy absence, nested overlays and distinct fee assets cannot mask a leg."""
+    sources = {
+        name: guard.read(name)
+        for name in (
+            "crates/iroha_core/src/validation_fee.rs",
+            "crates/iroha_core/src/validation_fee/committee_effects.rs",
+            "crates/iroha_core/src/validation_fee/staking_effects.rs",
+        )
+    }
+    assert original in sources[path]
+    sources[path] = sources[path].replace(original, replacement, 1)
+    with pytest.raises(RuntimeError, match="missing modeled source binding"):
+        guard.require_signed_staking_fee_boundary(
+            sources["crates/iroha_core/src/validation_fee.rs"],
+            sources["crates/iroha_core/src/validation_fee/committee_effects.rs"],
+            sources["crates/iroha_core/src/validation_fee/staking_effects.rs"],
+        )
+
+
 def test_source_contract_cli_help() -> None:
     """The read-only command documents its prerequisites without checking sources."""
     result = subprocess.run(
@@ -244,8 +362,14 @@ def test_production_checker_enforces_repaired_guards(
 
 
 STATE_PATH = "crates/iroha_core/src/state.rs"
-EXPIRY_CALL = "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h);"
-ENACTMENT_CALL = "Self::apply_block_start_parliament_enactments(&mut sb, now_h);"
+EXPIRY_CALL = (
+    "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)\n"
+    "            .map_err(StateBlockStartError::Storage)?;"
+)
+ENACTMENT_CALL = (
+    "Self::apply_block_start_parliament_enactments(&mut sb, now_h)\n"
+    "            .map_err(StateBlockStartError::Storage)?;"
+)
 
 
 def test_block_start_phase_helpers_preserve_original_order_and_custody() -> None:
@@ -272,7 +396,8 @@ CONSTRUCTION_PATH = "crates/iroha_core/src/state/state_block_construction.rs"
     ("helper", "let mut original = Some(acquired);", "let mut original = Some(other);"),
     ("helper", "finish_state_block_construction(|| {", "finish_state_block_construction(move || {"),
     ("fields", "                world,", "                world: World::default().block(),"),
-    ("fields", "                transactions,", "                transactions: other_transactions,"),
+    ("fields", "transactions: storage_transactions::TransactionsBlockField::new(transactions),",
+     "transactions: storage_transactions::TransactionsBlockField::new(other_transactions),"),
     ("fields", "_curr_block: curr_block,", "_curr_block: other_header,"),
     ("fields", "start_of_block_effects_applied: false,", "start_of_block_effects_applied: true,"),
     ("fields", "pending_parliament_telemetry_events\n                    .take()",
@@ -353,10 +478,13 @@ def test_block_start_phase_calls_reject_disconnected_or_late_owners(mutation: st
 
 @pytest.mark.parametrize("original,replacement", (
     ("barrier.manifest.expiry_height < now_h", "barrier.manifest.expiry_height <= now_h"),
+    ("let mut expiry = sb.try_transaction()?;", "let mut expiry = sb.try_transaction().unwrap();"),
     ("expiry.apply();", "drop(expiry);"),
     ("*enact_at_height < now_h", "*enact_at_height > now_h"),
     (".get(&now_h)", ".get(&(now_h + 1))"),
     ("drop(enactment);", "enactment.apply();"),
+    ("let mut enactment = sb.try_transaction()?;", "let mut enactment = sb.try_transaction().unwrap();"),
+    ("let mut failure = sb.try_transaction()?;", "let mut failure = sb.try_transaction().unwrap();"),
     ("failure.apply();", "drop(failure);"),
     ("let due_parliament_certificates = sb", "let _ = sb.world.parliament_attempts.iter();\n        let due_parliament_certificates = sb"),
 ))
@@ -380,6 +508,8 @@ def test_block_start_phase_bodies_reject_changed_height_or_rollback(
     ("self.acquire_canonical_runtime_block(false)?", "self.acquire_canonical_runtime_block(false).unwrap()"),
     ("self.acquire_canonical_runtime_block(false)?", "self.acquire_canonical_runtime_block(true)?"),
     ("before_start(&mut sb).map_err(StateBlockStartError::Stage)?", "before_start(&mut sb).unwrap()"),
+    (EXPIRY_CALL, "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h).unwrap();"),
+    (ENACTMENT_CALL, "Self::apply_block_start_parliament_enactments(&mut sb, now_h).unwrap();"),
     ("after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?", "after_start(&mut sb, continuation).unwrap()"),
 ))
 def test_block_start_admission_and_stage_refusals_remain_typed(
@@ -452,7 +582,7 @@ def test_prepared_parliament_commit_publication_baseline_and_entrypoint() -> Non
     "writer_removed", "generation_removed", "writer_early_drop", "conditional_world",
     "replay_prevalidation", "authenticated_replay", "transitions_outside_replay_guard",
     "gauges_inside_replay_guard", "duplicate_publisher", "early_telemetry", "missing_cfg",
-    "hash_prepare_refusal", "hash_cleanup_before_commit_unlock", "hash_cleanup_declared_after_commit_lock",
+    "hash_prepare_refusal", "commit_lock_early_drop", "commit_lock_after_prepare",
 ))
 def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutation: str) -> None:
     """Complete Rust statements cannot bypass refusals, publish early, or recount replay."""
@@ -460,57 +590,64 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
     guard.require_parliament_commit_publication(source)
     commit = guard.section(source, "    fn commit_inner(",
                            "    fn mint_canonical_carrier_commit_metadata_authorization(", STATE_PATH)
-    telemetry_start = commit.index('        #[cfg(feature = "telemetry")]\n        if !replay_prevalidation {',
+    telemetry_start = commit.index('        #[cfg(feature = "telemetry")]\n        if !*replay_prevalidation {',
                                    commit.index("drop(autoscale_lifecycle_guard);"))
     telemetry_end = commit.index("        if !verified_lane_relay_records.is_empty()", telemetry_start)
     telemetry = commit[telemetry_start:telemetry_end]
     changed = commit
     if mutation == "world_refusal":
-        anchor = "TransactionsBlockError::WorldCommitPreparation\n        })?;"
+        anchor = "TransactionsBlockError::WorldCommitPreparation\n        })?);"
         assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, anchor.replace("})?;", "}).unwrap();"), 1)
+        changed = commit.replace(anchor, anchor.replace("})?);", "}).unwrap());"), 1)
     elif mutation == "geometry_refusal":
-        changed = commit.replace("return Err(TransactionsBlockError::from(err));", "", 1)
+        geometry = guard.section(commit, "if let Err(err) = geometry_result {",
+                                 "autoscale_start.elapsed()", STATE_PATH)
+        assert geometry.count("return Err(TransactionsBlockError::from(err));") == 1
+        changed = commit.replace(geometry,
+                                 geometry.replace("return Err(TransactionsBlockError::from(err));", "", 1), 1)
     elif mutation == "hash_prepare_refusal":
         anchor = (
-            ".map_err(|(_, _, cleanup)| {\n"
-            "                    hash_refusal_cleanup = Some(cleanup);\n"
-            "                    TransactionsBlockError::SnapshotObservationChanged\n"
-            "                })?;"
+            "block_hashes.try_prepare_publication().map_err(|_| {\n"
+            "                TransactionsBlockError::SnapshotObservationChanged\n"
+            "            })?;"
         )
         assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, ".unwrap();", 1)
-    elif mutation == "hash_cleanup_before_commit_unlock":
-        changed = commit.replace("        drop(hash_retirement);", "", 1).replace(
-            "        drop(_state_commit_lock);", "        drop(hash_retirement);\n        drop(_state_commit_lock);", 1)
-    elif mutation == "hash_cleanup_declared_after_commit_lock":
-        changed = commit.replace("        let hash_retirement;", "", 1).replace(
-            "let _state_commit_lock = state_ref.state_commit_lock.lock();",
-            "let _state_commit_lock = state_ref.state_commit_lock.lock();\n        let hash_retirement;", 1)
+        changed = commit.replace(anchor, "block_hashes.try_prepare_publication().unwrap();", 1)
+    elif mutation == "commit_lock_early_drop":
+        changed = commit.replace("        drop(_state_commit_lock);", "", 1).replace(
+            "            world.publish_prepared();",
+            "            drop(_state_commit_lock);\n            world.publish_prepared();", 1)
+    elif mutation == "commit_lock_after_prepare":
+        changed = commit.replace("        let _state_commit_lock = commit_fence.lock();", "", 1).replace(
+            "        tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(",
+            "        let _state_commit_lock = commit_fence.lock();\n"
+            "        tiered_snapshot = Some(tiered_publication::PreparedTieredSnapshot::prepare(", 1)
     elif mutation == "world_drop":
-        changed = commit.replace("world.commit();", "drop(world);", 1)
+        changed = commit.replace("world.publish_prepared();", "drop(world);", 1)
     elif mutation == "hash_drop":
-        changed = commit.replace("hash_retirement = block_hashes.publish();", "drop(block_hashes);", 1)
+        changed = commit.replace("block_hashes.publish_prepared();", "drop(block_hashes);", 1)
     elif mutation == "swapped_commits":
-        changed = commit.replace("world.commit();", "SWAP_COMMIT", 1).replace(
-            "hash_retirement = block_hashes.publish();", "world.commit();", 1).replace("SWAP_COMMIT", "hash_retirement = block_hashes.publish();", 1)
+        changed = commit.replace("world.publish_prepared();", "SWAP_COMMIT", 1).replace(
+            "block_hashes.publish_prepared();", "world.publish_prepared();", 1).replace(
+                "SWAP_COMMIT", "block_hashes.publish_prepared();", 1)
     elif mutation in ("writer_removed", "generation_removed", "writer_early_drop", "conditional_world"):
-        publication = guard.section(commit, "        let mut lifecycle_post_publication = None;",
-                                    "        if let Some(post) = lifecycle_post_publication", STATE_PATH)
+        publication = guard.section(commit, "        let autoscale_storage_hold =",
+                                    "        if let Some(post) = lifecycle_post_publication.as_mut()", STATE_PATH)
         if mutation == "writer_removed":
-            replacement = publication.replace("let _state_write_lock = state_write_lock.lock();", "", 1)
+            replacement = publication.replace("let _state_write_lock = write_fence.lock();", "", 1)
         elif mutation == "generation_removed":
             replacement = publication.replace("let _view_generation = publication_notice.begin();", "", 1)
         elif mutation == "writer_early_drop":
-            replacement = publication.replace("transactions.publish();",
-                "drop(_state_write_lock);\n            transactions.publish();", 1)
+            replacement = publication.replace("transactions.publish_prepared();",
+                "drop(_state_write_lock);\n            transactions.publish_prepared();", 1)
         else:
-            replacement = publication.replace("world.commit();", "if false { world.commit(); }", 1)
+            replacement = publication.replace("world.publish_prepared();",
+                                              "if false { world.publish_prepared(); }", 1)
         changed = commit.replace(publication, replacement, 1)
     elif mutation in ("replay_prevalidation", "authenticated_replay", "missing_cfg", "duplicate_publisher"):
         old, new = {
-            "replay_prevalidation": ("if !replay_prevalidation {", "if true {"),
-            "authenticated_replay": ("if !authenticated_replay_commit {", "if true {"),
+            "replay_prevalidation": ("if !*replay_prevalidation {", "if true {"),
+            "authenticated_replay": ("if !*authenticated_replay_commit {", "if true {"),
             "missing_cfg": ('#[cfg(feature = "telemetry")]', ""),
             "duplicate_publisher": (
                 ".record_committed_parliament_transition(transition, no_result_kind);",
@@ -519,10 +656,10 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(mutat
         }[mutation]
         changed = commit.replace(telemetry, telemetry.replace(old, new, 1), 1)
     elif mutation == "transitions_outside_replay_guard":
-        old = "            if !authenticated_replay_commit {\n"
+        old = "            if !*authenticated_replay_commit {\n"
         moved = telemetry.replace(old, "", 1).replace(
             "                }\n            }\n            if let Some(counts)",
-            "                }\n            if !authenticated_replay_commit {}\n            if let Some(counts)", 1)
+            "                }\n            if !*authenticated_replay_commit {}\n            if let Some(counts)", 1)
         changed = commit.replace(telemetry, moved, 1)
     elif mutation == "gauges_inside_replay_guard":
         moved = telemetry.replace("                }\n            }\n            if let Some(counts)",

@@ -1110,12 +1110,16 @@ impl FundingCertificate {
             })
             .collect::<Vec<_>>();
         validators.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
+        let roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
             statement.lifecycle.network_id,
             0,
             &validators,
         );
-        let genesis_authorization_id = roster.authority_id().expect("finality roster ID");
+        let authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_authorization(&roster, 0, 1, 100);
+        let genesis_authorization_id = authorization
+            .authorization_id()
+            .expect("genesis scheduling authorization ID");
         let leaf = KagemushaTopUpLeafV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: digest(b"funding-operation", 0),
@@ -1129,7 +1133,7 @@ impl FundingCertificate {
             .expect("genuine sparse top-up membership tree");
         let message = Self::message(
             &roster,
-            genesis_authorization_id,
+            authorization,
             tree.execution_root(),
             tree.leaf_count(),
             None,
@@ -1173,10 +1177,10 @@ impl FundingCertificate {
             seal_bundle: KagemushaMintFinalitySealBundleV1 {
                 message: Self::message(
                     &roster,
-                    genesis_authorization_id,
+                    authorization,
                     kagemusha_mint_finality_root_v1(empty_root),
                     0,
-                    Some(genesis_authorization_id),
+                    None,
                 ),
                 seals: Vec::new(),
             },
@@ -1194,14 +1198,16 @@ impl FundingCertificate {
 
     fn message(
         roster: &KagemushaMintFinalityAuthorityGenerationV1,
-        epoch_id: DigestV1,
+        authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
         root: Hash,
         count: u32,
-        next: Option<DigestV1>,
+        next: Option<
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
+        >,
     ) -> KagemushaMintFinalitySealMessageV1 {
         KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            finality_epoch_id: epoch_id,
+            epoch_authorization: authorization,
             validator_count: u32::try_from(roster.validators.len()).expect("four validators"),
             network_id: roster.network_id,
             block_height: if count == 0 { 1 } else { 2 },
@@ -1213,7 +1219,7 @@ impl FundingCertificate {
             execution_commitment_digest: digest(b"funding-execution", u64::from(count)),
             kagemusha_top_up_root: root,
             kagemusha_top_up_count: count,
-            next_finality_epoch_id: next,
+            next_epoch_authorization: next,
         }
     }
 }

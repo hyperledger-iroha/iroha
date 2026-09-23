@@ -154,7 +154,7 @@ def finality(network: object, identities: list[str], *, height: int = 306) -> di
     block_hash = hash_literal(777)
     context = {name: None for name in ("next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap")}
     context.update(network_id=network, protocol_version=4, height=height, epoch=1,
-        kagemusha_mint_finality_epoch_id=[1] * 32, kagemusha_mint_finality_epoch_roster={"synthetic": True},
+        kagemusha_mint_finality_authorization={"synthetic": True}, kagemusha_mint_finality_authority={"synthetic": True},
         epoch_end_height=1000, mode={"mode": "permissioned", "details": None},
         roster=[{"validator": peer, "power": 1} for peer in identities[:4]],
         quorum={"min_signers": 3, "total_power": 4}, nexus_amx_context_hash=hash_literal(778),

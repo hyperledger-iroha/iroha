@@ -3365,7 +3365,7 @@ _HISTORY_REFUSAL_CLASSIFICATION = """
     ) -> Result<MergeCandidateValidation, MergeCandidateValidationError> {
         match validation {
             Ok(()) => Ok(MergeCandidateValidation::Ready),
-            Err(crate::state::MergeLedgerCommitError::BlockHashAdmission(error)) => {
+            Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(error)) => {
                 self.validated_merge_execution_candidate = None;
                 let Some(wait) = error.release_wait() else {
                     return Err(MergeCandidateValidationError::Frontier(error.to_string()));

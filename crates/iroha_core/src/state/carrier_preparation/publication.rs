@@ -67,6 +67,28 @@ pub(crate) struct PublishedNativeApply<'published> {
 }
 
 impl PublishedNativeApply<'_> {
+    /// Exact local instances retained by the original published Native source.
+    /// A duplicated instance cannot be acknowledged twice by a completion.
+    pub(crate) fn original_instance_ids(
+        &self,
+    ) -> Result<Vec<iroha_data_model::block::consensus_v2::HeightContextId>, String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut ids = Vec::new();
+        for group in self.source.sources() {
+            for context in group.contexts() {
+                let id = context.instance_id();
+                if !seen.insert(id) {
+                    return Err("published Native source contains a duplicate instance".into());
+                }
+                ids.push(id);
+            }
+        }
+        if ids.is_empty() {
+            return Err("published Native source contains no original instance".into());
+        }
+        Ok(ids)
+    }
+
     // Authenticate the actual published group before using it for either Apply
     // settlement or terminal retirement. A global finality/QC by itself cannot
     // construct this borrowed proof or replace its original State/source owner.
@@ -168,10 +190,44 @@ impl PublishedNativeApply<'_> {
 }
 
 impl<A, B, I> PublishedCarrier<A, B, I> {
-    /// Borrow exact Native completion authority only from actual State publication.
-    pub(crate) fn native_apply(
+    /// Reauthenticate the original State family, Kura checkpoint and finality.
+    ///
+    /// The receipt comes from this publisher, including its held writer and
+    /// namespace handles; a reopened Kura or copied marker cannot replace it.
+    pub(crate) fn reauthenticate_exact_publication(
         &self,
-    ) -> Option<PublishedNativeApply<'_>> {
+        state: &State,
+        kura: &std::sync::Arc<crate::kura::Kura>,
+        finality: &crate::block::VerifiedV2FinalityArtifact,
+    ) -> Result<crate::kura::KuraV2CommitReceipt, String> {
+        if !self.state_owner.matches_state(state)
+            || !state.matches_kura_instance(kura)
+            || usize::try_from(self.block().header().height().get()).ok()
+                != Some(state.committed_height())
+            || state.latest_block_hash_fast() != Some(self.block().hash())
+            || self.native_apply().is_none()
+        {
+            return Err(
+                "published carrier differs from its original State or Native source".into(),
+            );
+        }
+        finality
+            .artifact()
+            .validate_for_header(&self.block().header())
+            .map_err(|error| error.to_string())?;
+        let state_hash = crate::snapshot::canonical_state_snapshot_hash(state)
+            .map_err(|error| error.to_string())?;
+        kura.reauthenticate_wsv_checkpoint_receipt(
+            &self.checkpoint,
+            finality.artifact(),
+            state_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(self.checkpoint.finality_receipt().clone())
+    }
+
+    /// Borrow exact Native completion authority only from actual State publication.
+    pub(crate) fn native_apply(&self) -> Option<PublishedNativeApply<'_>> {
         let source = self.source.native()?;
         source
             .retains_carrier(self.block(), source.context().context())
@@ -183,15 +239,26 @@ impl<A, B, I> PublishedCarrier<A, B, I> {
     }
 
     /// Borrow the exact result-bearing carrier that became visible.
-    pub(crate) fn block(
-        &self,
-    ) -> &iroha_data_model::block::SignedBlock {
+    pub(crate) fn block(&self) -> &iroha_data_model::block::SignedBlock {
         self.block.as_ref()
     }
 
     /// Inspect events only after complete State publication and writer release.
     pub(crate) fn events(&self) -> &[EventBox] {
         &self.events
+    }
+
+    /// Move the terminal event batch only after every fallible durable repair.
+    pub(crate) fn take_completion_events(
+        &mut self,
+    ) -> (
+        iroha_data_model::events::pipeline::BlockEvent,
+        Vec<EventBox>,
+    ) {
+        (
+            self.committed_event.clone(),
+            std::mem::take(&mut self.events),
+        )
     }
 }
 
@@ -414,7 +481,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         publication_events.append(&mut extra_events);
         drop(commit);
         if !effects.verified_lane_relay_records.is_empty() {
-            target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records);
+            target.hydrate_verified_lane_relay_records(std::mem::take(
+                &mut effects.verified_lane_relay_records,
+            ));
         }
         drop(membership_retirement);
         drop(runtime_retirement);

@@ -10,7 +10,7 @@ The [State effect lock correction](../docs/history/2026-09-22/state-effect-lock-
 
 The [membership prerequisites](../docs/history/2026-09-22/membership-allocation-prerequisites.md) add one funded typed buffer and the native owned-generation allocation floor, with both MV layouts and corrected 884-control Core scope qualified. Integrate the original finite pool before membership construction, capture and restore; a late committed-state capacity error is not a progress design. The [indexed-publication and maintenance correction](../docs/history/2026-09-22/native-indexed-publication-recovery.md) extends the [partial-write repair correction](../docs/history/2026-09-22/native-repair-partial-write.md) through actual initial publication and completed latest-pointer maintenance; 1,004 selected Core, 21 Torii and 165 copied formal controls pass in their recorded scopes. The [authenticated map lookup prerequisite](../docs/history/2026-09-22/authenticated-map-node-lookup.md) now checks externally owned nodes and distinguishes proved absence from local read/corruption failures. The [bounded external update kernel](../docs/history/2026-09-22/authenticated-map-node-updates.md) now preserves original roots through failed path writes and passes 20 map controls plus Core compilation. The [membership root owner](../docs/history/2026-09-22/membership-root-publication.md) now binds both current and rollback cuts to the actual component publisher, rejects foreign/stale/recreated owners. Its [authenticated height reader](../docs/history/2026-09-22/authenticated-membership-values.md) now uses the [single located map kernel](../docs/history/2026-09-22/authenticated-map-locations.md); 26 map and 79 membership controls pass with all prior selectors retained. Explicit root/child/value locations avoid requiring a global content index while preserving exact logical commitments and old references. Implement funded fixed Norito records and retain exact segment generations next; generic codec limits do not cover schema/alignment/budget allocations, and a fresh value location cannot repair an old retained reference. Funded durable storage and complete original State root/publication/restore custody remain open. The next State/Kura membership milestone is authenticated durable lookup at the exact original State cut and incremental checkpoint construction before resident-cache cutover; the current production Apply path materializes the full membership history twice per fresh height, so a bounded lookup cache alone is insufficient. Missing or untrusted history must produce a typed local refusal, never a non-membership answer. Qualify eviction/cold restart, sealed aliases, old/replacement cuts and Kura-before-WSV interruption before that cutover. These corrections do not close L1–L6.
 
-Current integration location: `/Users/takemiyamakoto/devstuff/iroha`, branch
+Current integration location: `/Users/takemiyamakoto/soramitsudev/iroha`, branch
 `optimizations`. All ongoing source integration and validation use this checkout;
 no other branch or worktree is authorized for this work.
 
@@ -52,6 +52,12 @@ of the launched owner's actual state. Audit all nine variants first: some hold
 real successor ordinals or wait tokens that cannot simply be dropped. Facts not
 already represented must acquire one authoritative owner before removing the
 runner copy. A projection is read-only, uncached, and cannot mint work.
+
+The ordinary ingress batch now returns only its own retry and terminal-output
+facts. The outer runner reads the launched owner's current producer claim after
+the batch instead of retaining an earlier claim in the batch result. Busy
+adapter ownership and timer/FIFO debt in `v2_runtime.rs` remain independent
+mutable scheduling facts; this narrow removal does not complete L1 or L2.
 
 Then consolidate separate deferred-owner, timer-episode and schedule decisions
 in `v2_runtime.rs`. Ordinary production dispatch must use the surviving owner
@@ -141,6 +147,64 @@ and bounded accounting. Native ingress remains closed until its process-lived
 consumer and global rollover drain are connected, the canonical prepared execution
 survives Validate through Apply, and actual publication settles the original
 native Apply effect. These remain one production cutover.
+
+The current native driver and transport coalesce exact authenticated control
+retransmissions into their existing retained occurrence. A blocked destination
+keeps its original actor post and FIFO ticket; already serviced peers acquire at
+most one pending resend each. Duplicate traffic therefore cannot alone consume
+all bounded ingress/fanout slots and exclude a different timeout share. Focused
+source controls are `native_driver_retains_exact_ingress_and_instance_across_global_carrier_change`
+and `native_transport_exact_retransmissions_cannot_exhaust_slots_behind_silent_peer`.
+These changes await runtime qualification. Distinct retained messages can still
+fill transport capacity; this correction does not establish full saturation
+liveness, production silent-author recovery, final-transaction completion or L1–L6.
+
+`v2_runner/native_lane_runtime.rs` now composes the existing native driver and
+transport into one process-lived owner. Its single pending outbox slot keeps the
+original packet across full actor/fanout capacity, while each turn still services
+native clocks, WAL and body completions. Authenticated current-set absence can
+retire that transport copy; it cannot settle the reducer Apply. Source controls
+are `native_runner_silent_initial_author_reaches_real_decision_through_retained_transport`,
+`native_runner_retains_saturated_outbox_while_original_clock_advances`, and
+`native_runner_settles_original_closed_apply_only_after_real_publication`.
+These controls await execution on the current candidate. The production runner
+does not construct this owner yet: complete pre-execution and journal resource
+admission, retained Validate/cache/Apply integration, process startup and recovery,
+and simultaneous retirement of the old lane scheduler/signer remain required.
+The owner introduces no second active engine and does not close L1–L6.
+
+The real runner now creates one network/peer-bound lane-engine lease for its
+Sumeragi worker. Both ordinary and PendingKura legacy adapters must hold the
+exclusive lease until their durable height rollover consumes them; the Native
+runtime constructor requires the same slot's Native lease. This prevents both
+signers from owning one worker concurrently, but does not activate the Native
+runtime. Live Native ingress, retained original execution and old scheduler
+retirement still require one atomic production cutover.
+
+The closed Native fair-ingress carrier now validates the exact canonical wire,
+semantic origin, charged authenticated hop and opaque route history at checked
+dequeue. Driver backpressure returns the same owned payload and physical
+evidence through one process-lived retry slot; a changed checked dequeue or
+abandoned transfer closes consensus output. The public ingress entrypoint and
+ordinary legacy consumer still reject Native messages, so this owner supplies
+no live voting or scheduling authority until the complete funded cutover and
+restart custody are qualified.
+
+`v2_apply/retained_lifecycle_apply.rs` supplies the bounded lifecycle dispatch
+handoff to the retained validator cache. Shared Apply authentication checks the
+exact durable body, proposal round, context and genuine CommitQC before the
+original owner is selected. A refused consuming publisher restores its current
+phase and returns the original dispatch and local release dependency. A successful
+publisher must return the actual opaque `PublishedCarrier`; both pending
+completion and association-failure recovery keep that complete owner attached.
+The `retained_lifecycle_apply_` source controls cover genuine-QC admission,
+unchanged ownership across repeated refusal, forged/rebound tasks, and rejection
+of reopened-store or scalar-marker substitution. They await execution on the
+current candidate; they do not qualify terminal publication. This handoff remains
+disconnected from live workers. Complete authentication/decode/execution resource
+admission, consuming durable completion/recovery and the process-lived native
+runner cutover are still required before retiring scalar Apply and the old lane
+scheduler/signer together.
 
 The [publication completion seam](../docs/history/2026-09-20/native-published-apply.md)
 now binds that original Apply to actual State publication, allowing different

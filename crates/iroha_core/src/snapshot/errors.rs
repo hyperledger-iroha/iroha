@@ -18,6 +18,8 @@ pub enum TryReadError {
     SnapshotResourceLimit(String),
     /// Local snapshot read-buffer allocation admission refused: {0}
     PayloadAllocation(#[source] mv::allocation::AllocationRefusal),
+    /// Original configured operation-index pool refused snapshot restoration: {0}
+    OperationIndexAdmission(#[source] mv::storage::AdmittedStorageError),
     /// The allocator could not supply {requested_bytes} prepaid snapshot payload bytes
     PayloadAllocatorFailure {
         /// Exact requested byte allocation; no buffer was installed.
@@ -197,4 +199,17 @@ pub(super) enum TryWriteError {
         /// Missing publication step that a later snapshot interval must retry.
         reason: String,
     },
+}
+
+impl From<crate::state::deserialize::SnapshotRestoreError> for TryReadError {
+    fn from(error: crate::state::deserialize::SnapshotRestoreError) -> Self {
+        match error {
+            crate::state::deserialize::SnapshotRestoreError::Encoding(error) => {
+                Self::Serialization(error)
+            }
+            crate::state::deserialize::SnapshotRestoreError::Admission(error) => {
+                Self::OperationIndexAdmission(error)
+            }
+        }
+    }
 }

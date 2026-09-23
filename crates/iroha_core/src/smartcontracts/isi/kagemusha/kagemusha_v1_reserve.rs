@@ -2805,9 +2805,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let (mint_finality_epoch_id, mint_finality_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+            crate::kagemusha_v1_test_fixtures::mint_finality_context_fields(
                 request.network_id,
                 0,
+                0,
+                1,
+                u64::MAX,
                 &roster,
             );
         let _eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)
@@ -2823,7 +2826,9 @@ mod tests {
             proof,
             finality_certificate_binding,
             finality_authority_head,
-            finality_genesis_roster_id: mint_finality_epoch_id,
+            finality_genesis_authorization_id: mint_finality_epoch_id
+                .authorization_id()
+                .expect("genesis authorization"),
             finality_proof_binding_digest,
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
@@ -2836,8 +2841,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_authorization: mint_finality_epoch_id,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -2901,7 +2906,7 @@ mod tests {
         let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let mint_finality_message = KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            finality_epoch_id: mint_finality_epoch_id,
+            epoch_authorization: mint_finality_epoch_id,
             validator_count: 4,
             network_id: request.network_id,
             block_height: height,
@@ -2910,7 +2915,7 @@ mod tests {
             execution_commitment_digest: [0x42; 32],
             kagemusha_top_up_root: top_up_root,
             kagemusha_top_up_count: 1,
-            next_finality_epoch_id: None,
+            next_epoch_authorization: None,
         };
         let mint_finality_bundle = KagemushaMintFinalitySealBundleV1 {
             message: mint_finality_message,

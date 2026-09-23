@@ -145,6 +145,11 @@ fn dispatch_server_operation_with_session(
         {
             consensus_operations::global_beacon_partial_sign(state, request)
         }
+        (slot, OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            consensus_operations::global_beacon_seat_readiness(state, request)
+        }
         (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
             if slot == parliament_tle_partial_release_signer_slot =>
         {

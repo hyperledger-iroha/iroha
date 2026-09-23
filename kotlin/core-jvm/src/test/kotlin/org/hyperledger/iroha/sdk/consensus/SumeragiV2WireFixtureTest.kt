@@ -769,7 +769,7 @@ class SumeragiV2WireFixtureTest {
         requireNotNull(decoded.highestPrepareQc)
         requireNotNull(decoded.lastTimeoutCertificate)
         assertEquals(null, decoded.lastCommittedSubject)
-        assertEquals(2L, decoded.heightContext.epoch)
+        assertEquals(0L, decoded.heightContext.epoch)
         assertEquals(100L, decoded.heightContext.epochEndHeight)
         assertEquals(SumeragiV2Wire.ConsensusMode.NPOS, decoded.heightContext.mode)
         assertEquals(4L, decoded.heightContext.validatorCount)

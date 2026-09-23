@@ -7085,7 +7085,7 @@ mod validation_fee_registry_restore_tests {
     fn restore_world_with_network(
         world: World,
         restored_network_id: iroha_data_model::NetworkId,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, SnapshotRestoreError> {
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -7128,7 +7128,7 @@ mod validation_fee_registry_restore_tests {
             world.commit();
         }
         let snapshot = json::to_value(&state).expect("serialize validation-fee restore fixture");
-        KuraSeed {
+        KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
@@ -7138,15 +7138,15 @@ mod validation_fee_registry_restore_tests {
         .into_state_from_json(snapshot)
     }
 
-    fn restore_world(world: World) -> Result<Box<State>, json::Error> {
+    fn restore_world(world: World) -> Result<Box<State>, SnapshotRestoreError> {
         restore_world_with_network(world, network_id())
     }
 
-    fn assert_registry_restore_error(error: &json::Error, expected: &str) {
+    fn assert_registry_restore_error(error: &SnapshotRestoreError, expected: &str) {
         assert!(
             matches!(
                 error,
-                json::Error::InvalidField { field, message }
+                SnapshotRestoreError::Encoding(json::Error::InvalidField { field, message })
                     if field == "parameters" && message.contains(expected)
             ),
             "restore rejection must identify the protected registry provenance: {error}"
@@ -7190,7 +7190,7 @@ mod validation_fee_registry_restore_tests {
         assert!(
             matches!(
                 &error,
-                json::Error::InvalidField { field, message }
+                SnapshotRestoreError::Encoding(json::Error::InvalidField { field, message })
                     if field == "parliament_attempts"
                         && message.contains("missing exact governance proposal")
             ),
@@ -7243,7 +7243,7 @@ mod validation_fee_registry_restore_tests {
         assert!(
             matches!(
                 &error,
-                json::Error::InvalidField { field, message }
+                SnapshotRestoreError::Encoding(json::Error::InvalidField { field, message })
                     if field == "state.durable_merge_ledger"
                         && message.contains("validation-fee policy network mismatch")
             ),
@@ -8039,6 +8039,9 @@ fn parse_world(
     let tle_key_session_lifecycles = take_required(&mut map, "tle_key_session_lifecycles")?;
     let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
+    let validator_candidate_keys = take_required(&mut map, "validator_candidate_keys")?;
+    let validator_committee_transitions =
+        take_required(&mut map, "validator_committee_transitions")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
     let global_beacon_key_sessions = take_required(&mut map, "global_beacon_key_sessions")?;
     let global_beacon_active_session = take_required(&mut map, "global_beacon_active_session")?;
@@ -8054,14 +8057,18 @@ fn parse_world(
         [u8; 32],
         crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1,
     > = take_required(&mut map, "kagemusha_reserve_operations")?;
-    let kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "kagemusha_mint_credit_operations")?;
-    let kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "kagemusha_issuance_operations")?;
-    let kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "kagemusha_redemption_id_operations")?;
-    let kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "kagemusha_terminal_nullifier_operations")?;
+    let kagemusha_mint_credit_operations = map.remove("kagemusha_mint_credit_operations")
+        .ok_or_else(|| json::MapVisitor::missing_field("kagemusha_mint_credit_operations"))?
+        .into_operation_index(ivm_seed.operation_index_budget.clone(), ivm_seed.operation_index_refusal)?;
+    let kagemusha_issuance_operations = map.remove("kagemusha_issuance_operations")
+        .ok_or_else(|| json::MapVisitor::missing_field("kagemusha_issuance_operations"))?
+        .into_operation_index(ivm_seed.operation_index_budget.clone(), ivm_seed.operation_index_refusal)?;
+    let kagemusha_redemption_id_operations = map.remove("kagemusha_redemption_id_operations")
+        .ok_or_else(|| json::MapVisitor::missing_field("kagemusha_redemption_id_operations"))?
+        .into_operation_index(ivm_seed.operation_index_budget.clone(), ivm_seed.operation_index_refusal)?;
+    let kagemusha_terminal_nullifier_operations = map.remove("kagemusha_terminal_nullifier_operations")
+        .ok_or_else(|| json::MapVisitor::missing_field("kagemusha_terminal_nullifier_operations"))?
+        .into_operation_index(ivm_seed.operation_index_budget.clone(), ivm_seed.operation_index_refusal)?;
     {
         let pools = kagemusha_reserve_pools.view();
         let operations = kagemusha_reserve_operations.view();
@@ -8407,6 +8414,8 @@ fn parse_world(
         tle_key_session_lifecycles,
         tle_active_key_session,
         timed_ovn_evidence,
+        validator_candidate_keys,
+        validator_committee_transitions,
         global_beacon_dkg,
         global_beacon_key_sessions,
         global_beacon_active_session,
@@ -8419,6 +8428,12 @@ fn parse_world(
         external_event_buf,
     }));
     validate_da_pin_persistence(&world)?;
+    validator_committee::validate_persisted_progress(&world.view()).map_err(|message| {
+        json::Error::InvalidField {
+            field: "world.validator_committee".to_owned(),
+            message,
+        }
+    })?;
     validate_asset_transfer_control_persistence_v1(&world)?;
     world
         .rebuild_global_beacon_pulse_slots()
@@ -10445,10 +10460,14 @@ mod decode_tests {
                     .any(|window| window == restricted_salt_canary),
             "canonical World snapshot must never contain restricted pool asset/salt canaries"
         );
-        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
         let restored = parse_world(
             SnapshotJsonMap::parse(&encoded, "world").expect("parse governed pool World"),
             &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
                 ivm: &ivm,
                 _marker: PhantomData,
             },
@@ -10470,6 +10489,8 @@ mod decode_tests {
         let error = match parse_world(
             SnapshotJsonMap::parse(&corrupt, "world").expect("parse corrupt World"),
             &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
                 ivm: &ivm,
                 _marker: PhantomData,
             },
@@ -10505,10 +10526,14 @@ mod decode_tests {
                 .expect("finalized fixture abort")
         };
         let encoded = json::to_json(&world).expect("serialize finalized settlement World");
-        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
         let restored = parse_world(
             SnapshotJsonMap::parse(&encoded, "world").expect("parse finalized settlement World"),
             &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
                 ivm: &ivm,
                 _marker: PhantomData,
             },
@@ -10565,10 +10590,14 @@ mod decode_tests {
             (bundle_id, barrier, locks.len())
         };
         let encoded = json::to_json(&world).expect("serialize prepared settlement World");
-        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
         let restored = parse_world(
             SnapshotJsonMap::parse(&encoded, "world").expect("parse prepared settlement World"),
             &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
                 ivm: &ivm,
                 _marker: PhantomData,
             },
@@ -10610,10 +10639,14 @@ mod decode_tests {
             .private_settlement_outputs
             .insert(second_key, second_record);
         let encoded = json::to_json(&world).expect("serialize adversarial settlement World");
-        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
         let error = match parse_world(
             SnapshotJsonMap::parse(&encoded, "world").expect("parse adversarial World"),
             &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
                 ivm: &ivm,
                 _marker: PhantomData,
             },
@@ -10632,8 +10665,12 @@ mod decode_tests {
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");
-        let ivm = IVM::new(0);
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+    let operation_index_refusal = std::cell::RefCell::new(None);
+    let ivm = IVM::new(0);
         let seed = IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
             ivm: &ivm,
             _marker: PhantomData,
         };
@@ -10733,7 +10770,7 @@ mod decode_tests {
         assert!(!encoded.contains("\"account_aliases_by_account\""));
         assert!(!encoded.contains("\"account_scope_directory\""));
         let snapshot = json::to_value(&state).expect("serialize populated State snapshot");
-        let restored = KuraSeed {
+        let restored = KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura,
             query_handle: LiveQueryStore::start_test(),

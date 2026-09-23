@@ -10,31 +10,21 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
-## Validator epoch maintenance
+## Validator committee readiness
 
-The network operator must provision and commit the next mint-finality roster
-before each NPoS boundary. The native `iroha taira epoch-maintenance` workflow
-uses independently selected public genesis/peer trust and a bounded public
-schedule produced by `kagami kagemusha derive-mint-finality-epoch-schedule-v1`.
-Run its `maintain` command alongside application traffic with a separate ledger
-owner holding `CanSetParameters`; an HTTP operator credential alone cannot
-submit the maintenance transaction. The DPN deployment receives no validator
-seed material and does not manage validator epochs.
+Scheduling epochs retain the authenticated mint authority and beacon until an
+incumbent-certified boundary activates a fully prepared replacement. The removed
+rolling epoch schedule and supervisor are not deployment prerequisites.
 
-For boundary height B, the next roster must have executed by B−1. Queued
-maintenance needs three canonical carrier heights, so preparation rejects a
-parent later than B−4. These carriers contain actual admission, availability and
-parameter execution work. A public API listener or one successful deployment
-phase does not establish that the next epoch has been prepared.
-
-The maintainer retains one exact signed transaction per network and target epoch,
-observes uncertain submissions, and verifies its successful authenticated
-execution on all four validators. It stages the following roster only after an
-actual epoch transition. Its finite schedule and invocation budget require
-explicit renewal and supervision; it does not create empty blocks to reach a
-future epoch. Provisioning public keys does not prove future election membership.
-The workflow supports the selected fixed four-validator configuration and
-rejects observed membership changes. The consensus boundary remains authoritative.
+Operators inspect the selected future committee with `iroha staking committee
+status` using an independent context/height anchor, publish consented candidate
+keys, prepare the exact finalized beacon credentials, and admit every selected
+seat's actual key/share possession proof. Kagami can produce an individual
+candidate publication and exact-attempt readiness proof from inherited secret
+pipes. Public proof generation and successful submission do not establish runtime
+credential installation. Boundary finality alone certifies activation or retains
+the current authority and cancels an incomplete attempt. Dataspace deployment
+receives no validator secrets and does not own these committee operations.
 
 ## Commands
 

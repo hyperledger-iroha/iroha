@@ -653,7 +653,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertNotNil(decoded.highestPrepareQC)
         XCTAssertNotNil(decoded.lastTimeoutCertificate)
         XCTAssertNil(decoded.lastCommittedSubject)
-        XCTAssertEqual(decoded.heightContext.epoch, 2)
+        XCTAssertEqual(decoded.heightContext.epoch, 0)
         XCTAssertEqual(decoded.heightContext.epochEndHeight, 100)
         XCTAssertEqual(decoded.heightContext.mode, .npos)
         XCTAssertEqual(decoded.heightContext.validatorCount, 4)

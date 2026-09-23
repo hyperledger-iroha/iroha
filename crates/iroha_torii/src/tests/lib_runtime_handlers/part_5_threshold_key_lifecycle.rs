@@ -56,7 +56,7 @@ fn lifecycle_ordinary_fixture(
     }
     let mut certificate = ThresholdKeyLifecycleCertificateV1 {
         version: iroha_core::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-        action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+        action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
         expected_active_session_id: Some([0x41; 32]),
         effective_height: 2,
         network_id: *app.state.network_id_ref(),

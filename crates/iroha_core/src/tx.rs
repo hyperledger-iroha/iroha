@@ -69,6 +69,22 @@ type StateTelemetry = crate::telemetry::StateTelemetry;
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_model_base::topology::DataSpaceId;
 type NexusLaneId = iroha_model_base::topology::LaneId;
+/// Recovered lane execution distinguishes malformed input from local admission.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum LaneExecutionInputError {
+    /// Authenticated lane input is invalid.
+    #[error("{0}")]
+    Invalid(&'static str),
+    /// Original local State storage pool refused this attempt.
+    #[error(transparent)]
+    Storage(#[from] crate::state::StateStorageAdmissionError),
+}
+
+impl From<&'static str> for LaneExecutionInputError {
+    fn from(reason: &'static str) -> Self {
+        Self::Invalid(reason)
+    }
+}
 /// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
@@ -2964,7 +2980,11 @@ impl StateBlock<'_> {
         if penalties.is_empty() {
             return Ok(());
         }
-        let mut penalty_tx = self.transaction();
+        let mut penalty_tx = self.try_transaction().map_err(|_| {
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                "local State storage admission requires retry".to_owned(),
+            ))
+        })?;
         if let Some(routing) = routing {
             penalty_tx.current_lane_id = Some(routing.lane_id);
             penalty_tx.current_dataspace_id = Some(routing.dataspace_id);
@@ -3188,6 +3208,7 @@ impl StateBlock<'_> {
         })
     }
     /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -3225,8 +3246,9 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
     ) -> core::result::Result<
         Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
-        &'static str,
+        LaneExecutionInputError,
     > {
+        self.require_storage_admission()?;
         Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;
         crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
         let descriptor = &artifact.proposal.descriptor;
@@ -3258,7 +3280,9 @@ impl StateBlock<'_> {
                 .map_err(|_| "execution input routing cannot be resolved")?
             };
             if plan.coordinator_route() != routing {
-                return Err("execution input route does not match recomputed coordinator route");
+                return Err(LaneExecutionInputError::Invalid(
+                    "execution input route does not match recomputed coordinator route",
+                ));
             }
             let (entrypoint_hash, result) = self
                 .validate_transaction_at_entrypoint_index_and_routing(
@@ -3267,6 +3291,7 @@ impl StateBlock<'_> {
                     Some(raw_entrypoint_index),
                     Some(routing),
                 );
+            self.require_storage_admission()?;
             results.push((raw_entrypoint_index, entrypoint_hash, result));
         }
         Ok(results)
@@ -3323,14 +3348,28 @@ impl StateBlock<'_> {
         // Capture gas accounting inputs up front to avoid borrowing conflicts.
         let gas_total_before = self.gas_used_in_block;
         let gas_limit = self.gas_limit_per_block;
-        let mut state_transaction = self.transaction();
+        let hash = tx.hash_as_entrypoint();
+        let mut state_transaction = match self.try_transaction() {
+            Ok(transaction) => transaction,
+            Err(_) => {
+                // The enclosing StateBlock retains the original typed refusal.
+                // Callers must inspect it before constructing any output row.
+                return (
+                    hash,
+                    Err(TransactionRejectionReason::Validation(
+                        ValidationFail::InternalError(
+                            "local State storage admission requires retry".to_owned(),
+                        ),
+                    )),
+                );
+            }
+        };
         state_transaction.current_entrypoint_index = entrypoint_index;
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);
             state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
         }
-        let hash = tx.hash_as_entrypoint();
         let mut result = Self::execute_accepted_transaction_in_overlay(
             tx,
             &mut state_transaction,
@@ -3423,7 +3462,19 @@ impl StateBlock<'_> {
                     && rejected_live_execution_fee_eligible(signed.instructions(), &result)
                 {
                     let authority = signed.authority().clone();
-                    let mut fee_tx = self.transaction();
+                    let mut fee_tx = match self.try_transaction() {
+                        Ok(transaction) => transaction,
+                        Err(_) => {
+                            return (
+                                hash,
+                                Err(TransactionRejectionReason::Validation(
+                                    ValidationFail::InternalError(
+                                        "local State storage admission requires retry".to_owned(),
+                                    ),
+                                )),
+                            );
+                        }
+                    };
                     if let Some(routing) = routing_decision {
                         fee_tx.current_lane_id = Some(routing.lane_id);
                         fee_tx.current_dataspace_id = Some(routing.dataspace_id);
@@ -8647,6 +8698,29 @@ pub mod tests {
             unbond
         )));
         let finalize = iroha_data_model::isi::staking::FinalizePublicLaneUnbond {
+            monetary_plan: {
+                let asset = iroha_data_model::asset::AssetId::new(
+                    iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+                        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+                    )
+                    .expect("canonical network currency"),
+                    counterparty.clone(),
+                );
+                let mut plan =
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        asset.clone(),
+                        asset,
+                        1_u32.into(),
+                    );
+                plan.precondition =
+                    iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Unbond(
+                        iroha_data_model::nexus::PublicLaneUnbondPreconditionV1 {
+                            activation_height: 1,
+                            request_hash: request_id,
+                        },
+                    );
+                plan
+            },
             lane_id: TestLaneId::SINGLE,
             validator: counterparty.clone(),
             staker: counterparty.clone(),
@@ -13030,7 +13104,7 @@ pub mod tests {
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("forged execution input hashes must be rejected");
         assert_eq!(
-            err,
+            err.to_string(),
             "execution input entrypoint hashes do not match proposal descriptor"
         );
     }
@@ -13071,7 +13145,10 @@ pub mod tests {
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("duplicate lane execution entrypoints must be rejected");
-        assert_eq!(err, "execution input contains duplicate entrypoints");
+        assert_eq!(
+            err.to_string(),
+            "execution input contains duplicate entrypoints"
+        );
     }
     #[test]
     fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
@@ -13275,6 +13352,7 @@ pub mod tests {
         );
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),

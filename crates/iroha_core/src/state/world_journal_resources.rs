@@ -6,14 +6,20 @@
 //! one prepared Box per field and another Vec while all original boxes and the
 //! original Vec remain alive for abort/retry.
 //!
-//! This is shell demand only, never complete carrier admission. Nested MV/EBR
+//! The exact shared capacity-control layout is also included. This is shell
+//! demand only, never complete carrier admission. Nested MV/EBR
 //! storage, payloads, events, catalogs, runtime owners, archive custody, allocator
-//! bookkeeping and budget control storage require their own resource admission.
+//! bookkeeping and the original allocation-budget control storage require their
+//! own resource admission.
 //! No encoded-size estimate or inline `size_of` inference funds those owners.
 
 use super::*;
-use mv::allocation::{AllocationBudget, AllocationRefusal, AllocationReservation};
+use concread::shared::Shared;
+use mv::allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
+};
 use std::alloc::Layout;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Checked requested shell bytes for capture and one simultaneous installation.
 ///
@@ -25,6 +31,7 @@ pub(in crate::state) struct WorldJournalShellDemand {
     capture_bytes: usize,
     installation_bytes: usize,
     total_bytes: usize,
+    control_bytes: usize,
 }
 
 trait FieldShells {
@@ -82,6 +89,7 @@ impl WorldJournalShellDemand {
             capture_bytes: 0,
             installation_bytes: 0,
             total_bytes: 0,
+            control_bytes: ShellCapacity::layout().size(),
         };
         macro_rules! plan_fields {
             ($demand:ident;
@@ -121,6 +129,7 @@ impl WorldJournalShellDemand {
         self.total_bytes = self
             .capture_bytes
             .checked_add(self.installation_bytes)
+            .and_then(|bytes| bytes.checked_add(self.control_bytes))
             .ok_or(AllocationRefusal::DemandOverflow)?;
         Ok(self)
     }
@@ -140,7 +149,12 @@ impl WorldJournalShellDemand {
         self.installation_bytes
     }
 
-    /// Checked sum of both coexisting demands, not an aggregate allocation Layout.
+    /// Exact shared capacity-control allocation, including inline layout charges.
+    pub(in crate::state) fn control_bytes(self) -> usize {
+        self.control_bytes
+    }
+
+    /// Checked sum of both coexisting demands and their original capacity owner.
     pub(in crate::state) fn total_bytes(self) -> usize {
         self.total_bytes
     }
@@ -162,3 +176,142 @@ impl WorldJournalShellDemand {
 #[cfg(test)]
 #[path = "world_journal_resources_tests.rs"]
 mod tests;
+
+macro_rules! count_fields {
+    (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
+        const SHELL_FIELD_COUNT: usize = [
+            $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*
+        ].len();
+    };
+}
+with_world_overlay_fields!(count_fields);
+const SHELL_LAYOUT_COUNT: usize = 2 * SHELL_FIELD_COUNT + 2;
+type ShellCapacity = Shared<ShellCharges, AllocationCharge>;
+
+/// One exact inventory of original capture and simultaneous installation capacity.
+/// Charges remain reserved across retries. A new installation cannot reuse them
+/// until the previous installation's actual Boxes and Vec have been destroyed.
+struct ShellCharges {
+    installation_live: AtomicBool,
+    _layouts: [Option<AllocationCharge>; SHELL_LAYOUT_COUNT],
+}
+
+/// Sealed finite capacity acquired before original candidate execution.
+///
+/// This funds only the inventory-generated World shell layouts and this owner's
+/// exact control allocation. It does not fund execution, nested payloads, native
+/// locks, events, runtime, decoding or complete carrier restoration/publication.
+/// The live retained validator must acquire this alongside its other admission
+/// before execution; constructing it after execution supplies no such guarantee.
+#[must_use = "retain the original finite shell capacity through capture and publication"]
+pub(crate) struct WorldJournalShellReservation {
+    capacity: ShellCapacity,
+}
+
+impl WorldJournalShellReservation {
+    /// Acquire the complete fixed demand before any World or execution writer.
+    pub(crate) fn try_reserve(budget: &AllocationBudget) -> Result<Self, AllocationRefusal> {
+        let demand = WorldJournalShellDemand::plan()?;
+        let mut reservation = demand.try_reserve(budget)?;
+        Ok(Self::take_reserved(demand, &mut reservation)
+            .expect("the complete shell demand was reserved above"))
+    }
+
+    /// Partition already prepaid aggregate credits without reacquiring the pool.
+    pub(in crate::state) fn take_reserved(
+        demand: WorldJournalShellDemand,
+        aggregate: &mut AllocationReservation,
+    ) -> Result<Self, mv::allocation::InsufficientReservation> {
+        let mut reservation = aggregate.try_partition_bytes(demand.total_bytes())?;
+        let control = reservation
+            .try_split(ShellCapacity::layout())
+            .expect("the exact control layout is included in shell demand");
+        let mut layouts = std::array::from_fn(|_| None);
+        let mut index = 0;
+        macro_rules! charge_fields {
+            ($reservation:ident; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
+                $(charge_field(&mut $reservation, &mut layouts, &mut index, field_layouts(|world: &World| &world.$prefix));)*
+                $(charge_field(&mut $reservation, &mut layouts, &mut index, field_layouts(|world: &World| &world.$privacy));)*
+                $(charge_field(&mut $reservation, &mut layouts, &mut index, field_layouts(|world: &World| &world.$suffix));)*
+            }};
+        }
+        with_world_overlay_fields!(charge_fields, reservation);
+        for layout in [
+            Layout::array::<Box<dyn RetainedWorldField>>(demand.fields)
+                .expect("planned capture vector"),
+            publication::field_vector_layout(demand.fields).expect("planned prepared vector"),
+        ] {
+            layouts[index] = Some(
+                reservation
+                    .try_split(layout)
+                    .expect("planned vector capacity"),
+            );
+            index += 1;
+        }
+        assert_eq!(index, SHELL_LAYOUT_COUNT);
+        assert_eq!(reservation.remaining_bytes(), 0);
+        Ok(Self {
+            capacity: Shared::new(
+                ShellCharges {
+                    installation_live: AtomicBool::new(false),
+                    _layouts: layouts,
+                },
+                control,
+            ),
+        })
+    }
+
+    /// A second installation must await destruction of the caller's original
+    /// cleanup. Equal budgets or a newly allocated reservation cannot substitute.
+    pub(super) fn try_install(&self) -> Result<WorldJournalShellInstallation, ShellsNotRetired> {
+        self.capacity
+            .installation_live
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| ShellsNotRetired)?;
+        Ok(WorldJournalShellInstallation {
+            capacity: self.capacity.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn for_test() -> Self {
+        let demand = WorldJournalShellDemand::plan().expect("fixture shell layouts");
+        Self::try_reserve(&AllocationBudget::new(demand.total_bytes()))
+            .expect("fixture shell capacity")
+    }
+}
+
+fn charge_field(
+    reservation: &mut AllocationReservation,
+    layouts: &mut [Option<AllocationCharge>; SHELL_LAYOUT_COUNT],
+    index: &mut usize,
+    pair: (Layout, Layout),
+) {
+    for layout in [pair.0, pair.1] {
+        layouts[*index] = Some(
+            reservation
+                .try_split(layout)
+                .expect("planned field shell capacity"),
+        );
+        *index += 1;
+    }
+}
+
+/// The previous original installation still owns its physical shells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShellsNotRetired;
+
+/// Moves only into a complete installation or its delayed cleanup, after its
+/// Boxes and Vec in field order. Shared capacity cannot refund while either the
+/// detached capture or a delayed installation remains alive.
+pub(super) struct WorldJournalShellInstallation {
+    capacity: ShellCapacity,
+}
+
+impl Drop for WorldJournalShellInstallation {
+    fn drop(&mut self) {
+        self.capacity
+            .installation_live
+            .store(false, Ordering::Release);
+    }
+}

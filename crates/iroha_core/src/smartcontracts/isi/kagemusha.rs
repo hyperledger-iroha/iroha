@@ -13,7 +13,7 @@ use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId},
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     isi::kagemusha_v1::{
-        KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
         KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
@@ -104,7 +104,7 @@ struct KagemushaRecursiveVerifierProfileFileV1 {
     mint_hash_shard_ep_protocol_digest: [u8; 32],
     mint_hash_claim_eq_protocol_digest: [u8; 32],
     mint_hash_claim_ep_protocol_digest: [u8; 32],
-    mint_genesis_roster_id: [u8; 32],
+    mint_genesis_authorization_id: [u8; 32],
 }
 
 /// Non-serializable authority proving that one exact top-up request selected an enabled profile
@@ -261,7 +261,8 @@ pub trait KagemushaV1RuntimeVerifier: Send + Sync {
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],
-        epoch_roster: &KagemushaMintFinalityEpochRosterV1,
+        authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        authorization: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String>;
 
     /// Produce the immutable mint result for one canonical finalized reserve top-up.
@@ -311,7 +312,8 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
     fn prove_mint_authority_bootstrap(
         &self,
         _release_id: [u8; 32],
-        _epoch_roster: &KagemushaMintFinalityEpochRosterV1,
+        _authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        _authorization: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         Err("authenticated Kagemusha V1 mint authority is unavailable".to_owned())
     }
@@ -767,21 +769,29 @@ mod release_lifecycle_tests {
 
 fn kagemusha_mint_authority_bootstrap_certificate_v1(
     release_id: [u8; 32],
-    genesis_roster_id: [u8; 32],
-    epoch_roster: &KagemushaMintFinalityEpochRosterV1,
+    genesis_authorization_id: [u8; 32],
+    authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+    authorization: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
 ) -> Result<KagemushaMintCertificateWitnessV1, String> {
-    epoch_roster
+    authority_generation
         .validate()
         .map_err(|error| format!("invalid Kagemusha genesis finality roster: {error}"))?;
-    let actual_roster_id = epoch_roster
-        .finality_epoch_id()
-        .map_err(|error| format!("failed to digest Kagemusha genesis roster: {error}"))?;
-    if release_id == [0; 32] || actual_roster_id != genesis_roster_id {
+    authorization
+        .validate_against_authority(authority_generation)
+        .map_err(|error| format!("invalid Kagemusha genesis authorization: {error}"))?;
+    let actual_authorization_id = authorization
+        .authorization_id()
+        .map_err(|error| format!("failed to digest Kagemusha genesis authorization: {error}"))?;
+    if release_id == [0; 32]
+        || actual_authorization_id != genesis_authorization_id
+        || authorization.decision
+            != iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis
+    {
         return Err(
             "Kagemusha bootstrap roster differs from the authenticated release profile".to_owned(),
         );
     }
-    let first_validator = epoch_roster
+    let first_validator = authority_generation
         .validators
         .first()
         .ok_or_else(|| "Kagemusha bootstrap roster is empty".to_owned())?;
@@ -792,14 +802,14 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
             .parse()
             .map_err(|error| format!("invalid bootstrap asset name: {error}"))?,
     );
-    let network_id = epoch_roster.network_id;
+    let network_id = authority_generation.network_id;
     let binding = |label: &[u8]| {
         let mut hasher = Sha256::new();
         hasher.update(b"iroha:kagemusha:v1:mint-authority-bootstrap");
         hasher.update([0]);
         hasher.update(label);
         hasher.update(network_id.as_bytes());
-        hasher.update(genesis_roster_id);
+        hasher.update(genesis_authorization_id);
         <[u8; 32]>::from(hasher.finalize())
     };
     let incarnation_bytes: [u8; 32] = Hash::new(binding(b"asset-incarnation")).into();
@@ -864,8 +874,8 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
     };
     let message = KagemushaMintFinalitySealMessageV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        finality_epoch_id: genesis_roster_id,
-        validator_count: u32::try_from(epoch_roster.validators.len())
+        epoch_authorization: *authorization,
+        validator_count: u32::try_from(authority_generation.validators.len())
             .map_err(|_| "Kagemusha bootstrap roster exceeds u32".to_owned())?,
         network_id,
         block_height: 1,
@@ -876,7 +886,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
         execution_commitment_digest: binding(b"execution"),
         kagemusha_top_up_root: kagemusha_mint_finality_root_v1(root),
         kagemusha_top_up_count: 0,
-        next_finality_epoch_id: Some(genesis_roster_id),
+        next_epoch_authorization: None,
     };
     let certificate = KagemushaMintCertificateWitnessV1 {
         statement,
@@ -885,7 +895,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
             message,
             seals: Vec::new(),
         },
-        epoch_roster: epoch_roster.clone(),
+        authority_generation: authority_generation.clone(),
     };
     Ok(certificate)
 }
@@ -935,7 +945,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
     fn prove_mint_authority_bootstrap(
         &self,
         release_id: [u8; 32],
-        epoch_roster: &KagemushaMintFinalityEpochRosterV1,
+        authority_generation: &KagemushaMintFinalityAuthorityGenerationV1,
+        authorization: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     ) -> Result<KagemushaMintAuthorityCheckpointV1, String> {
         let runtime = self
             .releases
@@ -943,8 +954,9 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
         let certificate = kagemusha_mint_authority_bootstrap_certificate_v1(
             release_id,
-            runtime.verifier.mint_genesis_roster_id(),
-            epoch_roster,
+            runtime.verifier.mint_genesis_authorization_id(),
+            authority_generation,
+            authorization,
         )?;
         let checkpoint = prove_kagemusha_mint_authority_bootstrap_v1(
             &runtime.eq_mint_prover,
@@ -952,7 +964,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             &runtime.eq_mint_hash_prover,
             &runtime.ep_mint_hash_prover,
             release_id,
-            runtime.verifier.mint_genesis_roster_id(),
+            runtime.verifier.mint_genesis_authorization_id(),
             certificate,
         )
         .map_err(|error| format!("failed to prove Kagemusha mint bootstrap: {error}"))?;
@@ -1010,10 +1022,10 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             statement: statement.clone(),
             membership,
             seal_bundle,
-            epoch_roster: finality
+            authority_generation: finality
                 .finality_artifact
                 .height_context
-                .kagemusha_mint_finality_epoch_roster
+                .kagemusha_mint_finality_authority
                 .clone(),
         };
         let generated = prove_kagemusha_finalized_mint_from_checkpoint_v1(
@@ -1032,7 +1044,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             proof: generated.proof,
             finality_certificate_binding: generated.certificate_binding,
             finality_authority_head: generated.authority_head,
-            finality_genesis_roster_id: generated.genesis_roster_id,
+            finality_genesis_authorization_id: generated.genesis_authorization_id,
             finality_proof_binding_digest: generated.proof_binding_digest,
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
@@ -1076,7 +1088,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .ok_or_else(|| "epoch boundary lacks its paired-Pasta seal bundle".to_owned())?;
         let seal_bundle = decode_kagemusha_mint_finality_seal_bundle_v1(seal_payload)
             .map_err(|error| format!("invalid boundary mint seal bundle: {error}"))?;
-        if seal_bundle.message.next_finality_epoch_id.is_none() {
+        if seal_bundle.message.next_epoch_authorization.is_none() {
             return Err("mint authority rotation seal lacks the next roster identifier".to_owned());
         }
         let membership = match top_up_membership {
@@ -1114,9 +1126,9 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             statement: authority_checkpoint.statement.clone(),
             membership,
             seal_bundle,
-            epoch_roster: finality_artifact
+            authority_generation: finality_artifact
                 .height_context
-                .kagemusha_mint_finality_epoch_roster
+                .kagemusha_mint_finality_authority
                 .clone(),
         };
         let checkpoint = prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
@@ -1239,7 +1251,7 @@ impl KagemushaRecursiveVerifierProfileFileV1 {
             mint_hash_shard_ep_protocol_digest: self.mint_hash_shard_ep_protocol_digest,
             mint_hash_claim_eq_protocol_digest: self.mint_hash_claim_eq_protocol_digest,
             mint_hash_claim_ep_protocol_digest: self.mint_hash_claim_ep_protocol_digest,
-            mint_genesis_roster_id: self.mint_genesis_roster_id,
+            mint_genesis_authorization_id: self.mint_genesis_authorization_id,
         })
     }
 }
@@ -1300,7 +1312,7 @@ mod recursive_profile_file_tests {
         for (name, tag) in [
             ("mint_eq_protocol_digest", 1_u8),
             ("mint_ep_protocol_digest", 2_u8),
-            ("mint_genesis_roster_id", 3_u8),
+            ("mint_genesis_authorization_id", 3_u8),
             ("mint_hash_shard_eq_protocol_digest", 4_u8),
             ("mint_hash_shard_ep_protocol_digest", 5_u8),
             ("mint_hash_claim_eq_protocol_digest", 6_u8),
@@ -1320,7 +1332,7 @@ mod recursive_profile_file_tests {
         assert_eq!(profile.commit_wrapper_eq.num_fixed, 3);
         assert_eq!(profile.commit_wrapper_ep.num_fixed, 5);
         assert_eq!(profile.terminal_authorization_eq.num_fixed, 1);
-        assert_eq!(profile.mint_genesis_roster_id, [3; 32]);
+        assert_eq!(profile.mint_genesis_authorization_id, [3; 32]);
     }
 
     #[test]
@@ -1552,6 +1564,27 @@ pub mod isi {
         labeled_invariant(label, error.to_string()).into()
     }
 
+    fn retain_operation_index_refusal<T>(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        result: Result<T, (([u8; 32], [u8; 32]), mv::storage::AdmittedStorageError)>,
+    ) -> Result<T, Error> {
+        match result {
+            Ok(value) => Ok(value),
+            Err((_, refusal)) => {
+                // An inner contract may catch this execution error. The original
+                // local refusal remains on the enclosing block, so no receipt,
+                // fee or signed rejection can be published from this attempt.
+                state_transaction.arm_local_storage_refusal(
+                    crate::state::StateStorageAdmissionError::World(refusal),
+                );
+                Err(kagemusha_v1_error(
+                    "local_storage_refusal",
+                    "KAGEMUSHA operation index admission requires local retry",
+                ))
+            }
+        }
+    }
+
     fn kagemusha_v1_commit_context(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<KagemushaReserveCommitContextV1, Error> {
@@ -1770,14 +1803,16 @@ pub mod isi {
             .world
             .kagemusha_reserve_operations
             .insert(record.operation_id, operation);
-        state_transaction
+        let mint_credit_result = state_transaction
             .world
             .kagemusha_mint_credit_operations
-            .insert(record.credit_id, record.operation_id);
-        state_transaction
+            .try_insert_admitted(record.credit_id, record.operation_id);
+        retain_operation_index_refusal(state_transaction, mint_credit_result)?;
+        let issuance_result = state_transaction
             .world
             .kagemusha_issuance_operations
-            .insert(record.issuance_commitment, record.operation_id);
+            .try_insert_admitted(record.issuance_commitment, record.operation_id);
+        retain_operation_index_refusal(state_transaction, issuance_result)?;
         crate::sumeragi::witness::record_write_kagemusha_reserve_receipt_v1(
             &record.reserve_receipt,
         )
@@ -1934,14 +1969,16 @@ pub mod isi {
             .world
             .kagemusha_reserve_operations
             .insert(record.operation_id, operation);
-        state_transaction
+        let redemption_result = state_transaction
             .world
             .kagemusha_redemption_id_operations
-            .insert(record.redemption_id, record.operation_id);
-        state_transaction
+            .try_insert_admitted(record.redemption_id, record.operation_id);
+        retain_operation_index_refusal(state_transaction, redemption_result)?;
+        let nullifier_result = state_transaction
             .world
             .kagemusha_terminal_nullifier_operations
-            .insert(record.terminal_nullifier, record.operation_id);
+            .try_insert_admitted(record.terminal_nullifier, record.operation_id);
+        retain_operation_index_refusal(state_transaction, nullifier_result)?;
         crate::sumeragi::witness::record_write_kagemusha_reserve_receipt_v1(
             &record.reserve_receipt,
         )

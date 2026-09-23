@@ -152,7 +152,11 @@ fn assert_native_preparation_success_in_fixture(
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("real finalized first input and exact four-validator Decisions");
@@ -297,7 +301,12 @@ fn assert_native_preparation_success_in_fixture(
             .contains("not active")
     );
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, std::convert::Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, std::convert::Infallible>(()),
+        )
         .unwrap();
     assert_eq!(journals.execution_prefix_commitment(), commitment);
     assert_eq!(
@@ -374,7 +383,11 @@ fn assert_native_durable_source_authentication_in_fixture(fixture: NativeControl
     );
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("real original Native sources must be ready");
@@ -392,7 +405,12 @@ fn assert_native_durable_source_authentication_in_fixture(fixture: NativeControl
     let block = prepared.block().clone();
     let commitment = prepared.execution_prefix_commitment();
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, std::convert::Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, std::convert::Infallible>(()),
+        )
         .unwrap();
     let prefix = journals.source_prefix();
     let native = journals.native_source_for_test().unwrap();
@@ -564,7 +582,11 @@ fn assert_native_preparation_refusal(
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("global defect does not fabricate or alter Native source Decisions");
@@ -652,7 +674,7 @@ state_test! { sync native_preparation_rejects_stale_source_without_execution_or_
     let state = &fixture.economic.native.state;
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
@@ -680,7 +702,7 @@ state_test! { sync native_preparation_preserves_local_recorder_conflict
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
     let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
@@ -711,7 +733,11 @@ fn assert_native_preparation_raw_commit_refusal(fixture: NativeControlExecutionF
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("real first source");
@@ -878,7 +904,11 @@ fn assert_native_preparation_after_height_advance(fixture: NativeControlExecutio
     let state = &fixture.economic.native.state;
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("original source before actual publication");
@@ -1207,6 +1237,7 @@ impl NativePublicationFixture {
     fn restored_foreign_state(&self) -> Box<State> {
         let state = self.state();
         let restored = deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             kura: Arc::clone(&state.kura),
             lane_manifests: state.lane_manifests.read().clone(),
             query_handle: LiveQueryStore::start_test(),
@@ -1306,19 +1337,20 @@ impl NativePublicationFixture {
 
     /// Move the same State family into the actual process-lived driver after
     /// borrowed preparation has released every writer into owned journals.
-    pub(super) fn into_shared_driver(
+    pub(super) fn into_shared_runtime(
         self: Box<Self>,
     ) -> (
         Arc<State>,
-        crate::sumeragi::v2_lane_driver::NativeLaneDriver,
+        crate::sumeragi::v2_runner::native_lane_runtime::NativeLaneRuntime,
     ) {
         let key = self.original.economic.native.validators[0].clone();
         let state: Arc<State> = Arc::from(self.original.economic.native.state);
-        let driver = crate::sumeragi::v2_lane_driver::NativeLaneDriver::new(
+        let driver = crate::sumeragi::v2_runner::native_lane_runtime::NativeLaneRuntime::new(
             Arc::clone(&state),
             crate::sumeragi::output_guard::ConsensusOutputGuard::isolated(),
             key,
             native_driver_limits_for_test(),
+            nonzero!(32_usize),
         )
         .unwrap();
         (state, driver)
@@ -1370,7 +1402,11 @@ impl NativePublicationFixture {
     pub(super) fn prepare(&self) -> super::carrier_preparation::PreparedCarrier<'_> {
         let super::NativeLaneBatchSourcePreparationV1::Ready(source) = self
             .state()
-            .prepare_proposed_native_lane_batch_source(&self.carrier, &[])
+            .prepare_proposed_native_lane_batch_source(
+                self.carrier.clone(),
+                &[],
+                crate::state::NativeExecutionResourceAdmission::for_test_carrier(&self.carrier),
+            )
             .unwrap()
         else {
             panic!("genuine finalized Native source must be ready");

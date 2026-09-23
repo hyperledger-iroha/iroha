@@ -6,9 +6,11 @@ use integration_tests::sandbox;
 use iroha::blocking::Client;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
-    Level,
+    Level, NetworkId,
     account::Account,
     asset::AssetDefinition,
+    block::consensus_v2::HeightContext,
+    bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
     domain::Domain,
     isi::{
         Log, Mint, Register,
@@ -30,6 +32,7 @@ use iroha_test_network::{
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use norito::json::{self, Value};
 use std::{
+    collections::BTreeSet,
     num::NonZeroU64,
     str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
@@ -42,15 +45,13 @@ const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
-const STAKE_DOMAIN_ID: &str = "ivm.universal";
-const WAIT_HEIGHT: u64 = EPOCH_LEN.get() + FINALITY_MARGIN;
+const WAIT_HEIGHT: u64 = EPOCH_LEN.get() * 2 + 1;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(600);
 const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
 const HEIGHT_ADVANCE_RESUBMIT_EVERY_ATTEMPTS: u64 = 4;
-const STAKE_ASSET_NAME: &str = "NPOS Stake";
-const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
+const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Copy)]
 enum StakeActivationProfile {
@@ -181,10 +182,9 @@ fn validator_account_id_for_index(index: usize) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
 }
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    defaults::nexus::staking::stake_asset_id()
+        .parse()
+        .expect("canonical network XOR asset")
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
@@ -270,15 +270,10 @@ fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
     );
 }
 #[test]
-fn canonical_nexus_fee_asset_id_uses_explicit_fixture_name() {
+fn staking_and_fees_use_the_same_real_network_xor() {
     let fee_asset_id = nexus_fee_asset_definition_id();
-    let _definition = AssetDefinition::new(
-        fee_asset_id,
-        NEXUS_FEE_ASSET_NAME.to_owned(),
-        NumericSpec::default(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
-    );
+    assert_eq!(fee_asset_id, stake_asset_definition_id());
+    assert_eq!(fee_asset_id.to_string(), TAIRA_XOR_ASSET_DEFINITION_ID);
 }
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
     match profile {
@@ -302,36 +297,24 @@ fn stake_genesis_post_topology_transactions(
     topology: &[PeerId],
     profile: StakeActivationProfile,
 ) -> Vec<Vec<InstructionBox>> {
-    let stake_domain = DomainId::parse_fully_qualified(STAKE_DOMAIN_ID).expect("stake domain id");
-    let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain id");
+    let xor_domain = DomainId::try_new("universal", "universal").expect("XOR domain id");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
+    assert_eq!(stake_asset_id, fee_asset_id);
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let definition = {
         AssetDefinition::new(
             stake_asset_id.clone(),
-            STAKE_ASSET_NAME.to_owned(),
-            NumericSpec::default(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-    }
-    .with_metadata(Metadata::default());
-    let fee_definition = {
-        AssetDefinition::new(
-            fee_asset_id.clone(),
-            NEXUS_FEE_ASSET_NAME.to_owned(),
-            NumericSpec::default(),
+            "XOR".to_owned(),
+            NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
     }
     .with_metadata(Metadata::default());
     let mut bootstrap_tx = vec![
-        Register::domain(Domain::new(stake_domain.clone())).into(),
-        Register::domain(Domain::new(nexus_domain.clone())).into(),
+        Register::domain(Domain::new(xor_domain)).into(),
         Register::asset_definition(definition).into(),
-        Register::asset_definition(fee_definition).into(),
         Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
@@ -383,6 +366,12 @@ fn stake_genesis_post_topology_transactions(
                 stake_account: validator_id.clone(),
                 initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata,
+                monetary_plan:
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                        iroha_primitives::numeric::Quantity::from(stake),
+                    ),
             }
             .into(),
         );
@@ -584,13 +573,15 @@ fn should_submit_height_progress_tick(
             && attempt.is_multiple_of(resubmit_every_attempts))
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<()> {
+async fn npos_incomplete_election_retains_the_exact_four_seat_committee() -> eyre::Result<()> {
     init_instruction_registry();
     let gas_account_str = ALICE_ID.to_string();
     let mut npos = SumeragiNposParameters::default();
     npos.epoch_length_blocks = EPOCH_LEN;
     npos.min_self_bond = MIN_SELF_BOND.into();
     npos.finality_margin_blocks = FINALITY_MARGIN;
+    npos.evidence_horizon_blocks = 9;
+    npos.slashing_delay_blocks = 3;
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
@@ -632,7 +623,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_election_filters_stake_and_applies_after_margin),
+        stringify!(npos_incomplete_election_retains_the_exact_four_seat_committee),
     )
     .await?
     else {
@@ -640,8 +631,11 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     };
     let client = network.client();
     let peers = network.peers();
-    let eligible_peer = &peers[0];
-    let pre_margin_height = (FINALITY_MARGIN / 2).max(1);
+    let expected = peers
+        .iter()
+        .map(|peer| peer.id().to_string())
+        .collect::<BTreeSet<_>>();
+    let pre_margin_height = EPOCH_LEN.get() - 1;
     advance_to_height(
         &network,
         &client,
@@ -649,15 +643,18 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         "stake activation seed",
     )
     .await?;
+    let pre_client = client_observing_height(&network, pre_margin_height, &client).await;
     let collectors_url = client
         .client()
         .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
-    assert_no_single_collector(
-        &collectors_url,
-        &eligible_peer.id().to_string(),
-        &format!("collector roster should not have activated before height {pre_margin_height}"),
+    wait_for_exact_committee(&collectors_url, &expected).await?;
+    let before = authenticated_committee_at_height(
+        &pre_client,
+        network.network_id(),
+        pre_margin_height,
+        &expected,
     )
     .await?;
     advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
@@ -667,8 +664,18 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
-    let expected_peer = eligible_peer.id().to_string();
-    wait_for_single_collector(&collectors_url, &expected_peer).await?;
+    wait_for_exact_committee(&collectors_url, &expected).await?;
+    let after = authenticated_committee_at_height(
+        &activation_client,
+        network.network_id(),
+        WAIT_HEIGHT,
+        &expected,
+    )
+    .await?;
+    ensure!(
+        before.kagemusha_mint_finality_authority == after.kagemusha_mint_finality_authority,
+        "an incomplete elected pool must retain the certified authority generation"
+    );
     network.shutdown().await;
     Ok(())
 }
@@ -690,39 +697,67 @@ async fn fetch_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::R
         .wrap_err("validator-set history body")?;
     json::from_str(&body).wrap_err("parse validator-set history JSON")
 }
-async fn wait_for_single_collector(
+async fn wait_for_exact_committee(
     collectors_url: &reqwest::Url,
-    expected_peer: &str,
+    expected: &BTreeSet<String>,
 ) -> eyre::Result<()> {
     let http = integration_tests::http::client();
     let deadline = Instant::now() + COLLECTOR_RETRY;
     loop {
         let peers = collector_peer_ids(&http, collectors_url).await?;
-        if peers.len() == 1 && peers[0] == expected_peer {
+        if peers.len() == expected.len()
+            && peers.iter().cloned().collect::<BTreeSet<_>>() == *expected
+        {
             return Ok(());
         }
         if Instant::now() > deadline {
             eyre::bail!(
-                "collectors never converged to expected validator set; got {:?}",
-                peers
+                "committee never converged to the exact retained validator set; expected {expected:?}, got {peers:?}"
             );
         }
         sleep(COLLECTOR_POLL).await;
     }
 }
-async fn assert_no_single_collector(
-    collectors_url: &reqwest::Url,
-    expected_peer: &str,
-    context: &str,
-) -> eyre::Result<()> {
-    let http = integration_tests::http::client();
-    let peers = collector_peer_ids(&http, collectors_url).await?;
+async fn authenticated_committee_at_height(
+    client: &Client,
+    network_id: NetworkId,
+    height: u64,
+    expected: &BTreeSet<String>,
+) -> eyre::Result<HeightContext> {
+    let response = integration_tests::http::client()
+        .get(
+            client
+                .client()
+                .endpoint()
+                .join(&format!("v1/bridge/finality/{height}"))?,
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let proof: BridgeFinalityProof = norito::json::from_slice(&response)?;
+    verify_bridge_finality_proof(&proof, &network_id)
+        .wrap_err("retained committee needs authenticated finality")?;
+    let context = proof.finality_artifact.height_context.clone();
+    let actual = context
+        .roster
+        .iter()
+        .map(|voter| voter.validator.to_string())
+        .collect::<BTreeSet<_>>();
     ensure!(
-        peers.len() != 1 || peers[0] != expected_peer,
-        "{context}; observed {:?}",
-        peers
+        proof.finality_artifact.height == height
+            && proof.block_header.height().get() == height
+            && context.roster.len() == expected.len()
+            && actual == *expected
+            && context.roster.iter().all(|voter| voter.power == 1)
+            && context.quorum.total_power == 4
+            && context.quorum.min_signers == 3
+            && proof.finality_artifact.commit_qc.signers.len() == 3,
+        "retention must preserve four exact equal voters and a three-vote finality certificate"
     );
-    Ok(())
+    Ok(context)
 }
 async fn collector_peer_ids(
     http: &reqwest::Client,
@@ -744,7 +779,7 @@ async fn collector_peer_ids(
     Ok(peers)
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
+async fn npos_entity_correlation_cannot_shrink_the_certified_committee() -> eyre::Result<()> {
     init_instruction_registry();
     let gas_account_str = ALICE_ID.to_string();
     let mut npos = SumeragiNposParameters::default();
@@ -752,6 +787,8 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     npos.min_self_bond = MIN_SELF_BOND.into();
     npos.max_entity_correlation_pct = 50;
     npos.finality_margin_blocks = FINALITY_MARGIN;
+    npos.evidence_horizon_blocks = 9;
+    npos.slashing_delay_blocks = 3;
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
@@ -793,7 +830,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(npos_entity_correlation_limits_validator_set),
+        stringify!(npos_entity_correlation_cannot_shrink_the_certified_committee),
     )
     .await?
     else {
@@ -801,8 +838,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     };
     let client = network.client();
     let peers = network.peers();
-    let peer_a = &peers[0];
-    let peer_b = &peers[1];
+    let expected = peers
+        .iter()
+        .map(|peer| peer.id().to_string())
+        .collect::<BTreeSet<_>>();
     advance_to_height(
         &network,
         &client,
@@ -816,20 +855,14 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + COLLECTOR_RETRY;
-    loop {
-        let peers = collector_peer_ids(&http, &collectors_url).await?;
-        if peers.len() == 1
-            && (peers[0] == peer_a.id().to_string() || peers[0] == peer_b.id().to_string())
-        {
-            break;
-        }
-        if Instant::now() > deadline {
-            eyre::bail!("collectors not limited by entity cap; observed {peers:?}");
-        }
-        sleep(COLLECTOR_POLL).await;
-    }
+    wait_for_exact_committee(&collectors_url, &expected).await?;
+    authenticated_committee_at_height(
+        &activation_client,
+        network.network_id(),
+        WAIT_HEIGHT,
+        &expected,
+    )
+    .await?;
     network.shutdown().await;
     Ok(())
 }

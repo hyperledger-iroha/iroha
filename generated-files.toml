@@ -799,6 +799,27 @@ inputs = [
 check = "python3 scripts/regenerate_kotodama_goldens.py --check --koto target/debug/koto --iroha target/debug/iroha"
 
 [[generated]]
+name = "kagami-norito-schemas"
+kind = "file"
+outputs = [
+  "specs/references/schema.json",
+  "specs/references/genesis_schema.json",
+]
+generator = "bash scripts/tests/consistency.sh --update schema"
+generator_sources = [
+  "scripts/tests/consistency.sh",
+  "crates/iroha_kagami/src/main.rs",
+  "crates/iroha_kagami/src/schema.rs",
+]
+inputs = [
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_genesis/src/**/*.rs",
+  "crates/iroha_schema/src/**/*.rs",
+  "crates/iroha_schema_gen/src/**/*.rs",
+]
+check = "bash scripts/tests/consistency.sh schema"
+
+[[generated]]
 name = "default-docker-compose"
 kind = "file"
 outputs = [

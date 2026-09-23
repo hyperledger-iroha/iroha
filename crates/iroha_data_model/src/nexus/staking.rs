@@ -14,8 +14,23 @@ pub const MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS: usize = 64;
 pub const MAX_PUBLIC_LANE_REWARD_CLAIM_SOURCES: usize = 64;
 
 /// Signature scope for exact staking effects, including network-independent genesis templates.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneMonetaryScopeV1")]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum PublicLaneMonetaryScopeV1 {
     /// Only the authenticated genesis bootstrap may execute this template.
     Genesis,
@@ -24,35 +39,127 @@ pub enum PublicLaneMonetaryScopeV1 {
 }
 
 /// Exact state identity to which a monetary staking instruction is restricted.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneMonetaryPreconditionV1")]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum PublicLaneMonetaryPreconditionV1 {
-    /// A new registration at this exact eligibility boundary.
-    Registration {
-        /// Inclusive first height of the new validator tenure.
-        activation_height: u64,
-    },
+    /// A new registration at the exact eligibility boundary.
+    Registration(PublicLaneRegistrationPreconditionV1),
     /// Additional stake for the currently bound validator tenure.
-    Bond {
-        /// Inclusive first height of the validator tenure.
-        activation_height: u64,
-        /// Peer binding observed by the staker.
-        peer_id: PeerId,
-    },
-    /// One retained withdrawal request, including its amount and liability window.
-    Unbond {
-        /// Inclusive first height of the validator tenure.
-        activation_height: u64,
-        /// Domain-separated commitment to the exact pending withdrawal record.
-        request_hash: Hash,
-    },
-    /// One privileged slash against an exact tenure and slashable exposure.
-    Slash {
-        /// Inclusive first height of the validator tenure.
-        activation_height: u64,
-        /// Complete eligible custody exposure before this slash.
-        slashable_exposure: Quantity,
-    },
+    Bond(PublicLaneBondPreconditionV1),
+    /// One retained withdrawal request and its complete liability window.
+    Unbond(PublicLaneUnbondPreconditionV1),
+    /// One privileged slash against an exact tenure and exposure.
+    Slash(PublicLaneSlashPreconditionV1),
+}
+
+/// Exact retained state for the registration monetary operation.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRegistrationPreconditionV1")]
+pub struct PublicLaneRegistrationPreconditionV1 {
+    /// Inclusive first height of the new validator tenure.
+    pub activation_height: u64,
+}
+
+/// Exact retained state for the bond monetary operation.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneBondPreconditionV1")]
+pub struct PublicLaneBondPreconditionV1 {
+    /// Inclusive first height of the validator tenure.
+    pub activation_height: u64,
+    /// Peer binding observed by the staker.
+    pub peer_id: PeerId,
+}
+
+/// Exact retained state for the unbond monetary operation.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneUnbondPreconditionV1")]
+pub struct PublicLaneUnbondPreconditionV1 {
+    /// Inclusive first height of the validator tenure.
+    pub activation_height: u64,
+    /// Commitment to every field of the pending withdrawal request.
+    pub request_hash: Hash,
+}
+
+/// Exact retained state for the slash monetary operation.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneSlashPreconditionV1")]
+pub struct PublicLaneSlashPreconditionV1 {
+    /// Inclusive first height of the validator tenure.
+    pub activation_height: u64,
+    /// Complete eligible custody exposure before this slash.
+    pub slashable_exposure: Quantity,
 }
 
 /// Signed exact transfer and operation-specific custody change for a staking action.
@@ -60,8 +167,22 @@ pub enum PublicLaneMonetaryPreconditionV1 {
 /// Registration and bonding reserve `amount` at `destination_asset`; withdrawal
 /// and slashing release `amount` at `source_asset`. The instruction determines
 /// this direction, so the caller cannot select additional reserve effects.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneMonetaryPlanV1")]
+#[norito(deny_unknown_fields)]
 pub struct PublicLaneMonetaryPlanV1 {
     /// Genesis-derived network identity covered by the submitting signature.
     pub network_scope: PublicLaneMonetaryScopeV1,
@@ -93,9 +214,11 @@ impl PublicLaneMonetaryPlanV1 {
             source_asset,
             destination_asset,
             amount,
-            precondition: PublicLaneMonetaryPreconditionV1::Registration {
-                activation_height: 1,
-            },
+            precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                crate::nexus::PublicLaneRegistrationPreconditionV1 {
+                    activation_height: 1,
+                },
+            ),
         }
     }
 
@@ -107,10 +230,25 @@ impl PublicLaneMonetaryPlanV1 {
             && self.source_asset.definition() == self.destination_asset.definition()
             && self.source_asset.scope() == self.destination_asset.scope()
             && match &self.precondition {
-                PublicLaneMonetaryPreconditionV1::Registration { activation_height }
-                | PublicLaneMonetaryPreconditionV1::Bond { activation_height, .. }
-                | PublicLaneMonetaryPreconditionV1::Unbond { activation_height, .. } => *activation_height > 0,
-                PublicLaneMonetaryPreconditionV1::Slash { activation_height, slashable_exposure } => *activation_height > 0 && slashable_exposure >= &self.amount,
+                PublicLaneMonetaryPreconditionV1::Registration(
+                    crate::nexus::PublicLaneRegistrationPreconditionV1 { activation_height },
+                )
+                | PublicLaneMonetaryPreconditionV1::Bond(
+                    crate::nexus::PublicLaneBondPreconditionV1 {
+                        activation_height, ..
+                    },
+                )
+                | PublicLaneMonetaryPreconditionV1::Unbond(
+                    crate::nexus::PublicLaneUnbondPreconditionV1 {
+                        activation_height, ..
+                    },
+                ) => *activation_height > 0,
+                PublicLaneMonetaryPreconditionV1::Slash(
+                    crate::nexus::PublicLaneSlashPreconditionV1 {
+                        activation_height,
+                        slashable_exposure,
+                    },
+                ) => *activation_height > 0 && slashable_exposure >= &self.amount,
             }
     }
 }
@@ -119,16 +257,47 @@ impl PublicLaneMonetaryPlanV1 {
 ///
 /// Unpaid quantities live in separate exact-source accrual rows, so historical
 /// dust across many custody sources never requires an unbounded claim operation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardClaimStateV1")]
+#[norito(deny_unknown_fields)]
 pub struct PublicLaneRewardClaimStateV1 {
     /// Last processed reward epoch, including epochs with no recipient entitlement.
     pub through_epoch: Option<u64>,
 }
 
 /// Immutable reward record covered by the recipient's signed processing plan.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardRecordRefV1")]
+#[norito(deny_unknown_fields)]
 pub struct PublicLaneRewardRecordRefV1 {
     /// Reward epoch within the instruction's lane.
     pub epoch: u64,
@@ -137,8 +306,22 @@ pub struct PublicLaneRewardRecordRefV1 {
 }
 
 /// Exact prior accrual and payment from one retained reward custody source.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardClaimSourceV1")]
+#[norito(deny_unknown_fields)]
 pub struct PublicLaneRewardClaimSourceV1 {
     /// Immutable custody asset retained by reward records and accrual rows.
     pub source_asset: AssetId,
@@ -151,8 +334,22 @@ pub struct PublicLaneRewardClaimSourceV1 {
 }
 
 /// Bounded signed reward processing and payment plan.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, norito::NoritoSchema, crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
 #[norito_schema(name = "iroha_data_model::nexus::staking::PublicLaneRewardClaimPlanV1")]
+#[norito(deny_unknown_fields)]
 pub struct PublicLaneRewardClaimPlanV1 {
     /// Exact network or authenticated genesis template scope.
     pub network_scope: PublicLaneMonetaryScopeV1,
@@ -172,16 +369,28 @@ impl PublicLaneRewardClaimPlanV1 {
         self.valid_until_height > 0
             && self.records.len() <= MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS
             && self.sources.len() <= MAX_PUBLIC_LANE_REWARD_CLAIM_SOURCES
-            && self.records.windows(2).all(|pair| pair[0].epoch < pair[1].epoch)
+            && self
+                .records
+                .windows(2)
+                .all(|pair| pair[0].epoch < pair[1].epoch)
             && self.records.first().is_none_or(|record| {
-                self.expected_state.as_ref().and_then(|state| state.through_epoch).is_none_or(|epoch| epoch < record.epoch)
+                self.expected_state
+                    .as_ref()
+                    .and_then(|state| state.through_epoch)
+                    .is_none_or(|epoch| epoch < record.epoch)
             })
-            && self.sources.windows(2).all(|pair| pair[0].source_asset < pair[1].source_asset)
+            && self
+                .sources
+                .windows(2)
+                .all(|pair| pair[0].source_asset < pair[1].source_asset)
             && self.sources.iter().all(|source| {
                 source.source_asset.definition() == source.destination_asset.definition()
                     && source.source_asset.scope() == source.destination_asset.scope()
                     && source.destination_asset.account() == recipient
-                    && source.expected_accrued.as_ref().is_none_or(|amount| !amount.is_zero())
+                    && source
+                        .expected_accrued
+                        .as_ref()
+                        .is_none_or(|amount| !amount.is_zero())
             })
     }
 }
@@ -190,7 +399,9 @@ impl PublicLaneRewardClaimPlanV1 {
 ///
 /// # Errors
 /// Returns an error if canonical Norito encoding cannot be produced.
-pub fn public_lane_reward_record_commitment(record: &PublicLaneRewardRecord) -> Result<Hash, norito::Error> {
+pub fn public_lane_reward_record_commitment(
+    record: &PublicLaneRewardRecord,
+) -> Result<Hash, norito::Error> {
     let mut bytes = b"iroha.staking.reward_record.v1\0".to_vec();
     bytes.extend_from_slice(&norito::encode_canonical(record)?);
     Ok(Hash::new(bytes))
@@ -200,7 +411,9 @@ pub fn public_lane_reward_record_commitment(record: &PublicLaneRewardRecord) -> 
 ///
 /// # Errors
 /// Returns an error if the canonical Norito encoding cannot be produced.
-pub fn public_lane_unbonding_commitment(request: &PublicLaneUnbonding) -> Result<Hash, norito::Error> {
+pub fn public_lane_unbonding_commitment(
+    request: &PublicLaneUnbonding,
+) -> Result<Hash, norito::Error> {
     let mut bytes = b"iroha.staking.pending_unbond.v1\0".to_vec();
     bytes.extend_from_slice(&norito::encode_canonical(request)?);
     Ok(Hash::new(bytes))
@@ -232,7 +445,12 @@ pub struct PublicLaneValidatorRecord {
     /// status is promoted, so a finalized boundary snapshot can project them
     /// without depending on block-local execution order.
     pub activation_height: u64,
-    /// Exclusive first height no longer covered by this validator binding.
+    /// Requested exclusive end for selection into a new, unfrozen committee.
+    ///
+    /// This does not revoke a current or already frozen seat. Certified retention
+    /// may extend voting and slashing obligations beyond the requested height.
+    pub election_exit_height: Option<u64>,
+    /// Authenticated exclusive first height no longer covered by this binding.
     ///
     /// Retained custody records preserve this boundary after exit or slash so
     /// evidence can be matched to the exact historical tenure.
@@ -248,7 +466,7 @@ pub enum PublicLaneValidatorStatus {
     PendingActivation(u64),
     /// Validator participates in consensus for the target lane.
     Active,
-    /// Validator is exiting and the bonded stake is being unlocked.
+    /// Exit requested at the payload release time; certified replacement is still required.
     Exiting(u64),
     /// Validator exit processing is complete.
     ///
@@ -383,7 +601,7 @@ pub struct PublicLaneRewardRecord {
     pub epoch: u64,
     /// Asset identifier used for payouts.
     pub asset: AssetId,
-    /// Total reward minted or transferred into the pool.
+    /// Total explicit entitlement reserved from the already funded treasury asset.
     pub total_reward: Quantity,
     /// Individual reward shares emitted in this payout.
     pub shares: Vec<PublicLaneRewardShare>,
@@ -400,8 +618,8 @@ pub struct PublicLanePendingReward {
     pub account: AccountId,
     /// Asset identifier used for the payout.
     pub asset: AssetId,
-    /// Latest epoch that was already claimed (0 when none).
-    pub last_claimed_epoch: u64,
+    /// Highest reward record processed, including entitlements retained as unpaid accrual.
+    pub processed_through_epoch: Option<u64>,
     /// Latest epoch included in `amount`.
     pub pending_through_epoch: u64,
     /// Total amount available to claim up to `pending_through_epoch`.
@@ -507,3 +725,154 @@ mod tests {
 
 #[cfg(test)]
 mod captured_staking_schema_tests;
+
+#[cfg(test)]
+mod monetary_tests {
+    use super::*;
+
+    #[test]
+    fn monetary_plan_roundtrip_and_shape_bind_all_operation_preconditions() {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![23; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let account = AccountId::new(key.public_key().clone());
+        let mut plan = crate::isi::staking::monetary_registration_fixture(&account, 10_u64.into());
+        for precondition in [
+            PublicLaneMonetaryPreconditionV1::Registration(
+                crate::nexus::PublicLaneRegistrationPreconditionV1 {
+                    activation_height: 1,
+                },
+            ),
+            PublicLaneMonetaryPreconditionV1::Bond(crate::nexus::PublicLaneBondPreconditionV1 {
+                activation_height: 1,
+                peer_id: PeerId::new(key.public_key().clone()),
+            }),
+            PublicLaneMonetaryPreconditionV1::Unbond(
+                crate::nexus::PublicLaneUnbondPreconditionV1 {
+                    activation_height: 1,
+                    request_hash: Hash::new(b"unbond"),
+                },
+            ),
+            PublicLaneMonetaryPreconditionV1::Slash(crate::nexus::PublicLaneSlashPreconditionV1 {
+                activation_height: 1,
+                slashable_exposure: 10_u64.into(),
+            }),
+        ] {
+            plan.precondition = precondition;
+            assert!(plan.has_canonical_shape());
+            let bytes = norito::to_bytes(&plan).unwrap();
+            assert_eq!(
+                norito::decode_from_bytes::<PublicLaneMonetaryPlanV1>(&bytes).unwrap(),
+                plan
+            );
+            let json = norito::json::to_json(&plan).unwrap();
+            assert_eq!(
+                norito::json::from_json::<PublicLaneMonetaryPlanV1>(&json).unwrap(),
+                plan
+            );
+        }
+        plan.amount = 11_u64.into();
+        assert!(
+            !plan.has_canonical_shape(),
+            "slash cannot exceed its signed exposure"
+        );
+        plan.amount = Quantity::zero();
+        assert!(!plan.has_canonical_shape());
+    }
+
+    #[test]
+    fn bounded_reward_claim_roundtrip_and_ordering_are_exact() {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![24; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let recipient = AccountId::new(key.public_key().clone());
+        let asset = crate::isi::staking::monetary_registration_fixture(&recipient, 1_u64.into())
+            .source_asset;
+        let mut plan = PublicLaneRewardClaimPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Genesis,
+            valid_until_height: 1,
+            expected_state: None,
+            records: vec![PublicLaneRewardRecordRefV1 {
+                epoch: 0,
+                record_hash: Hash::new(b"record"),
+            }],
+            sources: vec![PublicLaneRewardClaimSourceV1 {
+                source_asset: asset.clone(),
+                destination_asset: asset,
+                expected_accrued: None,
+                payout: Quantity::zero(),
+            }],
+        };
+        assert!(plan.has_canonical_shape(&recipient));
+        assert_eq!(
+            norito::decode_from_bytes::<PublicLaneRewardClaimPlanV1>(
+                &norito::to_bytes(&plan).unwrap()
+            )
+            .unwrap(),
+            plan
+        );
+        assert_eq!(
+            norito::json::from_json::<PublicLaneRewardClaimPlanV1>(
+                &norito::json::to_json(&plan).unwrap()
+            )
+            .unwrap(),
+            plan
+        );
+        plan.sources[0].expected_accrued = Some(Quantity::zero());
+        assert!(!plan.has_canonical_shape(&recipient));
+        plan.sources[0].expected_accrued = None;
+        plan.records.push(plan.records[0].clone());
+        assert!(!plan.has_canonical_shape(&recipient));
+        plan.records = (0..65)
+            .map(|epoch| PublicLaneRewardRecordRefV1 {
+                epoch,
+                record_hash: Hash::new(epoch.to_be_bytes()),
+            })
+            .collect();
+        assert!(!plan.has_canonical_shape(&recipient));
+        plan.records.clear();
+        plan.sources = vec![plan.sources[0].clone(); 65];
+        assert!(!plan.has_canonical_shape(&recipient));
+    }
+
+    #[test]
+    fn immutable_reward_and_unbond_commitments_cover_mutations() {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![25; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let recipient = AccountId::new(key.public_key().clone());
+        let asset = crate::isi::staking::monetary_registration_fixture(&recipient, 1_u64.into())
+            .source_asset;
+        let mut record = PublicLaneRewardRecord {
+            lane_id: LaneId::SINGLE,
+            epoch: 0,
+            asset,
+            total_reward: 1_u64.into(),
+            shares: vec![PublicLaneRewardShare {
+                account: recipient,
+                role: PublicLaneRewardRole::Validator,
+                amount: 1_u64.into(),
+            }],
+            metadata: Metadata::default(),
+        };
+        let commitment = public_lane_reward_record_commitment(&record).unwrap();
+        record.epoch = 1;
+        assert_ne!(
+            public_lane_reward_record_commitment(&record).unwrap(),
+            commitment
+        );
+        let mut unbond = PublicLaneUnbonding {
+            request_id: Hash::new(b"request"),
+            amount: 1_u64.into(),
+            release_at_ms: 10,
+            slashable_through_height: 20,
+            liability_release_height: 30,
+        };
+        let commitment = public_lane_unbonding_commitment(&unbond).unwrap();
+        unbond.liability_release_height += 1;
+        assert_ne!(
+            public_lane_unbonding_commitment(&unbond).unwrap(),
+            commitment
+        );
+    }
+}

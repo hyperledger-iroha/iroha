@@ -5,7 +5,7 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
     },
     parameter::{Parameter, system::SumeragiConsensusMode},
@@ -70,12 +70,11 @@ impl Fixture {
             .collect();
         validators.sort_by(|a, b| a.validator.cmp(&b.validator));
         let mint = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         };
         let topology = (110..114)
             .map(|seed| {
@@ -248,7 +247,8 @@ fn execute_fixture_genesis(
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -378,11 +378,11 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
                         DomainId::parse_fully_qualified("nexus.universal").unwrap(),
                     ))
                     .into(),
-                    Register::account(Account::new(escrow)).into(),
+                    Register::account(Account::new(escrow.clone())).into(),
                     Register::asset_definition(AssetDefinition::new(
                         stake_asset.clone(),
-                        "Fixture stake",
-                        NumericSpec::default(),
+                        "XOR",
+                        NumericSpec::fractional(9),
                         AssetBalancePolicy::Global,
                         None,
                     ))
@@ -406,6 +406,11 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
                             validator.clone(),
                             Quantity::from(1_u64),
                             Metadata::default(),
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset.clone(), validator.clone()),
+                                AssetId::new(stake_asset.clone(), escrow.clone()),
+                                Quantity::from(1_u64),
+                            ),
                         )
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),
@@ -749,7 +754,7 @@ fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
 }
 
 #[test]
-fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution() {
+fn beacon_public_preparation_derives_native_network_bound_seats_and_rejects_substitution() {
     let fixture = Fixture::new();
     let wire = fixture.block.encode_wire().unwrap();
     let manifest = json_line(&fixture.manifest).unwrap();
@@ -793,6 +798,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
         value
     );
     let units = value.get("final_units").unwrap().as_array().unwrap();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(fixture.block.hash());
+    let network_root = hex::encode(network_id.as_bytes());
+    let attempt = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new_from_chunks(&[
+        b"iroha.global-beacon.genesis-attempt.v1\0",
+        network_id.as_bytes(),
+    ])));
     let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
         fixture.block.clone(),
     ))
@@ -815,14 +826,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
             unit.get("config_file").unwrap().as_str(),
             Some("beacon.toml")
         );
-        assert!(
-            unit.get("credential_path")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .ends_with(&format!(
-                    "/seat-{seat}/iroha-global-beacon-partial-signer-v1.norito"
-                ))
+        let expected = format!(
+            "/var/lib/taira/.public-reset-control-v1/beacon/{network_root}/ceremony/attempt-{attempt}-seat-{seat}/iroha-global-beacon-partial-signer-v1.norito"
+        );
+        assert_eq!(
+            unit.get("credential_path").unwrap().as_str(),
+            Some(expected.as_str())
         );
     }
     let other_nonce = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -832,7 +841,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
     let other =
         json::to_value(&prepare(other_nonce, &inventory.validator_clients, &manifest).unwrap())
             .unwrap();
-    assert_ne!(value.get("request"), other.get("request"));
+    assert_eq!(value.get("request"), other.get("request"));
+    assert_eq!(value.get("final_units"), other.get("final_units"));
+    assert_ne!(
+        value.get("authorization_nonce"),
+        other.get("authorization_nonce")
+    );
     let mut wrong = inventory.validator_clients.clone();
     wrong[0].peer_id = wrong[1].peer_id.clone();
     assert!(prepare(&inventory.authorization_nonce, &wrong, &manifest).is_err());

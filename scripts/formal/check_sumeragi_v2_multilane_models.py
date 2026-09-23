@@ -89,6 +89,7 @@ TLA_DECLARATION_TEMPLATE = (
     r"\s*(?:\([^)=\n]*\))?\s*=="
 )
 RUST_DECLARATION_TEMPLATES = {
+    "pub_fn": r"(?m)^[ \t]*pub[ \t]+fn[ \t]+{symbol}\b",
     "fn": (
         r"(?m)^[ \t]*(?:pub(?:\([^)\n]*\))?[ \t]+)?"
         r"(?:const[ \t]+)?(?:async[ \t]+)?(?:proof[ \t]+)?fn[ \t]+{symbol}\b"

@@ -785,7 +785,7 @@ public final class SumeragiV2WireFixtureTests {
       throw new AssertionError("compact status fixture omitted a required populated diagnostic");
     }
     assertEquals(null, decoded.lastCommittedSubject);
-    assertEquals(2L, decoded.heightContext.epoch);
+    assertEquals(0L, decoded.heightContext.epoch);
     assertEquals(100L, decoded.heightContext.epochEndHeight);
     assertEquals(SumeragiV2Wire.ConsensusMode.NPOS, decoded.heightContext.mode);
     assertEquals(4L, decoded.heightContext.validatorCount);

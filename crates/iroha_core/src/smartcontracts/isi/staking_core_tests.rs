@@ -277,6 +277,21 @@ fn set_test_npos_penalty_windows(
         .get_mut()
         .set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
 }
+fn set_fixture_xor_identity(stx: &mut StateTransaction<'_, '_>, asset: &AssetDefinitionId) {
+    let parameters = stx
+        .world
+        .sumeragi_npos_parameters()
+        .expect("fixture committed parameters");
+    assert_eq!(
+        asset, &parameters.xor_asset_definition_id,
+        "staking fixtures must use the committed network XOR identity"
+    );
+    assert_eq!(
+        asset,
+        &SumeragiNposParameters::default().xor_asset_definition_id,
+        "staking fixtures must use the first-release network XOR identity"
+    );
+}
 fn configure_reward_fixture(
     stx: &mut StateTransaction<'_, '_>,
     lane_id: LaneId,
@@ -298,16 +313,16 @@ fn configure_reward_fixture(
     Register::account(Account::new(validator.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+    let asset_def_id = stx
+        .world
+        .sumeragi_npos_parameters()
+        .expect("fixture committed NPoS parameters")
+        .xor_asset_definition_id;
     Register::asset_definition({
         let __asset_definition_id = asset_def_id.clone();
         AssetDefinition::numeric(
             __asset_definition_id.clone(),
-            "xor".to_owned(),
+            "XOR".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -342,10 +357,16 @@ fn configure_reward_fixture(
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
+    set_fixture_xor_identity(stx, &asset_def_id);
     stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(
+            &stx, lane_id,
+            &(validator.clone()),
+            &(initial_stake.clone()),
+        ),
         lane_id,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -388,16 +409,16 @@ fn prepare_accounts(
     register_peer_for_account(stx, &validator);
     register_peer_for_account(stx, &delegator);
     register_peer_for_account(stx, &escrow);
-    let asset_def_id: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("nexus", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+    let asset_def_id = stx
+        .world
+        .sumeragi_npos_parameters()
+        .expect("fixture committed NPoS parameters")
+        .xor_asset_definition_id;
     Register::asset_definition({
         let __asset_definition_id = asset_def_id.clone();
         AssetDefinition::numeric(
             __asset_definition_id.clone(),
-            "xor".to_owned(),
+            "XOR".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -413,6 +434,7 @@ fn prepare_accounts(
         .execute(&ALICE_ID, stx)
         .unwrap();
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
+    set_fixture_xor_identity(stx, &asset_def_id);
     stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = escrow.to_string();
     (validator, delegator, escrow, asset_def_id)
@@ -437,6 +459,11 @@ fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneI
         .execute(&ALICE_ID, stx)
         .expect("fund committee stake");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(
+                &stx, lane_id,
+                &(validator.clone()),
+                &(Quantity::from(1_000_u64)),
+            ),
             lane_id,
             peer_id,
             validator: validator.clone(),
@@ -476,6 +503,7 @@ fn insert_validator_record_for_key(
             metadata: Metadata::default(),
             status,
             activation_height,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         },

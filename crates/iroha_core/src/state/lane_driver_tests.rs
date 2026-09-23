@@ -48,12 +48,13 @@ fn native_driver_control_for_test(
 }
 
 #[cfg(all(unix, not(target_os = "espidf")))]
-state_test! { sync native_driver_silent_initial_author_reaches_real_decision_without_global_view_input
+state_test! { sync native_runner_silent_initial_author_reaches_real_decision_through_retained_transport
     use crate::sumeragi::{
         output_guard::ConsensusOutputGuard,
         v2_core as core,
-        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneInput},
         v2_lane_wire::{LaneAuthenticator, LaneWalRecordV1},
+        v2_runner::native_lane_runtime::NativeLaneRuntime,
     };
     use iroha_data_model::block::lane_consensus::LaneMessageV1;
     use std::{collections::VecDeque, time::Instant};
@@ -71,16 +72,17 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
     assert_ne!(context.leader(1), silent);
     let guards = (0..3).map(|_| ConsensusOutputGuard::isolated()).collect::<Vec<_>>();
     let mut drivers = survivors.iter().zip(&guards).map(|(&signer, guard)| {
-        NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(guard),
-            native_process_key(&fixture, lane, signer), native_driver_limits_for_test()).unwrap()
+        NativeLaneRuntime::new(Arc::clone(&fixture.state), Arc::clone(guard),
+            native_process_key(&fixture, lane, signer), native_driver_limits_for_test(), nonzero!(4_usize)).unwrap()
     }).collect::<Vec<_>>();
     let until = Instant::now() + Duration::from_secs(30);
     while drivers.iter().any(|driver| driver.process().instance(id).is_none()) {
-        for driver in &mut drivers { driver.poll(&observed, start).unwrap(); }
+        for driver in &mut drivers { driver.poll_for_test(&observed, start, |_, _| Ok(())).unwrap(); }
         assert!(Instant::now() < until, "all real physical opens must complete");
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(drivers.iter().all(|driver| driver.process().instance(id).unwrap().native_records().is_empty()));
+    assert!(drivers.iter().all(|driver| driver.next_deadline().is_some()));
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
     let due = start + Duration::from_secs(1);
     let mut pending = VecDeque::new();
@@ -92,22 +94,24 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         instance.native_decision().unwrap().is_none()
             || !instance.held_effects().any(|effect| matches!(effect, core::Effect::Apply { .. }))
     }) {
-        for driver in &mut drivers { driver.poll(&observed, due).unwrap(); }
-        for (sender, driver) in drivers.iter().enumerate() {
-            while let Some(packet) = driver.take_outbound().unwrap() {
-                assert_eq!(packet.canonical_bytes, norito::encode_canonical(&packet.envelope).unwrap());
-                if let LaneMessageV1::Proposal(proposal) = &packet.envelope.message
+        for driver in &mut drivers {
+            driver.poll_for_test(&observed, due, |post, ticket| {
+                assert!(ticket.is_none(), "fixture actor admits the actual original post");
+                let crate::NetworkMessage::SumeragiBlock(frame) = post.data else { panic!("native frame"); };
+                let crate::sumeragi::message::BlockMessage::NativeLane(envelope) = frame.as_message() else { panic!("native control"); };
+                if let LaneMessageV1::Proposal(proposal) = &envelope.message
                     && proposal.body.round.instance_id == Hash::from(id.0)
                 {
                     assert_eq!(proposal.body.round.voting_view, 1);
                     saw_successor_proposal = true;
                 }
-                for (recipient, &signer) in survivors.iter().enumerate() {
-                    if recipient != sender && packet.destinations.contains(&lane.frozen().committee[signer]) {
-                        pending.push_back((recipient, NativeLaneInput::Control(packet.envelope.clone())));
-                    }
+                // Actor custody for the silent peer is accepted, but that peer
+                // never returns a vote. Only the three live reducers exchange input.
+                if let Some(recipient) = survivors.iter().position(|&signer| lane.frozen().committee[signer] == post.peer_id) {
+                    pending.push_back((recipient, NativeLaneInput::Control(envelope.clone())));
                 }
-            }
+                Ok(())
+            }).unwrap();
         }
         let count = pending.len();
         for _ in 0..count {
@@ -134,9 +138,107 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         assert!(instance.held_effects().any(|effect| matches!(effect, core::Effect::Apply { .. })),
             "the candidate consumer still owes exact economic Apply");
     }
+    for driver in &drivers {
+        let handoff = driver.capture_decisions(&observed).unwrap().unwrap();
+        let _prepared = handoff.prepare_candidate().unwrap();
+    }
     assert!(guards.iter().all(|guard| !guard.restart_required()));
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
     for driver in drivers { driver.shutdown().join().unwrap(); }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_runner_retains_saturated_outbox_while_original_clock_advances
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneInput},
+        v2_lane_wire::LaneWalRecordV1,
+        v2_runner::native_lane_runtime::NativeLaneRuntime,
+    };
+    use iroha_p2p::network::{NetworkActorAdmissionError, NetworkActorAdmissionTicketTestFixture};
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let fixture = native_process_fixture(false, start);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut runtime = NativeLaneRuntime::new(
+        Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, 0), native_driver_limits_for_test(), nonzero!(1_usize),
+    ).unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    let mut actor_owners = Vec::new();
+    let mut refuse = |post: iroha_p2p::network::message::Post<crate::NetworkMessage>,
+                      ticket: Option<iroha_p2p::network::NetworkActorAdmissionTicket>| {
+        let ticket = match ticket {
+            Some(ticket) => ticket,
+            None => {
+                let (owner, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                actor_owners.push(owner);
+                ticket
+            }
+        };
+        let rank = ticket.rank().unwrap();
+        Err(NetworkActorAdmissionError::Backpressured { message: post, ticket: Some(ticket), rank })
+    };
+    while runtime.process().instance(id).is_none() {
+        runtime.poll_for_test(&observed, start, &mut refuse).unwrap();
+        assert!(Instant::now() < until, "original opening completes");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Genuine frozen-committee timeout votes advance the same native reducer.
+    // No fake certificate, injected Ready, or output acknowledgement is used.
+    for signer in 0..3 {
+        assert!(matches!(runtime.admit(&observed, NativeLaneInput::Control(
+            native_driver_control_for_test(&fixture, lane, signer)
+        )), NativeLaneAdmission::Accepted));
+    }
+    let due = start + Duration::from_secs(1);
+    while runtime.pending_output_for_test().is_none() {
+        runtime.poll_for_test(&observed, due, &mut refuse).unwrap();
+        assert!(Instant::now() < until, "distinct output fills the sole transport slot");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let packet = runtime.pending_output_for_test().unwrap();
+    let original = packet.canonical_bytes.as_ptr();
+    let bytes = packet.canonical_bytes.clone();
+    while runtime.process().instance(id).unwrap().tag().view() != 1 {
+        runtime.poll_for_test(&observed, due, &mut refuse).unwrap();
+        assert_eq!(runtime.pending_output_for_test().unwrap().canonical_bytes.as_ptr(), original);
+        assert!(Instant::now() < until, "exact timeout quorum advances despite full output");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let records_before = runtime.process().instance(id).unwrap().native_records().len();
+    // Service the reducer-issued EnterView at the same native clock instant
+    // before advancing to that actual original deadline.
+    while runtime.process().instance(id).unwrap().held_effects().any(|effect|
+        matches!(effect, crate::sumeragi::v2_core::Effect::EnterView { .. })) {
+        runtime.poll_for_test(&observed, due, &mut refuse).unwrap();
+        assert!(Instant::now() < until, "the original EnterView remains serviceable");
+    }
+    let later = runtime.process().instance(id).unwrap().timeout_deadline().unwrap();
+    loop {
+        runtime.poll_for_test(&observed, later, &mut refuse).unwrap();
+        let packet = runtime.pending_output_for_test().unwrap();
+        assert_eq!(packet.canonical_bytes.as_ptr(), original);
+        assert_eq!(packet.canonical_bytes, bytes);
+        let records = runtime.process().instance(id).unwrap().native_records();
+        if records.len() > records_before && records.iter().any(|row| matches!(&row.record,
+            LaneWalRecordV1::TimeoutIntent { body, .. } if body.round.voting_view == 1)) {
+            break;
+        }
+        assert!(Instant::now() < until, "actor saturation cannot starve the native clock or WAL");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(refuse);
+    assert!(!actor_owners.is_empty());
+    assert!(actor_owners.iter().all(|owner| owner.ticket_drop_cancellations() == 0));
+    assert!(!guard.restart_required());
+    // Shutdown does not claim delivery: original held output makes this fail-stop.
+    runtime.shutdown().join().unwrap();
+    assert!(guard.restart_required());
 }
 
 #[cfg(all(unix, not(target_os = "espidf")))]
@@ -156,6 +258,16 @@ state_test! { sync native_driver_retains_exact_ingress_and_instance_across_globa
         native_process_key(&fixture, lane, 0), limits).unwrap();
     let control = native_driver_control_for_test(&fixture, lane, 1);
     assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(control.clone())), NativeLaneAdmission::Accepted));
+    for _ in 0..32 {
+        assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(control.clone())), NativeLaneAdmission::Accepted),
+            "exact retransmission rejoins the one original queued reducer input even at capacity");
+    }
+    let mut forged = control.clone();
+    if let iroha_data_model::block::lane_consensus::LaneMessageV1::TimeoutVote(vote) = &mut forged.message {
+        vote.share.signature[0] ^= 1;
+    }
+    assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(forged)), NativeLaneAdmission::Rejected { .. }),
+        "capacity and coalescing never bypass native authentication");
     let second = native_driver_control_for_test(&fixture, lane, 2);
     let NativeLaneAdmission::Retry(NativeLaneInput::Control(retained)) = driver.admit(&observed, NativeLaneInput::Control(second.clone())) else { panic!("full queue retains exact input"); };
     assert_eq!(retained, second);

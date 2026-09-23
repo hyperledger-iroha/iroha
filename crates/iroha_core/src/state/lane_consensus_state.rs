@@ -113,6 +113,7 @@ impl StateBlock<'_> {
             if opening.height != height || opening.network_id != self.network_id {
                 return Err("lane opening authority belongs to another carrier".to_owned());
             }
+            self.finalize_validator_committee_boundary(opening)?;
         }
         self.lane_consensus_contexts
             .get()
