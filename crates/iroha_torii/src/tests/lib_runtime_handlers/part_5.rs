@@ -2166,7 +2166,7 @@ fn append_canonical_outcome_test_block(
     let header = block.header();
     let block_hash = store_finalized_history_fixture(app, block);
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block.transactions.insert_block(
         [entrypoint_hash].into_iter().collect(),
         NonZeroUsize::new(2).expect("second height is nonzero"),
@@ -2446,7 +2446,7 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
@@ -2483,7 +2483,7 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     )
     .expect("committed height is non-zero");
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block
         .transactions
         .insert_block([bogus_hash].into_iter().collect(), height);
@@ -2526,7 +2526,7 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let block_hash = store_finalized_history_fixture(&app, sample.block);
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [sample.entrypoint_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
@@ -2579,7 +2579,7 @@ fn store_and_index_transaction_details_block(
     .expect("transaction-details height is nonzero");
     let block_hash = store_finalized_history_fixture(app, block);
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     state_block
         .transactions
         .insert_block([entrypoint_hash].into_iter().collect(), height);
@@ -3153,7 +3153,7 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     let entrypoint_hashes: HashSet<_> = [reveal_entry_hash, signed_entrypoint_alias]
         .into_iter()
         .collect();
@@ -3222,7 +3222,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
@@ -3266,7 +3266,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
     let mut state_block = app.state.block(header.clone());
-    state_block.block_hashes.push(block_hash);
+    state_block.block_hashes.push_for_tests(block_hash);
     let tx_hashes: HashSet<_> = [tx_entry_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
