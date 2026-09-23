@@ -47,7 +47,7 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Reputation(crate::query::reputation_finalized::ReputationFinalizedArchiveError),
     /// The original execution witness could not be persisted or reauthenticated.
     ExecutionWitness(crate::kura::Error),
-    /// Retained archive persistence failed before the final joint lease.
+    /// Retained archive persistence failed under the original joint lease.
     Archive(super::archive_publication::CarrierArchivePublicationError),
     /// The named original State fence must release before another attempt.
     Fence {
@@ -104,12 +104,14 @@ impl std::fmt::Debug for CarrierPhysicalPreparationError {
 /// No standalone proof escapes: releasing the lease returns only the original
 /// unauthenticated decision, so every later attempt must reauthenticate it.
 struct SourceAuthenticatedCarrier<'target, Admission> {
+    // Unlock the complete physical boundary before original values/admission
+    // can run cleanup callbacks during abandonment or unwind.
+    kura: KuraPublicationLease<'target>,
     decision: DecisionBoundCarrierJournals<
         Admission,
         DetachedCarrierComponents,
         KuraWsvCheckpointReceipt,
     >,
-    kura: KuraPublicationLease<'target>,
 }
 
 impl<'target, Admission> SourceAuthenticatedCarrier<'target, Admission> {
@@ -403,7 +405,7 @@ impl<Admission>
         PhysicallyPreparedCarrier<'target, Admission>,
         (Self, CarrierPhysicalPreparationError),
     > {
-        let mut original = self;
+        let original = self;
         if !target.matches_kura_instance(&original.journals.kura) {
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
         }
@@ -429,28 +431,40 @@ impl<Admission>
                 return Err((original, CarrierPhysicalPreparationError::Queue(error)));
             }
         }
-        // Reject substituted execution or archive custody before any derived
-        // persistence can modify its durable namespace. Release the temporary
-        // lease before the continuations enter their own storage APIs; the final
-        // lease below must authenticate all these same owners again.
+        // Retain the same original Kura fences from source authentication through
+        // witness/archive persistence and State acquisition. Releasing between
+        // phases lets queued readers repeatedly preempt the next try-only probe.
         let kura = match target.kura.try_publication_lease() {
             Ok(lease) => lease,
             Err(error) => {
                 return Err((original, CarrierPhysicalPreparationError::Kura(error)));
             }
         };
-        original = match SourceAuthenticatedCarrier::try_new(original, kura) {
-            Ok(owner) => owner.release(),
-            Err((original, error)) => {
-                return Err((original, error));
-            }
-        };
-        if let Err(error) = original.publish_execution_witness() {
+        let authenticated = SourceAuthenticatedCarrier::try_new(original, kura)?;
+        authenticated.try_prepare(target, queue_source)
+    }
+}
+
+impl<'target, Admission> SourceAuthenticatedCarrier<'target, Admission> {
+    /// Continue under the original lease; no intermediate phase reacquires Kura.
+    fn try_prepare(
+        mut self,
+        target: &'target State,
+        queue_source: Option<&OriginalCarrierQueue<'target>>,
+    ) -> Result<
+        PhysicallyPreparedCarrier<'target, Admission>,
+        (
+            DecisionBoundCarrierJournals<
+                Admission,
+                DetachedCarrierComponents,
+                KuraWsvCheckpointReceipt,
+            >,
+            CarrierPhysicalPreparationError,
+        ),
+    > {
+        if let Err(error) = self.decision.publish_execution_witness(&self.kura) {
             use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;
             let error = match error {
-                CarrierExecutionWitnessPublicationError::Kura(error) => {
-                    CarrierPhysicalPreparationError::Kura(error)
-                }
                 CarrierExecutionWitnessPublicationError::Checkpoint(error) => {
                     CarrierPhysicalPreparationError::Checkpoint(error)
                 }
@@ -458,40 +472,19 @@ impl<Admission>
                     CarrierPhysicalPreparationError::ExecutionWitness(error)
                 }
             };
-
-            return Err((original, error));
+            return Err((self.release(), error));
         }
-        if let Err(error) = original.publish_archives() {
+        if let Err(error) = self.decision.publish_archives(&self.kura) {
             use super::archive_publication::CarrierArchivePublicationError;
             let error = match error {
-                CarrierArchivePublicationError::Kura(error) => {
-                    CarrierPhysicalPreparationError::Kura(error)
-                }
                 CarrierArchivePublicationError::Checkpoint(error) => {
                     CarrierPhysicalPreparationError::Checkpoint(error)
                 }
                 error => CarrierPhysicalPreparationError::Archive(error),
             };
-
-            return Err((original, error));
+            return Err((self.release(), error));
         }
-        // Borrow the exact target's Arc, never a self-referential field inside
-        // the retained carrier. Identity equality above joins that same owner.
-        let kura = match target.kura.try_publication_lease() {
-            Ok(lease) => lease,
-            Err(error) => {
-                return Err((original, CarrierPhysicalPreparationError::Kura(error)));
-            }
-        };
-        // Join the original source and checkpoint under all four Kura fences
-        // before any State probe. The complete owner carries this authentication
-        // only while that same lease remains held.
-        let authenticated = match SourceAuthenticatedCarrier::try_new(original, kura) {
-            Ok(owner) => owner,
-            Err((original, error)) => {
-                return Err((original, error));
-            }
-        };
+        let authenticated = self;
         if let Err(error) = authenticated
             .kura
             .reauthenticate_execution_witness(authenticated.decision.finality.artifact())
@@ -593,7 +586,7 @@ impl<Admission>
             _kura: kura,
         };
 
-        let Self {
+        let DecisionBoundCarrierJournals {
             checkpoint,
             finality,
             committed_event,

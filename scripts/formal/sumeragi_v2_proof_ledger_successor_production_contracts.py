@@ -1,5 +1,164 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+def _lifecycle_retained_apply_owner_source_fidelity_errors(
+    worker_path, worker_source, launch_path, launch_source, errors, require_order,
+) -> None:
+    """Bind the original physical wait, guarded task, and exact retry queue cut."""
+
+    def method(path, source, context, name, attributes=()):
+        expected = (rust_code_tokens(context),)
+        rows = [row for row in rust_items(source, name) if row.brace_context == expected]
+        if len(rows) != 1:
+            errors.append(f"{path}: retained Apply requires exactly one {context}::{name}; found {len(rows)}")
+            return None
+        row = rows[0]
+        _require_rust_item_context(path, row, expected, "retained Apply owner", errors,
+                                   expected_attributes=attributes)
+        return row
+
+    def sequence(path, row, expected, description):
+        _require_rust_token_sequence(path, row, expected, description, errors)
+
+    def structure(path, source, name, expected, attributes):
+        rows = rust_struct_items(source, name)
+        if len(rows) != 1:
+            errors.append(f"{path}: retained Apply requires exactly one struct {name}; found {len(rows)}")
+            return
+        _require_rust_item_context(path, rows[0], (), "retained Apply private owner", errors,
+                                   expected_attributes=attributes)
+        sequence(path, rows[0], expected, "Apply must retain its original private guarded owner")
+
+    commands = rust_enum_items(worker_source, "V2IoCommand")
+    if len(commands) != 1:
+        errors.append(f"{worker_path}: retained Apply requires one defining V2IoCommand enum")
+    else:
+        _require_rust_item_context(
+            worker_path, commands[0], (), "Apply worker command", errors,
+            expected_attributes=("#[allow(variant_size_differences, clippy::large_enum_variant)]",),
+        )
+        sequence(worker_path, commands[0], "LifecycleDecisionApply(LifecycleDecisionApplyTaskV1)",
+                 "Apply command must carry the original typed task")
+    structure(worker_path, worker_source, "PreparedLifecycleDecisionApplyCompletionV1", """
+pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyCompletionV1 {
+    guarded: Box<GuardedLifecycleDecisionApplyWorkerResultV1>,
+    work_ack: LifecycleDecisionApplyWorkAckV1,
+    dependency: Option<RetainedApplyDependency>,
+}
+""", ('#[must_use = "the lifecycle Decision Apply result still requires owner settlement"]',))
+    structure(launch_path, launch_source, "RetainedLifecycleDecisionApplyDeferredV1", """
+pub(in crate::sumeragi) struct RetainedLifecycleDecisionApplyDeferredV1 {
+    completion: PreparedLifecycleDecisionApplyCompletionV1,
+}
+""", ('#[must_use = "deferred lifecycle Decision Apply remains the sole retry owner"]',))
+    new = method(worker_path, worker_source, "impl PreparedLifecycleDecisionApplyCompletionV1", "new")
+    sequence(worker_path, new, """
+let dependency = match guarded.result() {
+    LifecycleDecisionApplyWorkerResultV1::Deferred { refusal, .. } => {
+        Some(RetainedApplyDependency::new(refusal))
+    }
+    LifecycleDecisionApplyWorkerResultV1::Applied(_) => None,
+};
+Self { guarded, work_ack, dependency }
+""", "Apply completion must retain the dependency of its exact worker refusal")
+    dependency = method(worker_path, worker_source, "impl RetainedApplyDependency", "new")
+    for expected in (
+        "let wake = busy.waker().clone(); Self::Release { pending: busy.wait.clone().wait_for_release(), wake, resource: busy.resource, }",
+        'LocalValidationRefusal::QueueRelease { wait, wake } => Self::Release { pending: wait.clone().wait_for_release(), wake: wake.clone(), resource: "queue-release", }',
+        "LocalValidationRefusal::RecoveryRequired(reason) => { Self::RecoveryRequired(reason.clone()) }",
+        'LocalValidationRefusal::NativeSourceRecovery { .. } => Self::RecoveryRequired( "validated Apply lost its original Native source custody".into(), )',
+    ):
+        sequence(worker_path, dependency, expected, "Apply wait must preserve physical identity or fail closed")
+    ready = method(worker_path, worker_source, "impl RetainedApplyDependency", "ready")
+    sequence(worker_path, ready, """
+match self {
+    Self::Release { pending, wake, .. } => Ok(std::future::Future::poll(
+        std::pin::Pin::new(pending),
+        &mut std::task::Context::from_waker(wake),
+    ).is_ready()),
+    Self::RecoveryRequired(reason) => Err(reason.clone()),
+}
+""", "Apply retry must poll the same retained future and waker across turns")
+    retry = method(worker_path, worker_source, "impl PreparedLifecycleDecisionApplyCompletionV1", "retry_deferred",
+                   ("#[allow(clippy::result_large_err)]",))
+    sequence(worker_path, retry, """
+match self.dependency.as_mut().map(RetainedApplyDependency::ready) {
+    Some(Ok(false)) => return LifecycleDecisionApplyDeferredRetryV1::Unavailable(self),
+    Some(Ok(true)) => {},
+    Some(Err(reason)) => {
+        self.work_ack.output_guard.retain_effect_failure(reason);
+        return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
+    }
+    None => return LifecycleDecisionApplyDeferredRetryV1::RestartRequired,
+}
+""", "Apply may retry only after its original dependency releases")
+    require_order(worker_path, retry, (
+        "let Self { guarded, work_ack, dependency } = self",
+        "let (result, mut completion_guard) = (*guarded).into_retry_parts()",
+        "let LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal } = result",
+        "match work_ack.queue.retry_lifecycle_decision_apply(task)",
+        "work_ack.acknowledge_retry_publication()", "completion_guard.disarm()",
+    ), "Apply must enqueue the original task before acknowledgement and guard disarm")
+    sequence(worker_path, retry, """
+Err(LifecycleDecisionApplyRetryQueueErrorV1::Unavailable(task)) => {
+    LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
+        guarded: Box::new(GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
+            LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }, completion_guard,
+        ),), work_ack, dependency,
+    })
+}
+""", "Unavailable Apply capacity must preserve task, refusal, guard, acknowledgement, and dependency")
+    sequence(worker_path, retry, """
+Err(LifecycleDecisionApplyRetryQueueErrorV1::InvalidOwner(_task)) => {
+    drop(work_ack);
+    drop(completion_guard);
+    LifecycleDecisionApplyDeferredRetryV1::RestartRequired
+}
+""", "Changed Apply queue ownership must fail closed")
+    queue_retry = method(worker_path, worker_source, "impl V2IoCommandQueue", "retry_lifecycle_decision_apply")
+    require_order(worker_path, queue_retry, (
+        "let key = task.dispatch_key()", "let mut state = self.lock()",
+        "if !state.sender_open || !state.receiver_open",
+        ".lifecycle_decision_apply_completion_is_exact(key)",
+        ".is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)",
+        ".any(|command| command.lifecycle_decision_apply_key() == Some(key))",
+        "return Err(LifecycleDecisionApplyRetryQueueErrorV1::InvalidOwner(task))",
+        "if state.commands.len() >= self.capacity || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)",
+        "return Err(LifecycleDecisionApplyRetryQueueErrorV1::Unavailable(task))",
+        ".transfer_lifecycle_decision_apply_completion(key)",
+        ".get_mut(&key)", ".state = V2IoWorkState::Queued",
+        "state.commands.push_back(task.into_command())", "drop(state)", "self.ready.notify_all()",
+    ), "Apply retry must transfer one exact pending completion under the original queue lock")
+    into_command = method(worker_path, worker_source,
+                          "impl LifecycleDecisionApplyRetryTaskV1 for LifecycleDecisionApplyTaskV1", "into_command")
+    sequence(worker_path, into_command, "V2IoCommand::LifecycleDecisionApply(self)",
+             "Production Apply retry must move the original typed task")
+    commit = method(worker_path, worker_source, "impl LifecycleDecisionApplyCapacityReservationV1<'_>", "commit")
+    require_order(worker_path, commit, (
+        "self.preflight(&prepared)", "let task = prepared.commit_for_worker()",
+        "assert_eq!(task.dispatch_key(), self.key,", "let mut state = self.state.take()",
+        "state.lifecycle_decision_applies.insert(self.key,",
+        "state: V2IoWorkState::Queued", "replaced.is_none()",
+        ".push_back(V2IoCommand::LifecycleDecisionApply(task))",
+        "executor_dispatch.commit_after_worker_dispatch()", "drop(state)",
+        "self.queue.ready.notify_all()", "operation.complete()",
+    ), "Apply dispatch must publish its exact registry task once before releasing reservation")
+    worker = method(worker_path, worker_source, "impl V2IoHandle", "spawn")
+    sequence(worker_path, worker, """
+V2IoCommand::LifecycleDecisionApply(task) => apply_service.execute_retained_lifecycle_apply(
+    &context, body_store.as_mut().expect("body store remains live before Retire"),
+    &mut retained_validation, task,
+)
+""", "Apply worker must consume the original Native service, body store, validation and task")
+    deferred = method(launch_path, launch_source, "impl RetainedLifecycleDecisionApplyDeferredV1", "retry_after_local_release")
+    sequence(launch_path, deferred, "let Self { completion } = self; match completion.retry_deferred()",
+             "Deferred Apply must consume its guarded original completion")
+    sequence(launch_path, deferred, """
+LifecycleDecisionApplyDeferredRetryV1::Unavailable(completion) => {
+    ProductionLifecycleDecisionApplyRetryV1::Unavailable(Self { completion })
+}
+""", "Deferred Apply must return the same completion on unavailable retry")
+
+
 def _lifecycle_decision_apply_lineage_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
@@ -322,8 +481,13 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
             "prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)",
             "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
             "executor.has_pending_lifecycle_output_admissions()",
-            "attest_lifecycle_decision_apply_successor_outputs(",
+            "try_classify_lifecycle_decision_apply_pending_output_census(",
             "executor.pending_lifecycle_output_admission_census()",
+            "LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(predecessor,)",
+            "predecessor.apply_dispatch_key().lifecycle_ordinal() != protected_ordinal",
+            "predecessor.runtime_ordinal() >= protected_ordinal",
+            "ProductionCompletionCarrierStageV1::LiveApplyGenericPredecessorOrder",
+            "LifecycleDecisionApplyPendingOutputCensusV1::Successor(attestation)",
             "live_apply_successor_outputs",
             ".insert(protected_ordinal, attestation)",
             "let fence = executor.lifecycle_reducer_fence_observation()",
@@ -503,13 +667,8 @@ let lineage_owner_is_exact = match authority.lineage() {
         errors,
     )
 
-    _require_rust_source_token_sequence(
-        worker_path,
-        worker_source,
-        "V2IoCommand::LifecycleDecisionApply(task)",
-        "worker command queue must retain the neutral lifecycle Apply variant",
-        errors,
-        count=3,
+    _lifecycle_retained_apply_owner_source_fidelity_errors(
+        worker_path, worker_source, launch_path, launch_source, errors, require_order,
     )
     _require_rust_source_token_sequence(
         worker_path,
@@ -584,8 +743,7 @@ LifecycleCompletionCapacityProbeV1::Apply {
         settlement,
         (
             "LifecycleDecisionApplyWorkerResultV1::Deferred",
-            "completion.authorizes_sidecar_owner(services, lane_work)",
-            "sidecar.register(lane_work)",
+            "RetainedLifecycleDecisionApplyDeferredV1 { completion }",
             "settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)",
         ),
         "lifecycle Apply result classification and direct live-height settlement",
@@ -608,68 +766,31 @@ LifecycleCompletionCapacityProbeV1::Apply {
             "adapter.commit_after_durable_settlement()",
             "executor.commit_lifecycle_decision_apply_finality(finality)",
             "completion.acknowledge_after_owner_settlement()",
+            "let LifecycleDecisionApplyWorkerResultV1::Applied(applied) = settled",
+            "let published = applied.into_published()",
             "super::super::status::set_v2_status(status)",
+            "Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied(published,))",
         ),
         "lifecycle Apply durable terminal settlement and direct status publication",
     )
 
-    _require_rust_source_token_sequence(
-        lane_path,
-        lane_source,
-        "fn defer_missing_lifecycle_decision_apply_sidecar(",
-        "lane work must expose only the neutral lifecycle Apply sidecar owner",
-        errors,
-    )
-    _require_rust_source_token_sequence(
-        lane_path,
-        lane_source,
-        "lifecycle_decision_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>",
-        "lane work must retain the lifecycle-neutral Apply sidecar wait owner",
-        errors,
-    )
-    _require_rust_source_token_sequence(
-        lane_path,
-        lane_source,
-        "rejected_lifecycle_decision_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>",
-        "lane work must retain the lifecycle-neutral Apply sidecar rejection owner",
-        errors,
-    )
-    _require_rust_source_token_sequence(
-        lane_path,
-        lane_source,
-        "fn dispatch_next_lifecycle_decision_apply_sidecar_request(",
-        "lane work must expose only the lifecycle-neutral Apply sidecar dispatcher",
-        errors,
-    )
-    lane_constructor = _require_rust_item(
-        lane_path,
-        lane_source,
-        "new_with_output_guard_and_transport_inner",
-        errors,
+    deferred_drive = _require_qualified_rust_item(
+        launch_path, launch_source, "LaunchedProductionLifecycleV1",
+        "drive_lifecycle_decision_apply_deferred", errors,
+        "deferred lifecycle Apply retry owner",
     )
     _require_rust_token_sequence(
-        lane_path,
-        lane_constructor,
-        """
-lifecycle_decision_apply_sidecar_waits: BTreeSet::new(),
-rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
-""",
-        "lane construction must initialize distinct neutral lifecycle Apply wait and rejection owners",
+        launch_path, deferred_drive, "deferred.retry_after_local_release()",
+        "deferred lifecycle Apply must retry its retained original dependency",
         errors,
     )
-    sidecar_drive = _require_rust_item(
-        launch_path,
-        launch_source,
-        "drive_lifecycle_decision_apply_deferred",
-        errors,
-    )
-    _require_rust_token_sequence(
-        launch_path,
-        sidecar_drive,
-        "lane_work.dispatch_next_lifecycle_decision_apply_sidecar_request",
-        "deferred lifecycle Apply must use the lifecycle-neutral sidecar dispatcher",
-        errors,
-    )
+    for current in (settlement, deferred_drive):
+        if current is not None:
+            reject_aliases(
+                launch_path, current.source,
+                ("lane_work", "authorizes_sidecar_owner", "sidecar.register"),
+                "production Apply ownership",
+            )
 
     reject_aliases(
         registry_path,
@@ -1733,7 +1854,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
                     "owner.launch(launch_inputs)",
                     "install_pending_kura_apply(&mut setup_runner)",
                     "drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)",
-                    "prepare_lane_recovery(",
+                    "prepare_lane_recovery::<V2RunnerError>(&mut setup_runner)",
                     "activate_no_clock(activation)",
                     "run_pending_active_height(",
                     "run_non_pending_lifecycle_loop(",
@@ -2790,12 +2911,12 @@ settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
             """
 let status = executor.commit_lifecycle_decision_apply_finality(finality);
 let settled = completion.acknowledge_after_owner_settlement();
-assert!(
-    matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
-    "borrowed lifecycle Decision Apply result cannot change before acknowledgement"
-);
+let LifecycleDecisionApplyWorkerResultV1::Applied(applied) = settled else {
+    unreachable!("borrowed lifecycle Apply result cannot change before acknowledgement")
+};
+let published = applied.into_published();
 super::super::status::set_v2_status(status);
-Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
+Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied(published,))
 """,
             "lifecycle Decision Apply settlement must publish only after durable finality and acknowledgement",
             errors,

@@ -23,6 +23,9 @@ on:
       - "scripts/tests/exec_with_file_lock_test.py"
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/mobile_sdk_android_artifacts.py"
+      - "scripts/android_sbom_provenance.sh"
+      - "scripts/tests/mobile_sdk_android_artifacts_test.py"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "ci/check_swift_pod_bridge.sh"
       - "scripts/check_swift_pod_bridge.sh"
@@ -185,6 +188,8 @@ jobs:
         run: scripts/check_kotlin_no_reflection.sh
       - name: Artifact checker fixture tests
         run: bash scripts/check_mobile_sdk_artifacts_test.sh
+      - name: Canonical Kotlin output and SBOM ownership fixtures
+        run: python3 -I -S -B scripts/tests/mobile_sdk_android_artifacts_test.py
       - name: Mobile Python 3.12 contract
         run: bash scripts/tests/mobile_sdk_python312_contract.sh
 
@@ -516,18 +521,35 @@ jobs:
             -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
             -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
+            :core-jvm:test \
             :tools:test \
             :client-android:testDebugUnitTest \
             :client-android:testDebugHostNative \
             :client-android:lintRelease \
             :kagemusha-wallet-android:testDebugUnitTest \
             :kagemusha-wallet-android:lintRelease \
+            :core-jvm:cyclonedxDirectBom \
+            :client-android:cyclonedxDirectBom \
+            :kagemusha-wallet-android:cyclonedxDirectBom \
             :core-jvm:publishReleasePublicationToMavenLocal \
             :client-android:publishReleasePublicationToMavenLocal \
             :kagemusha-wallet-android:publishReleasePublicationToMavenLocal \
             :core-jvm:publishReleasePublicationToMobileSdkRepository \
             :client-android:publishReleasePublicationToMobileSdkRepository \
             :kagemusha-wallet-android:publishReleasePublicationToMobileSdkRepository
+      - name: Collect canonical Kotlin runtime SBOMs
+        run: >-
+          "$MOBILE_SDK_PYTHON_BINARY" -I -S -B scripts/mobile_sdk_android_artifacts.py
+          --root "$GITHUB_WORKSPACE"
+          --collect-sboms "$MOBILE_SDK_ANDROID_ARTIFACT_DIR/sbom"
+          --version "$MOBILE_SDK_MAVEN_VERSION"
+      - name: Retain canonical Kotlin runtime inventories
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: kotlin-runtime-sbom-${{ env.MOBILE_SDK_VERSION }}
+          path: ${{ runner.temp }}/iroha-mobile-android-artifacts/sbom/*.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Test mirrored Java Android Governance DAG reference validators
         working-directory: java/iroha_android
         env:

@@ -815,6 +815,21 @@ impl Kura {
                 Err(error) => return Err(Error::IO(error.error, path.to_path_buf())),
             }
         };
+        #[cfg(test)]
+        if FAIL_ATOMIC_WRITE_AFTER_RENAME.with(|slot| {
+            let mut pending = slot.borrow_mut();
+            if pending.as_deref() == Some(path) {
+                pending.take();
+                true
+            } else {
+                false
+            }
+        }) {
+            return Err(Error::IO(
+                std::io::Error::other("injected atomic publication failure after rename"),
+                path.to_path_buf(),
+            ));
+        }
         persisted
             .sync_all()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -853,5 +868,19 @@ impl Kura {
     fn fail_next_atomic_write_after_temporary_sync_for_test(&self) {
         self.fail_next_atomic_write_after_temporary_sync
             .store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_ATOMIC_WRITE_AFTER_RENAME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+impl Kura {
+    fn fail_next_atomic_write_after_rename_for_test(&self, path: &Path) {
+        FAIL_ATOMIC_WRITE_AFTER_RENAME.with(|slot| {
+            assert!(slot.borrow_mut().replace(path.to_path_buf()).is_none());
+        });
     }
 }

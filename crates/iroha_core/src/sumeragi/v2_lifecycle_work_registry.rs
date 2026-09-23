@@ -820,8 +820,8 @@ use crate::sumeragi::{
         VerifiedHeightContext,
     },
     v2_body_store::{
-        BodyValidationError, BodyValidationRejectionIdentity, DurableBodyReceipt,
-        DurableBodyValidationOutcome, DurableCertifiedFetchBodyReceipt, RecoveredValidatedBodyCut,
+        BodyValidationRejectionIdentity, DurableBodyReceipt, DurableBodyValidationOutcome,
+        DurableCertifiedFetchBodyReceipt, RecoveredValidatedBodyCut,
         RecoveredValidatedBodyCutError, V2BodyStore, V2BodyStoreError, ValidatedBodyReceipt,
     },
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,

@@ -9,6 +9,8 @@ mod native_candidate;
 pub(in crate::sumeragi) mod native_process;
 mod native_source;
 pub(in crate::sumeragi) use native_process::NativeRunnerProcess;
+#[cfg(test)]
+pub(crate) use native_source::NativeSourceRequestTestProbe;
 
 use std::{
     num::{NonZeroU64, NonZeroUsize},

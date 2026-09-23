@@ -1,3 +1,68 @@
+// Scalar callbacks exist only inside this cfg(test) fixture module. Production
+// dispatch always transfers the exact store-owned retained validator.
+use crate::sumeragi::v2_body_store::BodyValidationError;
+
+#[cfg(test)]
+impl DetachedDurableValidateExecution {
+    /// Execute the exact detached request through the scheduler-free body-store
+    /// validation boundary.
+    ///
+    /// The request is consumed once. A storage failure returns it intact for a
+    /// typed recovery decision; a successful storage call seals the request and
+    /// closed outcome together in one move-only token.
+    #[allow(clippy::result_large_err)]
+    fn execute<F, E>(
+        self,
+        body_store: &mut V2BodyStore,
+        validator: F,
+    ) -> Result<
+        ExecutedDurableValidateExecution,
+        (V2BodyStoreError, DetachedDurableValidateExecution),
+    >
+    where
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        let outcome = match body_store.execute_durable_validation(
+            self.durable_receipt.clone(),
+            self.expected_manifest_hash,
+            validator,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((error, self)),
+        };
+        self.seal_outcome(outcome)
+    }
+
+}
+
+#[cfg(test)]
+impl DurableValidateDispatch {
+    /// Execute the exact request after its claimed lifecycle row became an
+    /// external wait.
+    ///
+    /// A body-store error reconstructs and returns the complete dispatch,
+    /// including its exact wake authority, so retry cannot mint a second
+    /// request or wait token.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn execute<F, E>(
+        self,
+        body_store: &mut V2BodyStore,
+        validator: F,
+    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)>
+    where
+        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
+        E: BodyValidationError,
+    {
+        let Self { request, wake } = self;
+        match request.execute(body_store, validator) {
+            Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
+            Err((error, request)) => Err((error, Self { request, wake })),
+        }
+    }
+
+}
+
 #[cfg(feature = "bls")]
 #[test]
 fn durable_validate_dispatch_moves_claim_to_current_external_wait_and_executes() {
@@ -5165,4 +5230,285 @@ mod retained_dispatch {
             LifecycleState::Waiting(wait)
         );
     }
+}
+
+
+#[cfg(feature = "bls")]
+#[test]
+fn completion_pre_gate_retries_original_apply_after_physical_release() {
+    deferred_ordinary_apply_completion_pre_gate_fixture(false, false);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn completion_pre_gate_observes_apply_release_before_registration() {
+    deferred_ordinary_apply_completion_pre_gate_fixture(true, false);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn completion_pre_gate_retains_original_apply_while_worker_queue_is_full() {
+    deferred_ordinary_apply_completion_pre_gate_fixture(false, true);
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn deferred_ordinary_apply_completion_pre_gate_fixture(
+    release_before_poll: bool,
+    fill_capacity: bool,
+) {
+    use super::super::ProductionLifecycleCompletionPreGateV1 as Gate;
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_body_store::{BodyValidationBusy, LocalValidationRefusal},
+        v2_effects::ApplyTask,
+        v2_runner::{LifecycleRunnerRankTarget, with_lifecycle_current_runner_turn_for_test},
+    };
+    use std::sync::Arc;
+
+    // This cold-runtime helper requires the remote certified-body Fetch path,
+    // as in its existing view-zero fixtures. Keep the local node out of the
+    // proposal-author role while testing the independent Apply retry boundary.
+    let marker = 0_u8;
+    let (mut fixture, _body_directory, body_store, durable) =
+        durable_validate_store_fixture_at_view(marker, 0);
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = fixture.effect
+    else {
+        unreachable!("durable fixture has the original body coordinates");
+    };
+    let context = fixture.verified.context().clone();
+    assert_eq!(context.roster.len(), 4);
+    assert_ne!(context.leader(round.view), 0, "cold fixture needs a remote author");
+    assert_eq!(
+        context.da_layout.encoding,
+        wire::PayloadEncoding::ReedSolomon16
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable.clone());
+    let mut certificate = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: Vec::new(),
+    };
+    let preimage = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject,
+        execution_commitment: certificate.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let keys = durable_store_keys(marker);
+    let shares = keys[..3]
+        .iter()
+        .map(|key| {
+            iroha_crypto::Signature::new(key.private_key(), &preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("sign the exact three-of-four CommitQC");
+    fixture
+        .verified
+        .verify_consensus_message(&wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+        ))
+        .expect("authenticate the original Apply certificate");
+    let original = ApplyTask::for_test(71, tag, subject, certificate, validated);
+
+    let coordinator = ready_durable_validate_coordinator(&[&fixture]);
+    let registry = take_dispatch_registry(&mut fixture);
+    let owner_directory = TempDir::new().unwrap();
+    let (mut owner, runtime_authority) =
+        super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
+            fixture.verified.clone(),
+            coordinator,
+            registry,
+            body_store,
+            owner_directory.path(),
+        );
+    let runtime_directory = TempDir::new().unwrap();
+    let (runtime, _, _) = cold_ready_validate_runtime_at_durable(
+        &fixture,
+        &durable,
+        &keys,
+        runtime_directory.path(),
+        "apply-retry.wal",
+        std::time::Instant::now(),
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_authority,
+        ),
+    );
+    let output_guard = ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
+    let (executor, planner) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        Arc::clone(&output_guard),
+        0,
+        2,
+    );
+    let binding_directory = TempDir::new().unwrap();
+    let ingress = super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
+        &executor, &binding_directory, &context.roster[0].validator,
+    );
+    let launched =
+        super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
+            owner, executor, services, ingress,
+        );
+    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner);
+
+    let (events, _) = tokio::sync::broadcast::channel(8);
+    let queue = Arc::new(crate::queue::Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ));
+    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+    queue.set_sumeragi_wake(wake_tx);
+    let held = queue.lock_lane_retirement_observer();
+    let wait = match queue.try_lock_lane_retirement_observer() {
+        Err(wait) => wait,
+        Ok(_) => panic!("the actual Queue publication lock is held"),
+    };
+    let refusal = LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(
+        "lane_reservation_transition_lock",
+        wait,
+        queue.sumeragi_waker(),
+    ));
+    {
+        let ReadyLocalProposalSignLaunchedFixtureGuard { launched, planner } = &mut launched;
+        launched
+            .as_mut()
+            .unwrap()
+            .with_proposal_restart_fixture_for_test(|_, _, services| {
+                planner
+                    .as_ref()
+                    .unwrap()
+                    .publish_ordinary_apply_deferred_for_test(services, original.clone(), refusal);
+            });
+    }
+    let (_, after) = with_lifecycle_current_runner_turn_for_test(
+        &context,
+        LifecycleRunnerRankTarget::Completion,
+        |runner| match launched.drive_completion_pre_gate(runner) {
+            Gate::Ordinary(runner) => drop(runner),
+            _ => panic!("the actual deferred Apply callback must classify as ordinary Completion"),
+        },
+    );
+    assert_eq!(after, LifecycleRunnerRankTarget::Runtime);
+    launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
+        let (serviced, certified) = services
+            .drain_completions_with_lifecycle(executor)
+            .expect("transfer the original deferred callback to the service owner")
+            .into_parts();
+        assert_eq!(serviced, 1);
+        assert!(certified.is_none());
+    });
+
+    let assert_wait =
+        |launched: &mut ReadyLocalProposalSignLaunchedFixtureGuard, pending, depth| {
+            let ReadyLocalProposalSignLaunchedFixtureGuard { launched, planner } = launched;
+            launched
+                .as_mut()
+                .unwrap()
+                .with_proposal_restart_fixture_for_test(|_, _, services| {
+                    planner
+                        .as_ref()
+                        .unwrap()
+                        .assert_ordinary_apply_wait_for_test(services, pending, depth);
+                });
+        };
+    let probe = |launched: &mut ReadyLocalProposalSignLaunchedFixtureGuard| {
+        let (_, after) = with_lifecycle_current_runner_turn_for_test(
+            &context,
+            LifecycleRunnerRankTarget::Completion,
+            |runner| match launched.drive_completion_pre_gate(runner) {
+                Gate::Ready(ready) => drop(ready),
+                _ => panic!("there is no physical, local, or parked completion to select"),
+            },
+        );
+        assert_eq!(after, LifecycleRunnerRankTarget::Runtime);
+    };
+    assert_wait(&mut launched, true, 0);
+    if !release_before_poll {
+        for _ in 0..3 {
+            probe(&mut launched);
+            assert_wait(&mut launched, true, 0);
+        }
+        let (events, _) = tokio::sync::broadcast::channel(8);
+        let foreign = crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+        );
+        drop(foreign.lock_lane_retirement_observer());
+        assert!(
+            wake_rx.try_recv().is_err(),
+            "an unrelated Queue release cannot wake this Apply"
+        );
+        probe(&mut launched);
+        assert_wait(&mut launched, true, 0);
+    }
+    let occupied = if fill_capacity {
+        let ReadyLocalProposalSignLaunchedFixtureGuard { launched, planner } = &mut launched;
+        launched
+            .as_mut()
+            .unwrap()
+            .with_proposal_restart_fixture_for_test(|_, _, services| {
+                planner
+                    .as_ref()
+                    .unwrap()
+                    .fill_ordinary_apply_retry_queue_for_test(services)
+            })
+    } else {
+        0
+    };
+    drop(held);
+    if !release_before_poll {
+        wake_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("the retained registration must wake after the pre-gate probe has returned");
+    }
+    if fill_capacity {
+        for _ in 0..3 {
+            probe(&mut launched);
+            assert_wait(&mut launched, true, occupied);
+        }
+        launched
+            .planner
+            .as_ref()
+            .unwrap()
+            .release_ordinary_apply_retry_queue_for_test(occupied);
+        assert_wait(&mut launched, true, 0);
+    }
+    // No generic completion drain, timer, ingress, or callback is allowed here.
+    probe(&mut launched);
+    assert_wait(&mut launched, false, 1);
+    probe(&mut launched);
+    assert_wait(&mut launched, false, 1);
+    {
+        let ReadyLocalProposalSignLaunchedFixtureGuard { launched, planner } = &mut launched;
+        launched
+            .as_mut()
+            .unwrap()
+            .with_proposal_restart_fixture_for_test(|_, _, services| {
+                planner
+                    .as_ref()
+                    .unwrap()
+                    .assert_and_finish_ordinary_apply_retry_for_test(services, &original);
+            });
+    }
+    assert!(!output_guard.restart_required());
 }

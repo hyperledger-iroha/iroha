@@ -257,6 +257,7 @@ impl Drop for LifecycleDecisionApplyWorkAckV1 {
 pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyCompletionV1 {
     guarded: Box<GuardedLifecycleDecisionApplyWorkerResultV1>,
     work_ack: LifecycleDecisionApplyWorkAckV1,
+    dependency: Option<RetainedApplyDependency>,
 }
 /// Guarded recovered-Sign completion with only a fixed adapter-private preview;
 /// abandonment closes output while its command owner remains recoverable.
@@ -732,17 +733,30 @@ impl PreparedRecoveredLifecycleSignCompletionV1 {
         self.guarded.acknowledge_after_publication();
     }
 }
-/// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
+/// Result of atomically returning one guarded deferred Apply to the worker FIFO.
 #[must_use = "an unavailable lifecycle Decision Apply retry still owns its guarded completion"]
 pub(in crate::sumeragi) enum LifecycleDecisionApplyDeferredRetryV1 {
     /// The same dispatch key and task were republished to the dedicated worker queue.
     Requeued,
-    /// Consensus queue capacity is unavailable; the complete guarded result remains owned.
+    /// The dependency or queue capacity is unavailable; the guarded result remains owned.
     Unavailable(PreparedLifecycleDecisionApplyCompletionV1),
     /// The dedicated queue index no longer matched the retained completion.
     RestartRequired,
 }
 impl PreparedLifecycleDecisionApplyCompletionV1 {
+    fn new(
+        guarded: Box<GuardedLifecycleDecisionApplyWorkerResultV1>,
+        work_ack: LifecycleDecisionApplyWorkAckV1,
+    ) -> Self {
+        let dependency = match guarded.result() {
+            LifecycleDecisionApplyWorkerResultV1::Deferred { refusal, .. } => {
+                Some(RetainedApplyDependency::new(refusal))
+            }
+            LifecycleDecisionApplyWorkerResultV1::Applied(_) => None,
+        };
+        Self { guarded, work_ack, dependency }
+    }
+
     /// Compare service queue, output guard, and recovery owner without releasing
     /// guarded completion or process-local dependencies.
     pub(in crate::sumeragi) fn authorizes_sidecar_owner(
@@ -765,45 +779,30 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
     pub(in crate::sumeragi) fn acknowledge_after_owner_settlement(
         self,
     ) -> LifecycleDecisionApplyWorkerResultV1 {
-        let Self { guarded, work_ack } = self;
+        let Self { guarded, work_ack, dependency: _ } = self;
         work_ack.acknowledge();
         (*guarded).into_result()
     }
-    /// Republish a `CompletionPending` sidecar task under its existing owner,
+    /// Republish a `CompletionPending` task after its original dependency releases,
     /// reserving/enqueueing before disarming guards; mismatch requires restart.
     #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn retry_deferred(self) -> LifecycleDecisionApplyDeferredRetryV1 {
-        let Self { guarded, work_ack } = self;
+    pub(in crate::sumeragi) fn retry_deferred(mut self) -> LifecycleDecisionApplyDeferredRetryV1 {
+        match self.dependency.as_mut().map(RetainedApplyDependency::ready) {
+            Some(Ok(false)) => return LifecycleDecisionApplyDeferredRetryV1::Unavailable(self),
+            Some(Ok(true)) => {},
+            Some(Err(reason)) => {
+                self.work_ack.output_guard.retain_effect_failure(reason);
+                return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
+            }
+            None => return LifecycleDecisionApplyDeferredRetryV1::RestartRequired,
+        }
+        let Self { guarded, work_ack, dependency } = self;
         let (result, mut completion_guard) = (*guarded).into_retry_parts();
         let LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal } = result else {
             drop(work_ack);
             drop(completion_guard);
             return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
         };
-        let ready = match &refusal {
-            super::v2_body_store::LocalValidationRefusal::PhysicalBusy(busy) => {
-                let mut pending = busy.wait.clone().wait_for_release();
-                std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                    &mut std::task::Context::from_waker(busy.waker())).is_ready()
-            }
-            super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, wake } => {
-                let mut pending = wait.clone().wait_for_release();
-                std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                    &mut std::task::Context::from_waker(&wake)).is_ready()
-            }
-            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. } => false,
-            super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => {
-                drop(work_ack); drop(completion_guard);
-                return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
-            }
-        };
-        if !ready {
-            return LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
-                guarded: Box::new(GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
-                    LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }, completion_guard)),
-                work_ack,
-            });
-        }
         match work_ack.queue.retry_lifecycle_decision_apply(task) {
             Ok(()) => {
                 work_ack.acknowledge_retry_publication();
@@ -819,6 +818,7 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
                         ),
                     ),
                     work_ack,
+                    dependency,
                 })
             }
             Err(LifecycleDecisionApplyRetryQueueErrorV1::InvalidOwner(_task)) => {
@@ -2072,25 +2072,5 @@ impl V2IoHandle {
                 .map_err(|_| "Sumeragi v2 I/O worker panicked".to_owned())?;
         }
         Ok(())
-    }
-}
-
-/// Probe only the actual original publication dependency before requeueing Apply.
-fn local_apply_refusal_ready(refusal: &super::v2_body_store::LocalValidationRefusal) -> Result<bool, String> {
-    use super::v2_body_store::LocalValidationRefusal;
-    match refusal {
-        LocalValidationRefusal::PhysicalBusy(busy) => {
-            let mut pending = busy.wait.clone().wait_for_release();
-            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                &mut std::task::Context::from_waker(busy.waker())).is_ready())
-        }
-        LocalValidationRefusal::QueueRelease { wait, wake } => {
-            let mut pending = wait.clone().wait_for_release();
-            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                &mut std::task::Context::from_waker(&wake)).is_ready())
-        }
-        LocalValidationRefusal::RecoveryRequired(reason) => Err(reason.clone()),
-        LocalValidationRefusal::NativeSourceRecovery { .. } => Err(
-            "validated Apply lost its original Native source custody".into()),
     }
 }

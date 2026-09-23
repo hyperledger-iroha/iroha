@@ -1306,7 +1306,8 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "method",
         "PrefixPreparation::capture",
         "let manifest = exec::NativeAmxApplicationManifestV1::"
-        "from_result_bearing_block_and_merge_entry( block, None, )?;",
+        "from_result_bearing_block_and_merge_entry( block, None, )"
+        ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",

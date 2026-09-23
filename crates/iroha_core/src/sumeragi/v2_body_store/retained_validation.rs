@@ -111,7 +111,7 @@ impl V2BodyStore {
     /// Validate with complete custody installed before the success marker write.
     /// Cache and reproposal paths require the same executed owner. A local write
     /// refusal leaves its pending receipt and every older confirmed receipt.
-    /// TODO: replace live scalar validation only with a real reserved publisher.
+    /// Restart replay and the live worker use this same store-owned service.
     pub(crate) fn execute_retained_durable_validation<P: CarrierValidator>(
         &mut self,
         durable: DurableBodyReceipt,

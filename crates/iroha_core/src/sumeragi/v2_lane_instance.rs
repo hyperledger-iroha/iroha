@@ -54,7 +54,7 @@ pub(crate) use persistence::{
 };
 pub(crate) use process::{
     LaneClosedInstance, LanePhysicalPool, LanePhysicalShutdown, LaneProcessLimits,
-    LaneProcessOwner, LaneProcessProgress, LaneWorkerClass,
+    LaneProcessOwner, LaneProcessProgress, LaneSourceRecoveryTarget, LaneWorkerClass,
 };
 #[cfg(test)]
 pub(crate) use process::{LanePhysicalCompletion, LaneProcessOccupancy};
@@ -289,6 +289,8 @@ pub(crate) struct LaneInstance {
     held: Vec<HeldEffect>,
     /// Original obligations stay in the same per-instance descriptor budget.
     retired: VecDeque<RetirementKind>,
+    /// Exact cleanup ticket retains its original descriptor through worker return.
+    retirement_cleanup: Option<Arc<()>>,
     completion: Option<reducer::Event>,
     effect_limit: usize,
     failed: bool,
@@ -350,6 +352,7 @@ impl LaneInstance {
         self.held
             .len()
             .checked_add(self.retired.len())
+            .and_then(|count| count.checked_add(usize::from(self.retirement_cleanup.is_some())))
             .and_then(|count| count.checked_add(self.body.retained_job_count()))
             .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
             .and_then(|count| count.checked_add(additional))
@@ -372,6 +375,7 @@ impl LaneInstance {
             .held
             .len()
             .checked_add(self.retired.len())
+            .and_then(|count| count.checked_add(usize::from(self.retirement_cleanup.is_some())))
             .and_then(|count| count.checked_add(self.body.retained_job_count()))
             .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
             .expect("fixture retained descriptors fit usize");
@@ -381,7 +385,7 @@ impl LaneInstance {
 
     /// Borrow retained retirement occupancy without releasing its reservation.
     pub(crate) fn retirement_count(&self) -> usize {
-        self.retired.len()
+        self.retired.len() + usize::from(self.retirement_cleanup.is_some())
     }
 
     /// Transfer exactly one original retirement to the downstream owner. Taking
@@ -394,6 +398,60 @@ impl LaneInstance {
         })
     }
 
+    // Only the original producer selects semantically retired custody. A closure
+    // result remains armed for the separate PublishedNativeApply consumer.
+    fn take_retirement_cleanup(
+        &mut self,
+        state: &State,
+        guard: &Arc<ConsensusOutputGuard>,
+    ) -> Result<Option<(Arc<()>, LaneRetirement)>> {
+        if !self.state_owner.matches_state(state) || !Arc::ptr_eq(&self.output_guard, guard) {
+            return Err(bad("foreign Native retirement cleanup owner"));
+        }
+        if self.retirement_cleanup.is_some() {
+            return Ok(None);
+        }
+        let Some(index) = self.retired.iter().position(|retired| match retired {
+            RetirementKind::Effect(retired) => matches!(
+                retired.effect,
+                reducer::Effect::Broadcast(_)
+                    | reducer::Effect::Sign { .. }
+                    | reducer::Effect::FetchBody { .. }
+                    | reducer::Effect::StoreBody { .. }
+                    | reducer::Effect::ValidateBody { .. }
+            ),
+            RetirementKind::Body(body) => !body.requires_recovery(),
+        }) else {
+            return Ok(None);
+        };
+        let ticket = Arc::new(());
+        let kind = self
+            .retired
+            .remove(index)
+            .expect("selected original retirement");
+        self.retirement_cleanup = Some(Arc::clone(&ticket));
+        Ok(Some((
+            ticket,
+            LaneRetirement {
+                state_owner: self.state_owner.clone(),
+                verified: Arc::clone(&self.verified),
+                kind,
+            },
+        )))
+    }
+
+    fn finish_retirement_cleanup(&mut self, ticket: &Arc<()>) -> Result<()> {
+        if !self
+            .retirement_cleanup
+            .as_ref()
+            .is_some_and(|issued| Arc::ptr_eq(issued, ticket))
+        {
+            return Err(bad("foreign Native retirement cleanup completion"));
+        }
+        self.retirement_cleanup.take();
+        Ok(())
+    }
+
     fn authorize_terminal_retirement<'proof, 'published>(
         &self,
         published: &'proof crate::state::PublishedNativeApply<'published>,
@@ -402,6 +460,7 @@ impl LaneInstance {
         if self.wal.is_some()
             || self.body_store.is_some()
             || self.persistence.is_some()
+            || self.retirement_cleanup.is_some()
             || self.body.worker_in_flight()
         {
             return Err(bad(

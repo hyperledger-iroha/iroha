@@ -970,9 +970,8 @@ def _successor_recovery_ready_proposal_sign_source_fidelity_errors(
             "Some(permit)",
             ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
             "current_turn",
-            "lane_work",
             "permit",
-            "None => activated.drive_completion_pre_gate(current_turn, lane_work)",
+            "None => activated.drive_completion_pre_gate(current_turn)",
         ),
     )
     ready_proposal_sign_eligibility_regression = item(
@@ -1005,7 +1004,7 @@ def _successor_recovery_ready_proposal_sign_source_fidelity_errors(
             ".ready_proposal_sign_preemption_permit()",
             ".is_some()",
             "LifecycleProducerClaimDispositionV1::AwaitingCompletion",
-            "LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar",
+            "LifecycleProducerClaimDispositionV1::AwaitingNativeSource",
             "LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion",
             "LifecycleProducerClaimDispositionV1::ApplyTerminalSettled",
             "claim.ready_proposal_sign_preemption_permit().is_none()",
@@ -1034,7 +1033,7 @@ def _successor_recovery_ready_proposal_sign_source_fidelity_errors(
         "the sealed permit reaches only the private Completion classifier",
         (
             "LifecycleReadyProposalSignPreemptionPermitV1",
-            "self.drive_completion_pre_gate_inner(runner, lane_work, Some(permit))",
+            "self.drive_completion_pre_gate_inner(runner, Some(permit))",
         ),
     )
     ready_proposal_sign_pre_gate_inner = _require_qualified_rust_item(
@@ -1097,7 +1096,7 @@ def _successor_recovery_ready_proposal_sign_source_fidelity_errors(
         (
             "LifecycleReadyProposalSignPreemptionPermitV1",
             ".drive_completion_pre_gate_with_ready_proposal_sign_preemption(",
-            "runner, lane_work, permit",
+            "runner, permit",
         ),
     )
     tracked_auxiliary_completion_publisher = item(
