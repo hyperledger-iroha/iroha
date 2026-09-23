@@ -2115,21 +2115,64 @@ fn append_canonical_outcome_test_block(
     anchor: CanonicalTransactionAnchor,
     rebind_transaction: bool,
 ) {
-    let block = make_empty_signed_block(2, Some(anchor.block_hash), 10);
+    let keypair = checked_torii_test_ed25519_keypair(0x27, "sign Torii successor fixture");
+    let transaction = if rebind_transaction {
+        app.kura
+            .get_block(anchor.height)
+            .expect("canonical predecessor block")
+            .external_transactions()
+            .next()
+            .expect("canonical predecessor transaction")
+            .clone()
+    } else {
+        checked_torii_test_transaction(
+            TransactionBuilder::new(
+                signed_query_test_network_id(),
+                AccountId::new(keypair.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            ),
+            &keypair,
+            "sign unrelated Torii successor transaction",
+        )
+    };
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    if rebind_transaction {
+        assert_eq!(entrypoint_hash, anchor.entrypoint_hash);
+    } else {
+        assert_ne!(entrypoint_hash, anchor.entrypoint_hash);
+    }
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).expect("second height is nonzero"),
+        Some(anchor.block_hash),
+        None,
+        10,
+        0,
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header.clone());
+    builder.push_transaction(transaction);
+    let mut block = builder.build_with_signature(0, keypair.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
     let header = block.header();
     let block_hash = store_finalized_history_fixture(app, block);
-    record_committed_block_hash_for_test(app, header.clone(), block_hash);
-    let mut state_block = app.state.block(header);
-    let membership = if rebind_transaction {
-        [anchor.entrypoint_hash].into_iter().collect()
-    } else {
-        HashSet::new()
-    };
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push(block_hash);
     state_block.transactions.insert_block(
-        membership,
+        [entrypoint_hash].into_iter().collect(),
         NonZeroUsize::new(2).expect("second height is nonzero"),
     );
     state_block.commit().expect("publish second fixture block");
+    app.state.update_latest_block_header_cache_for_tests(header);
 }
 #[tokio::test]
 async fn canonical_outcome_releases_state_snapshot_before_kura_authentication() {
@@ -2532,14 +2575,15 @@ fn store_and_index_transaction_details_block(
     )
     .expect("transaction-details height is nonzero");
     let block_hash = store_finalized_history_fixture(app, block);
-    record_committed_block_hash_for_test(app, header.clone(), block_hash);
-    let mut state_block = app.state.block(header);
+    let mut state_block = app.state.block(header.clone());
+    state_block.block_hashes.push(block_hash);
     state_block
         .transactions
         .insert_block([entrypoint_hash].into_iter().collect(), height);
     state_block
         .commit()
         .expect("commit transaction-details membership index");
+    app.state.update_latest_block_header_cache_for_tests(header);
     signed_hash
 }
 fn signed_transaction_details_query(
