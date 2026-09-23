@@ -59,6 +59,7 @@ the mutable checkout gate.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import argparse
 import contextlib
 import fcntl
@@ -73,6 +74,7 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import uuid
@@ -654,7 +656,16 @@ def unchanged_source_directories(previous_entries: bytes, entries: bytes) -> set
     return {directory for directory, digest in current.items() if previous.get(directory) == digest}
 
 
-def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
+def source_capture_heartbeat(stop: threading.Event, started: float,
+                             completed: list[int], total: int) -> None:
+    """Report bounded capture progress without publishing source paths or contents."""
+    while not stop.wait(15):
+        print(f"[taira-release] signed source capture {completed[0]}/{total} entries "
+              f"in {time.monotonic() - started:.0f}s", flush=True)
+
+
+def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes,
+                   *, on_entry: Callable[[int], None] | None = None) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
     state_path = parent / "source-state.json"
@@ -687,6 +698,7 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     unchanged_directories = (unchanged_source_directories(previous_entries, entries)
                              if previous_entries is not None else set())
     # Batch mode reads exact committed blobs without archive export filters.
+    captured_entries = 0
     with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
                           env=child_environment(dict(os.environ), root / "target"),
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
@@ -703,6 +715,9 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                 ensure_private_directory(path.parent, anchor=pending)
                 if mode == b"160000":
                     path.mkdir(mode=0o700)
+                    captured_entries += 1
+                    if on_entry is not None:
+                        on_entry(captured_entries)
                     continue
                 child.stdin.write(oid + b"\n")
                 child.stdin.flush()
@@ -728,6 +743,9 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                         if old is not None and old.sha256 == hashlib.sha256(payload).hexdigest():
                             info = previous.stat()
                             os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+                captured_entries += 1
+                if on_entry is not None:
+                    on_entry(captured_entries)
             child.stdin.close()
             require(child.wait() == 0, "Git source capture failed")
         finally:
@@ -1453,8 +1471,31 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                              "fixed source capture"),
                             (target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
                             (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
-    source = capture_source(root, source, target_dir, args.expected_commit, entries)
-    before = frozen_snapshot(source, entries, target_dir)
+    capture_started = time.monotonic()
+    capture_total = entries.count(b"\0")
+    capture_completed = [0]
+
+    def count_captured_entry(count: int) -> None:
+        capture_completed[0] = count
+
+    capture_stop = threading.Event()
+    capture_thread = threading.Thread(
+        target=source_capture_heartbeat,
+        args=(capture_stop, capture_started, capture_completed, capture_total),
+        daemon=True,
+    )
+    print(f"[taira-release] signed source capture started ({capture_total} entries)", flush=True)
+    capture_thread.start()
+    try:
+        source = capture_source(root, source, target_dir, args.expected_commit, entries,
+                                on_entry=count_captured_entry)
+        capture_completed[0] = capture_total
+        before = frozen_snapshot(source, entries, target_dir)
+    finally:
+        capture_stop.set()
+        capture_thread.join()
+    print(f"[taira-release] signed source capture ready ({capture_total} entries "
+          f"in {time.monotonic() - capture_started:.1f}s)", flush=True)
     inherited = dict(os.environ)
     env, environment_record, incremental = preparation_environment(output, target_dir, inherited, fresh=fresh)
     tools = [verify_tool(args.zig, args.zig_sha256),

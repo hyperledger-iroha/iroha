@@ -389,6 +389,128 @@ fn sign_effect_verifies_signature_and_preserves_original_tag() {
         CompletionDisposition::Stale
     );
 }
+#[cfg(feature = "bls")]
+#[test]
+fn epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal() {
+    let fixture = ProductionTransportFixture::new();
+    let mut context = fixture.context.clone();
+    context.epoch_end_height = context.height;
+    context.kagemusha_mint_finality_authorization.last_height = context.height;
+    let next_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        context.network_id,
+        context.kagemusha_mint_finality_authority.generation + 1,
+        &context.roster,
+    );
+    let next_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &context.kagemusha_mint_finality_authorization,
+            &next_authority,
+            context.height + 8,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
+        );
+    context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        epoch: context.epoch + 1,
+        kagemusha_mint_finality_authorization: next_authorization,
+        kagemusha_mint_finality_authority: next_authority,
+        epoch_end_height: context.height + 8,
+        mode: context.mode,
+        roster: context.roster.clone(),
+        validator_set_pops: fixture
+            .validator_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("next-epoch BLS proof of possession")
+            })
+            .collect(),
+        quorum: context.quorum,
+        leader_seed: [0xC7; 32],
+    });
+    context.validate().expect("valid epoch-boundary context");
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let vote = wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject: fixture.subject,
+        execution_commitment: fixture.canonical_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let message = crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
+        &context.kagemusha_mint_finality_authority,
+        &context,
+        &vote,
+    )
+    .expect("build boundary seal message")
+    .expect("epoch boundary requires a seal");
+    let local_authority =
+        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(context.kagemusha_mint_finality_authority.clone()),
+            zeroize::Zeroizing::new([0xA0; 32]),
+            0,
+        )
+        .expect("bind current Pasta validator key");
+    let signer = local_authority
+        .signer_for_authority(&context.kagemusha_mint_finality_authority)
+        .expect("current authority owns validator key");
+    let seal =
+        crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(&signer, &message)
+            .expect("sign boundary seal");
+    let auxiliary = crate::sumeragi::v2::encode_kagemusha_commit_vote_seal_share_v1(message, seal);
+    let bls = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &vote.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    let envelope = wire::encode_kagemusha_consensus_signature_envelope_v1(
+        wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+        &bls,
+        &auxiliary,
+    )
+    .expect("encode paired Commit signature");
+    let request = SignRequest::Vote(vote.clone());
+    verify_signer_completion(&context, Some(0), &request, &envelope)
+        .expect("accept exact BLS and Pasta boundary signature");
+    assert!(
+        verify_signer_completion(&context, Some(0), &request, &bls).is_err(),
+        "zero-top-up boundary still requires a Pasta seal"
+    );
+    let wrong_bls = Signature::new(
+        fixture.validator_keys[1].private_key(),
+        &vote.signature_preimage(),
+    );
+    let wrong_bls_envelope = wire::encode_kagemusha_consensus_signature_envelope_v1(
+        wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+        wrong_bls.payload(),
+        &auxiliary,
+    )
+    .expect("encode wrong-signer BLS envelope");
+    assert!(verify_signer_completion(&context, Some(0), &request, &wrong_bls_envelope).is_err());
+    let mut tampered_auxiliary = auxiliary.clone();
+    *tampered_auxiliary.last_mut().expect("nonempty seal") ^= 1;
+    let tampered_envelope = wire::encode_kagemusha_consensus_signature_envelope_v1(
+        wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+        &bls,
+        &tampered_auxiliary,
+    )
+    .expect("encode tampered Pasta envelope");
+    assert!(verify_signer_completion(&context, Some(0), &request, &tampered_envelope).is_err());
+    let wrong_kind = wire::encode_kagemusha_consensus_signature_envelope_v1(
+        wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,
+        &bls,
+        &auxiliary,
+    )
+    .expect("encode wrong-kind envelope");
+    assert!(verify_signer_completion(&context, Some(0), &request, &wrong_kind).is_err());
+}
 #[test]
 fn invalid_signer_completion_fails_closed_without_runtime_input() {
     let fixture = Fixture::new();

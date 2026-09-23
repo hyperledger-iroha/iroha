@@ -1032,6 +1032,16 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay against isolated commit
     "state::tests::retired_lane_cleanup_preserves_frontier_for_historical_drain_recovery",
 )),)
 
+CORE_ADMISSION_STARTUP_STAGES += (("governed replay and signed snapshot restart", (
+    "state::canonical_runtime::tests::replay_probe_keeps_configured_governance_before_manifest_rebind",
+    "snapshot::tests::signed_snapshot_restore_keeps_configured_governance_catalog",
+    "snapshot::tests::signed_snapshot_restore_accepts_configured_governed_lane",
+)),)
+
+CORE_ADMISSION_STARTUP_STAGES += (("paired Commit signature completion", (
+    "sumeragi::v2::tests::epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal",
+)),)
+
 CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred startup writers", (
     "kura::tests::startup_replay_geometry_transition_preserves_shared_binding_for_added_lane",
     "kura::tests::startup_replay_geometry_transition_rejects_checkpoint_and_manifest_drift",
