@@ -188,6 +188,8 @@ fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
         }),
         device_keys: [0, 1]
             .map(|_| assign_bytes(ctx, &range, credential.device_public_key.as_sec1_bytes())),
+        app_bindings: [0, 1]
+            .map(|_| assign_fixed_digest_v1(ctx, &range, credential.app_policy_binding_digest)),
     };
     match mutation {
         Substitution::CredentialExpiry => credential.expires_at_ms += 1,
