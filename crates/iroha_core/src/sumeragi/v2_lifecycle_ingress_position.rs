@@ -835,21 +835,19 @@ impl FairIngressQueueCut<'_> {
             && self.metadata_is_current()
     }
     fn metadata_is_current(&self) -> bool {
+        self.check_current_metadata().is_ok()
+    }
+    /// Distinguish a valid producer change after the frozen cut from invalid
+    /// live queue structure. Phase B may retry the former with a fresh cut.
+    fn check_current_metadata(&self) -> Result<(), FairIngressQueueCutError> {
         let state = self.queue.state.lock();
-        if validate_live_queue_structure(&state).is_err() {
-            return false;
-        }
-        let Ok(leader_wire_projection) =
+        validate_live_queue_structure(&state)?;
+        let leader_wire_projection =
             fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
-        else {
-            return false;
-        };
-        let Ok((current, _)) =
-            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)
-        else {
-            return false;
-        };
-        state.leader_wire_context == Some(self.bound_context)
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (current, _) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)?;
+        if state.leader_wire_context == Some(self.bound_context)
             && state
                 .ready
                 .iter()
@@ -857,6 +855,11 @@ impl FairIngressQueueCut<'_> {
                 .eq(self.geometry.ready_prefix.iter())
             && current == self.geometry
             && leader_wire_projection == self.leader_wire_projection
+        {
+            Ok(())
+        } else {
+            Err(FairIngressQueueCutError::QueueCutChanged)
+        }
     }
 }
 impl<'a> FairIngressQueueCut<'a> {
@@ -1551,9 +1554,7 @@ impl FairV2Ingress {
             selected_positions,
             selected_disposition,
         };
-        if !cut.metadata_is_current() {
-            return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
-        }
+        cut.check_current_metadata()?;
         Ok(cut)
     }
 }
@@ -3849,6 +3850,29 @@ mod tests {
             before
         );
         assert!(find_entry_by_physical_ordinal(&state, ordinal).is_some());
+    }
+    #[test]
+    fn captured_cut_classifies_valid_concurrent_coalescence_as_retryable() {
+        let (ingress, _context, peer, message, ordinal) = single_commit_request_ingress(35);
+        let cut = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("capture exact target before a same-wire producer change");
+        assert_eq!(cut.check_current_metadata(), Ok(()));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(message, peer)),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        assert_eq!(
+            cut.check_current_metadata(),
+            Err(FairIngressQueueCutError::QueueCutChanged),
+            "a valid producer mutation after snapshot must not become a permanent identity error"
+        );
+        drop(cut);
+        assert_eq!(ingress.len(), 1, "retry retains the exact queued owner");
+        let recaptured = ingress
+            .capture_lifecycle_queue_cut(ordinal)
+            .expect("fresh cut accepts the coalesced target");
+        assert_eq!(recaptured.check_current_metadata(), Ok(()));
     }
     #[test]
     fn prepared_lock_reports_retryable_change_for_pre_lock_coalescence() {
