@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-20.
+Last updated: 2026-09-23.
 
 The active [first-release completion goals](specs/first_release_completion_goals.md)
 coordinate privacy/ZK, SoraFS and multilane implementation on one integrated
@@ -19,6 +19,16 @@ obsolete surfaces rather than retaining aliases, compatibility dispatch or
 migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
+
+For Sumeragi, retain the [observer and quorum corrections](docs/history/2026-09-23/stale-height-consensus-ingress.md)
+and [Native source-refresh correction](docs/history/2026-09-23/native-source-observation-refresh.md).
+Identify the exact in-flight owner behind the intermittent controlled-drain
+timeout and retire a retained pre-execution validation owner nonfatally when a
+different successor finalizes. Then finish the unchanged four/seven-validator
+loss, reordering, backpressure, leader-failure, restart and final-transaction
+matrix. Trace remaining waits to one authoritative owner and reachable wake,
+then qualify the resulting release candidate with the complete formal,
+workspace and network gates.
 
 Finish native118 retained-history qualification and rollout, verify validator catch-up and two fresh coherent anchored 3-of-4 observations while attempting all four validators, then activate the approved additive BPNG catalog through its authenticated on-chain transition. Recover current application readiness through the maintained API22/FE17 deployment and fresh commissioning inventory; expired API21 admission cannot be renewed by changing dates. September 13 native117/API21/FE14 acceptance is historical; see [current evidence](status.md). Preserve keys outside Git, keep configured execution-policy equality strict, and reuse warm build lanes. Broader crash/concurrency, advanced workloads and full release matrices remain separate from basic BPNG acceptance.
 

@@ -3163,13 +3163,21 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                     .wrap_err_with(|| format!("read pre-heal ACK from {}", peer.mnemonic()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let healed = try_join_all(peers.iter().map(|peer| async move {
-            peer.consensus_message_control()
-                .expect("controlled peer")
-                .heal_and_release_all(CONTROL_TIMEOUT)
-                .await
-                .wrap_err_with(|| format!("heal and drain {} traffic", peer.mnemonic()))
-        }))
+        let healed = try_join_all(peers.iter().zip(&controller_baselines).map(
+            |(peer, before)| async move {
+                let control = peer.consensus_message_control().expect("controlled peer");
+                control
+                    .heal_and_release_all(CONTROL_TIMEOUT)
+                    .await
+                    .wrap_err_with(|| {
+                        format!(
+                            "heal and drain {} traffic: before={before:?}, current={:?}",
+                            peer.mnemonic(),
+                            control.read_ack()
+                        )
+                    })
+            },
+        ))
         .await?;
         for ((peer, before), ack) in peers.iter().zip(&controller_baselines).zip(&healed) {
             ensure!(

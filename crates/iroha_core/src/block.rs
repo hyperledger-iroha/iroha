@@ -7028,6 +7028,9 @@ pub(crate) mod valid {
                         crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged => {
                             return Err(Self::execution_context_error("Native replay pre-State observation changed"));
                         }
+                        crate::state::NativeLaneBatchSourcePreparationV1::Superseded => {
+                            return Err(Self::execution_context_error("Native replay carrier was superseded by finalized State"));
+                        }
                     };
                         let input = Self::validate_and_record_native_candidate(
                             source,

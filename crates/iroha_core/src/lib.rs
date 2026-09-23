@@ -1291,17 +1291,29 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 const MAX_CERTIFICATE_BYTES: usize =
                     iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
                 const MAX_WIRE_BYTES: usize = MAX_CERTIFICATE_BYTES + WIRE_OVERHEAD_BYTES;
+                // Relay, NetworkMessage, Arc, publication, and the owned
+                // complete-input field share one cumulative decode budget.
+                // Their nested copies need twelve bounded wire sizes; the
+                // independent frame and field caps still reject oversized input.
+                const MAX_DECODE_ALLOCATED_BYTES: usize = 12 * MAX_WIRE_BYTES;
                 if framed_len > MAX_WIRE_BYTES {
                     return Err(norito::core::Error::ArchiveLengthExceeded {
                         length: u64::try_from(framed_len).unwrap_or(u64::MAX),
                         limit: u64::try_from(MAX_WIRE_BYTES).unwrap_or(u64::MAX),
                     });
                 }
+                let (_, remaining) = inbound_enum_parts(payload)?;
+                let publication = inbound_owned_enum_field(remaining, flags)?;
+                let (_, encoded_complete_input) =
+                    inbound_two_field_struct(publication, flags, core::mem::size_of::<u16>())?;
+                // `certificate` is a raw-byte sequence, not another sized
+                // struct field. Its fixed-width count precedes the bytes.
+                enforce_inbound_byte_sequence_limit(encoded_complete_input, MAX_CERTIFICATE_BYTES)?;
                 Ok(Some(norito::DecodeLimits::new(
-                    MAX_CERTIFICATE_BYTES,
-                    MAX_CERTIFICATE_BYTES,
-                    MAX_CERTIFICATE_BYTES,
-                    MAX_WIRE_BYTES.saturating_mul(2),
+                    MAX_WIRE_BYTES,
+                    MAX_WIRE_BYTES,
+                    MAX_WIRE_BYTES,
+                    MAX_DECODE_ALLOCATED_BYTES,
                     16,
                 )))
             }

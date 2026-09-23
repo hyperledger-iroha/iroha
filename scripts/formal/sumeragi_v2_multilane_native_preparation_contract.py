@@ -2424,7 +2424,7 @@ NATIVE_VALIDATION_OWNER_BODIES = {
     "AwaitingNativeSource": """{
         class: CurrentCarrierSourceClass, context: VerifiedHeightContext, proposal: SignedBlock,
         recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>, pending: Option<PendingNativeSource>,
-        shell_admission: CarrierShellAdmission,
+        shell_admission: Option<CarrierShellAdmission>,
     }""",
     "NativeValidationCandidate::matches_candidate": """{
         match self.phase.as_ref().as_ref().expect("original Native validation phase") {
@@ -2469,7 +2469,26 @@ NATIVE_CURRENT_OWNER_BINDINGS = (
     (NATIVE_VALIDATION, "struct", "AwaitingNativeSource", (
         "context: VerifiedHeightContext", "proposal: SignedBlock",
         "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
-        "pending: Option<PendingNativeSource>", "shell_admission: CarrierShellAdmission",
+        "pending: Option<PendingNativeSource>", "shell_admission: Option<CarrierShellAdmission>",
+    )),
+    (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::execute_source", (
+        "NativeLaneBatchSourcePreparationV1::ObservationChanged =>",
+        "return Ok(NativeValidationPhase::AwaitingSource(waiting));",
+        "&mut waiting.shell_admission",
+        "let Some(prepared) = prepared else",
+    )),
+    ("crates/iroha_core/src/sumeragi/v2_apply/native_preparation.rs", "method",
+     "V2ApplyService::prepare_native_source_admitted", (
+         "shell_admission: &mut Option<super::native_validation::CarrierShellAdmission>",
+         "let carrier = match source.prepare_candidate(",
+         "Ok(None)",
+         "shell_admission: shell_admission",
+         ".take()",
+     )),
+    (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::resume", (
+        "LocalValidationRefusal::ObservationChanged",
+        "*owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));",
+        "return Err((owner, refusal));",
     )),
     (NATIVE_VALIDATION, "method", "NativeValidationCandidate::matches_candidate", (
         "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",

@@ -20965,7 +20965,40 @@
             "proposal: SignedBlock",
             "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
             "pending: Option<PendingNativeSource>",
-            "shell_admission: CarrierShellAdmission"
+            "shell_admission: Option<CarrierShellAdmission>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs",
+          "kind": "method",
+          "symbol": "OwnedNativeCarrierValidator::execute_source",
+          "required_tokens": [
+            "NativeLaneBatchSourcePreparationV1::ObservationChanged =>",
+            "return Ok(NativeValidationPhase::AwaitingSource(waiting));",
+            "&mut waiting.shell_admission",
+            "let Some(prepared) = prepared else"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/native_preparation.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::prepare_native_source_admitted",
+          "required_tokens": [
+            "shell_admission: &mut Option<super::native_validation::CarrierShellAdmission>",
+            "let carrier = match source.prepare_candidate(",
+            "Ok(None)",
+            "shell_admission: shell_admission",
+            ".take()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs",
+          "kind": "method",
+          "symbol": "OwnedNativeCarrierValidator::resume",
+          "required_tokens": [
+            "LocalValidationRefusal::ObservationChanged",
+            "*owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));",
+            "return Err((owner, refusal));"
           ]
         },
         {

@@ -58,6 +58,30 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Use the actual finalized State head before waiting again on a retained
+    /// pre-execution Native proposal.
+    pub(in crate::sumeragi) fn native_proposal_superseded(
+        &self,
+        proposal_height: u64,
+    ) -> Result<Option<bool>, String> {
+        self.state.native_proposal_superseded(proposal_height)
+    }
+
+    /// Stop requesting a first input after its exact proposal lost authority.
+    pub(in crate::sumeragi) fn retire_superseded_native_source_wait(
+        &mut self,
+        subject: wire::BlockSubject,
+    ) {
+        if self
+            .native_source_wait
+            .as_ref()
+            .is_some_and(|wait| wait.subject == subject)
+        {
+            self.native_source_wait.take();
+            self.native_source_completion.take();
+        }
+    }
+
     /// Keep the actual State/Kura publication until the process driver takes it.
     pub(in crate::sumeragi) fn retain_native_publication(
         &mut self,

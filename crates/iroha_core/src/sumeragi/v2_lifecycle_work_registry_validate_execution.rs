@@ -87,6 +87,22 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
+    /// Original proposal round retained through every local worker retry.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.request.round
+    }
+    /// Project the same waiting row and stored body identity for exact
+    /// cancellation after its Native source is superseded.
+    pub(super) fn waiting_authority(&self) -> Option<DurableValidateWaitingAuthority> {
+        Some(DurableValidateWaitingAuthority {
+            address: self.request.address,
+            digest: self.request.incumbent_digest,
+            wait_token: self.wake.wait_token,
+            lifecycle_key: self.request.lifecycle_key,
+            lifecycle_stage: self.request.lifecycle_stage,
+            payload: durable_validate_body_payload(&self.request.durable_receipt)?,
+        })
+    }
     /// Original durable subject retained by this exact worker dispatch.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
         self.request.subject
@@ -158,6 +174,16 @@ impl DurableValidateDispatch {
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateCompletionAuthority {
+    pub(super) const fn waiting_authority(self) -> DurableValidateWaitingAuthority {
+        DurableValidateWaitingAuthority {
+            address: self.address,
+            digest: self.incumbent_digest,
+            wait_token: self.wait_token,
+            lifecycle_key: self.lifecycle_key,
+            lifecycle_stage: self.lifecycle_stage,
+            payload: self.payload,
+        }
+    }
     /// Exact immutable owner of the waiting record.
     pub(super) const fn owner(self) -> OwnerId {
         self.address.owner

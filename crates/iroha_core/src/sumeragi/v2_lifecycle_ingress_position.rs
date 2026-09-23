@@ -2164,6 +2164,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{HashOf, KeyPair};
     use iroha_model_base::peer::PeerId;
+    use iroha_p2p::network::NetworkReplyRouteTestFixture;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     enum Source {
         First,
@@ -2310,19 +2311,39 @@ mod tests {
         let active_context = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
             b"active-historical-serve-context",
         )));
-        let peer = PeerId::from(KeyPair::random().public_key().clone());
+        let requester_key = KeyPair::random();
+        let peer = PeerId::from(requester_key.public_key().clone());
         let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
             .configure_roster([peer.clone()])
             .expect("current validator lane fits the historical request fixture");
         ingress.state.lock().leader_wire_context = Some((active_context, 3));
         ingress.open().expect("open current lifecycle ingress");
-        let request = commit_certificate_request(historical_context, 2, &peer, 17);
+        let mut request = commit_certificate_request(historical_context, 2, &peer, 17);
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(signed_request),
+            ..
+        }) = &mut request
+        else {
+            unreachable!("commit request fixture must carry a v2 request");
+        };
+        signed_request.signature = iroha_crypto::Signature::new(
+            requester_key.private_key(),
+            &signed_request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let reply_target = signed_request.requester.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let inbound = InboundBlockMessage::try_from_transport_with_reply_route(
+            request.clone(),
+            peer.clone(),
+            peer,
+            routes.mint(reply_target),
+        )
+        .expect("signed commit request retains a live authenticated reply route");
         assert!(matches!(
-            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-                request.clone(),
-                peer,
-            )),
+            ingress.try_push(inbound),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
         let active = lifecycle_context_from_wire((active_context, 3));
@@ -2394,16 +2415,32 @@ mod tests {
         let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::CertifiedBodyRequest(signed_request),
         ));
+        let BlockMessage::V2(request_wire) = &request else {
+            unreachable!("historical request fixture is a v2 envelope");
+        };
+        let encoded = request_wire.encode();
+        let mut cursor = encoded.as_slice();
+        assert_eq!(
+            <wire::ConsensusMessageV2 as norito::codec::Decode>::decode(&mut cursor)
+                .expect("certified body request must have canonical wire"),
+            *request_wire
+        );
+        assert!(cursor.is_empty());
         let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
             .configure_roster([peer.clone()])
             .expect("current validator lane fits the historical body fixture");
         ingress.state.lock().leader_wire_context = Some((active_context, 3));
         ingress.open().expect("open current lifecycle ingress");
-        let admitted = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let inbound = InboundBlockMessage::try_from_transport_with_reply_route(
             request.clone(),
-            peer,
-        ));
+            peer.clone(),
+            peer.clone(),
+            routes.mint(peer),
+        )
+        .expect("signed body request retains a live authenticated reply route");
+        let admitted = ingress.try_push(inbound);
         assert!(
             matches!(admitted, Ok(FairV2IngressPushDisposition::Enqueued)),
             "historical body request admission: {admitted:?}"

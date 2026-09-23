@@ -1884,7 +1884,7 @@ pub(in crate::sumeragi) fn retry_recovered_decision_fetch_if_due(
     *next_attempt = deadline_after(now, retransmit_interval);
     Ok(attempted)
 }
-fn drive_block_sync(
+pub(in crate::sumeragi) fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
     retransmit_interval: Duration,
@@ -1905,6 +1905,13 @@ fn drive_block_sync(
         let message = discovery
             .retransmit(*hash)
             .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?;
+        // The previous topology attempt can remain owned by an unavailable
+        // peer after reachable servers answered "not yet". Retire only that
+        // transport attempt before sampling new archive targets; discovery
+        // retains the same signed request and accepts any late response.
+        services
+            .cancel_block_sync_request(*hash)
+            .map_err(V2RunnerError::Service)?;
         services
             .broadcast_block_sync_while_guarded(message, operation.permit())
             .map_err(V2RunnerError::Service)?;

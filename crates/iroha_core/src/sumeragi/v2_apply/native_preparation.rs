@@ -58,8 +58,8 @@ impl V2ApplyService {
         source: PreparedNativeLaneBatchSourceV1<'state>,
         context: VerifiedHeightContext,
     ) -> Result<Option<PreparedNativeServiceCandidate<'state>>, V2ApplyError> {
-        let shell_admission = self.reserve_carrier_shells()?;
-        self.prepare_native_source_admitted(body, source, context, shell_admission)
+        let mut shell_admission = Some(self.reserve_carrier_shells()?);
+        self.prepare_native_source_admitted(body, source, context, &mut shell_admission)
     }
 
     pub(super) fn prepare_native_source_admitted<'state>(
@@ -67,7 +67,7 @@ impl V2ApplyService {
         body: &SignedBlock,
         source: PreparedNativeLaneBatchSourceV1<'state>,
         context: VerifiedHeightContext,
-        shell_admission: super::native_validation::CarrierShellAdmission,
+        shell_admission: &mut Option<super::native_validation::CarrierShellAdmission>,
     ) -> Result<Option<PreparedNativeServiceCandidate<'state>>, V2ApplyError> {
         crate::sumeragi::witness::ensure_state_access_without_exec_witness().map_err(|reason| {
             LocalValidationRefusal::RecoveryRequired(format!(
@@ -105,7 +105,9 @@ impl V2ApplyService {
             carrier,
             provider,
             reputation,
-            shell_admission,
+            shell_admission: shell_admission
+                .take()
+                .expect("Native shell admission remains owned until execution succeeds"),
         }))
     }
 

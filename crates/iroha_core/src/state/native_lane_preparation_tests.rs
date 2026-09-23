@@ -886,12 +886,30 @@ fn assert_native_preparation_after_height_advance(fixture: NativeControlExecutio
     let original_snapshot = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let original_height = state.view().height();
     let original_generation = state.state_view_generation();
+    assert_eq!(
+        state
+            .native_proposal_superseded(carrier.header().height().get())
+            .unwrap(),
+        Some(false)
+    );
     let published = native_preparation_publish_later_admission(&fixture);
     assert_eq!(state.view().height(), original_height + 1);
     assert_eq!(published.header().height(), carrier.header().height());
     assert_ne!(published.hash(), carrier.hash());
     assert_ne!(state.state_view_generation(), original_generation);
     assert_eq!(state.state_view_generation() % 2, 0);
+    assert_eq!(
+        state
+            .native_proposal_superseded(carrier.header().height().get())
+            .unwrap(),
+        Some(true)
+    );
+    assert!(matches!(
+        state
+            .prepare_proposed_native_lane_batch_source(&carrier, &[])
+            .unwrap(),
+        NativeLaneBatchSourcePreparationV1::Superseded
+    ));
     let after = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     assert_ne!(after, original_snapshot);
     let files = exact_test_tree_fingerprint(&state.kura.store_root());

@@ -360,7 +360,9 @@ impl PreparedLifecycleValidateCompletionV1 {
             super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, .. } => {
                 Some(wait.clone().wait_for_release())
             }
-            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
+            super::v2_body_store::LocalValidationRefusal::ObservationChanged { .. }
+            | super::v2_body_store::LocalValidationRefusal::Superseded
+            | super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
             | super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
         };
         Err(RetainedLocalLifecycleValidateV1 {
@@ -442,10 +444,32 @@ pub(in crate::sumeragi) enum LocalLifecycleValidateRetryV1 {
     Waiting(RetainedLocalLifecycleValidateV1),
     /// The exact original dispatch re-entered the worker queue.
     Requeued,
+    /// Finalized State passed the original unexecuted Native proposal.
+    Superseded(RetainedLocalLifecycleValidateV1),
     /// The original owner remains quarantined while output is closed for recovery.
     RecoveryRequired(RetainedLocalLifecycleValidateV1),
 }
 impl RetainedLocalLifecycleValidateV1 {
+    /// Borrow the original dispatch for exact durable cancellation.
+    pub(in crate::sumeragi) fn dispatch_for_supersession(&self) -> &DurableValidateDispatch {
+        &self.dispatch
+    }
+
+    /// Return whether this retained refusal still owns a pre-execution Native
+    /// source and can be retired if finalized State passes its proposal height.
+    pub(in crate::sumeragi) fn awaits_native_source(&self) -> bool {
+        matches!(
+            &self.refusal,
+            super::v2_body_store::LocalValidationRefusal::ObservationChanged { .. }
+                | super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
+                | super::v2_body_store::LocalValidationRefusal::Superseded
+        )
+    }
+
+    /// Retire the worker index only after the exact lifecycle row was cancelled.
+    pub(in crate::sumeragi) fn acknowledge_superseded(self) {
+        self.ack.acknowledge_after_publication();
+    }
     /// Borrow the exact authenticated source still owned by the original dispatch.
     pub(in crate::sumeragi) fn native_source_recovery(
         &self,
@@ -489,6 +513,10 @@ impl RetainedLocalLifecycleValidateV1 {
 
         let wake = match &self.refusal {
             LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
+            LocalValidationRefusal::ObservationChanged { wake } => wake.clone(),
+            LocalValidationRefusal::Superseded => {
+                return LocalLifecycleValidateRetryV1::Superseded(self);
+            }
             LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
             LocalValidationRefusal::NativeSourceRecovery { wake, .. } => {
                 if !self.native_source_recovered {
