@@ -8,9 +8,12 @@
 compile_error!(
     "the test-network message controller requires Unix openat/no-follow and ownership semantics"
 );
-use iroha_core::NetworkMessage;
+use iroha_core::{NetworkMessage, sumeragi::message::BlockMessage};
 use iroha_crypto::Hash;
 use iroha_crypto::HashOf;
+use iroha_data_model::block::lane_consensus::{
+    LANE_MESSAGE_VERSION_V1, LaneMessageV1, LanePhaseV1,
+};
 use iroha_data_model::{
     block::{
         BlockHeader,
@@ -42,7 +45,7 @@ use std::{
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 5;
+const FORMAT_VERSION: u64 = 6;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -90,8 +93,30 @@ enum MessageKind {
     CommitCertificateRequest,
     CommitCertificateResponse,
     GlobalBeaconPartialSignature,
+    NativeProposal,
+    NativePrepareVote,
+    NativeCommitVote,
+    NativePrepareCertificate,
+    NativeCommitCertificate,
+    NativeTimeoutVote,
+    NativeTimeoutCertificate,
+    NativeDecision,
 }
 impl MessageKind {
+    const fn is_native_lane(self) -> bool {
+        matches!(
+            self,
+            Self::NativeProposal
+                | Self::NativePrepareVote
+                | Self::NativeCommitVote
+                | Self::NativePrepareCertificate
+                | Self::NativeCommitCertificate
+                | Self::NativeTimeoutVote
+                | Self::NativeTimeoutCertificate
+                | Self::NativeDecision
+        )
+    }
+
     fn parse(value: &Value) -> Result<Self, ControlError> {
         let Some(value) = value.as_str() else {
             return Err(ControlError::InvalidField("kind"));
@@ -113,6 +138,14 @@ impl MessageKind {
             "commit_certificate_request" => Ok(Self::CommitCertificateRequest),
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
             "global_beacon_partial_signature" => Ok(Self::GlobalBeaconPartialSignature),
+            "native_proposal" => Ok(Self::NativeProposal),
+            "native_prepare_vote" => Ok(Self::NativePrepareVote),
+            "native_commit_vote" => Ok(Self::NativeCommitVote),
+            "native_prepare_certificate" => Ok(Self::NativePrepareCertificate),
+            "native_commit_certificate" => Ok(Self::NativeCommitCertificate),
+            "native_timeout_vote" => Ok(Self::NativeTimeoutVote),
+            "native_timeout_certificate" => Ok(Self::NativeTimeoutCertificate),
+            "native_decision" => Ok(Self::NativeDecision),
             _ => Err(ControlError::InvalidField("kind")),
         }
     }
@@ -131,6 +164,14 @@ impl MessageKind {
             Self::CommitCertificateRequest => "commit_certificate_request",
             Self::CommitCertificateResponse => "commit_certificate_response",
             Self::GlobalBeaconPartialSignature => "global_beacon_partial_signature",
+            Self::NativeProposal => "native_proposal",
+            Self::NativePrepareVote => "native_prepare_vote",
+            Self::NativeCommitVote => "native_commit_vote",
+            Self::NativePrepareCertificate => "native_prepare_certificate",
+            Self::NativeCommitCertificate => "native_commit_certificate",
+            Self::NativeTimeoutVote => "native_timeout_vote",
+            Self::NativeTimeoutCertificate => "native_timeout_certificate",
+            Self::NativeDecision => "native_decision",
         }
     }
 }
@@ -141,6 +182,7 @@ struct MessageMeta {
     kind: MessageKind,
     height: Option<u64>,
     view: Option<u64>,
+    native_instance_id: Option<Hash>,
     block_hash: Option<HashOf<BlockHeader>>,
     manifest_hash: Option<HashOf<PayloadManifest>>,
     chunk_index: Option<u32>,
@@ -158,6 +200,7 @@ struct Rule {
     kind: MessageKind,
     height: Option<u64>,
     view: Option<u64>,
+    native_instance_id: Option<Hash>,
     block_hash: Option<HashOf<BlockHeader>>,
     manifest_hash: Option<HashOf<PayloadManifest>>,
     chunk_index: Option<u32>,
@@ -184,6 +227,7 @@ impl Rule {
         self.sender == meta.sender
             && self.authenticated_via == meta.authenticated_via
             && self.kind == meta.kind
+            && self.native_instance_id == meta.native_instance_id
             && self.height == meta.height
             && self.view == meta.view
             && self
@@ -202,6 +246,7 @@ impl Rule {
         if self.sender != other.sender
             || self.authenticated_via != other.authenticated_via
             || self.kind != other.kind
+            || self.native_instance_id != other.native_instance_id
         {
             return false;
         }
@@ -1072,6 +1117,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             "height",
             "kind",
             "manifest_hash",
+            "native_instance_id",
             "proposal_height",
             "proposal_view",
             "sender",
@@ -1128,6 +1174,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             .get("kind")
             .ok_or(ControlError::InvalidField("kind"))?,
     )?;
+    let native_instance_id = optional_native_instance_id(object)?;
     let height = optional_u64(object, "height")?;
     let view = optional_u64(object, "view")?;
     let manifest_hash = match object.get("manifest_hash") {
@@ -1193,7 +1240,10 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
                 && proposal_view.is_none()
         }
     };
-    if !valid_coordinates {
+    if !valid_coordinates
+        || kind.is_native_lane() != native_instance_id.is_some()
+        || kind.is_native_lane() && block_hash.is_some()
+    {
         return Err(ControlError::InvalidField("coordinates"));
     }
     Ok(Rule {
@@ -1202,6 +1252,7 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
         kind,
         height,
         view,
+        native_instance_id,
         block_hash,
         manifest_hash,
         chunk_index,
@@ -1374,6 +1425,14 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
         ),
         ("kind", Value::from(descriptor.meta.kind.as_str())),
         (
+            "native_instance_id",
+            descriptor
+                .meta
+                .native_instance_id
+                .as_ref()
+                .map_or(Value::Null, |hash| Value::from(hash.to_string())),
+        ),
+        (
             "manifest_hash",
             descriptor
                 .meta
@@ -1421,6 +1480,12 @@ fn rule_value(rule: &Rule) -> Value {
         ("height", rule.height.map_or(Value::Null, Value::from)),
         ("kind", Value::from(rule.kind.as_str())),
         (
+            "native_instance_id",
+            rule.native_instance_id
+                .as_ref()
+                .map_or(Value::Null, |hash| Value::from(hash.to_string())),
+        ),
+        (
             "manifest_hash",
             rule.manifest_hash
                 .as_ref()
@@ -1445,6 +1510,145 @@ fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
     }
     Value::Object(object)
 }
+fn optional_native_instance_id(object: &Map) -> Result<Option<Hash>, ControlError> {
+    let value = object
+        .get("native_instance_id")
+        .ok_or(ControlError::InvalidField("native_instance_id"))?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let literal = value
+        .as_str()
+        .ok_or(ControlError::InvalidField("native_instance_id"))?;
+    if literal.is_empty() || literal.len() > MAX_HASH_BYTES {
+        return Err(ControlError::FieldTooLarge("native_instance_id"));
+    }
+    let hash = literal
+        .parse::<Hash>()
+        .map_err(|_| ControlError::InvalidField("native_instance_id"))?;
+    if hash.to_string() != literal {
+        return Err(ControlError::NonCanonicalField("native_instance_id"));
+    }
+    if hash == Hash::prehashed([0; Hash::LENGTH]) {
+        return Err(ControlError::InvalidField("native_instance_id"));
+    }
+    Ok(Some(hash))
+}
+
+/// Select Native coordinates from the original wire family after transport
+/// authentication. This descriptor is not signature or finalized-context
+/// authority; ordinary Native ingress authenticates both after release.
+fn native_message_meta(
+    peer: &Peer,
+    authenticated_via: &PeerId,
+    block: &BlockMessage,
+) -> Result<Option<MessageMeta>, ControlError> {
+    let (kind, round, signer, certificate_signers) = match block {
+        BlockMessage::NativeLane(envelope) => {
+            if envelope.version != LANE_MESSAGE_VERSION_V1 {
+                return Err(ControlError::InvalidMessageDescriptor);
+            }
+            let instance_bound = match &envelope.message {
+                LaneMessageV1::Proposal(value) => {
+                    value.body.round.instance_id == value.body.manifest.value.instance_id
+                }
+                LaneMessageV1::Vote(value) => {
+                    value.statement.round.instance_id == value.statement.value.instance_id
+                }
+                LaneMessageV1::QuorumCertificate(value) => {
+                    value.statement.round.instance_id == value.statement.value.instance_id
+                }
+                LaneMessageV1::TimeoutVote(_) => true,
+                LaneMessageV1::TimeoutCertificate(value) => value
+                    .votes
+                    .iter()
+                    .all(|vote| vote.body.round == value.round),
+            };
+            if !instance_bound {
+                return Err(ControlError::InvalidMessageDescriptor);
+            }
+            match &envelope.message {
+                LaneMessageV1::Proposal(value) => (
+                    MessageKind::NativeProposal,
+                    value.body.round,
+                    Some(value.body.proposer),
+                    Vec::new(),
+                ),
+                LaneMessageV1::Vote(value) => (
+                    match value.statement.phase {
+                        LanePhaseV1::Prepare => MessageKind::NativePrepareVote,
+                        LanePhaseV1::Commit => MessageKind::NativeCommitVote,
+                    },
+                    value.statement.round,
+                    Some(value.share.signer),
+                    Vec::new(),
+                ),
+                LaneMessageV1::QuorumCertificate(value) => (
+                    match value.statement.phase {
+                        LanePhaseV1::Prepare => MessageKind::NativePrepareCertificate,
+                        LanePhaseV1::Commit => MessageKind::NativeCommitCertificate,
+                    },
+                    value.statement.round,
+                    None,
+                    value.shares.iter().map(|share| share.signer).collect(),
+                ),
+                LaneMessageV1::TimeoutVote(value) => (
+                    MessageKind::NativeTimeoutVote,
+                    value.body.round,
+                    Some(value.share.signer),
+                    Vec::new(),
+                ),
+                LaneMessageV1::TimeoutCertificate(value) => (
+                    MessageKind::NativeTimeoutCertificate,
+                    value.round,
+                    None,
+                    value.votes.iter().map(|vote| vote.share.signer).collect(),
+                ),
+            }
+        }
+        BlockMessage::NativeLaneDecision(value) => {
+            if value.commit_qc.statement.phase != LanePhaseV1::Commit
+                || value.commit_qc.statement.round.instance_id != value.manifest.value.instance_id
+                || value.commit_qc.statement.value != value.manifest.value
+            {
+                return Err(ControlError::InvalidMessageDescriptor);
+            }
+            (
+                MessageKind::NativeDecision,
+                value.commit_qc.statement.round,
+                None,
+                value
+                    .commit_qc
+                    .shares
+                    .iter()
+                    .map(|share| share.signer)
+                    .collect(),
+            )
+        }
+        _ => return Ok(None),
+    };
+    let meta = MessageMeta {
+        sender: peer.id().clone(),
+        authenticated_via: authenticated_via.clone(),
+        kind,
+        height: Some(round.lane_height),
+        view: Some(round.voting_view),
+        native_instance_id: Some(round.instance_id),
+        block_hash: None,
+        manifest_hash: None,
+        chunk_index: None,
+        subject: None,
+        execution_commitment: None,
+        signer,
+        cited_responder: None,
+        certificate_signers,
+        // Include the distinct BlockMessage family tag, not only its payload.
+        envelope_digest: Hash::new(block.encode()),
+    };
+    validate_message_meta(&meta)?;
+    Ok(Some(meta))
+}
+
 fn message_meta(
     peer: &Peer,
     authenticated_via: &PeerId,
@@ -1453,8 +1657,9 @@ fn message_meta(
     let NetworkMessage::SumeragiBlock(block) = message else {
         return Ok(None);
     };
-    let iroha_core::sumeragi::message::BlockMessage::V2(message) = block.as_ref().as_ref() else {
-        return Ok(None);
+    let block = block.as_ref().as_ref();
+    let BlockMessage::V2(message) = block else {
+        return native_message_meta(peer, authenticated_via, block);
     };
     let sender = peer.id().clone();
     let envelope_digest = Hash::new(message.encode());
@@ -1549,6 +1754,7 @@ fn message_meta(
                     kind: MessageKind::CommitCertificateRequest,
                     height: Some(value.height),
                     view: None,
+                    native_instance_id: None,
                     block_hash: None,
                     manifest_hash: None,
                     chunk_index: None,
@@ -1599,6 +1805,7 @@ fn message_meta(
         kind,
         height: round.map(|round| round.height),
         view: round.map(|round| round.view),
+        native_instance_id: None,
         block_hash: subject.map(|subject| subject.block_hash),
         manifest_hash,
         chunk_index,
@@ -1621,7 +1828,9 @@ fn message_meta(
 /// test-network client. Invalid traffic therefore fails the controller closed
 /// without poisoning its acknowledgement with an unrepresentable entry.
 fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
-    if meta.height == Some(0)
+    if meta.kind.is_native_lane() != meta.native_instance_id.is_some()
+        || meta.native_instance_id == Some(Hash::prehashed([0; Hash::LENGTH]))
+        || meta.height == Some(0)
         || meta
             .execution_commitment
             .as_ref()
@@ -1650,6 +1859,24 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     }
     let has_round = meta.height.is_some() && meta.view.is_some();
     let valid = match meta.kind {
+        MessageKind::NativeProposal
+        | MessageKind::NativePrepareVote
+        | MessageKind::NativeCommitVote
+        | MessageKind::NativeTimeoutVote => {
+            has_round
+                && has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+        }
+        MessageKind::NativePrepareCertificate
+        | MessageKind::NativeCommitCertificate
+        | MessageKind::NativeTimeoutCertificate
+        | MessageKind::NativeDecision => {
+            has_round
+                && has_no_subject_or_execution
+                && !has_single_signer
+                && has_certificate_signers
+        }
         MessageKind::Proposal => {
             has_round
                 && meta.subject.is_some()
@@ -2073,6 +2300,18 @@ mod tests {
             cited_responder,
             certificate_signers,
         ) = match kind {
+            MessageKind::NativeProposal
+            | MessageKind::NativePrepareVote
+            | MessageKind::NativeCommitVote
+            | MessageKind::NativeTimeoutVote => {
+                (Some(9), Some(2), None, None, Some(0), None, Vec::new())
+            }
+            MessageKind::NativePrepareCertificate
+            | MessageKind::NativeCommitCertificate
+            | MessageKind::NativeTimeoutCertificate
+            | MessageKind::NativeDecision => {
+                (Some(9), Some(2), None, None, None, None, vec![0, 1, 2])
+            }
             MessageKind::Proposal => (
                 Some(9),
                 Some(2),
@@ -2137,6 +2376,9 @@ mod tests {
             kind,
             height,
             view,
+            native_instance_id: kind
+                .is_native_lane()
+                .then(|| Hash::new(b"native descriptor instance")),
             block_hash: subject.map(|subject| subject.block_hash),
             manifest_hash,
             chunk_index,
@@ -2179,6 +2421,7 @@ mod tests {
             kind,
             height: Some(height),
             view: Some(view),
+            native_instance_id: None,
             block_hash: Some(hash(1)),
             manifest_hash: None,
             chunk_index: None,
@@ -2216,6 +2459,7 @@ mod tests {
             kind: MessageKind::PayloadChunk,
             height: None,
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: Some(index),
@@ -2253,6 +2497,7 @@ mod tests {
             kind: MessageKind::PrepareVote,
             height: Some(9),
             view: Some(3),
+            native_instance_id: None,
             block_hash: Some(hash(1)),
             manifest_hash: None,
             chunk_index: None,
@@ -2286,6 +2531,7 @@ mod tests {
                 ..exact.clone()
             },
             MessageMeta {
+                native_instance_id: None,
                 block_hash: Some(hash(2)),
                 ..exact.clone()
             },
@@ -2302,6 +2548,7 @@ mod tests {
             kind: MessageKind::PayloadChunk,
             height: None,
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: Some(manifest_hash(0x44)),
             chunk_index: Some(7),
@@ -2315,6 +2562,7 @@ mod tests {
             kind: MessageKind::PayloadChunk,
             height: None,
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: Some(manifest_hash(0x44)),
             chunk_index: Some(7),
@@ -2372,6 +2620,7 @@ mod tests {
             kind: MessageKind::PayloadChunk,
             height: None,
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: Some(7),
@@ -2705,6 +2954,14 @@ mod tests {
             MessageKind::CommitCertificateRequest,
             MessageKind::CommitCertificateResponse,
             MessageKind::GlobalBeaconPartialSignature,
+            MessageKind::NativeProposal,
+            MessageKind::NativePrepareVote,
+            MessageKind::NativeCommitVote,
+            MessageKind::NativePrepareCertificate,
+            MessageKind::NativeCommitCertificate,
+            MessageKind::NativeTimeoutVote,
+            MessageKind::NativeTimeoutCertificate,
+            MessageKind::NativeDecision,
         ] {
             let meta = valid_meta(kind);
             validate_message_meta(&meta)
@@ -2840,6 +3097,7 @@ mod tests {
             kind: MessageKind::CommitCertificateRequest,
             height: Some(9),
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: None,
@@ -2895,6 +3153,7 @@ mod tests {
             kind: MessageKind::PayloadChunk,
             height: None,
             view: None,
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: Some(manifest_hash(0x55)),
             chunk_index: Some(11),
@@ -3172,6 +3431,7 @@ mod tests {
             kind: MessageKind::PrepareVote,
             height: Some(9),
             view: Some(2),
+            native_instance_id: None,
             block_hash: None,
             manifest_hash: None,
             chunk_index: None,
@@ -3372,5 +3632,510 @@ mod tests {
             1,
             "unsafe metadata must fail closed without retry"
         );
+    }
+    /// Real BLS-signed Native wire values; controller tests do not grant them
+    /// finalized-context authority or bypass ordinary downstream admission.
+    fn native_wire_fixture() -> (Peer, Vec<(MessageKind, BlockMessage)>) {
+        use iroha_crypto::Signature;
+        use iroha_data_model::block::{consensus_v2 as global, lane_consensus::*};
+        let mut keys = (1_u8..=4)
+            .map(|marker| KeyPair::try_from_seed(vec![marker; 32], Algorithm::BlsNormal).unwrap())
+            .collect::<Vec<_>>();
+        keys.sort_by(|a, b| a.public_key().cmp(b.public_key()));
+        let sign = |signer: u32, bytes: &[u8]| {
+            let key = &keys[signer as usize];
+            let signature = Signature::new(key.private_key(), bytes);
+            signature.verify(key.public_key(), bytes).unwrap();
+            LaneSignatureShareV1 {
+                signer,
+                signature: signature.payload().to_vec(),
+            }
+        };
+        let round = LaneRoundV1 {
+            instance_id: Hash::new(b"native control instance"),
+            lane_height: 9,
+            voting_view: 0,
+        };
+        let layout = global::recommended_data_availability_layout();
+        let chunk_root = Hash::new(b"native control chunk root");
+        let chunk_count = global::expected_encoded_chunk_count(8, layout).unwrap();
+        let value = LaneValueRefV1 {
+            instance_id: round.instance_id,
+            admitted_binding_hash: Hash::new(b"native control admitted binding"),
+            kind: LaneValueKindV1::Execution,
+            origin_view: 0,
+            origin_producer: 0,
+            descriptor_hash: Hash::new(b"native control descriptor"),
+            payload_hash: Hash::new(b"native control input"),
+            availability_hash: lane_availability_hash(layout, chunk_root, 8, chunk_count).unwrap(),
+        };
+        let manifest = LaneManifestV1 {
+            value,
+            layout,
+            chunk_root,
+            byte_len: 8,
+            chunk_count,
+        };
+        manifest.validate_availability().unwrap();
+        let prepare = LaneVoteStatementV1 {
+            round,
+            phase: LanePhaseV1::Prepare,
+            value,
+        };
+        let commit = LaneVoteStatementV1 {
+            phase: LanePhaseV1::Commit,
+            ..prepare
+        };
+        let qc = |statement: LaneVoteStatementV1| {
+            let bytes = statement.signature_preimage().unwrap();
+            LaneQcV1 {
+                statement,
+                shares: (0..3).map(|signer| sign(signer, &bytes)).collect(),
+            }
+        };
+        let proposal_body = LaneProposalBodyV1 {
+            round,
+            proposer: 0,
+            manifest,
+            justification: LaneJustificationV1::Opening,
+        };
+        let proposal_signature = sign(0, &proposal_body.signature_preimage().unwrap()).signature;
+        let timeout_body = LaneTimeoutBodyV1 {
+            round,
+            highest_prepare: None,
+        };
+        let timeouts = (0..3)
+            .map(|signer| LaneTimeoutVoteV1 {
+                body: timeout_body.clone(),
+                share: sign(signer, &timeout_body.signature_preimage().unwrap()),
+            })
+            .collect::<Vec<_>>();
+        let mut messages = vec![
+            (
+                MessageKind::NativeProposal,
+                LaneMessageV1::Proposal(LaneProposalV1 {
+                    body: proposal_body,
+                    signature: proposal_signature,
+                }),
+            ),
+            (
+                MessageKind::NativePrepareVote,
+                LaneMessageV1::Vote(LaneVoteV1 {
+                    statement: prepare,
+                    share: sign(0, &prepare.signature_preimage().unwrap()),
+                }),
+            ),
+            (
+                MessageKind::NativeCommitVote,
+                LaneMessageV1::Vote(LaneVoteV1 {
+                    statement: commit,
+                    share: sign(0, &commit.signature_preimage().unwrap()),
+                }),
+            ),
+            (
+                MessageKind::NativePrepareCertificate,
+                LaneMessageV1::QuorumCertificate(qc(prepare)),
+            ),
+            (
+                MessageKind::NativeCommitCertificate,
+                LaneMessageV1::QuorumCertificate(qc(commit)),
+            ),
+            (
+                MessageKind::NativeTimeoutVote,
+                LaneMessageV1::TimeoutVote(timeouts[0].clone()),
+            ),
+            (
+                MessageKind::NativeTimeoutCertificate,
+                LaneMessageV1::TimeoutCertificate(LaneTcV1 {
+                    round,
+                    votes: timeouts,
+                }),
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, message)| {
+            message.validate_shape(4).unwrap();
+            (
+                kind,
+                BlockMessage::NativeLane(LaneMessageEnvelopeV1 {
+                    version: LANE_MESSAGE_VERSION_V1,
+                    message,
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
+        messages.push((
+            MessageKind::NativeDecision,
+            BlockMessage::NativeLaneDecision(Box::new(LaneDecisionV1 {
+                manifest,
+                commit_qc: qc(commit),
+            })),
+        ));
+        (
+            Peer::new("127.0.0.1:0".parse().unwrap(), keys[0].public_key().clone()),
+            messages,
+        )
+    }
+
+    fn native_rule(meta: &MessageMeta, action: Action) -> Rule {
+        Rule {
+            sender: meta.sender.clone(),
+            authenticated_via: meta.authenticated_via.clone(),
+            kind: meta.kind,
+            height: meta.height,
+            view: meta.view,
+            native_instance_id: meta.native_instance_id,
+            block_hash: None,
+            manifest_hash: None,
+            chunk_index: None,
+            proposal_height: None,
+            proposal_view: None,
+            action,
+        }
+    }
+
+    #[test]
+    fn native_wire_selectors_bind_instance_slot_view_phase_and_family() {
+        let (sender, messages) = native_wire_fixture();
+        for (kind, block) in messages {
+            let message =
+                NetworkMessage::SumeragiBlock(Arc::new(BlockMessageWire::new(block.clone())));
+            let meta = message_meta(&sender, sender.id(), &message)
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta.kind, kind);
+            assert_eq!(meta.height, Some(9));
+            assert_eq!(meta.view, Some(0));
+            assert_eq!(
+                meta.native_instance_id,
+                Some(Hash::new(b"native control instance"))
+            );
+            assert_eq!(meta.envelope_digest, Hash::new(block.encode()));
+            let exact = native_rule(&meta, Action::Hold);
+            assert!(exact.matches(&meta));
+            assert_eq!(parse_rule(&rule_value(&exact)).unwrap(), exact);
+            for other_kind in [
+                MessageKind::Proposal,
+                MessageKind::PrepareVote,
+                MessageKind::CommitVote,
+                MessageKind::PrepareCertificate,
+                MessageKind::CommitCertificate,
+                MessageKind::TimeoutVote,
+                MessageKind::TimeoutCertificate,
+                MessageKind::NativeProposal,
+                MessageKind::NativePrepareVote,
+                MessageKind::NativeCommitVote,
+                MessageKind::NativePrepareCertificate,
+                MessageKind::NativeCommitCertificate,
+                MessageKind::NativeTimeoutVote,
+                MessageKind::NativeTimeoutCertificate,
+                MessageKind::NativeDecision,
+            ] {
+                if other_kind != kind {
+                    assert!(!exact.matches(&MessageMeta {
+                        kind: other_kind,
+                        ..meta.clone()
+                    }));
+                    assert!(!exact.overlaps(&Rule {
+                        kind: other_kind,
+                        ..exact.clone()
+                    }));
+                }
+            }
+            for changed in [
+                MessageMeta {
+                    native_instance_id: Some(Hash::new(b"other instance")),
+                    ..meta.clone()
+                },
+                MessageMeta {
+                    height: Some(10),
+                    ..meta.clone()
+                },
+                MessageMeta {
+                    view: Some(1),
+                    ..meta.clone()
+                },
+                MessageMeta {
+                    sender: peer(91),
+                    ..meta.clone()
+                },
+                MessageMeta {
+                    authenticated_via: peer(92),
+                    ..meta.clone()
+                },
+            ] {
+                assert!(!exact.matches(&changed));
+            }
+            assert!(!exact.overlaps(&Rule {
+                native_instance_id: Some(Hash::new(b"other instance")),
+                ..exact.clone()
+            }));
+            for changed in [
+                Rule {
+                    native_instance_id: None,
+                    ..exact.clone()
+                },
+                Rule {
+                    native_instance_id: Some(Hash::prehashed([0; Hash::LENGTH])),
+                    ..exact.clone()
+                },
+                Rule {
+                    kind: MessageKind::CommitVote,
+                    ..exact.clone()
+                },
+                Rule {
+                    block_hash: Some(hash(1)),
+                    ..exact.clone()
+                },
+            ] {
+                assert!(parse_rule(&rule_value(&changed)).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn native_control_and_decision_preserve_exact_hold_release_drop_custody() {
+        let (sender, messages) = native_wire_fixture();
+        for (kind, block) in messages.into_iter().filter(|(kind, _)| {
+            matches!(
+                kind,
+                MessageKind::NativeCommitVote | MessageKind::NativeDecision
+            )
+        }) {
+            let (_parent, controller) = Controller::<Box<u64>, Box<u64>>::for_tests();
+            let frame = Arc::new(BlockMessageWire::new(block));
+            let message = NetworkMessage::SumeragiBlock(Arc::clone(&frame));
+            let size_bytes = message.encode().len();
+            let meta = message_meta(&sender, sender.id(), &message)
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta.kind, kind);
+            let hold = native_rule(&meta, Action::Hold);
+            let install = |revision: u64, rule: &Rule, release: Vec<u64>| {
+                let command = object_value([
+                    ("version", Value::from(FORMAT_VERSION)),
+                    ("revision", Value::from(revision)),
+                    ("queue_capacity", Value::from(4_u64)),
+                    ("drain", Value::from(false)),
+                    ("rules", Value::Array(vec![rule_value(rule)])),
+                    (
+                        "release",
+                        Value::Array(release.into_iter().map(Value::from).collect()),
+                    ),
+                ]);
+                write_atomic_private_file(
+                    &controller.root,
+                    CONTROL_FILE,
+                    &canonical_json(&command).unwrap(),
+                )
+                .unwrap();
+                controller.poll_command().unwrap();
+            };
+            let ack = || -> Value {
+                norito::json::from_slice(&fs::read(controller.root.join(ACK_FILE)).unwrap())
+                    .unwrap()
+            };
+            install(1, &hold, Vec::new());
+            // Equal instance/slot/view/Commit phase does not bridge wire families.
+            let other_kind = if kind == MessageKind::NativeDecision {
+                MessageKind::NativeCommitCertificate
+            } else {
+                MessageKind::NativeDecision
+            };
+            let other_block = native_wire_fixture()
+                .1
+                .into_iter()
+                .find(|(candidate, _)| *candidate == other_kind)
+                .unwrap()
+                .1;
+            let other_frame = Arc::new(BlockMessageWire::new(other_block));
+            let other_message = NetworkMessage::SumeragiBlock(Arc::clone(&other_frame));
+            let (pass, original) = controller
+                .admit_with_reply_route_and_ownership(
+                    sender.clone(),
+                    sender.id(),
+                    other_message.clone(),
+                    other_message.encode().len(),
+                    Some(Box::new(31)),
+                    Some(Box::new(32)),
+                )
+                .unwrap();
+            assert_eq!(pass, Admission::Pass);
+            let (_, passed_message, _, route, ownership) = original.unwrap();
+            let NetworkMessage::SumeragiBlock(passed_frame) = passed_message else {
+                panic!("foreign family passes intact");
+            };
+            assert!(Arc::ptr_eq(&passed_frame, &other_frame));
+            assert_eq!(route.as_deref(), Some(&31));
+            assert_eq!(ownership.as_deref(), Some(&32));
+            let untouched = ack();
+            assert_eq!(untouched.get("dropped").and_then(Value::as_u64), Some(0));
+            assert!(
+                untouched
+                    .get("held")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty()
+            );
+            let reply_route = Box::new(41);
+            let ownership = Box::new(42);
+            let reply_pointer = std::ptr::from_ref(reply_route.as_ref());
+            let ownership_pointer = std::ptr::from_ref(ownership.as_ref());
+            let (admission, returned) = controller
+                .admit_with_reply_route_and_ownership(
+                    sender.clone(),
+                    sender.id(),
+                    message,
+                    size_bytes,
+                    Some(reply_route),
+                    Some(ownership),
+                )
+                .unwrap();
+            assert_eq!(admission, Admission::Held);
+            assert!(returned.is_none());
+            let held_ack = ack();
+            assert_eq!(held_ack.get("dropped").and_then(Value::as_u64), Some(0));
+            let held = &held_ack.get("held").and_then(Value::as_array).unwrap()[0];
+            assert_eq!(
+                held.get("native_instance_id"),
+                Some(&Value::from(meta.native_instance_id.unwrap().to_string()))
+            );
+            assert_eq!(held.get("kind"), Some(&Value::from(kind.as_str())));
+            assert_eq!(
+                held.get("envelope_digest"),
+                Some(&Value::from(meta.envelope_digest.to_string()))
+            );
+            assert_eq!(
+                held_ack.get("held_bytes").and_then(Value::as_u64),
+                Some(size_bytes as u64)
+            );
+            let sequence = held.get("sequence").and_then(Value::as_u64).unwrap();
+            assert!(controller.next_release().unwrap().is_none());
+            install(2, &hold, vec![sequence]);
+            let released = controller.next_release().unwrap().unwrap();
+            assert_eq!(released.sequence, sequence);
+            assert_eq!(released.authenticated_via, *sender.id());
+            assert_eq!(released.size_bytes, size_bytes);
+            assert!(std::ptr::eq(
+                released.reply_route.as_deref().unwrap(),
+                reply_pointer
+            ));
+            assert!(std::ptr::eq(
+                released.ownership.as_deref().unwrap(),
+                ownership_pointer
+            ));
+            let NetworkMessage::SumeragiBlock(released_frame) = released.message else {
+                panic!("exact family retained");
+            };
+            assert!(Arc::ptr_eq(&released_frame, &frame));
+            let inflight = ack();
+            assert_eq!(
+                inflight.get("in_flight").and_then(Value::as_u64),
+                Some(sequence)
+            );
+            assert!(
+                inflight
+                    .get("delivered")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty()
+            );
+            controller
+                .complete_release(sequence, ReleaseOutcome::Delivered)
+                .unwrap();
+            let delivered = ack();
+            assert_eq!(
+                delivered.get("delivered"),
+                Some(&Value::Array(vec![Value::from(sequence)]))
+            );
+            assert_eq!(delivered.get("in_flight"), Some(&Value::Null));
+            assert!(
+                delivered
+                    .get("held")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(controller.next_release().unwrap().is_none());
+            let drop_rule = Rule {
+                action: Action::Drop,
+                ..hold
+            };
+            install(3, &drop_rule, Vec::new());
+            let (admission, returned) = controller
+                .admit_with_reply_route_and_ownership(
+                    sender.clone(),
+                    sender.id(),
+                    NetworkMessage::SumeragiBlock(Arc::clone(&frame)),
+                    size_bytes,
+                    Some(Box::new(51)),
+                    Some(Box::new(52)),
+                )
+                .unwrap();
+            assert_eq!(admission, Admission::Consumed);
+            let (_, original, returned_bytes, route, owned) = returned.unwrap();
+            assert_eq!(returned_bytes, size_bytes);
+            assert_eq!(route.as_deref(), Some(&51));
+            assert_eq!(owned.as_deref(), Some(&52));
+            let NetworkMessage::SumeragiBlock(original_frame) = original else {
+                panic!("exact dropped family returned");
+            };
+            assert!(Arc::ptr_eq(&original_frame, &frame));
+            let dropped = ack();
+            assert_eq!(dropped.get("revision").and_then(Value::as_u64), Some(3));
+            assert_eq!(
+                dropped.get("rules"),
+                Some(&Value::Array(vec![rule_value(&drop_rule)]))
+            );
+            assert_eq!(dropped.get("dropped").and_then(Value::as_u64), Some(1));
+            assert!(
+                dropped
+                    .get("held")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(dropped.get("fatal"), Some(&Value::from(false)));
+            assert!(controller.next_release().unwrap().is_none());
+        }
+    }
+    #[test]
+    fn native_metadata_rejects_unbound_or_unsupported_coordinates() {
+        let (sender, messages) = native_wire_fixture();
+        for (_, block) in messages {
+            let mut malformed = block.clone();
+            match &mut malformed {
+                BlockMessage::NativeLane(envelope) => match &mut envelope.message {
+                    LaneMessageV1::Proposal(value) => {
+                        value.body.manifest.value.instance_id = Hash::new(b"foreign")
+                    }
+                    LaneMessageV1::Vote(value) => {
+                        value.statement.value.instance_id = Hash::new(b"foreign")
+                    }
+                    LaneMessageV1::QuorumCertificate(value) => {
+                        value.statement.value.instance_id = Hash::new(b"foreign")
+                    }
+                    LaneMessageV1::TimeoutVote(value) => {
+                        value.body.round.instance_id = Hash::prehashed([0; Hash::LENGTH])
+                    }
+                    LaneMessageV1::TimeoutCertificate(value) => value.round.voting_view += 1,
+                },
+                BlockMessage::NativeLaneDecision(value) => {
+                    value.commit_qc.statement.phase = LanePhaseV1::Prepare
+                }
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                native_message_meta(&sender, sender.id(), &malformed),
+                Err(ControlError::InvalidMessageDescriptor)
+            ));
+            if let BlockMessage::NativeLane(mut envelope) = block {
+                envelope.version = LANE_MESSAGE_VERSION_V1 + 1;
+                assert!(matches!(
+                    native_message_meta(&sender, sender.id(), &BlockMessage::NativeLane(envelope)),
+                    Err(ControlError::InvalidMessageDescriptor)
+                ));
+            }
+        }
     }
 }

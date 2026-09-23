@@ -415,6 +415,109 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
   );
 });
 
+test("macOS native build seals SDK, deployment target, and Apple tools into Cargo fingerprints", {
+  skip: process.platform !== "darwin",
+}, (t) => {
+  const fixture = createFixture(t);
+  fixture.nativePath = nativeBuildOutputPath({
+    repoRoot: fixture.repoRoot,
+    cargoProfile: "debug",
+    env: fixture.env,
+    platform: "darwin",
+  });
+  const clang = path.join(fixture.repoRoot, "apple-clang");
+  const linker = path.join(fixture.repoRoot, "apple-ld");
+  for (const executable of [clang, linker]) {
+    writeFileSync(executable, "#!/bin/sh\nexit 99\n");
+    chmodSync(executable, 0o700);
+  }
+  const runTool = (executable, args, options) => {
+    if (executable === "/usr/bin/xcrun") {
+      assert.equal(options.cwd, fixture.repoRoot);
+      const name = args.join(" ");
+      if (name === "--find clang") return { status: 0, stdout: clang };
+      if (name === "--find ld") return { status: 0, stdout: linker };
+      assert.fail(`unexpected xcrun probe: ${name}`);
+    }
+    if (executable === clang) {
+      assert.deepEqual(args, ["--version"]);
+      return { status: 0, stdout: "Apple clang version 21.0.0 (fixture)\n" };
+    }
+    if (executable === linker) {
+      assert.deepEqual(args, ["-v"]);
+      return {
+        status: 0,
+        stdout: "",
+        stderr: "@(#)PROGRAM:ld PROJECT:ld-27037.1\n",
+      };
+    }
+    return fixture.runTool(executable, args, options);
+  };
+  const run = (version) => {
+    const sdkRoot = path.join(fixture.repoRoot, `MacOSX${version}.sdk`);
+    mkdirSync(sdkRoot);
+    writeFileSync(path.join(sdkRoot, "SDKSettings.json"),
+      `${JSON.stringify({ Version: version })}\n`);
+    const env = {
+      ...fixture.env,
+      SDKROOT: sdkRoot,
+      MACOSX_DEPLOYMENT_TARGET: "11.0",
+    };
+    let rustflags;
+    const result = runNativeBuild({
+      repoRoot: fixture.repoRoot,
+      env,
+      platform: "darwin",
+      runTool,
+      readSourceState: () => sourceState(),
+      runCargo(_cargo, _args, { cargoEnv }) {
+        assert.equal(cargoEnv.SDKROOT, sdkRoot);
+        rustflags = cargoEnv.RUSTFLAGS;
+        writeNativeOutput(fixture, `macos-sdk-${version}`);
+        return { status: 0, stdout: successfulCargoJson(fixture) };
+      },
+    });
+    assert.equal(result, 0);
+    const provenance = readNativeBuildProvenance(fixture.nativePath);
+    assert.equal(provenance.version, 4);
+    assert.equal(provenance.macos_build.sdk_root, sdkRoot);
+    assert.equal(provenance.macos_build.sdk_version, version);
+    assert.equal(provenance.macos_build.deployment_target, "11.0");
+    assert.match(provenance.macos_build.sdk_settings_sha256, /^[0-9a-f]{64}$/u);
+    return rustflags;
+  };
+  const firstFlags = run("26.5");
+  const secondFlags = run("27.0");
+  assert.match(firstFlags, /-Cmetadata=iroha_js_macos_[0-9a-f]{64}/u);
+  assert.notEqual(secondFlags, firstFlags);
+  const lastSdkRoot = path.join(fixture.repoRoot, "MacOSX27.0.sdk");
+  assert.throws(() => runNativeBuild({
+    repoRoot: fixture.repoRoot,
+    env: {
+      ...fixture.env,
+      SDKROOT: lastSdkRoot,
+      MACOSX_DEPLOYMENT_TARGET: "11.0",
+    },
+    platform: "darwin",
+    runTool,
+    readSourceState: () => sourceState(),
+    runCargo() {
+      writeNativeOutput(fixture, "sdk-changed-during-cargo");
+      writeFileSync(path.join(lastSdkRoot, "SDKSettings.json"),
+        `${JSON.stringify({ Version: "27.1" })}\n`);
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+  }), /SDK or Apple toolchain changed while Cargo was running/u);
+  assert.equal(existsSync(nativeBuildProvenancePath(fixture.nativePath)), false);
+  assert.throws(() => runNativeBuild({
+    repoRoot: fixture.repoRoot,
+    env: { ...fixture.env, SDKROOT: lastSdkRoot },
+    platform: "darwin",
+    runTool,
+    runCargo() { assert.fail("missing deployment target must fail before Cargo"); },
+  }), /explicit MACOSX_DEPLOYMENT_TARGET/u);
+});
+
 test("a fresh Cargo artifact is authenticated without forcing a rebuild", (t) => {
   const fixture = createFixture(t);
   writeNativeOutput(fixture, "already-current-output");
@@ -734,7 +837,7 @@ test("failed Cargo leaves the output unauthenticated", (t) => {
 
 function buildProvenance(source, cargoProfile, state) {
   return {
-    version: 3,
+    version: 4,
     build_execution_policy: "trusted-local-cargo-v1",
     cargo_profile: cargoProfile,
     native_sha256: sha256File(source),

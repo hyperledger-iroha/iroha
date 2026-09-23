@@ -47,15 +47,45 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         }
     }
 
+    @Test
+    fun `close revokes local handle and cannot dispatch or close twice`() {
+        val endpoint = Endpoint()
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        bridge.close()
+        bridge.close()
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> {
+            bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1)))
+        }
+        assertEquals(0, endpoint.invokeCalls)
+    }
+
+    @Test
+    fun `failed native teardown still revokes local handle`() {
+        val endpoint = Endpoint().apply { closeStatus = -312 }
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        assertFailsWith<IllegalStateException> { bridge.close() }
+        assertFailsWith<IllegalStateException> {
+            bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1)))
+        }
+        assertEquals(1, endpoint.closeCalls)
+        assertEquals(0, endpoint.invokeCalls)
+    }
+
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
-        val contractWords = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+        val contractWords = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
         var openCalls = 0
         var invokeCalls = 0
+        var closeCalls = 0
+        var closeStatus = 0
         var returnedHandle = -1L // An opaque u64 handle retains every bit across JNI's signed long.
         var mutateRequest = false
         var missingResponse = false
         override fun contract() = contractWords.copyOf()
         override fun open(storagePath: String): Long { openCalls++; return returnedHandle }
+        override fun close(handle: Long): Int { closeCalls++; assertEquals(returnedHandle, handle); return closeStatus }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {
             invokeCalls++
             assertEquals(returnedHandle, handle)

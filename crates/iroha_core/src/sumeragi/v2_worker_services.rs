@@ -33,7 +33,7 @@ pub(crate) struct ProductionV2Services {
     // One global height can publish exactly one carrier. This original owner
     // must move to the process-wide Native driver before height retirement.
     pending_native_publication: Option<super::v2_apply::PublishedNativeCarrier>,
-    pending_local_apply: Option<(ApplyTask, super::v2_body_store::LocalValidationRefusal)>,
+    pending_local_apply: Option<RetainedLocalApply>,
     native_source_wait: Option<NativeSourceWait>,
     native_source_completion:
         Option<super::v2_apply::native_validation::NativeSourceRecoveryCompletion>,

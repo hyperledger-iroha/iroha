@@ -519,7 +519,9 @@ fn state_capture_late_membership_refusal_retains_completed_world_and_runtime_unt
             .poll(&mut Context::from_waker(&waker))
             .is_pending()
     );
+    let _read_releases;
     let StateBlockFields {
+        read_releases: original_read_releases,
         world,
         canonical_runtime,
         commit_topology,
@@ -529,6 +531,7 @@ fn state_capture_late_membership_refusal_retains_completed_world_and_runtime_unt
         block_hashes,
         ..
     } = block.into_fields();
+    _read_releases = original_read_releases;
     let mut pending = StateJournalCapture::new(
         world.capture_slot(),
         runtime_journals::RuntimeCapture::new(

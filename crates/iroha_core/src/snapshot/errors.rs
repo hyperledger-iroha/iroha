@@ -12,6 +12,8 @@ pub enum TryReadError {
     IO(#[source] std::io::Error, PathBuf),
     /// Error (de)serializing state snapshot
     Serialization(#[source] norito::json::Error),
+    /// Local State history allocation refused restore; this is not evidence of snapshot corruption: {0}
+    StateAdmission(#[source] crate::state::StateAdmissionError),
     /// Signed snapshot payload is not the single canonical first-release JSON encoding
     NonCanonicalSnapshotPayload,
     /// Snapshot exceeds a configured typed decode or transient resource boundary: {0}
@@ -133,6 +135,18 @@ pub enum TryReadError {
     },
     /// Failed to reconcile snapshot block hashes with Kura
     Kura(#[source] KuraError),
+}
+impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
+    fn from(error: crate::state::deserialize::StateRestoreError) -> Self {
+        match error {
+            crate::state::deserialize::StateRestoreError::Serialization(error) => {
+                Self::Serialization(error)
+            }
+            crate::state::deserialize::StateRestoreError::Admission(error) => {
+                Self::StateAdmission(error)
+            }
+        }
+    }
 }
 /// Error variants for snapshot writing
 #[derive(thiserror::Error, Debug, displaydoc::Display)]

@@ -1,18 +1,21 @@
 # SoraFS production signer authority inventory
 
-This is the implementation inventory for G02.1, inspected on 2026-09-13 in the
-final-promotion candidate. It records existing source boundaries and missing
-production code. Configuration declarations and test signatures do not prove
-that a device, authority or deployment exists. The outer receipt contract is
+This is the implementation inventory for G02.1, initially inspected on 2026-09-13
+and rechecked on 2026-09-23 in the `optimizations` checkout. It records existing
+source boundaries and missing production code. Configuration declarations and
+test signatures do not prove an operating signer, authoritative state source or
+deployment. The outer receipt contract is
 specified in [final-promotion receipt V1](final_promotion_receipt_v1.md).
 
 ## Missing implementations
 
 The [daemon coordinator](../../crates/irohad/src/signer_operation.rs) depends on
-`SignerKeyOperationProviderV1` and `SignerOperationStateSourceV1`. Their only
-current implementors are the coordinator and stream-token test fixtures.
-No production implementation yet resolves the configured software signer and carries
-the coordinator's ordered, fenced operations through the runtime provider.
+`SignerKeyOperationProviderV1` and `SignerOperationStateSourceV1`. Its
+[software credential provider](../../crates/irohad/src/signer_operation/credential_provider.rs)
+implements the key-operation trait for an owner-only supervisor credential and
+rechecks enrolled custody and the exact reservation before key use. It is not
+yet assembled into configured purpose dispatch, and state-source implementations
+remain test fixtures.
 No production state source authenticates and atomically updates the required
 custody, audit predecessor, reservation and completed-operation authority.
 

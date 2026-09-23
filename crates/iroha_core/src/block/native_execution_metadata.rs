@@ -60,11 +60,8 @@ impl ValidBlock {
                 // An empty ordinary set means there are no external inputs; it
                 // supplies no Native/old-merge permission of its own.
                 state
-                    .stage_canonical_carrier_membership(
-                        std::iter::empty::<HashOf<TransactionEntrypoint>>(),
-                        height,
-                    )
-                    .map_err(|error| Self::execution_context_error(error.to_string()))?;
+                    .stage_canonical_carrier_membership(Vec::new(), height)
+                    .map_err(BlockValidationError::from_certified_merge_stage_error)?;
                 let committed_fragment_count =
                     Self::validated_committed_fragment_count(state, advertised_fragments)?;
                 Ok(crate::state::ExecutionOutputSealMetadata {

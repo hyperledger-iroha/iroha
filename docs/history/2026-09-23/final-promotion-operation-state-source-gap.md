@@ -1,0 +1,29 @@
+# Final-promotion operation state-source gap — 2026-09-23
+
+This record covers the `optimizations` checkout's role-14 daemon signing source. It is a
+source audit, not deployed qualification. No Cargo command was run for this record.
+
+## Available authority boundaries
+
+- Core's [native operation executor](../../../crates/iroha_core/src/smartcontracts/isi/sorafs_final_promotion_authority/operation.rs#L28) performs Reserve and Complete inside a `StateTransaction`. Reserve checks the exact audit predecessor and active slot, preserves operation-ID replay protection, and derives the fence and expiry from native execution. Complete compares the original intent, custody, reservation, submitting account and timely execution before recording a completed row.
+- Core's [same-State reader](../../../crates/iroha_core/src/query/final_promotion_authority.rs#L243) returns one custody/control record, operation head and optional operation at an exact committed height. Its own documentation calls the result a runtime snapshot, not signed observation evidence.
+- Core's [exact finality helper](../../../crates/iroha_core/src/query/signer_finality.rs#L41) binds a State block hash to durable Kura and its revision-4 finality artifact, but expressly does not establish a fresh custody head. The challenged Check below supplies the required current-authority step.
+- Core's [Check consumer](../../../crates/iroha_core/src/query/final_promotion_authority/observation.rs#L399) consumes the original signed Check after validating its aligned successful execution, retained State/Kura finality and current authority. It accepts an independently sampled UTC interval and keeps the original finite challenge lifetime.
+- The daemon's [Current Check runtime](../../../crates/irohad/src/signer_operation/final_promotion/current_observation.rs#L176) pins a reviewed role-14 request and the node `State`, obtains custody plus audit from one finalized Current Check, and requires separate payload, observer signer, submission, qualified UTC and durable floor providers. Its result explicitly grants no reservation or signing permission.
+- The [client submission API](../../../crates/iroha/src/client.rs#L17253) accepts an existing signed transaction and can wait for `Applied`. Neither method is wired to this daemon source; an HTTP acceptance or confirmation does not replace the local exact signed Check and State/Kura proof.
+
+## Missing production source
+
+[`SignerOperationStateSourceV1`](../../../crates/irohad/src/signer_operation.rs#L168) requires more than the Current Check result: a fresh same-snapshot custody and audit predecessor; durable exclusive Reserve; a fresh phase-specific authenticated Check before and after each provider operation; a timely Complete transaction that verifies the staged private receipt; and fresh exact completed-row observations before signature release. Failed and expired operation IDs must retain replay tombstones.
+
+Repository source has no non-test implementation of that trait. Its implementations are the simulated `Source` in [signer operation tests](../../../crates/irohad/src/signer_operation/tests.rs#L127), `StreamSource` in the stream-token test support, and `CountedSource` in final-promotion lifecycle tests. The daemon Current Check runtime builds only `FinalPromotionCheckSubjectV1::Current`; Core also defines `BeforeProvider`, `AfterProvider`, `BeforeCommit`, `AfterCommit` and `BeforeRelease` subjects, but no daemon owner currently drives those phases through actual signed submission and finalized reads. The five Current Check collaborator traits have implementations only in the [daemon tests](../../../crates/irohad/src/signer_operation/final_promotion/account_transaction/tests/current_observation.rs#L37). No runtime configuration or daemon assembly constructs those collaborators or the software credential coordinator for role 14.
+
+The [account transaction preparer](../../../crates/irohad/src/signer_operation/final_promotion/account_transaction.rs#L125) can derive exact Reserve or Complete payloads from verified Checks and a staged receipt. It does not supply fee approval, a configured role-15 account key, native submission, same-envelope reconciliation or finality. A private receipt journal cannot substitute for the native operation row or prove completion.
+
+The native reducer currently accepts only role-14 `Sign` reservations, so this path cannot serve the generic coordinator's other actions or another custody purpose. A completed native row retains audit, response and signature digests; the source must compare that finalized row against the exact durably staged private receipt before releasing signatures.
+
+An adapter that reads a historical State snapshot, accepts a transport acknowledgement, or implements the remaining trait methods with local in-memory state would let the protected key sign without current finalized reservation ownership. The [software credential coordinator factory](../../../crates/irohad/src/signer_operation/credential_provider.rs#L99) therefore requires an explicitly supplied state source and fails before credential access when none exists. No HSM is a prerequisite.
+
+## Next bounded implementation
+
+Construct configured independent observer signing, approved transaction spending, qualified UTC and rollback-resistant floor providers. Bind one reviewed request and private journal to the source. For every trait phase, submit the original signed native Check or Reserve/Complete envelope through the ordinary transaction path, reconcile ambiguous results without re-signing, and consume the exact finalized State/Kura result with Core's current-authority predicate. Only then assemble the credential provider, source and purpose-specific sign/recover service. Exercise concurrent revoke, lost reservation, expiry, changed audit, ambiguous completion and restart recovery against that concrete implementation.

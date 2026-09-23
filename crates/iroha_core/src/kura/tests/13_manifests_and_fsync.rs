@@ -1960,3 +1960,140 @@ fn carrier_checkpoint_receipt_retains_original_ancestor_objects() {
     kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
         .expect("the original live file and ancestor objects are retained");
 }
+
+#[test]
+fn v2_finality_retry_repeats_each_failed_directory_barrier_on_the_exact_file() {
+    // Each iteration starts with a real successful rename and a refused receipt.
+    // A second injected barrier failure proves that the existing-file path
+    // repeats synchronization rather than accepting presence as durability.
+    for target_index in 0..4 {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block)).unwrap();
+        let artifact = v2_finality_artifact_for_block(&block);
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let directory = path.parent().unwrap();
+        kura.fail_next_atomic_write_after_rename_for_test(&path);
+        assert!(kura.store_v2_finality_artifact(&artifact).is_err());
+        let before = kura
+            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
+            .unwrap()
+            .expect("the real rename happened before its refused receipt");
+        assert_eq!(
+            kura.open_bound_progress_namespace(&path, &path)
+                .unwrap()
+                .directories
+                .len(),
+            4
+        );
+        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
+        assert!(
+            kura.store_v2_finality_artifact(&artifact).is_err(),
+            "an existing finality file cannot bypass a failed ancestor sync"
+        );
+        let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
+        assert_v2_commit_receipt_matches_artifact(&receipt, &artifact);
+        let after = kura
+            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.bytes, after.bytes);
+        assert!(Kura::stable_sidecar_file_binding_unchanged(
+            &before.metadata,
+            &after.metadata,
+        ));
+        assert_eq!(
+            kura.v2_finality_artifact(artifact.height).unwrap(),
+            Some(artifact)
+        );
+    }
+}
+
+#[test]
+fn v2_finality_retry_resync_rejects_replaced_verified_file_and_changed_bytes() {
+    for replace_file in [false, true] {
+        let (kura, _, artifact, _) = carrier_checkpoint_receipt_fixture();
+        let path = kura.v2_finality_artifact_path(artifact.height);
+        let directory = path.parent().unwrap();
+        let verified = kura
+            .read_regular_sidecar_snapshot(&path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)
+            .unwrap()
+            .unwrap();
+        if replace_file {
+            fs::rename(&path, path.with_extension("retained-original")).unwrap();
+            fs::write(&path, &verified.bytes).unwrap();
+        } else {
+            fs::write(&path, b"different finality bytes").unwrap();
+        }
+        let _prune = kura.prune_lock.lock();
+        let _canonical = kura.canonical_chain_lock.lock();
+        assert!(
+            kura.resync_verified_v2_finality_record(&path, directory, &verified)
+                .is_err(),
+            "synchronizing another file or modified content must not reuse the verified identity"
+        );
+    }
+}
+
+#[test]
+fn commit_manifest_binds_checkpoint_only_after_every_directory_barrier() {
+    for target_index in 0..4 {
+        let kura = Kura::blank_kura_for_testing();
+        establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block)).unwrap();
+        let artifact = v2_finality_artifact_for_block(&block);
+        let checkpoint = Hash::new(b"original captured checkpoint");
+        kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)
+            .unwrap();
+        let manifest = CommitManifest::new(
+            artifact.height,
+            artifact.block_hash,
+            None,
+            None,
+            checkpoint,
+            None,
+        )
+        .with_authenticated_v2_commit_authority(&artifact);
+        assert!(!kura.commit_manifest_dir().exists());
+        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
+        assert!(kura.store_commit_manifest(manifest.clone()).is_err());
+        assert_eq!(
+            kura.commit_manifest(artifact.height).unwrap(),
+            Some(manifest.clone())
+        );
+        let path = kura.commit_manifest_path(artifact.height);
+        assert_eq!(
+            kura.open_bound_progress_namespace(&path, &path)
+                .unwrap()
+                .directories
+                .len(),
+            4
+        );
+        assert_eq!(
+            kura.commit_manifest_binding_state(&manifest).unwrap(),
+            CommitManifestBindingState::Unbound,
+            "a refused directory barrier must not publish the checkpoint digest",
+        );
+        assert!(
+            kura.v2_finality_artifact(artifact.height)
+                .unwrap()
+                .is_none()
+        );
+        let plan = crate::sumeragi::v2_recovery::plan_v2_startup_replay(&kura)
+            .expect("manifest-before-binding interruption remains a recoverable pending tip");
+        assert_eq!(plan.complete_prefix_height(), 0);
+        assert_eq!(plan.pending_tip_height(), Some(artifact.height));
+        drop(plan);
+        kura.finish_v2_startup_finality_verification();
+        kura.store_commit_manifest(manifest.clone()).unwrap();
+        assert!(kura.commit_manifest_has_wsv_binding(&manifest).unwrap());
+        assert_eq!(
+            kura.wsv_checkpoint(artifact.height)
+                .unwrap()
+                .unwrap()
+                .state_hash,
+            checkpoint
+        );
+    }
+}

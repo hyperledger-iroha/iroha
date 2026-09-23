@@ -3027,7 +3027,7 @@ fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     assert!(!crate::sumeragi::SumeragiHandle::emergency_fast_disabled().admission_ready());
 }
 #[test]
-fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
+fn authenticated_lane_drain_vote_retains_original_owner_without_live_consumer() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(true, Ordering::Release);
     let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
@@ -3073,18 +3073,19 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
         keypair.private_key(),
     )
     .expect("sign valid lane-drain vote");
-    assert!(handle.try_incoming_lane_drain_vote(signer.clone(), vote.clone()));
-    let LaneRelayMessage::DrainVote {
+    let super::SumeragiIngressDisposition::Rejected(LaneRelayMessage::DrainVote {
         sender,
         vote: queued_vote,
-    } = relay_receiver
-        .try_recv()
-        .expect("valid drain vote reaches the bounded relay queue")
+    }) = handle.try_incoming_lane_relay_owned(LaneRelayMessage::DrainVote {
+        sender: signer.clone(),
+        vote: vote.clone(),
+    })
     else {
-        panic!("valid drain vote changed relay message kind");
+        panic!("a valid drain vote has no current serialized consumer");
     };
     assert_eq!(sender, signer);
     assert_eq!(queued_vote, vote);
+    assert!(relay_receiver.try_recv().is_err());
     let mismatched_sender = PeerId::new(KeyPair::random().public_key().clone());
     assert!(!handle.try_incoming_lane_drain_vote(mismatched_sender, vote.clone()));
     assert!(relay_receiver.try_recv().is_err());
@@ -3183,7 +3184,47 @@ fn oversized_atomic_lane_certificate_is_returned_exactly() {
     assert!(ingress.try_recv().is_none());
 }
 #[test]
-fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
+fn retired_nexus_relay_envelope_returns_original_before_queue_admission() {
+    let (handle, _ingress, relay_receiver) = test_sumeragi_handle(1);
+    handle.ingress_ready.store(true, Ordering::Release);
+    let header = iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(7).expect("nonzero lane height"),
+        None,
+        None,
+        0,
+        0,
+    );
+    let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
+        block_height: header.height().get(),
+        lane_id: LaneId::new(3),
+        lane_incarnation: Hash::new(b"retired nexus relay incarnation"),
+        dataspace_id: DataSpaceId::new(10),
+        tx_count: 0,
+        total_local_amount: "0".parse().expect("zero quantity"),
+        total_xor_due: "0".parse().expect("zero quantity"),
+        total_xor_after_haircut: "0".parse().expect("zero quantity"),
+        total_xor_variance: "0".parse().expect("zero quantity"),
+        swap_metadata: None,
+        receipts: Vec::new(),
+        nexus_fee_receipts: Vec::new(),
+        native_amx_receipts: Vec::new(),
+    };
+    let envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(header, None, settlement, 0)
+        .expect("valid source relay envelope")
+        .with_manifest_root(Some([0x63; 32]))
+        .with_lane_block_descriptor_hash(Some(Hash::new(b"retired nexus relay descriptor")));
+    let expected = envelope.clone();
+    assert!(matches!(
+        handle.try_incoming_lane_relay_owned(LaneRelayMessage::Envelope(envelope)),
+        super::SumeragiIngressDisposition::Rejected(LaneRelayMessage::Envelope(returned))
+            if returned == expected
+    ));
+    assert!(relay_receiver.try_recv().is_err());
+    assert!(!handle.try_incoming_lane_relay(expected));
+    assert!(relay_receiver.try_recv().is_err());
+}
+#[test]
+fn retired_lane_ingress_rejects_exact_messages_without_using_queue_plan_capacity() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
     let first = MergeCommitteeSignature {
         version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
@@ -3203,185 +3244,100 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
         bls_sig: vec![0x5A],
         leader_candidate_body: None,
     };
-    assert!(matches!(
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::MergeSignature(first)),
-        super::SumeragiIngressDisposition::Accepted
-    ));
-    let retry =
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::MergeSignature(second));
-    let super::SumeragiIngressDisposition::Retry(message) = retry else {
-        panic!("saturated lane ingress must return caller ownership");
+    let first_rejected =
+        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::MergeSignature(first));
+    let super::SumeragiIngressDisposition::Rejected(super::LaneRelayMessage::MergeSignature(
+        retained_first,
+    )) = first_rejected
+    else {
+        panic!("the retired merge signature must return its original owner");
     };
-    let super::LaneRelayMessage::MergeSignature(retained) = &message else {
-        panic!("retry must preserve the exact lane message variant");
+    assert_eq!(retained_first.view, 1);
+    assert_eq!(retained_first.bls_sig, vec![0xA5]);
+    let rejected =
+        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::MergeSignature(second));
+    let super::SumeragiIngressDisposition::Rejected(message) = rejected else {
+        panic!("the retired merge signature must return its original owner");
+    };
+    let super::LaneRelayMessage::MergeSignature(retained) = message else {
+        panic!("rejection must preserve the exact lane message variant");
     };
     assert_eq!(retained.view, 2);
     assert_eq!(retained.bls_sig, vec![0x5A]);
-    let _ = relay_receiver
-        .try_recv()
-        .expect("release bounded lane ingress capacity");
+    assert!(relay_receiver.try_recv().is_err());
+    let sender = authenticated_peer_for_test();
+    let certificate = Arc::new(vec![0x51]);
     assert!(matches!(
-        handle.try_incoming_lane_relay_owned(message),
+        handle.try_incoming_lane_relay_owned(
+            super::LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender: sender.clone(),
+                certificate: Arc::clone(&certificate),
+            }
+        ),
         super::SumeragiIngressDisposition::Accepted
     ));
+    assert!(matches!(
+        relay_receiver.try_recv().expect("QueuePlan retains the sole live relay slot"),
+        super::LaneRelayMessage::QueuePlanAdmissionCertificate {
+            sender: delivered_sender,
+            certificate: delivered_certificate,
+        } if delivered_sender == sender && Arc::ptr_eq(&delivered_certificate, &certificate)
+    ));
+    assert!(relay_receiver.try_recv().is_err());
 }
 #[test]
-fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
+fn retired_sidecar_request_returns_exact_owner_before_queue_admission() {
     use crate::merge_sidecar::{
-        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseV1,
-        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
-        CertifiedMergeSidecarStreamEpochV1,
+        CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarMessage,
+        CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
+        CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
     };
     use std::num::NonZeroU64;
-    let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
-        .expect("one-validator ingress geometry is representable");
-    assert_eq!(ingress_capacity, 5);
-    let (handle, ingress, relay_receiver) = test_sumeragi_handle(ingress_capacity);
-    let mut peers = validator_peers(3);
-    let roster_requester = peers.remove(0);
-    let outsider = peers.remove(0);
-    let hub = peers.remove(0);
-    ingress.close();
-    ingress
-        .configure_roster([roster_requester.clone()])
-        .expect("one frozen sidecar requester fits the ingress geometry");
-    ingress.open().expect("open the frozen sidecar roster");
-    let request_for = |requester: &PeerId| {
-        let mut request = CertifiedMergeSidecarRequestV1 {
-            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-            stream_epoch: CertifiedMergeSidecarStreamEpochV1(NonZeroU64::MIN),
-            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(NonZeroU64::MIN),
-            closed_through: 0,
-            request_id: Hash::prehashed([0; Hash::LENGTH]),
-            entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
-                b"early sidecar roster gate",
-            )),
-            encoded_len: 1,
-            epoch_id: 1,
-            reference_digest: Hash::new(b"early sidecar roster reference"),
-            requester: requester.clone(),
-            responder: roster_requester.clone(),
-        };
-        request.request_id = request.canonical_request_id();
-        request
-    };
+
+    let (handle, _ingress, relay_receiver) = test_sumeragi_handle(5);
+    handle.ingress_ready.store(true, Ordering::Release);
+    let requester = validator_peers(1).remove(0);
+    let hub = PeerId::new(KeyPair::random().public_key().clone());
     let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 8);
-    let outsider_request = request_for(&outsider);
-    let outsider_route = routes.mint_via(outsider.clone(), hub.clone());
-    let admitted =
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender: outsider.clone(),
-            reply_route: Some(outsider_route),
-            message: CertifiedMergeSidecarMessage::Request(outsider_request.clone()),
-        });
-    assert!(matches!(
-        admitted,
-        super::SumeragiIngressDisposition::Accepted
-    ));
-    assert!(matches!(
-        relay_receiver
-            .try_recv()
-            .expect("serialized adapter receives the exact historical proof candidate"),
-        super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender,
-            reply_route: Some(route),
-            message: CertifiedMergeSidecarMessage::Request(request),
-        } if sender == outsider
-            && request == outsider_request
-            && route.is_authenticated_via(&hub)
-            && route.semantic_target() == &outsider
-    ));
-    let mut outsider_close = CertifiedMergeSidecarCloseV1 {
+    let route = routes.mint_via(requester.clone(), hub.clone());
+    let mut request = CertifiedMergeSidecarRequestV1 {
         version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
         service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
         stream_epoch: CertifiedMergeSidecarStreamEpochV1(NonZeroU64::MIN),
-        closed_through: 1,
-        close_id: Hash::prehashed([0; Hash::LENGTH]),
-        requester: outsider.clone(),
-        responder: roster_requester.clone(),
+        semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(NonZeroU64::MIN),
+        closed_through: 0,
+        request_id: Hash::prehashed([0; Hash::LENGTH]),
+        entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+            b"retired sidecar ingress owner",
+        )),
+        encoded_len: 1,
+        epoch_id: 1,
+        reference_digest: Hash::new(b"retired sidecar reference"),
+        requester: requester.clone(),
+        responder: requester.clone(),
     };
-    outsider_close.close_id = outsider_close.canonical_close_id();
-    let expected_outsider_close = outsider_close.clone();
-    let outsider_close_route = routes.mint_via(outsider.clone(), hub.clone());
-    assert!(matches!(
+    request.request_id = request.canonical_request_id();
+    let expected = request.clone();
+    let result =
         handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender: outsider.clone(),
-            reply_route: Some(outsider_close_route),
-            message: CertifiedMergeSidecarMessage::Close(outsider_close),
-        },),
-        super::SumeragiIngressDisposition::Accepted
-    ));
-    assert!(matches!(
-        relay_receiver
-            .try_recv()
-            .expect("serialized adapter receives the historical close candidate"),
-        super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender,
-            reply_route: Some(route),
-            message: CertifiedMergeSidecarMessage::Close(close),
-        } if sender == outsider
-            && close == expected_outsider_close
-            && route.is_authenticated_via(&hub)
-            && route.semantic_target() == &outsider
-    ));
-    let mismatched_request = request_for(&outsider);
-    let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
-    assert!(matches!(
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender: roster_requester.clone(),
-            reply_route: Some(roster_route),
-            message: CertifiedMergeSidecarMessage::Request(mismatched_request),
-        },),
-        super::SumeragiIngressDisposition::Rejected(_)
-    ));
-    assert!(
-        matches!(
-            relay_receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ),
-        "a roster transport identity cannot allocate for another semantic requester"
-    );
-    let outsider_request = request_for(&outsider);
-    let wrong_target_route = routes.mint_via(roster_requester.clone(), hub.clone());
-    assert!(matches!(
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender: outsider.clone(),
-            reply_route: Some(wrong_target_route),
-            message: CertifiedMergeSidecarMessage::Request(outsider_request),
-        },),
-        super::SumeragiIngressDisposition::Rejected(_)
-    ));
-    assert!(
-        matches!(
-            relay_receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ),
-        "a reply route for another semantic peer cannot reach the proof owner"
-    );
-    let roster_request = request_for(&roster_requester);
-    let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
-    assert!(matches!(
-        handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender: roster_requester.clone(),
-            reply_route: Some(roster_route),
-            message: CertifiedMergeSidecarMessage::Request(roster_request.clone()),
-        },),
-        super::SumeragiIngressDisposition::Accepted
-    ));
-    assert!(matches!(
-        relay_receiver
-            .try_recv()
-            .expect("a roster requester may use an authenticated non-roster relay"),
-        super::LaneRelayMessage::CertifiedMergeSidecar {
-            sender,
-            reply_route: Some(route),
+            sender: requester.clone(),
+            reply_route: Some(route.clone()),
             message: CertifiedMergeSidecarMessage::Request(request),
-        } if sender == roster_requester
-            && request == roster_request
-            && route.is_authenticated_via(&hub)
-    ));
+        });
+    let super::SumeragiIngressDisposition::Rejected(
+        super::LaneRelayMessage::CertifiedMergeSidecar {
+            sender,
+            reply_route: Some(returned_route),
+            message: CertifiedMergeSidecarMessage::Request(returned_request),
+        },
+    ) = result
+    else {
+        panic!("a sidecar request without a live owner must return the original item");
+    };
+    assert_eq!(sender, requester);
+    assert_eq!(returned_request, expected);
+    assert!(returned_route.same_delivery(&route));
+    assert!(relay_receiver.try_recv().is_err());
 }
 #[test]
 fn restart_required_ingress_rejects_before_queue_mutation() {

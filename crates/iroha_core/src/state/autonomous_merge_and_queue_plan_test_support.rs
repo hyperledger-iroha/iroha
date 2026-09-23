@@ -1496,7 +1496,7 @@ fn stage_exact_autonomous_carrier_membership_for_pre_vote(
 ) {
     let height = autonomous_carrier_transaction_height(state_block);
     state_block
-        .stage_canonical_carrier_membership(carrier.network_input_hashes(), height)
+        .stage_canonical_carrier_membership(carrier.network_input_hashes().collect(), height)
         .expect("certified carrier membership must match its merge execution batch");
 }
 fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZeroUsize {

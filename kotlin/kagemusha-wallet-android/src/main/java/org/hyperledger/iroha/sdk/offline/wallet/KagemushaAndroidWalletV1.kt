@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.sdk.offline.wallet
 
+import android.content.Context
 import org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareProviderV1
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareQualificationV1
@@ -31,6 +32,11 @@ fun interface KagemushaAndroidHardwareProviderFactoryV1 {
 
 /** Fail-closed Android entry point for aggregate-balance KAGEMUSHA V1. */
 object KagemushaAndroidWalletV1 {
+    /** Collect raw ordinary-app KeyMint evidence without granting monetary authority. */
+    @JvmStatic
+    fun keyMintEvidence(context: Context): KagemushaAndroidKeyMintEvidenceAdapterV1 =
+        KagemushaAndroidKeyMintEvidenceAdapterV1(context)
+
     /** Open a wallet around an already provisioned, completely qualified hardware provider. */
     @JvmStatic
     fun open(provider: KagemushaHardwareProviderV1, authorizeBootstrap: () -> Unit): KagemushaWalletV1 =
@@ -39,9 +45,9 @@ object KagemushaAndroidWalletV1 {
     /**
      * Discover the audited native device service and bind it to an OEM provider adapter.
      *
-     * Stock Android devices currently return online-only because KeyMint and StrongBox do not
-     * expose the atomic journal/counter/inbox/outbox primitive required by this protocol. Missing
-     * native support is an error, never permission to substitute a software wallet.
+     * Raw one-use KeyMint evidence is available through [keyMintEvidence]. Monetary execution
+     * remains online-only until native Core verifies the paired ratchet proof and supplies the
+     * complete authenticated lifecycle. Missing native support is an error.
      */
     @JvmStatic
     fun openProduction(

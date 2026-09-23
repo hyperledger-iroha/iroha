@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import base64
 import copy
@@ -33,9 +34,13 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 import check_sorafs_production_readiness as aggregate_checker  # noqa: E402
+import check_sorafs_production_readiness_test as readiness_fixture  # noqa: E402
 import sorafs_l1_lane_evidence_inventory as lane_inventory  # noqa: E402
 import sorafs_l1_lane_inventory_integration as inventory_integration  # noqa: E402
+import sorafs_l1_lane_inventory_test_support as inventory_support  # noqa: E402
 import sorafs_topology_qualification as topology_qualification  # noqa: E402
+import sorafs_rollout_runner_test_support as rollout_support  # noqa: E402
+import sorafs_resilience_test_support as resilience_support  # noqa: E402
 from sorafs_resilience_test_support import (  # noqa: E402
     public_key_from_seed,
     sign,
@@ -677,6 +682,976 @@ def mock_cosign_verification(monkeypatch):
     return calls
 
 
+def inner_approval_inputs(root: Path) -> tuple[argparse.Namespace, MODULE.PositiveReplayEvidence]:
+    """Build isolated exact-byte inputs; their bodies are never production approvals."""
+
+    values: dict[str, Any] = {
+        "now_unix": NOW_UNIX,
+        "inner_max_summary_artifact_age_secs": 14 * 24 * 60 * 60,
+        "inner_foundational_release_sequence": 1,
+        "inner_foundational_previous_envelope_sha256": "00" * 32,
+    }
+    digests: dict[str, str] = {}
+    for slot, attribute in MODULE.INNER_APPROVAL_INPUTS:
+        path = root / f"{slot}.json"
+        raw = MODULE.render_checker_summary({"slot": slot}).encode("utf-8")
+        path.write_bytes(raw)
+        values[attribute] = path
+        digests[slot] = hashlib.sha256(raw).hexdigest()
+    values["inner_lane_summary"] = []
+    for lane in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES:
+        path = root / f"lane-{lane}.json"
+        raw = MODULE.render_checker_summary({"lane": lane}).encode("utf-8")
+        path.write_bytes(raw)
+        values["inner_lane_summary"].append(f"{lane}={path}")
+        digests[lane] = hashlib.sha256(raw).hexdigest()
+    trust = {
+        "schema": MODULE.INNER_APPROVAL_TRUST_SCHEMA,
+        "foundational_receipt_verifier_sha256": digest("reviewed-foundation-verifier"),
+    }
+    for index, name in enumerate(("topology", "resilience", "lane_inventory", "foundational"), start=1):
+        trust[name] = {
+            "public_key_hex": public_key_from_seed(bytes([index]) * 32).hex(),
+            "service_id": f"sorafs-{name}-signer",
+            "administrator_id": f"sorafs-{name}-administrator",
+            "key_revision": index,
+            "policy_revision": index + 1,
+            "policy_digest_sha256": digest(f"{name}-policy"),
+        }
+    trust_path = root / "inner-trust.json"
+    trust_raw = MODULE.render_checker_summary(trust).encode("utf-8")
+    trust_path.write_bytes(trust_raw)
+    values["inner_approval_trust"] = trust_path
+    values["inner_approval_trust_sha256"] = hashlib.sha256(trust_raw).hexdigest()
+    values["inner_foundational_receipt_verifier"] = root / "foundation-verifier"
+    return argparse.Namespace(**values), MODULE.PositiveReplayEvidence(
+        input_count=22,
+        input_set_sha256=digest("inner-input-set"),
+        input_sha256=digests,
+        aggregate={"thresholds": {"max_summary_artifact_age_secs": values["inner_max_summary_artifact_age_secs"]}},
+        output_sha256={},
+    )
+
+
+def signed_inner_approval_inputs(
+    root: Path,
+) -> tuple[argparse.Namespace, MODULE.PositiveReplayEvidence]:
+    """Build genuine, separately signed test inputs without native completion claims."""
+
+    deployment_id = readiness_fixture.DEPLOYMENT_ID
+    environment = readiness_fixture.ENVIRONMENT
+    now_unix = readiness_fixture.NOW_UNIX
+    inventory_path, lane_paths, _base_topology = readiness_fixture.lane_inventory_fixture(root)
+    topology_path = readiness_fixture.write_topology_qualification(root)
+    rollout_support.signed_topology_cli_args(
+        topology_path, deployment_id=deployment_id,
+        environment=environment, now_unix=now_unix,
+    )
+    envelope_path = topology_path.with_name(f"{topology_path.name}.ed25519")
+    topology, topology_errors = topology_qualification.load_signed_topology_qualification_binding(
+        topology_path, envelope_path,
+        trusted_public_key=rollout_support.TOPOLOGY_VERIFICATION_PUBLIC_KEY,
+        trusted_signer_service_id=rollout_support.TOPOLOGY_SIGNER_SERVICE_ID,
+        trusted_signer_administrator_id=rollout_support.TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
+        trusted_key_revision=rollout_support.TOPOLOGY_SIGNER_KEY_REVISION,
+        trusted_policy_revision=rollout_support.TOPOLOGY_SIGNER_POLICY_REVISION,
+        trusted_policy_digest_hex=rollout_support.TOPOLOGY_SIGNER_POLICY_DIGEST,
+        now_unix=now_unix,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    assert topology_errors == [] and topology is not None
+    resilience_path, resilience_key, resilience = resilience_support.write_resilience_summary(
+        aggregate_checker, root / "l1-resilience-qualification.summary",
+        deployment_id=deployment_id, environment=environment,
+        topology_qualification=topology,
+        generated_at_unix=readiness_fixture.GENERATED_AT,
+        captured_at_unix=readiness_fixture.GENERATED_AT - 1,
+    )
+    inventory, _raw = lane_inventory.load_canonical_inventory_file(inventory_path)
+    verification = lane_inventory.verify_inventory(
+        inventory, lane_paths,
+        **inventory_support._trust(  # noqa: SLF001 - test support's exact reviewed tuple
+            topology, deployment_id=deployment_id,
+            environment=environment, now_unix=now_unix,
+        ),
+    )
+    verified_inventory = inventory_integration.VerifiedLaneInventory(
+        verification,
+        {row["lane"]: row["summary_sha256"] for row in inventory["summaries"]},
+    )
+    foundation = readiness_fixture.foundational_summary(
+        lane_summary_sha256={
+            lane: hashlib.sha256(path.read_bytes()).hexdigest()
+            for lane, path in lane_paths
+        },
+        resilience_qualification=resilience,
+        l1_lane_evidence_inventory_sha256=hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+    )
+    foundation["topology_qualification"] = topology
+    readiness_fixture.resign_foundational_summary(foundation)
+    verifier_path = readiness_fixture.RECEIPT_SUPPORT.attach_bundle(foundation, root)
+    foundation_path = readiness_fixture.write_json(
+        root / "foundational_prerequisites.json", foundation,
+    )
+    foundation_row, foundation_errors, _context = MODULE.validate_foundational_prerequisite_summary(
+        foundation,
+        MODULE.ValidationOptions(
+            now_unix=now_unix,
+            max_summary_artifact_age_secs=aggregate_checker.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+            deployment_id=deployment_id,
+            environment=environment,
+            foundational_signer_public_key=readiness_fixture.FOUNDATIONAL_SIGNER_PUBLIC_KEY,
+            foundational_release_sequence=readiness_fixture.FOUNDATIONAL_RELEASE_SEQUENCE,
+            foundational_previous_envelope_sha256=readiness_fixture.FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
+            foundational_signer_verifier=verifier_path,
+            foundational_signer_verifier_sha256=hashlib.sha256(verifier_path.read_bytes()).hexdigest(),
+            topology_qualification=topology,
+            resilience_qualification=resilience,
+            l1_lane_evidence_inventory=verified_inventory,
+        ),
+    )
+    assert foundation_errors == []
+
+    def signer(public_key: bytes, service_id: str, administrator_id: str,
+               key_revision: int, policy_revision: int, policy_digest: str) -> dict[str, Any]:
+        return {
+            "public_key_hex": public_key.hex(),
+            "service_id": service_id,
+            "administrator_id": administrator_id,
+            "key_revision": key_revision,
+            "policy_revision": policy_revision,
+            "policy_digest_sha256": policy_digest,
+        }
+
+    trust = {
+        "schema": MODULE.INNER_APPROVAL_TRUST_SCHEMA,
+        "topology": signer(
+            rollout_support.TOPOLOGY_VERIFICATION_PUBLIC_KEY,
+            rollout_support.TOPOLOGY_SIGNER_SERVICE_ID,
+            rollout_support.TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
+            rollout_support.TOPOLOGY_SIGNER_KEY_REVISION,
+            rollout_support.TOPOLOGY_SIGNER_POLICY_REVISION,
+            rollout_support.TOPOLOGY_SIGNER_POLICY_DIGEST,
+        ),
+        "resilience": signer(
+            resilience_key, resilience_support.SIGNER_SERVICE_ID,
+            resilience_support.SIGNER_ADMINISTRATOR_ID,
+            resilience_support.SIGNER_KEY_REVISION,
+            resilience_support.SIGNER_POLICY_REVISION,
+            resilience_support.SIGNER_POLICY_DIGEST_SHA256,
+        ),
+        "lane_inventory": signer(
+            inventory_support.PUBLIC_KEY, inventory_support.SERVICE_ID,
+            inventory_support.ADMINISTRATOR_ID,
+            inventory_support.KEY_REVISION,
+            inventory_support.POLICY_REVISION,
+            inventory_support.POLICY_DIGEST_SHA256,
+        ),
+        "foundational": signer(
+            readiness_fixture.FOUNDATIONAL_SIGNER_PUBLIC_KEY,
+            readiness_fixture.FOUNDATIONAL_SIGNER_SERVICE_ID,
+            readiness_fixture.FOUNDATIONAL_SIGNER_ADMINISTRATOR_ID,
+            readiness_fixture.FOUNDATIONAL_SIGNER_KEY_REVISION,
+            readiness_fixture.FOUNDATIONAL_SIGNER_POLICY_REVISION,
+            readiness_fixture.FOUNDATIONAL_SIGNER_POLICY_DIGEST,
+        ),
+        "foundational_receipt_verifier_sha256": hashlib.sha256(
+            verifier_path.read_bytes()
+        ).hexdigest(),
+    }
+    trust_path = root / "inner-trust.json"
+    trust_raw = MODULE.render_checker_summary(trust).encode("utf-8")
+    trust_path.write_bytes(trust_raw)
+    paths = {
+        "topology_qualification": topology_path,
+        "topology_qualification_envelope": envelope_path,
+        "resilience_qualification": resilience_path,
+        "l1_lane_evidence_inventory": inventory_path,
+        "foundational_prerequisite": foundation_path,
+        **dict(lane_paths),
+    }
+    input_sha256 = {
+        slot: hashlib.sha256(path.read_bytes()).hexdigest()
+        for slot, path in paths.items()
+    }
+    snapshot = tuple(
+        (slot, input_sha256[slot])
+        for slot in MODULE.promotion_runner.REPLAY_INPUT_SLOTS
+    )
+    aggregate = {
+        "deployment": {"deployment_id": deployment_id, "environment": environment},
+        "thresholds": {
+            "max_summary_artifact_age_secs": aggregate_checker.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        },
+        "topology_qualification": topology,
+        "resilience_qualification": {"binding": resilience},
+        "l1_lane_evidence_inventory": {"binding": verification},
+        "foundational_prerequisites": {
+            **foundation_row,
+            "path": "foundational_prerequisites.json",
+            "sha256": input_sha256["foundational_prerequisite"],
+        },
+    }
+    args = argparse.Namespace(
+        now_unix=now_unix,
+        inner_topology_qualification=topology_path,
+        inner_topology_qualification_envelope=envelope_path,
+        inner_resilience_qualification=resilience_path,
+        inner_l1_lane_evidence_inventory=inventory_path,
+        inner_foundational_prerequisite=foundation_path,
+        inner_lane_summary=[f"{lane}={path}" for lane, path in lane_paths],
+        inner_approval_trust=trust_path,
+        inner_approval_trust_sha256=hashlib.sha256(trust_raw).hexdigest(),
+        inner_foundational_receipt_verifier=verifier_path,
+        inner_max_summary_artifact_age_secs=aggregate_checker.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        inner_foundational_release_sequence=readiness_fixture.FOUNDATIONAL_RELEASE_SEQUENCE,
+        inner_foundational_previous_envelope_sha256=(
+            readiness_fixture.FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256
+        ),
+        provenance_verification_public_key_hex=SIGNING_PUBLIC_KEY.hex(),
+        provenance_signer_administrator_id="sorafs-final-promotion-administrator",
+    )
+    positive = MODULE.PositiveReplayEvidence(
+        input_count=len(snapshot),
+        input_set_sha256=MODULE.promotion_runner.input_set_sha256(snapshot),
+        input_sha256=input_sha256,
+        aggregate=aggregate,
+        output_sha256={},
+    )
+    return args, positive
+
+
+def assert_missing_inner_approval_errors(errors: list[str]) -> None:
+    """Require explicit missing-input failures and the unchanged final release block."""
+
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+    assert "inner approvals require an independently pinned trust document" in errors
+    for slot, _attribute in MODULE.INNER_APPROVAL_INPUTS:
+        assert f"inner approval {slot} requires its exact replay input" in errors
+    assert "inner approval requires exactly 17 ordered lane summary inputs" in errors
+
+
+def test_inner_approval_gate_requires_explicit_positive_replay_and_trust() -> None:
+    errors = MODULE.validate_inner_approval_chain(argparse.Namespace(), None)
+    assert "inner approvals require a validated positive replay" in errors
+    assert "inner approvals require an independently pinned trust document" in errors
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+    with pytest.raises(TypeError):
+        MODULE.validate_inner_approval_chain()
+
+
+def test_inner_approval_dispatch_requires_all_22_exact_replay_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    observed: list[dict[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        MODULE, "_verify_inner_approval_signatures",
+        lambda _args, _positive, inputs, _trust, _reviewed: observed.append(dict(inputs)) or [],
+    )
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert len(observed) == 1
+    assert set(observed[0]) == {slot for slot, _attribute in MODULE.INNER_APPROVAL_INPUTS}
+    assert errors == [MODULE.INNER_APPROVAL_RELEASE_BLOCKER]
+    assert "inner approval chain" in errors[-1]
+
+
+def test_inner_approval_verifiers_consume_snapshotted_replay_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    original = MODULE._load_inner_approval_inputs
+    original_lanes = MODULE._load_inner_lane_summaries
+    source = args.inner_topology_qualification
+    first_lane = MODULE.promotion_runner.DEFAULT_REQUIRED_GATES[0]
+    lane_source = Path(args.inner_lane_summary[0].partition("=")[2])
+    captured: list[tuple[bytes, bytes]] = []
+
+    def replace_after_read(arguments, replay, errors):
+        inputs = original(arguments, replay, errors)
+        source.write_bytes(b'{"slot":"replaced-after-read"}')
+        return inputs
+
+    def replace_lane_after_read(arguments, replay, errors):
+        inputs = original_lanes(arguments, replay, errors)
+        lane_source.write_bytes(b'{"lane":"replaced-after-read"}')
+        return inputs
+
+    def inspect_snapshots(arguments, _replay, _inputs, _trust, _reviewed):
+        lane_snapshot = Path(arguments.inner_lane_summary[0].partition("=")[2])
+        captured.append((
+            arguments.inner_topology_qualification.read_bytes(),
+            lane_snapshot.read_bytes(),
+        ))
+        assert arguments.inner_topology_qualification != source
+        assert lane_snapshot != lane_source
+        assert arguments.inner_lane_summary[0].partition("=")[0] == first_lane
+        snapshot_root = arguments.inner_topology_qualification.parent.resolve(strict=True)
+        source_root = MODULE.SCRIPT_DIR.parent.resolve(strict=True)
+        assert snapshot_root != source_root
+        assert source_root not in snapshot_root.parents
+        return []
+
+    monkeypatch.setattr(MODULE, "_load_inner_approval_inputs", replace_after_read)
+    monkeypatch.setattr(MODULE, "_load_inner_lane_summaries", replace_lane_after_read)
+    monkeypatch.setattr(MODULE, "_verify_inner_approval_signatures", inspect_snapshots)
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert captured == [(
+        MODULE.render_checker_summary({"slot": "topology_qualification"}).encode("utf-8"),
+        MODULE.render_checker_summary({"lane": first_lane}).encode("utf-8"),
+    )]
+    assert errors == [MODULE.INNER_APPROVAL_RELEASE_BLOCKER]
+
+
+def test_inner_approval_rejects_a_source_tree_temporary_root_without_creating_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    created: list[object] = []
+    monkeypatch.setattr(
+        MODULE.tempfile, "gettempdir", lambda: str(MODULE.SCRIPT_DIR.parent),
+    )
+    monkeypatch.setattr(
+        MODULE.tempfile, "TemporaryDirectory",
+        lambda *_args, **_kwargs: created.append(True),
+    )
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert created == []
+    assert "inner approval signature verification failed closed" in errors
+    assert "inner approval chain" in errors[-1]
+
+
+@pytest.mark.parametrize("failure", ["missing", "tampered", "substituted"])
+def test_inner_approval_missing_tampered_or_substituted_bytes_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        MODULE, "_verify_inner_approval_signatures",
+        lambda *_args: observed.append(True) or [],
+    )
+    if failure == "missing":
+        args.inner_resilience_qualification.unlink()
+    elif failure == "tampered":
+        args.inner_resilience_qualification.write_bytes(b'{"slot":"tampered"}')
+    else:
+        args.inner_resilience_qualification = args.inner_topology_qualification
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert observed == []
+    assert any("inner approval resilience_qualification" in error for error in errors)
+    assert "inner approval chain" in errors[-1]
+
+
+@pytest.mark.parametrize("failure", ["missing", "tampered", "reordered", "substituted"])
+def test_inner_lane_replay_requires_all_ordered_exact_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        MODULE, "_verify_inner_approval_signatures",
+        lambda *_args: observed.append(True) or [],
+    )
+    first_lane = MODULE.promotion_runner.DEFAULT_REQUIRED_GATES[0]
+    if failure == "missing":
+        args.inner_lane_summary.pop()
+    elif failure == "tampered":
+        Path(args.inner_lane_summary[0].partition("=")[2]).write_bytes(b'{"lane":"tampered"}')
+    elif failure == "reordered":
+        args.inner_lane_summary.reverse()
+    else:
+        second_path = args.inner_lane_summary[1].partition("=")[2]
+        args.inner_lane_summary[0] = f"{first_lane}={second_path}"
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert observed == []
+    if failure in {"missing", "reordered"}:
+        assert "inner approval requires exactly 17 ordered lane summary inputs" in errors
+    else:
+        assert any(f"inner approval lane {first_lane}" in error for error in errors)
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+@pytest.mark.parametrize("failure", ["missing_age", "mismatched_age", "missing_sequence", "wrong_predecessor"])
+def test_inner_reviewed_policy_is_independent_and_matches_the_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        MODULE, "_verify_inner_approval_signatures",
+        lambda *_args: observed.append(True) or [],
+    )
+    if failure == "missing_age":
+        args.inner_max_summary_artifact_age_secs = None
+    elif failure == "mismatched_age":
+        args.inner_max_summary_artifact_age_secs += 1
+    elif failure == "missing_sequence":
+        args.inner_foundational_release_sequence = None
+    else:
+        args.inner_foundational_previous_envelope_sha256 = "11" * 32
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert observed == []
+    assert any("inner approval" in error for error in errors[:-1])
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_inner_verifier_dispatches_full_lane_and_foundational_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, base = inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())
+    topology = {
+        field: digest(field)
+        for field in (
+            "qualification_summary_sha256", "manifest_sha256",
+            "canonical_manifest_sha256", "validator_ids_sha256",
+        )
+    }
+    topology.update({
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": "production",
+        "network": "taira",
+        "chain_id": topology_qualification.taira_constants.CHAIN_ID,
+        "chain_discriminant": topology_qualification.taira_constants.CHAIN_DISCRIMINANT,
+        "signer_authentication_kind": "external-ed25519",
+        "signer_service_id": trust["topology"]["service_id"],
+        "signer_administrator_id": trust["topology"]["administrator_id"],
+        "signer_key_revision": trust["topology"]["key_revision"],
+        "signer_policy_revision": trust["topology"]["policy_revision"],
+        "signer_policy_digest_sha256": trust["topology"]["policy_digest_sha256"],
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(
+            bytes.fromhex(trust["topology"]["public_key_hex"])
+        ).hexdigest(),
+    })
+    resilience = {
+        f"signer_{field}": value
+        for field, value in trust["resilience"].items()
+        if field != "public_key_hex"
+    }
+    resilience["signer_public_key_fingerprint_sha256"] = hashlib.sha256(
+        bytes.fromhex(trust["resilience"]["public_key_hex"])
+    ).hexdigest()
+    resilience.update({
+        "schema": aggregate_checker.RESILIENCE_QUALIFICATION_BINDING_SCHEMA,
+        "summary_sha256": base.input_sha256["resilience_qualification"],
+        "receipt_sha256": digest("resilience-receipt"),
+        "canonical_receipt_sha256": digest("canonical-resilience-receipt"),
+        "receipt_generated_at_unix": NOW_UNIX - 120,
+    })
+    foundation_summary = {
+        f"signer_{field}": value
+        for field, value in trust["foundational"].items()
+        if field != "public_key_hex"
+    }
+    foundation_summary["signer_public_key_fingerprint_sha256"] = hashlib.sha256(
+        bytes.fromhex(trust["foundational"]["public_key_hex"])
+    ).hexdigest()
+    inventory_raw = args.inner_l1_lane_evidence_inventory.read_bytes()
+    verification = {
+        "schema": lane_inventory.VERIFICATION_SCHEMA,
+        "status": "ready",
+        "inventory_sha256": hashlib.sha256(inventory_raw).hexdigest(),
+        "summary_file_count": 17,
+        "recognized_summary_count": 17,
+        "deployment": {
+            key: topology[key] for key in lane_inventory.DEPLOYMENT_FIELDS
+        },
+        "anchors": {
+            "topology_qualification_summary_sha256": topology[
+                "qualification_summary_sha256"
+            ],
+            "topology_manifest_sha256": topology["manifest_sha256"],
+            "topology_canonical_manifest_sha256": topology[
+                "canonical_manifest_sha256"
+            ],
+            "validator_ids_sha256": topology["validator_ids_sha256"],
+            "oldest_evidence_generated_at_unix": NOW_UNIX - 120,
+            "newest_evidence_generated_at_unix": NOW_UNIX - 60,
+        },
+        "signer": lane_inventory.trusted_signer_binding(
+            trust["lane_inventory"]["public_key_hex"],
+            service_id=trust["lane_inventory"]["service_id"],
+            administrator_id=trust["lane_inventory"]["administrator_id"],
+            key_revision=trust["lane_inventory"]["key_revision"],
+            policy_revision=trust["lane_inventory"]["policy_revision"],
+            policy_digest_sha256=trust["lane_inventory"]["policy_digest_sha256"],
+        ),
+    }
+    inventory = {
+        "summaries": [
+            {"lane": lane, "summary_sha256": base.input_sha256[lane]}
+            for lane in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES
+        ],
+    }
+    foundation_summary.update({
+        "schema": MODULE.promotion_runner.FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "present": True,
+        "valid": True,
+        "errors": [],
+        "release_sequence": 1,
+        "previous_envelope_sha256": "00" * 32,
+        "l1_lane_evidence_inventory_sha256": base.input_sha256[
+            "l1_lane_evidence_inventory"
+        ],
+        "topology_qualification": topology,
+        "resilience_qualification": resilience,
+        "lane_summary_sha256": [
+            {"gate": lane, "sha256": base.input_sha256[lane]}
+            for lane in MODULE.promotion_runner.DEFAULT_REQUIRED_GATES
+        ],
+    })
+    aggregate = {
+        "deployment": {"deployment_id": DEPLOYMENT_ID, "environment": "production"},
+        "topology_qualification": topology,
+        "resilience_qualification": {"binding": resilience},
+        "l1_lane_evidence_inventory": {"binding": verification},
+        "foundational_prerequisites": {
+            **foundation_summary,
+            "path": "foundational.json",
+            "sha256": base.input_sha256["foundational_prerequisite"],
+        },
+    }
+    positive = MODULE.PositiveReplayEvidence(
+        input_count=base.input_count,
+        input_set_sha256=base.input_set_sha256,
+        input_sha256=base.input_sha256,
+        aggregate=aggregate,
+        output_sha256=base.output_sha256,
+    )
+    monkeypatch.setattr(
+        MODULE.topology_qualification, "load_signed_topology_qualification_binding",
+        lambda *_args, **_kwargs: (topology, []),
+    )
+    monkeypatch.setattr(
+        MODULE.promotion_runner, "load_resilience_qualification_binding",
+        lambda *_args, **_kwargs: (resilience, []),
+    )
+    monkeypatch.setattr(
+        MODULE.lane_inventory, "load_canonical_inventory_file",
+        lambda *_args: (inventory, inventory_raw),
+    )
+    lane_calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+    def replay_inventory(_inventory, specs, **kwargs):
+        lane_calls.append((tuple(lane for lane, _path in specs), kwargs))
+        return verification
+
+    monkeypatch.setattr(MODULE.lane_inventory, "verify_inventory", replay_inventory)
+    foundation_calls: list[aggregate_checker.ValidationOptions] = []
+
+    def replay_foundation(_payload, options):
+        foundation_calls.append(options)
+        return foundation_summary, [], None
+
+    monkeypatch.setattr(MODULE, "validate_foundational_prerequisite_summary", replay_foundation)
+    foundation_payload = {
+        "signer_receipt_bundle": {
+            "schema": MODULE.FOUNDATIONAL_SIGNER_RECEIPT_BUNDLE_SCHEMA,
+            "verifier_sha256": trust["foundational_receipt_verifier_sha256"],
+            "operation_id_hex": digest("foundational-operation"),
+            "binding_base64": "YmluZGluZw==",
+            "receipt_base64": "cmVjZWlwdA==",
+            "validation_sha256": digest("foundational-validation"),
+        },
+    }
+    errors = MODULE._verify_inner_approval_signatures(
+        args, positive, {"foundational_prerequisite": foundation_payload}, trust,
+        (args.inner_max_summary_artifact_age_secs, 1, "00" * 32),
+    )
+
+    assert errors == [
+        MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER,
+    ]
+    assert lane_calls[0][0] == MODULE.promotion_runner.DEFAULT_REQUIRED_GATES
+    assert lane_calls[0][1]["expected_topology_manifest_sha256"] == topology["manifest_sha256"]
+    assert lane_calls[0][1]["verification_public_key_hex"] == trust["lane_inventory"]["public_key_hex"]
+    assert len(foundation_calls) == 1
+    assert foundation_calls[0].foundational_release_sequence == 1
+    assert foundation_calls[0].foundational_previous_envelope_sha256 == "00" * 32
+    assert foundation_calls[0].replay_foundational_signer_receipt is True
+    assert foundation_calls[0].l1_lane_evidence_inventory.verification == verification
+    assert foundation_calls[0].topology_qualification == topology
+    assert foundation_calls[0].resilience_qualification == resilience
+
+
+def test_signed_inner_chain_replays_all_prerequisites_but_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert errors == [
+        MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER,
+        MODULE.INNER_APPROVAL_RELEASE_BLOCKER,
+    ]
+
+
+def test_foundational_claim_requires_reviewed_continuity_signer_and_exact_replay(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    trust_document = json.loads(args.inner_approval_trust.read_bytes())
+    projection = copy.deepcopy(positive.aggregate["foundational_prerequisites"])
+    projection.pop("path")
+    projection.pop("sha256")
+    payload = json.loads(args.inner_foundational_prerequisite.read_bytes())
+    reviewed = (
+        args.inner_max_summary_artifact_age_secs,
+        args.inner_foundational_release_sequence,
+        args.inner_foundational_previous_envelope_sha256,
+    )
+
+    def inspect(
+        summary: dict[str, Any],
+        subject: dict[str, Any] = payload,
+    ) -> list[str]:
+        return MODULE._foundational_native_authority_errors(
+            summary, subject, trust_document["foundational"],
+            trust_document["foundational_receipt_verifier_sha256"], reviewed,
+            positive.input_sha256["l1_lane_evidence_inventory"],
+            positive.aggregate["topology_qualification"],
+            positive.aggregate["resilience_qualification"]["binding"],
+            positive.input_sha256,
+        )
+
+    assert inspect(projection) == [MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER]
+
+    foreign = copy.deepcopy(projection)
+    foreign["signer_service_id"] = "sorafs-foreign-role-signer"
+    errors = inspect(foreign)
+    assert "inner approval foundational signer_service_id must match independent trust" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    altered = copy.deepcopy(projection)
+    altered["release_sequence"] = float(projection["release_sequence"])
+    errors = inspect(altered)
+    assert "inner approval foundational must bind reviewed release continuity" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    altered = copy.deepcopy(projection)
+    altered["lane_summary_sha256"][0]["sha256"] = digest("foreign-lane")
+    errors = inspect(altered)
+    assert "inner approval foundational must bind all exact replayed lane bytes" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    altered = copy.deepcopy(projection)
+    altered["topology_qualification"]["manifest_sha256"] = digest("foreign-topology")
+    errors = inspect(altered)
+    assert "inner approval foundational must bind exact inner prerequisites" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    altered = copy.deepcopy(projection)
+    altered["l1_lane_evidence_inventory_sha256"] = digest("foreign-inventory")
+    errors = inspect(altered)
+    assert "inner approval foundational must bind exact replayed inventory bytes" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    widened = copy.deepcopy(payload)
+    widened["signer_receipt_bundle"]["native_completed_operation"] = {
+        "status": "completed"
+    }
+    errors = inspect(projection, widened)
+    assert "inner approval foundational must retain the pinned signer receipt bundle" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+    substituted_verifier = copy.deepcopy(payload)
+    substituted_verifier["signer_receipt_bundle"]["verifier_sha256"] = digest(
+        "foreign-verifier"
+    )
+    errors = inspect(projection, substituted_verifier)
+    assert "inner approval foundational must retain the pinned signer receipt bundle" in errors
+    assert errors[-1] == MODULE.FOUNDATIONAL_NATIVE_AUTHORITY_BLOCKER
+
+
+def test_resilience_claim_rejects_foreign_purpose_or_claimed_completion(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())["resilience"]
+    binding = positive.aggregate["resilience_qualification"]["binding"]
+    summary_sha256 = positive.input_sha256["resilience_qualification"]
+    assert MODULE._resilience_native_authority_errors(
+        binding, binding, trust, summary_sha256,
+    ) == [MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER]
+
+    wrong_summary = MODULE._resilience_native_authority_errors(
+        binding, binding, trust, digest("other-summary"),
+    )
+    assert "inner approval resilience must bind the exact replayed summary bytes" in wrong_summary
+    assert wrong_summary[-1] == MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER
+
+    foreign = copy.deepcopy(binding)
+    foreign["schema"] = "sorafs.production_readiness.final_promotion_binding.v1"
+    errors = MODULE._resilience_native_authority_errors(
+        foreign, foreign, trust, summary_sha256,
+    )
+    assert "inner approval resilience must retain its exact purpose-specific binding" in errors
+    assert errors[-1] == MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER
+
+    foreign = copy.deepcopy(binding)
+    foreign["signer_administrator_id"] = "sorafs-foreign-role-administrator"
+    errors = MODULE._resilience_native_authority_errors(
+        foreign, foreign, trust, summary_sha256,
+    )
+    assert (
+        "inner approval resilience signer_administrator_id must match independent trust"
+    ) in errors
+    assert errors[-1] == MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER
+
+    widened = copy.deepcopy(binding)
+    widened["native_completed_operation"] = {"status": "completed"}
+    errors = MODULE._resilience_native_authority_errors(
+        widened, widened, trust, summary_sha256,
+    )
+    assert "inner approval resilience must retain its exact purpose-specific binding" in errors
+    assert errors[-1] == MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER
+
+
+def test_resilience_aggregate_numeric_type_substitution_fails_exact_match(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    original = positive.aggregate["resilience_qualification"]["binding"]
+    altered = copy.deepcopy(positive.aggregate)
+    altered["resilience_qualification"]["binding"]["signer_key_revision"] = float(
+        original["signer_key_revision"]
+    )
+    assert altered["resilience_qualification"]["binding"] == original
+    substituted = MODULE.PositiveReplayEvidence(
+        input_count=positive.input_count,
+        input_set_sha256=positive.input_set_sha256,
+        input_sha256=positive.input_sha256,
+        aggregate=altered,
+        output_sha256=positive.output_sha256,
+    )
+    errors = MODULE.validate_inner_approval_chain(args, substituted)
+    assert "inner approval resilience must match the positive aggregate binding" in errors
+    assert MODULE.RESILIENCE_NATIVE_AUTHORITY_BLOCKER not in errors
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_lane_inventory_claim_rejects_foreign_signer_and_fake_native_completion(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())["lane_inventory"]
+    binding = positive.aggregate["l1_lane_evidence_inventory"]["binding"]
+    inventory_sha256 = positive.input_sha256["l1_lane_evidence_inventory"]
+    topology = positive.aggregate["topology_qualification"]
+
+    def inspect(candidate: dict[str, Any], *, expected_digest: str | None = inventory_sha256):
+        return MODULE._lane_inventory_native_authority_errors(
+            candidate, candidate, trust, expected_digest, topology,
+        )
+
+    assert inspect(binding) == [MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER]
+    wrong_bytes = inspect(binding, expected_digest=digest("other-inventory"))
+    assert "inner approval lane-inventory must bind exact replayed inventory bytes" in wrong_bytes
+    assert wrong_bytes[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    foreign = copy.deepcopy(binding)
+    foreign["signer"]["role"] = "final-promotion-provenance"
+    errors = inspect(foreign)
+    assert (
+        "inner approval lane-inventory signer must match its independent purpose and trust"
+    ) in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    foreign = copy.deepcopy(binding)
+    foreign["signer"]["administrator_id"] = "sorafs-foreign-role-administrator"
+    errors = inspect(foreign)
+    assert (
+        "inner approval lane-inventory signer must match its independent purpose and trust"
+    ) in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    changed_topology = copy.deepcopy(binding)
+    changed_topology["anchors"]["topology_manifest_sha256"] = digest("other-topology")
+    errors = inspect(changed_topology)
+    assert "inner approval lane-inventory must bind the exact authenticated topology" in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    changed_type = copy.deepcopy(binding)
+    changed_type["deployment"]["chain_discriminant"] = float(
+        topology["chain_discriminant"]
+    )
+    errors = inspect(changed_type)
+    assert "inner approval lane-inventory must bind the exact authenticated topology" in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    changed_type = copy.deepcopy(binding)
+    changed_type["summary_file_count"] = 17.0
+    errors = inspect(changed_type)
+    assert "inner approval lane-inventory must retain the exact verification schema" in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+    widened = copy.deepcopy(binding)
+    widened["native_completed_operation"] = {"status": "completed"}
+    errors = inspect(widened)
+    assert "inner approval lane-inventory must retain the exact verification schema" in errors
+    assert errors[-1] == MODULE.LANE_INVENTORY_NATIVE_AUTHORITY_BLOCKER
+
+
+def test_topology_claim_cannot_substitute_signer_or_attach_fake_native_completion(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())["topology"]
+    topology = positive.aggregate["topology_qualification"]
+    assert MODULE._topology_native_authority_errors(
+        topology, topology, trust,
+    ) == [MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER]
+
+    foreign = copy.deepcopy(topology)
+    foreign["signer_service_id"] = "sorafs-other-topology-signer"
+    errors = MODULE._topology_native_authority_errors(foreign, foreign, trust)
+    assert "inner approval topology signer_service_id must match independent trust" in errors
+    assert errors[-1] == MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER
+
+    foreign = copy.deepcopy(topology)
+    foreign["signer_public_key_fingerprint_sha256"] = digest("other-topology-key")
+    errors = MODULE._topology_native_authority_errors(foreign, foreign, trust)
+    assert (
+        "inner approval topology signer_public_key_fingerprint_sha256 "
+        "must match independent trust"
+    ) in errors
+    assert errors[-1] == MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER
+
+    widened = copy.deepcopy(topology)
+    widened["native_completed_operation"] = {"status": "completed"}
+    errors = MODULE._topology_native_authority_errors(widened, widened, trust)
+    assert "inner approval topology must retain the exact qualification-only binding" in errors
+    assert errors[-1] == MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER
+
+    wrong_kind = copy.deepcopy(topology)
+    wrong_kind["signer_authentication_kind"] = "self-attested"
+    errors = MODULE._topology_native_authority_errors(wrong_kind, wrong_kind, trust)
+    assert "inner approval topology requires the authenticated Ed25519 envelope" in errors
+    assert errors[-1] == MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER
+
+
+@pytest.mark.parametrize("field", ["chain_discriminant", "signer_key_revision"])
+def test_signed_topology_replay_rejects_numeric_type_substitution(
+    tmp_path: Path, field: str,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    signed = positive.aggregate["topology_qualification"]
+    rebound = copy.deepcopy(signed)
+    rebound[field] = float(rebound[field])
+    assert rebound == signed  # Python equality would otherwise hide the substitution.
+    positive.aggregate["topology_qualification"] = rebound
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert "inner approval topology must match the positive aggregate binding" in errors
+    assert MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER not in errors
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_topology_envelope_cannot_claim_a_completed_native_operation(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    envelope_path = args.inner_topology_qualification_envelope
+    envelope = json.loads(envelope_path.read_bytes())
+    envelope["completed_operation_state_sha256"] = digest("claimed-topology-completion")
+    raw = MODULE.render_checker_summary(envelope).encode("utf-8")
+    envelope_path.write_bytes(raw)
+    positive.input_sha256["topology_qualification_envelope"] = hashlib.sha256(raw).hexdigest()
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("signed topology qualification envelope fields must match" in error for error in errors)
+    assert MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER not in errors
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_signed_inner_chain_rejects_a_rebound_lane_summary(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    lane, _separator, path_text = args.inner_lane_summary[0].partition("=")
+    path = Path(path_text)
+    value = json.loads(path.read_bytes())
+    value["recognized_artifacts"][0]["fingerprint"]["deployment_id"] = "production-other"
+    path.write_bytes(lane_inventory.canonical_file_bytes(value))
+    positive.input_sha256[lane] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("inner approval lane-inventory full replay could not be verified" in error for error in errors)
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_signed_inner_chain_rejects_re_signed_invalid_foundational_semantics(
+    tmp_path: Path,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    path = args.inner_foundational_prerequisite
+    foundation = json.loads(path.read_bytes())
+    foundation["prerequisites"][0]["status"] = "blocked"
+    readiness_fixture.resign_foundational_summary(foundation)
+    path.write_bytes(lane_inventory.canonical_file_bytes(foundation))
+    positive.input_sha256["foundational_prerequisite"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("foundational prerequisites[0].status must be `verified`" in error for error in errors)
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+def test_inner_approval_trust_substitution_or_signer_reuse_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(
+        MODULE, "_verify_inner_approval_signatures",
+        lambda *_args: observed.append(True) or [],
+    )
+    args.inner_approval_trust.write_bytes(b'{"schema":"substituted"}')
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("independently reviewed SHA-256" in error for error in errors)
+    assert observed == []
+
+    args, positive = inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())
+    trust["resilience"]["public_key_hex"] = trust["topology"]["public_key_hex"]
+    raw = MODULE.render_checker_summary(trust).encode("utf-8")
+    args.inner_approval_trust.write_bytes(raw)
+    args.inner_approval_trust_sha256 = hashlib.sha256(raw).hexdigest()
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("four independent signer keys" in error for error in errors)
+    assert observed == []
+
+    args, positive = inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())
+    args.provenance_verification_public_key_hex = trust["topology"]["public_key_hex"]
+    args.provenance_signer_administrator_id = trust["topology"]["administrator_id"]
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert any("outer promotion key" in error for error in errors)
+    assert any("outer promotion administrator" in error for error in errors)
+    assert observed == []
+
+
+def test_unverified_inner_approvals_never_make_promotion_ready(tmp_path: Path) -> None:
+    args, positive = inner_approval_inputs(tmp_path)
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert errors
+    assert any("inner approval" in error for error in errors[:-1])
+    assert "inner approval chain" in errors[-1]
+
+
 def test_complete_outer_receipt_verification_cannot_qualify_the_inner_chain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -702,7 +1677,7 @@ def test_complete_outer_receipt_verification_cannot_qualify_the_inner_chain(
     assert MODULE.verify_ed25519(calls[0][3], calls[0][2], calls[0][1])
     assert len(cosign_calls) == 1
     assert cosign_calls[0][2] == paths["cosign"].read_bytes()
-    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert_missing_inner_approval_errors(summary["errors"])
     assert set(summary) == MODULE.PROMOTION_SUMMARY_FIELDS
     assert summary["status"] == "blocked"
     assert summary["externally_authenticated"] is False
@@ -749,7 +1724,7 @@ def test_complete_authenticated_bundle_runs_authoritative_aggregate_validator(
     assert exit_code == 1
     assert "inner approval chain" in stderr
     assert len(calls) == 1
-    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert_missing_inner_approval_errors(summary["errors"])
     assert summary["status"] == "blocked"
     assert summary["externally_authenticated"] is False
     assert summary["promotion_eligible"] is False
@@ -1419,7 +2394,7 @@ def test_relabelled_inner_aggregate_cannot_supply_missing_custody_proofs(
     assert len(calls) == 1
     assert summary["status"] == "blocked"
     assert summary["promotion_eligible"] is False
-    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert_missing_inner_approval_errors(summary["errors"])
     for owner in ("foundational", "topology", "resilience", "lane-inventory"):
         assert owner in stderr
 
@@ -1449,7 +2424,7 @@ def test_arbitrary_cosign_json_stays_blocked_after_other_verification_boundaries
     monkeypatch.setattr(
         MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native,
     )
-    monkeypatch.setattr(MODULE, "validate_inner_approval_chain", lambda: [])
+    monkeypatch.setattr(MODULE, "validate_inner_approval_chain", lambda *_args: [])
     cosign_calls = []
     def reject_cosign(arguments, subject, bundle):
         assert bundle == arbitrary_bundle
@@ -1558,7 +2533,7 @@ def test_cosign_uses_once_captured_bundle_when_source_is_replaced_after_native_v
     assert len(calls) == 1
     assert calls[0][1:] == (expected_subject, original)
     assert summary["cosign_bundle_sha256"] == hashlib.sha256(original).hexdigest()
-    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert_missing_inner_approval_errors(summary["errors"])
     assert summary["promotion_eligible"] is False
 
 

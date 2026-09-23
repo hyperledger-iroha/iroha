@@ -6,6 +6,8 @@ use crate::publication_rwlock::DeferredPublicationRwLock;
 /// Retains original index releases outside the calling operation's physical fences.
 /// Short read/write guards unlock normally; their notifications stay in this owner.
 pub(super) struct LaneLifecycleReleases<'state> {
+    pub(super) hashes: Option<concread::release::DeferredReleaseBatch>,
+    pub(super) membership: concread::release::DeferredReleaseBatch,
     pub(super) header: DeferredPublicationRwLock<'state, Option<BlockHeader>>,
     pub(super) sccp: crate::publication_lock::DeferredPublicationFence<'state, SccpRegistryCache>,
     pub(super) merge_admission: DeferredPublicationRwLock<'state, MergeAdmissionState>,
@@ -24,6 +26,8 @@ pub(super) struct LaneLifecycleReleases<'state> {
 impl<'state> LaneLifecycleReleases<'state> {
     pub(super) fn new(state: &'state State) -> Self {
         Self {
+            hashes: state.block_hashes.reader_release_batch(),
+            membership: state.transactions.reader_release_batch(),
             header: state.latest_block_header.defer_notifications(),
             sccp: state.sccp_registry_cache.defer_notifications(),
             merge_admission: state.merge_admission.defer_notifications(),

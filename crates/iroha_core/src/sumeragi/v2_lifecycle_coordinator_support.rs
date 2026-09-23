@@ -275,6 +275,7 @@ pub(crate) fn reviewed_v2_worker_source_for_test() -> &'static str {
             let services_impl = expand_reviewed_includes!(
                 include_str!("v2_worker_services_impl.rs");
                 "v2_worker/pending_kura_apply_io_snapshot.rs",
+                "v2_worker/retained_apply.rs",
                 "v2_worker/current_lane_output_rollover_claim.rs",
                 "v2_worker/production_services_drop_impl.rs",
                 "v2_worker/effect_services_impl.rs",
@@ -321,6 +322,8 @@ enum SourceId {
     BodyPipelineTests,
     BodyRetirement,
     BodyStore,
+    RetainedValidation,
+    NativeValidation,
     CanonicalRecoveryIngress,
     CertifiedServeStore,
     ConcreteAdmission,
@@ -379,6 +382,8 @@ impl SourceId {
             "body_pipeline_tests" => Self::BodyPipelineTests,
             "body_retirement" => Self::BodyRetirement,
             "body_store" => Self::BodyStore,
+            "retained_validation" => Self::RetainedValidation,
+            "native_validation" => Self::NativeValidation,
             "canonical_recovery_ingress" => Self::CanonicalRecoveryIngress,
             "certified_serve_store" => Self::CertifiedServeStore,
             "concrete_admission" => Self::ConcreteAdmission,
@@ -443,6 +448,10 @@ fn source(id: SourceId) -> String {
         }
         SourceId::BodyRetirement => include_str!("v2_lifecycle_body_retirement.rs").to_owned(),
         SourceId::BodyStore => include_str!("v2_body_store.rs").to_owned(),
+        SourceId::RetainedValidation => {
+            include_str!("v2_body_store/retained_validation.rs").to_owned()
+        }
+        SourceId::NativeValidation => include_str!("v2_apply/native_validation.rs").to_owned(),
         SourceId::CanonicalRecoveryIngress => {
             include_str!("v2_runner/canonical_recovery_ingress.rs").to_owned()
         }

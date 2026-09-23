@@ -934,6 +934,39 @@ pub(super) fn native_publication_fixture(atomic: bool) -> Box<NativePublicationF
     native_publication_fixture_from_control(native_control_execution_fixture(atomic, true))
 }
 
+/// Seed the canonical genesis authority before any signed admission, so the
+/// genuine published Native carrier can enter the production replay consumer.
+#[inline(never)]
+pub(super) fn native_publication_replay_fixture(atomic: bool) -> Box<NativePublicationFixture> {
+    let economic = native_economic_fixture_with_world_initializer(
+        &[NativeEconomicCase::Transfer(25)],
+        atomic,
+        Some(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 8192,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
+        }),
+        None,
+        |world| {
+            let authority = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let (id, account) = Account::new(authority.clone())
+                .build(&authority)
+                .into_key_value();
+            world.accounts.insert(id, account);
+            let domain_id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+            world
+                .domains
+                .insert(domain_id.clone(), Domain::new(domain_id).build(&authority));
+        },
+    );
+    native_publication_fixture_from_control(native_control_execution_fixture_from_economic(
+        economic, atomic, true,
+    ))
+}
+
 #[inline(never)]
 fn native_publication_fixture_from_control(
     original: NativeControlExecutionFixture,
@@ -1445,4 +1478,104 @@ impl NativePublicationFixture {
         crate::block::VerifiedV2FinalityArtifact::verify(artifact)
             .expect("real three-of-four global finality joins the actual Native execution")
     }
+}
+
+fn native_preparation_snapshot_record(
+    fixture: &NativeControlExecutionFixture,
+) -> iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord {
+    use iroha_data_model::block::consensus_v2::{
+        SnapshotBootstrapAnchor, SnapshotV2BootstrapRecord,
+    };
+    let state = &fixture.economic.native.state;
+    let parent = fixture.economic.native.block.header();
+    let mut context = fixture.applying.context().clone();
+    context.parent_commit_qc = None;
+    context.snapshot_bootstrap = Some(SnapshotBootstrapAnchor {
+        snapshot_height: parent.height().get(),
+        snapshot_block_hash: parent.hash(),
+        snapshot_block_creation_time_ms: parent.creation_time_ms,
+        snapshot_state_hash: crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+    });
+    let record = SnapshotV2BootstrapRecord {
+        version: SnapshotV2BootstrapRecord::VERSION,
+        context,
+        validator_set_pops: fixture.applying.proofs_of_possession().to_vec(),
+    };
+    record.validate().unwrap();
+    record
+}
+
+state_test! { sync native_preparation_snapshot_anchor_retains_source_owned_execution
+    let mut fixture = native_control_execution_fixture(false, false);
+    let record = native_preparation_snapshot_record(&fixture);
+    let state = &mut fixture.economic.native.state;
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    state.kura.force_hash_only_block_for_testing(
+        std::num::NonZeroUsize::new(state.committed_height()).unwrap(),
+    ).expect("snapshot startup retains the authenticated parent hash without its body");
+    assert!(state.view().latest_block().is_none());
+    state.set_snapshot_v2_bootstrap_candidate_for_testing(record.clone());
+    state.authenticate_snapshot_v2_bootstrap_candidate(
+        crate::snapshot::SnapshotBootstrapLineageAuthority::normally_signed_for_testing(),
+    ).expect("authenticate exact snapshot State, history, roster and live BLS proofs");
+    assert_eq!(state.authenticated_snapshot_v2_bootstrap(), Some(&record));
+    fixture.applying = crate::sumeragi::v2::VerifiedHeightContext::snapshot_bootstrap(&record).unwrap();
+    let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
+    let state = &fixture.economic.native.state;
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
+    let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    else { panic!("snapshot successor retains genuine finalized first sources"); };
+    let prepared = source.prepare_candidate(
+        fixture.applying.clone(), &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+        &clock, state.sumeragi_block_cadence(),
+    ).unwrap().expect("shared global preflight and Native controls accept the authenticated anchor");
+    assert!(prepared.block().has_results());
+    assert_eq!(prepared.block().hash(), carrier.hash());
+    assert_eq!(prepared.context(), &record.context);
+    assert!(prepared.native_source_for_test().is_some());
+    assert_eq!(prepared.state().world.assets.get(&fixture.economic.source).unwrap().0, Quantity::from(75u32));
+    assert_eq!(prepared.state().world.assets.get(&fixture.economic.destination).unwrap().0, Quantity::from(25u32));
+    drop(prepared);
+
+    let mut wrong = record.clone();
+    wrong.context.snapshot_bootstrap.as_mut().unwrap().snapshot_block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign Native snapshot parent"));
+    let wrong = crate::sumeragi::v2::VerifiedHeightContext::snapshot_bootstrap(&wrong).unwrap();
+    let error = crate::block::ValidBlock::prepare_native_execution_controls(
+        &carrier, state, wrong.clone(),
+    ).err().expect("control admission must reject another snapshot parent");
+    assert!(error.to_string().contains("exact carrier pre-State"), "{error}");
+    let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    else { panic!("bad global context cannot alter the original source"); };
+    let error = source.prepare_candidate(
+        wrong, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+        &clock, state.sumeragi_block_cadence(),
+    ).err().expect("shared preflight must reject another snapshot parent before recording");
+    assert!(error.to_string().contains("verified context"), "{error}");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    assert_native_economic_relay_recorder_released();
+}
+
+state_test! { sync native_preparation_snapshot_anchor_rejects_wrong_state_authentication
+    let mut fixture = native_control_execution_fixture(false, false);
+    let mut record = native_preparation_snapshot_record(&fixture);
+    record.context.snapshot_bootstrap.as_mut().unwrap().snapshot_state_hash =
+        Hash::new(b"foreign Native snapshot State");
+    record.validate().unwrap();
+    let state = &mut fixture.economic.native.state;
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    state.set_snapshot_v2_bootstrap_candidate_for_testing(record);
+    let error = state.authenticate_snapshot_v2_bootstrap_candidate(
+        crate::snapshot::SnapshotBootstrapLineageAuthority::normally_signed_for_testing(),
+    ).expect_err("a structurally valid anchor cannot authenticate a different State");
+    assert!(error.contains("canonical snapshot WSV"), "{error}");
+    assert!(state.authenticated_snapshot_v2_bootstrap().is_none());
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
 }

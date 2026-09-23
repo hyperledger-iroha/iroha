@@ -30,6 +30,17 @@ aggregate-only requirement permits. Its voter-identity privacy definition does
 not make these plaintexts an acceptable substitute for aggregate-only disclosure.
 [Protocol, Arapinis et al.](https://eprint.iacr.org/2020/513.pdf)
 
+**Parallel OV-Net** tolerates some unresponsive voters by running multiple
+overlapping sub-elections. Its authors explicitly analyze the extra information
+from individually tallyable sub-elections and the statistical loss of accuracy;
+when surviving session vectors do not span the full voter vector, its exact
+combiner cannot recover the complete sum. Our contract permits one exact final
+total over every accepted ballot and no additional subset tallies. Importing
+this recovery therefore does not meet either the accuracy or disclosure
+requirement. This rejects that construction for this product; it is not a claim
+about the paper's stated trade-off theorem.
+[Bana et al., sections V–VI](https://eprint.iacr.org/2021/1065.pdf)
+
 A separate algebraic rejection check applies to a tempting update adaptation.
 If a binary-choice ballot is `C = M * g^(w*b)` and an update publishes
 `C' = M * g^(w'*b)` using the same mask, the public ratio is

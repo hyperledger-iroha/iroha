@@ -689,7 +689,7 @@ fn run_pending_active_height(
             }
         }
         receiver
-            .ensure_closed_drained_cut()
+            .ensure_closed_global_drained_cut()
             .map_err(V2RunnerError::Service)?;
         if context.height == u64::MAX {
             activated.with_runner_runtime(&mut active_runner, |executor, _services| {

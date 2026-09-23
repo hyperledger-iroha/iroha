@@ -427,7 +427,7 @@ impl State {
     pub(super) fn acquire_canonical_runtime_block(
         &self,
         replacement: bool,
-    ) -> Result<AcquiredRuntimeBlock<'_>, BlockHashAdmissionError> {
+    ) -> Result<AcquiredRuntimeBlock<'_>, StateAdmissionError> {
         loop {
             let generation = self.state_view_generation();
             if generation % 2 != 0 {
@@ -444,13 +444,20 @@ impl State {
             // retry; a World-only generation check cannot bind the predecessor.
             // Hash construction detaches its private tree before waiting for World.
             let block_hashes = self.block_hashes.try_next_block(replacement)?;
+            let membership = self.transactions.prepare_next_block(replacement)?;
             // Projection payloads outlive joint physical retirement on refusal
             // and unwind. Every Cell slot remains in this caller while initializing.
             let projection_result;
             let mut projection;
             let mut sccp_registry;
-            let mut pending = acquisition::RuntimeBlockAcquisition::new(self, block_hashes);
-            pending.initialize(replacement);
+            let mut pending =
+                acquisition::RuntimeBlockAcquisition::new(self, block_hashes, membership);
+            if let Err(error) = pending.initialize(replacement) {
+                // The same original prepared generation returns to its sole
+                // preparation slot only after every physical sibling releases.
+                pending.retain_refused_membership();
+                return Err(error.into());
+            }
             projection_result = self.project_canonical_runtime_with_manifests(
                 pending.canonical_runtime().get(),
                 pending.world(),

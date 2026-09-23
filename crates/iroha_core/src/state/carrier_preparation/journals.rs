@@ -373,6 +373,7 @@ impl<'state> PreparedCarrier<'state> {
         let da_commitments;
         // Notification custody survives partial capture and materialization unwind.
         let da_rewind_releases;
+        let read_releases;
         let mut original = self;
         let state = &mut original.parts_mut().state;
         // Admit capture overlap, retained originals/final values and eventual
@@ -438,6 +439,7 @@ impl<'state> PreparedCarrier<'state> {
             _publication_events: publication_events,
         } = original.into_parts();
         let StateBlockFields {
+            read_releases: original_read_releases,
             state_ref,
             da_rewind_releases: original_da_rewind_releases,
             runtime_policy,
@@ -472,6 +474,7 @@ impl<'state> PreparedCarrier<'state> {
             ..
         } = state.into_fields();
         da_rewind_releases = original_da_rewind_releases;
+        read_releases = original_read_releases;
         let mut pending = StateJournalCapture::new(
             world.capture_slot(),
             runtime_journals::RuntimeCapture::new(
@@ -493,6 +496,7 @@ impl<'state> PreparedCarrier<'state> {
         // Successful capture freed all original State writers; no journal authority
         // is derived from these completed, same-source notification batches.
         drop(da_rewind_releases);
+        drop(read_releases);
         let journals = PreparedCarrierJournals {
             valid,
             context,

@@ -26,6 +26,10 @@ pub struct Kura {
     /// Zero is invalid; this policy has no environment override.
     #[config(default = "defaults::kura::BLOCK_HASH_HISTORY_BYTES")]
     pub block_hash_history_bytes: Bytes,
+    /// Finite requested-allocation limit for State's transaction-membership generations.
+    /// Zero is invalid; this policy has no environment override.
+    #[config(default = "defaults::kura::TRANSACTION_HISTORY_BYTES")]
+    pub transaction_history_bytes: Bytes,
     /// Finite membership segment and workspace limits, without an environment override.
     #[config(nested)]
     pub membership_storage: KuraMembershipStorage,
@@ -90,6 +94,7 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
+            transaction_history_bytes,
             membership_storage,
             lane_history_retention,
             fastpq_artifacts,
@@ -110,6 +115,13 @@ impl Kura {
         {
             emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(
                 "kura.block_hash_history_bytes must be nonzero and representable as usize",
+            ));
+        }
+        if transaction_history_bytes.get() == 0
+            || usize::try_from(transaction_history_bytes.get()).is_err()
+        {
+            emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(
+                "kura.transaction_history_bytes must be nonzero and representable as usize",
             ));
         }
         let fastpq_artifacts = actual::KuraFastpqArtifactPolicy {
@@ -135,6 +147,7 @@ impl Kura {
             max_disk_usage_bytes,
             blocks_in_memory,
             block_hash_history_bytes,
+            transaction_history_bytes,
             membership_storage: actual::KuraMembershipStoragePolicy {
                 max_bytes: membership_storage.max_bytes,
                 memory_bytes: membership_storage.memory_bytes,

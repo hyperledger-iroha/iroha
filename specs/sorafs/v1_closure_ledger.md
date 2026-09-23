@@ -37,6 +37,82 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-23 software signer and exact-assignment checkpoint
+
+The [dated cross-component record](../../docs/history/2026-09-23/election-signer-provider-js-checkpoint.md)
+captures four passing software-credential provider tests and the exact
+provider-assignment source lookup (three focused Core lookup tests, one
+extended corruption test and three daemon tests). The software provider
+checks enrolled custody and reservation at key use; the daemon lookup binds
+the current committed State/Kura head, archive generation, approved pin,
+assignment revision and canonical source set without consuming a worker cursor.
+It issues no grant. A further daemon-only check now brackets existing
+council/advert/transport evidence validation with two identical current
+assignment reads and an archive-generation fence. Three focused assignment
+tests and one missing-finality evidence test pass; stale source inventories and
+assignment revisions fail closed. A lower-height admission cursor does not
+itself prove ancestry. Production signer state/completion sources and protected
+purpose dispatch remain absent, and independently authenticated admission
+lineage, current revocation, advert, transport pins, bounded token grants and
+distributed provider-ingest qualification remain open. G02, G06 and all
+promotion gates remain open. No HSM prerequisite or compatibility path applies.
+The role-14 Current Check adapter now consumes Core's original applied and
+finalized State/Kura observation, checks the exact custody/audit context,
+advances a separate retained floor and rechecks qualified UTC. Five focused
+daemon tests and both current Core applied-without-finality tests pass. The
+configured clock/floor providers, exact submission,
+full operation state source and signing dispatch remain absent; G02 stays open.
+
+The production promotion checker now binds the five inner approval inputs and
+all 17 ordered lane summaries to the exact positive replay digest set,
+replays the signed inventory and full foundational semantics, verifies
+independently pinned signer tuples and signatures, and replays the
+foundational external signer receipt. The scoped Python 3.12
+promotion/evidence/cosign selection passes 396 tests.
+It still rejects final promotion because purpose-owned native completion and
+finalized-state verification for the inner approvals is absent; the outer
+role-14 receipt cannot replace those proofs.
+The [topology claim boundary](../../docs/history/2026-09-23/sorafs-topology-inner-approval-claim-boundary.md)
+additionally rejects foreign signer tuples and widened detached bindings;
+196 focused checker tests pass, but the role-16 native receipt and finalized
+Check remain absent.
+The [resilience claim boundary](../../docs/history/2026-09-23/sorafs-resilience-inner-approval-claim-boundary.md)
+also requires the exact purpose, replayed summary bytes and signer tuple;
+198 focused checker tests pass, but its native purpose and completed operation
+remain absent.
+The [lane-inventory claim boundary](../../docs/history/2026-09-23/sorafs-lane-inventory-inner-approval-claim-boundary.md)
+requires the exact signed inventory bytes, purpose-specific signer and topology
+anchors; 199 focused checker tests pass, but its native completion remains absent.
+The [foundational claim boundary](../../docs/history/2026-09-23/sorafs-foundational-inner-approval-claim-boundary.md)
+requires explicit receipt replay and exact signer, verifier, continuity and
+prerequisite bindings; 200 focused checker tests pass, but finalized native
+custody and completion remain absent.
+
+## 2026-09-23 release-manifest and runtime-input checkpoint
+
+The [role-13 native-operation boundary](../../docs/history/2026-09-23/sorafs-release-manifest-native-operation-gap.md)
+now has a bounded internal Norito action and Check claim contract. The existing
+four-signature private service still lacks native custody, completed-operation
+state, finalized source and purpose-aware daemon dispatch; release signing and
+promotion remain blocked without an HSM prerequisite.
+
+The [integrated packet record](../../docs/history/2026-09-23/integrated-packet-validation.md)
+captures 20 passing release-manifest signer tests after the reviewed audit-head
+predecessor fence. Signing now checks a fresh same-snapshot custody/head pair,
+and recovery retains the original reviewed predecessor. Production operation
+state and key providers are still test-only for this role; roles 11, 13, 14 and
+15 remain disabled. The focused Node runtime-input relation passes 123 tests,
+but the actual 20-image artifact remains rejected and has no loader/process/
+native-execution qualification. No G02, G13 or promotion gate is closed.
+The later bounded image/alias/absence physical input owner passes nine focused
+tests; its combined pure-input selection passes 133. Its release automation
+selection includes both workflow triggers and the CI command; the current
+`check_sorafs_release_automation_test.py` plus runtime-custody selection passes
+1,482 tests after both cleanup cases.
+The owner is not yet retained through the fixed Node child or joined to actual
+mapped-image observations, so this does not change the rejected runtime or
+release status.
+
 ## 2026-09-21 integrated signing adapter validation
 
 The [current signing adapter record](../../docs/history/2026-09-21/sorafs-signing-adapter-validation.md)

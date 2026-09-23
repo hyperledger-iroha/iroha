@@ -2780,7 +2780,7 @@ fn state_with_snapshot_nexus_runtime() -> State {
 fn deserialize_state_snapshot_value_with_kura(
     value: norito::json::Value,
     kura: Arc<Kura>,
-) -> Result<Box<State>, json::Error> {
+) -> Result<Box<State>, deserialize::StateRestoreError> {
     deserialize::KuraSeed {
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura,
@@ -2790,7 +2790,9 @@ fn deserialize_state_snapshot_value_with_kura(
     }
     .into_state_from_json(value)
 }
-fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<Box<State>, json::Error> {
+fn deserialize_state_snapshot_value(
+    value: norito::json::Value,
+) -> Result<Box<State>, deserialize::StateRestoreError> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
 }
 state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_canonical_root
@@ -4025,6 +4027,27 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
         state_key,
         crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
             .expect("canonical Orchard pool-state record"),
+    );
+    let reserve_asset_id = AssetId::with_scope(
+        asset_definition_id.clone(),
+        reserve_account.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Global,
+    );
+    let custody_owner = crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
+        namespace,
+        bootstrap_digest,
+    };
+    world.privacy_commitments.insert(
+        crate::privacy_state::PrivacyCommitmentKeyV1::public_reserve_custody(
+            custody_owner.protocol_id(),
+            &reserve_asset_id,
+        )
+        .expect("canonical Orchard reserve key"),
+        crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(
+            reserve_asset_id,
+            custody_owner,
+        )
+        .expect("canonical Orchard reserve custody"),
     );
     world.privacy_roots.insert(root_key, provenance);
     world.privacy_root_heads.insert(
@@ -5922,6 +5945,8 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
@@ -9832,7 +9857,7 @@ fn committed_drain_suppresses_hot_scale_out_and_only_later_commitment_retires_hi
             .expect("install the committed drain observation with its exact lineage");
         *state.nexus.write() = nexus;
         if certified {
-            let same_carrier = state.block(third.header());
+            let mut same_carrier = state.block(third.header());
             assert_eq!(
                 same_carrier
                     .select_autoscale_scale_in_action(&third)
@@ -32216,8 +32241,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-    membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES, membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -34567,7 +34591,7 @@ state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_
         "normal execution must bind its compact replay row to the exact signed family"
     );
 }
-state_test! { sync recording_hidden_axt_amount_charges_consensus_budget
+state_test! { sync recording_redacted_axt_amount_rejects_without_charging_budget
     let mut state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
@@ -34659,17 +34683,17 @@ state_test! { sync recording_hidden_axt_amount_charges_consensus_budget
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.record_axt_envelope(envelope)
-        .expect("hidden proof scalar must stage exact budget consumption");
-    stx.apply();
-    assert_eq!(
-        block
-            .world
-            .axt_handle_budget_ledger
-            .get(&budget_key)
-            .expect("hidden amount must publish a cumulative family record")
-            .consumed(),
-        &Quantity::from(5_u64)
+    let error = stx
+        .record_axt_envelope(envelope)
+        .expect_err("a proof's public scalar cannot authorize a redacted spend amount");
+    assert!(
+        error.to_string().contains("MissingAmount"),
+        "unexpected redacted amount rejection: {error}"
+    );
+    drop(stx);
+    assert!(
+        block.world.axt_handle_budget_ledger.get(&budget_key).is_none(),
+        "rejected redacted amount must not stage family consumption"
     );
 }
 state_test! { sync axt_handle_budget_persists_across_state_block_commits
@@ -34706,7 +34730,7 @@ state_test! { sync axt_handle_budget_persists_across_state_block_commits
                 Some(u128::from(amount)),
             );
             let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                .expect("decode hidden-amount proof envelope");
+                .expect("decode amount-bound proof envelope");
             AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -34752,11 +34776,11 @@ state_test! { sync axt_handle_budget_persists_across_state_block_commits
                             kind: "transfer".into(),
                             from: ALICE_ID.to_string(),
                             to: BOB_ID.to_string(),
-                            amount: None,
+                            amount: Some(Quantity::from(amount)),
                         },
                     },
                     proof: Some(proof),
-                    amount: None,
+                    amount: Some(Quantity::from(amount)),
                     amount_commitment: proof_envelope.amount_commitment,
                 }],
                 commit_height,
@@ -47016,3 +47040,6 @@ mod merge_publication_release_tests;
 
 #[path = "lifecycle_index_release_tests.rs"]
 mod lifecycle_index_release_tests;
+
+#[path = "history_reader_transitive_tests.rs"]
+mod history_reader_transitive_tests;

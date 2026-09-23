@@ -9,6 +9,8 @@ mod native_candidate;
 pub(in crate::sumeragi) mod native_process;
 mod native_source;
 pub(in crate::sumeragi) use native_process::NativeRunnerProcess;
+#[cfg(test)]
+pub(crate) use native_source::NativeSourceRequestTestProbe;
 
 use std::{
     num::{NonZeroU64, NonZeroUsize},
@@ -2929,10 +2931,10 @@ fn candidate_attachments(
         )
         .derive_npos_consensus_effects(round_header)
         .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::BlockHashAdmissionError>() {
+            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
                 V2RunnerError::CandidateBuild(
                     super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::History(refusal.clone()),
+                        crate::state::StateBlockStartError::from(refusal.clone()),
                     ),
                 )
             } else {

@@ -32,12 +32,12 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
     KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1,
     KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1,
     KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1, KagemushaCreditOpeningV1,
-    KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
+    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
     KagemushaMintAuthorizationStatementV1, kagemusha_asset_identity_digest_v1,
     kagemusha_ciphertext_digest_v1, kagemusha_credit_opening_canonical_layout_v1,
     kagemusha_hardware_credential_id_preimage_layout_v1,
@@ -73,8 +73,9 @@ use super::{
         KAGEMUSHA_PLATFORM_CREDENTIAL_PUBLIC_INSTANCE_COUNT_V1,
         KagemushaPlatformCredentialStatementV1, assert_digest_nonzero, assign_bytes,
         assign_credential_statement_v1, bind_equal_digest, constant_bytes,
-        constrain_enabled_hardware_profile_membership_v1, device_authority_commitment_v1,
-        digest_limbs_assigned, hash, platform_credential_public_instance,
+        constrain_enabled_hardware_profile_membership_v1, constrain_platform_guarantees_v1,
+        device_authority_commitment_v1, digest_limbs_assigned, hash,
+        platform_credential_public_instance,
     },
     mint_hash_claim_fold::{
         KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
@@ -106,6 +107,18 @@ const HARDWARE_AUTHORIZATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-hardwa
 const MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1: u32 = 5;
 const MINT_AUTHORIZATION_HASH_CLAIM_EQUATION_TAG_V1: u32 = 14;
 const _: () = assert!(KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1 == 14);
+
+fn require_mint_assertion_fold_v1(
+    platform_class: KagemushaHardwarePlatformClassV1,
+) -> Result<(), String> {
+    // TODO: admit these classes only after attested P-256 assertion and exact
+    // one-use key lineage are constrained in both mint parities.
+    if platform_class.is_ordinary_app() {
+        Err("Kagemusha ordinary-app mint assertion fold is unavailable".to_owned())
+    } else {
+        Ok(())
+    }
+}
 
 /// Non-history public cells in one mint-authorization parity.
 pub(crate) const MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 50;
@@ -187,6 +200,7 @@ impl KagemushaMintAuthorizationRelationWitnessV1 {
         self.hardware_profile
             .validate()
             .map_err(|error| format!("invalid mint hardware profile: {error}"))?;
+        require_mint_assertion_fold_v1(self.hardware_profile.platform_class)?;
         self.hardware_credential
             .validate_against_profile(&self.hardware_profile)
             .map_err(|error| format!("invalid mint hardware credential: {error}"))?;
@@ -576,7 +590,7 @@ fn validate_credential_public_instances_v1<F: KagemushaPoseidonFieldV1>(
             != Some(expected_history.as_slice())
     {
         return Err(format!(
-            "{parity:?} mint-authorization carried claim history does not match credential public rows 6..40"
+            "{parity:?} mint-authorization carried claim history does not match credential public rows 8..42"
         ));
     }
     Ok(())
@@ -1854,17 +1868,7 @@ fn bind_hardware_profile<F: KagemushaPoseidonFieldV1>(
     gate.assert_is_const(ctx, &version.value, &F::ONE);
     gate.assert_is_const(ctx, &protocol_version.value, &F::ONE);
     let provider = assign_digest(ctx, range, profile.provider_id);
-    let platform_class = assign_uint_le(
-        ctx,
-        range,
-        u128::from(match profile.platform_class {
-            iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AndroidOemService => 0_u8,
-            iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AppleOemService => 1,
-            iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::DedicatedSecureElement => 2,
-            iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::OtherQualified => 3,
-        }),
-        32,
-    );
+    let platform_class = assign_uint_le(ctx, range, u128::from(profile.platform_class as u8), 32);
     let product = assign_digest(ctx, range, profile.product_class_digest);
     let firmware = assign_digest(ctx, range, profile.firmware_policy_digest);
     let enrollment = assign_digest(ctx, range, profile.enrollment_attestation_verifier_digest);
@@ -1876,10 +1880,12 @@ fn bind_hardware_profile<F: KagemushaPoseidonFieldV1>(
         range,
         profile.governance_credential_public_key.as_sec1_bytes(),
     );
-    let capabilities = assign_uint_le(ctx, range, u128::from(profile.capability_mask), 16);
+    let capabilities = assign_uint_le(ctx, range, u128::from(profile.capability_mask), 32);
     let qualification = assign_digest(ctx, range, profile.qualification_report_digest);
     let valid_from = assign_uint_le(ctx, range, u128::from(profile.valid_from_ms), 64);
     let expires = assign_uint_le(ctx, range, u128::from(profile.expires_at_ms), 64);
+    let app_authority_policy =
+        assign_digest(ctx, range, profile.app_attestation_authority_policy_digest);
     for digest in [
         &provider,
         &product,
@@ -1888,15 +1894,16 @@ fn bind_hardware_profile<F: KagemushaPoseidonFieldV1>(
         &trust_roots,
         &suite_commitment,
         &qualification,
+        &app_authority_policy,
     ] {
         assert_digest_nonzero(ctx, range, digest);
     }
     assert_nonzero(ctx, range, policy_epoch.value);
-    gate.assert_is_const(
-        ctx,
-        &capabilities.value,
-        &F::from(u64::from(KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1)),
-    );
+    constrain_platform_guarantees_v1(ctx, range, platform_class.value, capabilities.value);
+    // Match the native gate above inside the admitted mint circuit. A release
+    // cannot authorize an app-mode mint by bypassing a host constructor.
+    let oem_checkpoint = range.is_less_than_safe(ctx, platform_class.value, 4);
+    gate.assert_is_const(ctx, &oem_checkpoint, &F::ONE);
     gate.assert_is_const(
         ctx,
         &governance_key[0]
@@ -1927,6 +1934,7 @@ fn bind_hardware_profile<F: KagemushaPoseidonFieldV1>(
             &qualification,
             &valid_from.bytes,
             &expires.bytes,
+            &app_authority_policy,
         ],
     )?;
     let expected_profile = hash_framed(
@@ -1974,6 +1982,7 @@ fn bind_compact_credential<F: KagemushaPoseidonFieldV1>(
     let key_reference = assign_digest(ctx, range, credential.device_key_reference);
     let issued = assign_uint_le(ctx, range, u128::from(credential.issued_at_ms), 64);
     let expires = assign_uint_le(ctx, range, u128::from(credential.expires_at_ms), 64);
+    let app_binding = assign_digest(ctx, range, credential.app_policy_binding_digest);
     for (left, right) in [
         (&network, &platform.network_id),
         (&credential_profile, &platform.hardware_profile_id),
@@ -1988,6 +1997,12 @@ fn bind_compact_credential<F: KagemushaPoseidonFieldV1>(
     ctx.constrain_equal(&policy_epoch.value, &profile.policy_epoch.value);
     ctx.constrain_equal(&generation.value, &platform.epoch_generation.value);
     bind_equal_digest(ctx, range, &firmware, &profile.firmware_policy_digest);
+    bind_equal_digest(
+        ctx,
+        range,
+        &app_binding,
+        &platform.app_policy_binding_digest,
+    );
     let expected_suite_commitment =
         hash_framed(ctx, jobs, SUITE_COMMITMENT_DOMAIN_V1, 32, suite.to_vec())?;
     bind_equal_digest(
@@ -2039,6 +2054,7 @@ fn bind_compact_credential<F: KagemushaPoseidonFieldV1>(
             &key_reference,
             &issued.bytes,
             &expires.bytes,
+            &app_binding,
         ],
     )?;
     let expected_id = hash_framed(
@@ -2337,6 +2353,24 @@ mod canonical_tests;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn mint_host_keeps_oem_corridor_open_and_fails_closed_for_both_app_modes() {
+        for class in [
+            KagemushaHardwarePlatformClassV1::AndroidOemService,
+            KagemushaHardwarePlatformClassV1::AppleOemService,
+            KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            KagemushaHardwarePlatformClassV1::OtherQualified,
+        ] {
+            require_mint_assertion_fold_v1(class).expect("qualified OEM mode remains available");
+        }
+        for class in [
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+        ] {
+            assert!(require_mint_assertion_fold_v1(class).is_err());
+        }
+    }
+
+    #[test]
     fn mint_authorization_inner_semantics_carry_both_commitments_and_exact_policy_root() {
         fn check<F: KagemushaPoseidonFieldV1>() {
             let prefix = vec![F::from(7); MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1];
@@ -2390,9 +2424,10 @@ mod tests {
         NetworkId,
         block::BlockHeader,
         kagemusha::{
-            KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
-            KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
-            KagemushaHardwareProfileV1, kagemusha_device_key_reference_v1,
+            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+            KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+            KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
+            kagemusha_device_key_reference_v1,
         },
     };
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
@@ -2421,6 +2456,7 @@ mod tests {
     fn fixed_profile_and_credential_projections_match_norito_identities() {
         let issuer = signing_key(0x31);
         let profile = KagemushaHardwareProfileV1 {
+            app_attestation_authority_policy_digest: [0xA5; 32],
             version: KAGEMUSHA_WIRE_VERSION_V1,
             protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
             hardware_profile_id: [0; 32],
@@ -2454,6 +2490,7 @@ mod tests {
                 b"kagemusha-v1-mint-authorization-layout",
             )));
         let credential = KagemushaHardwareCredentialV1 {
+            app_policy_binding_digest: [0xA6; 32],
             version: KAGEMUSHA_WIRE_VERSION_V1,
             credential_id: [0; 32],
             network_id,

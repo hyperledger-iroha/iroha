@@ -56,7 +56,7 @@ use super::{
 };
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{SignedBlock, consensus_v2 as wire};
+use iroha_data_model::block::consensus_v2 as wire;
 use iroha_model_base::peer::PeerId;
 use norito::codec::Encode;
 use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};
@@ -820,8 +820,8 @@ use crate::sumeragi::{
         VerifiedHeightContext,
     },
     v2_body_store::{
-        BodyValidationError, BodyValidationRejectionIdentity, DurableBodyReceipt,
-        DurableBodyValidationOutcome, DurableCertifiedFetchBodyReceipt, RecoveredValidatedBodyCut,
+        BodyValidationRejectionIdentity, DurableBodyReceipt, DurableBodyValidationOutcome,
+        DurableCertifiedFetchBodyReceipt, RecoveredValidatedBodyCut,
         RecoveredValidatedBodyCutError, V2BodyStore, V2BodyStoreError, ValidatedBodyReceipt,
     },
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,

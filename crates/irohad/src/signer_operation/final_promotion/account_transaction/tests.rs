@@ -45,6 +45,7 @@ use sorafs_manifest::signer::{
 };
 use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
+mod current_observation;
 mod observer_signing;
 
 mod statements {

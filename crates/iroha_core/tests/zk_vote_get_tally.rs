@@ -53,9 +53,9 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     stx.world.elections_mut().insert(
         election_id.clone(),
         iroha_core::state::ElectionState {
-            options: 1,
+            options: 2,
             finalized: true,
-            tally: vec![4],
+            tally: vec![4, 0],
             ..Default::default()
         },
     );
@@ -78,7 +78,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     assert_eq!(
         host.set_zk_elections_snapshot(std::collections::BTreeMap::from([(
             election_id.clone(),
-            (1, true, Vec::new()),
+            (2, true, Vec::new()),
         )])),
         Err(ivm::VMError::NoritoInvalid),
     );
@@ -96,5 +96,5 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let resp: zk_verify::VoteGetTallyResponse =
         norito::decode_from_bytes(tlv_out.payload).expect("decode resp");
     assert!(resp.finalized);
-    assert_eq!(resp.tally, vec![4]);
+    assert_eq!(resp.tally, vec![4, 0]);
 }

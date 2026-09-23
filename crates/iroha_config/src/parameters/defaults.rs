@@ -810,6 +810,8 @@ pub mod kura {
     pub const BLOCKS_IN_MEMORY: NonZeroUsize = nonzero!(1024_usize);
     /// Requested allocation bytes retained by State's block-hash generations.
     pub const BLOCK_HASH_HISTORY_BYTES: Bytes = Bytes(256 * 1024 * 1024);
+    /// Requested allocation bytes retained by State's transaction-membership generations.
+    pub const TRANSACTION_HISTORY_BYTES: Bytes = Bytes(256 * 1024 * 1024);
     /// Finite extent retained by the initial membership segment (256 MiB).
     pub const MEMBERSHIP_STORAGE_MAX_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
     /// Membership controls and original append workspaces (64 MiB).

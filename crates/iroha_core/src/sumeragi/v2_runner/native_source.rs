@@ -2,6 +2,9 @@
 
 use super::*;
 use crate::sumeragi::v2_lane_driver::NativeLaneDriver;
+use crate::sumeragi::v2_lane_instance::{
+    LaneCurrentGate, LaneProcessOwner, LaneSourceRecoveryTarget,
+};
 use crate::sumeragi::v2_transport::{
     AuthenticatedCertifiedBodyRequest, AuthenticatedCertifiedBodyResponse,
     authenticate_certified_body_request_with_validator_pops,
@@ -15,9 +18,9 @@ use iroha_p2p::{
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) enum NativeSourceTarget {
-    Instance(wire::HeightContextId),
+    Instance(LaneSourceRecoveryTarget),
     Candidate,
-    Validation(wire::BlockSubject),
+    Validation(Box<wire::BlockSubject>),
 }
 
 pub(super) struct NativeSourceRequest {
@@ -93,6 +96,37 @@ impl NativeSourceRequest {
         })
     }
 
+    pub(super) fn targets_instance(&self) -> bool {
+        matches!(self.target, NativeSourceTarget::Instance(_))
+    }
+
+    /// Release only the duplicate network request after exact authenticated closure.
+    /// Original physical work and closed body/source custody remain in the table.
+    /// Dropping a retained actor ticket cancels only its unadmitted waiter position.
+    pub(super) fn retire_closed_instance(
+        retained: &mut Option<Self>,
+        process: &LaneProcessOwner,
+        observed: Option<&crate::state::VerifiedLaneContexts>,
+    ) -> LaneCurrentGate {
+        let Some(Self {
+            target: NativeSourceTarget::Instance(target),
+            ..
+        }) = retained.as_ref()
+        else {
+            return LaneCurrentGate::Current;
+        };
+        let Some(observed) = observed else {
+            return LaneCurrentGate::ObservationChanged;
+        };
+        let gate = process.source_recovery_target_gate(target, observed);
+        if gate == LaneCurrentGate::InstanceClosed {
+            // No request remains eligible for a late response after this transfer.
+            // This does not clear the instance's recovery requirement or worker.
+            retained.take();
+        }
+        gate
+    }
+
     pub(super) fn admits_hash(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.response.is_none()
             && self
@@ -142,7 +176,7 @@ impl NativeSourceRequest {
         if self.response.is_none() {
             return Ok(false);
         }
-        match self.target {
+        match &self.target {
             NativeSourceTarget::Candidate => {
                 let input = self
                     .source
@@ -155,10 +189,10 @@ impl NativeSourceRequest {
                 recovered.insert(binding, Arc::new(input));
                 Ok(true)
             }
-            NativeSourceTarget::Instance(id) => {
+            NativeSourceTarget::Instance(target) => {
                 driver
                     .complete_source_recovery(
-                        id,
+                        target.instance_id(),
                         self.request.as_ref().expect("retained request"),
                         self.response.as_ref().expect("retained response"),
                     )
@@ -168,7 +202,7 @@ impl NativeSourceRequest {
             NativeSourceTarget::Validation(subject) => {
                 let request = self.request.take().expect("retained request");
                 let response = self.response.take().expect("retained response");
-                match services.complete_native_source(subject, request, response) {
+                match services.complete_native_source(**subject, request, response) {
                     NativeSourceCompletionAdmission::Accepted => Ok(true),
                     NativeSourceCompletionAdmission::Retry { request, response } => {
                         self.request = Some(request);
@@ -259,5 +293,104 @@ impl NativeSourceRequest {
 
     pub(super) fn next_deadline(&self) -> Option<Instant> {
         (self.response.is_none() && !self.peers.is_empty()).then_some(self.next_retry)
+    }
+}
+
+/// Exercise the real source selector/retirement with State-owned test fixtures.
+#[cfg(test)]
+pub(crate) struct NativeSourceRequestTestProbe(Option<NativeSourceRequest>);
+#[cfg(test)]
+impl NativeSourceRequestTestProbe {
+    pub(crate) fn instance(
+        target: LaneSourceRecoveryTarget,
+        source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        key: &KeyPair,
+        now: Instant,
+    ) -> Self {
+        Self(Some(
+            NativeSourceRequest::new(
+                source,
+                NativeSourceTarget::Instance(target),
+                &PeerId::new(key.public_key().clone()),
+                key,
+                Vec::new(),
+                now,
+            )
+            .expect("real authenticated instance source request"),
+        ))
+    }
+    pub(crate) fn non_instance(
+        source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        key: &KeyPair,
+        now: Instant,
+        validation: bool,
+    ) -> Self {
+        let target = if validation {
+            NativeSourceTarget::Validation(Box::new(source.finality().subject))
+        } else {
+            NativeSourceTarget::Candidate
+        };
+        Self(Some(
+            NativeSourceRequest::new(
+                source,
+                target,
+                &PeerId::new(key.public_key().clone()),
+                key,
+                Vec::new(),
+                now,
+            )
+            .expect("real authenticated non-instance source request"),
+        ))
+    }
+    pub(crate) fn retire(
+        &mut self,
+        process: &LaneProcessOwner,
+        observed: Option<&crate::state::VerifiedLaneContexts>,
+    ) -> LaneCurrentGate {
+        NativeSourceRequest::retire_closed_instance(&mut self.0, process, observed)
+    }
+    #[cfg(feature = "bls")]
+    pub(crate) fn assert_observation_deadline(
+        self,
+        state: Arc<State>,
+        key: &KeyPair,
+        now: Instant,
+    ) {
+        super::native_process::NativeRunnerProcess::assert_observation_deadline_for_test(
+            state,
+            self.0.expect("retained original request"),
+            key,
+            now,
+        );
+    }
+    pub(crate) fn retains_request(&self) -> bool {
+        self.0.is_some()
+    }
+    pub(crate) fn admits_hash(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|request| request.admits_hash(hash))
+    }
+    pub(crate) fn accept(&mut self, response: wire::CertifiedBodyResponse, sender: &PeerId) {
+        let request = self.0.as_mut().expect("retained original source request");
+        request
+            .accept(response, sender)
+            .expect("actual source authentication");
+        assert!(request.response.is_some());
+    }
+    pub(crate) fn backpressure(
+        &mut self,
+    ) -> iroha_p2p::network::NetworkActorAdmissionTicketTestFixture {
+        let request = self.0.as_mut().expect("retained source");
+        let post = Post {
+            data: NetworkMessage::SumeragiBlock(Arc::clone(&request.message)),
+            peer_id: request.peers[request.cursor].clone(),
+            priority: Priority::High,
+        };
+        let (fixture, ticket) =
+            iroha_p2p::network::NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+        request.returned = Some(post);
+        request.ticket = Some(ticket);
+        fixture
     }
 }

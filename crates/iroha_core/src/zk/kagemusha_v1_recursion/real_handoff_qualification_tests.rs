@@ -454,6 +454,7 @@ fn diagnostic_hardware_profile() -> KagemushaHardwareProfileV1 {
     )
     .expect("canonical diagnostic issuer key");
     KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         hardware_profile_id: [0; 32],
@@ -532,6 +533,7 @@ fn credential_witness_with_policy(
         capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
         provider_authority_commitment: provider_authority_commitment(provider_secret),
         platform_attestation_digest: digest(b"platform-attestation", index),
+        app_policy_binding_digest: digest(b"app-policy-binding", index),
         credential_issuance_digest: digest(b"credential-issuance", index),
         canonical_empty_effect_digest: empty_effect,
         provider_profile_index: policy.provider_profile_index,
@@ -569,7 +571,7 @@ fn state_component<F: KagemushaPoseidonFieldV1>(
     replay_root: DigestV1,
 ) -> DigestV1 {
     let replay_root = decode_pasta::<F>(replay_root).expect("canonical replay root");
-    let mut inputs = Vec::with_capacity(34);
+    let mut inputs = Vec::with_capacity(36);
     inputs.push(F::from(u64::from(state.version)));
     inputs.push(F::from(u64::from(state.protocol_version)));
     inputs.extend(digest_limbs::<F>(state.suite_id));
@@ -595,6 +597,7 @@ fn state_component<F: KagemushaPoseidonFieldV1>(
     inputs.extend(digest_limbs::<F>(
         state.device_policy_binding.hardware_policy_id,
     ));
+    inputs.extend(digest_limbs::<F>(state.next_one_use_key_reference));
     inputs.extend(digest_limbs::<F>(state.state_nonce_commitment));
     inputs.push(replay_root);
     encode_pasta(pasta_hash(KAGEMUSHA_STATE_DOMAIN_V1, &inputs))
@@ -642,6 +645,7 @@ pub(super) fn aggregate_state_with_balance(
             device_key_reference: credential.key_reference,
             hardware_policy_id: credential.hardware_policy_id,
         },
+        next_one_use_key_reference: [0; 32],
         state_nonce_commitment: nonce,
         consumed_credit_root,
         state_commitment_components: KagemushaPastaStateCommitmentV1::ZERO,

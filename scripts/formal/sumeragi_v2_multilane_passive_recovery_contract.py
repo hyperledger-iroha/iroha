@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from sumeragi_v2_multilane_reviewed_rust_source import _mask_rust_comments
+
 
 PASSIVE_RECOVERY_CONTRACT_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_multilane_passive_recovery_contract.py"
@@ -607,7 +609,9 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
             "reconcile_autonomous_lifecycle_startup(",
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
-            "construct_after_pending_tip_application_recovery(",
+            "reconcile_executor_locked_body(executor, services)?",
+            "preactivation.initialize_recovered_local_proposal(setup_runner)?",
+            "preactivation.activate(height_started_at, local_proposal)?",
             "let lane_work_limits = lane_work_limits(",
             "block_sync_frame_byte_capacity",
             "retransmit_interval",
@@ -632,12 +636,11 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "fn",
         "run_lifecycle_active_height",
         (
-            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
-            "service_historical_recovery_tick(&mut lane_work, services)?",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()?",
-            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
-            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?",
+            "native.take_service_publication(services)",
+            "native.service_sources(services, now)?",
+            "native.poll(native_global, native_network, now, receiver)?",
+            "native.next_deadline().map_or(IDLE_POLL, |deadline|",
+            "wake_rx.recv_timeout(native_wait)",
         ),
     ),
     (
@@ -646,12 +649,10 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "fn",
         "run_pending_active_height",
         (
-            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
-            "service_historical_recovery_tick(lane_work, services)?",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()?",
-            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
+            "native.take_service_publication(services)",
+            "native.service_sources(services, Instant::now())",
+            "native.poll(native_global, native_network, Instant::now(), receiver)?",
+            "wake_rx.recv_timeout(IDLE_POLL)",
         ),
     ),
     (
@@ -665,6 +666,408 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
             "service_next_historical_recovery_with_archive_targets(&current_archive_targets)",
             "map_err(V2RunnerError::from)",
         ),
+    ),
+)
+
+# Native retry retains its original request/ticket. Only an instance target
+# with its original State family and authenticated frozen-context closure may
+# release that duplicate request. Candidate and Validate completion remain owned.
+NATIVE_RECOVERY_BINDINGS = (
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_process.rs',
+        'method',
+        'NativeRunnerProcess::poll',
+        (
+            'self.settle_pending_publication()?',
+            'self.note_current_observation(observed.as_ref())',
+            'self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged',
+            'self.note_current_observation(Some(&observed))',
+            'self.poll_candidate()?',
+            'self.service_native_ingress(receiver)?',
+            'NativeSourceRequest::retire_closed_instance(',
+            'if source_gate != LaneCurrentGate::ObservationChanged',
+            'if let Some(source) = self.source.as_mut()',
+            'source.poll(network, &self.guard, now, self.retransmit)?',
+            'if let Some(prepared) = self.pending_ingress.take()',
+            'self.consume_native_ingress(prepared, receiver)?',
+            '.poll(&observed, now)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_process.rs',
+        'method',
+        'NativeRunnerProcess::service_sources',
+        (
+            'NativeSourceRequest::targets_instance',
+            'self.driver.process().is_productive(id)',
+            'let observed = if needs_current',
+            'NativeSourceRequest::retire_closed_instance(',
+            '== LaneCurrentGate::ObservationChanged',
+            'self.awaiting_current_observation = true',
+            '.source_recovery_target(id, observed.as_ref()?)?',
+            'if let Some(mut source) = self.source.take()',
+            'source.settle(&mut self.driver, services, &mut self.recovered_sources)',
+            'Ok(false) => self.source = Some(source)',
+            """self.source = Some(source);
+                    return Err(error);""",
+            'if self.source.is_some()',
+            'services.native_source_requirement()',
+            'instance.source_recovery_requirement()',
+            'self.candidate_source_requirement()',
+            'self.source = Some(NativeSourceRequest::new(',
+            'services.current_archive_targets()',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_process.rs',
+        'method',
+        'NativeRunnerProcess::next_deadline',
+        (
+            'if self.awaiting_current_observation',
+            'return None',
+            """self.driver
+            .next_deadline()""",
+            '.and_then(NativeSourceRequest::next_deadline)',
+            '.min()',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::new',
+        (
+            'let artifact = source.finality()',
+            'subject: artifact.subject',
+            'certificate: artifact.commit_qc.clone()',
+            '&request.signature_preimage()',
+            'authenticate_certified_body_request_with_validator_pops(',
+            '&artifact.height_context',
+            '&artifact.validator_set_pops',
+            'request.request().clone()',
+            '.chain(archives)',
+            '.filter(|peer| peer != local)',
+            '.collect::<BTreeSet<_>>()',
+            'request: Some(request)',
+            'next_retry: now',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::accept',
+        (
+            'let request = self.request.as_ref().ok_or_else(',
+            'response.request_hash != request.request_hash() || self.response.is_some()',
+            'request.authenticate_response(',
+            '&self.source.finality().height_context',
+            'Ok(response) => self.response = Some(response)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::poll',
+        (
+            'if self.response.is_some() || self.peers.is_empty() || now < self.next_retry',
+            """guard
+            .begin_fail_stop_operation()""",
+            'let peer = &self.peers[self.cursor]',
+            'self.returned.take().unwrap_or_else(|| Post {',
+            'NetworkMessage::SumeragiBlock(Arc::clone(&self.message))',
+            'network.post_recoverable(post, self.ticket.take())',
+            'self.cursor = (self.cursor + 1) % self.peers.len()',
+            """self.next_retry = if self.cursor == 0 {
+                    deadline_after(now, retransmit)
+                } else {
+                    now
+                };""",
+            'NetworkActorAdmissionError::Backpressured',
+            'NetworkActorAdmissionError::Closed',
+            'NetworkActorAdmissionError::Rejected',
+            'post.peer_id == *peer',
+            'post.priority == Priority::High',
+            'Arc::ptr_eq(message, &self.message)',
+            'self.returned = Some(post)',
+            'self.ticket = ticket',
+            'if !exact',
+            """if result.is_ok() {
+            operation.complete();""",
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::next_deadline',
+        (
+            '(self.response.is_none() && !self.peers.is_empty()).then_some(self.next_retry)',
+        ),
+    ),
+)
+NATIVE_RECOVERY_BINDINGS += (
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lane_process.rs',
+        'struct',
+        'LaneSourceRecoveryTarget',
+        (
+            'state_owner: crate::state::NativeLaneStateOwner',
+            'verified: Arc<VerifiedLaneContext>',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lane_process.rs',
+        'method',
+        'LaneProcessOwner::source_recovery_target',
+        (
+            'let _lease = self.state.consensus_publication_lease()',
+            'let Owner::Active(owner) = &self.entries.get(&id)?.owner else',
+            'owner.source_recovery_requirement().is_none()',
+            'owner.current_gate(&self.state, observed) != LaneCurrentGate::Current',
+            'state_owner: owner.state_owner.clone()',
+            'verified: Arc::clone(&owner.verified)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_lane_process.rs',
+        'method',
+        'LaneProcessOwner::source_recovery_target_gate',
+        (
+            'let _lease = self.state.consensus_publication_lease()',
+            'if !target.state_owner.matches_state(&self.state)',
+            'return LaneCurrentGate::ObservationChanged',
+            'LaneInstance::gate_for(&target.verified, &self.state, observed)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'enum',
+        'NativeSourceTarget',
+        (
+            'Instance(LaneSourceRecoveryTarget)',
+            'Candidate',
+            'Validation(Box<wire::BlockSubject>)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::targets_instance',
+        (
+            'matches!(self.target, NativeSourceTarget::Instance(_))',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::retire_closed_instance',
+        (
+            'retained: &mut Option<Self>',
+            'target: NativeSourceTarget::Instance(target)',
+            'retained.as_ref()',
+            'let Some(observed) = observed else',
+            'return LaneCurrentGate::ObservationChanged',
+            'process.source_recovery_target_gate(target, observed)',
+            'if gate == LaneCurrentGate::InstanceClosed',
+            'retained.take()',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::settle',
+        (
+            'match &self.target',
+            'NativeSourceTarget::Instance(target)',
+            '.complete_source_recovery(',
+            'target.instance_id()',
+            'NativeSourceTarget::Validation(subject)',
+            'services.complete_native_source(**subject, request, response)',
+            'self.request = Some(request)',
+            'self.response = Some(response)',
+        ),
+    ),
+)
+NATIVE_RECOVERY_BINDINGS += (
+    (
+        AUTONOMOUS_MODULE,
+        "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
+        "method", "NativeRunnerProcess::note_current_observation",
+        (
+            "self.awaiting_current_observation =",
+            "observed.is_none_or(|observed| !observed.is_current(&self.state))",
+        ),
+    ),
+)
+PASSIVE_RECOVERY_MODEL_BINDINGS += NATIVE_RECOVERY_BINDINGS
+
+NATIVE_QUIET_LOOP_PREFIXES = (
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs',
+        'run_lifecycle_active_height',
+        """loop {
+        cleanup_supervisor.reap_finished();
+        if output_guard.restart_required() {
+            return Err(V2RunnerError::RestartRequired);
+        }
+        if shutdown_signal.is_sent() {
+            activated.into_clean_shutdown(&mut active_runner)?;
+            return Ok(HeightRunOutcome::Shutdown);
+        }
+        let now = Instant::now();
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_owner, _executor, services, _local_proposal| {
+                native.take_service_publication(services);
+                native.service_sources(services, now)?;
+                Ok::<_, V2RunnerError>(())
+            },
+        )?;
+        native.poll(native_global, native_network, now, receiver)?;
+        liveness_watchdog.poll(now);""",
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs',
+        'run_lifecycle_active_height',
+        """loop {
+                cleanup_supervisor.reap_finished();
+                if output_guard.restart_required() {
+                    return Err(V2RunnerError::RestartRequired);
+                }
+                if shutdown_signal.is_sent() {
+                    activated.into_clean_shutdown(&mut active_runner)?;
+                    return Ok(HeightRunOutcome::Shutdown);
+                }
+                let now = Instant::now();
+                native.poll(native_global, native_network, now, receiver)?;
+                liveness_watchdog.poll(now);""",
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs',
+        'run_pending_active_height',
+        """loop {
+        cleanup_supervisor.reap_finished();
+        if output_guard.restart_required() {
+            return Err(V2RunnerError::RestartRequired);
+        }
+        if shutdown_signal.is_sent() {
+            activated.into_clean_shutdown(&mut active_runner)?;
+            return Ok(HeightRunOutcome::Shutdown);
+        }
+        liveness_watchdog.poll(Instant::now());
+        activated.with_runner_runtime(&mut active_runner, |_executor, services| {
+            native.take_service_publication(services);
+            native.service_sources(services, Instant::now())
+        })?;
+        native.poll(native_global, native_network, Instant::now(), receiver)?;""",
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs',
+        'run_pending_active_height',
+        """loop {
+            cleanup_supervisor.reap_finished();
+            if output_guard.restart_required() {
+                return Err(V2RunnerError::RestartRequired);
+            }
+            if shutdown_signal.is_sent() {
+                activated.into_clean_shutdown(&mut active_runner)?;
+                return Ok(HeightRunOutcome::Shutdown);
+            }
+            native.poll(native_global, native_network, Instant::now(), receiver)?;
+            liveness_watchdog.poll(Instant::now());""",
+    ),
+)
+
+NATIVE_QUIET_WAIT_CHECKS = (
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs',
+        'run_lifecycle_active_height',
+        """let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                deadline.saturating_duration_since(Instant::now()).min(IDLE_POLL)
+            });
+            let _ = wake_rx.recv_timeout(native_wait);""",
+        8,
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs',
+        'run_pending_active_height',
+        """let _ = wake_rx.recv_timeout(IDLE_POLL);""",
+        4,
+    ),
+)
+
+NATIVE_SOURCE_RETIREMENT_TRANSITIONS = (
+    (
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'NativeSourceRequest::retire_closed_instance',
+        """let Some(Self { target: NativeSourceTarget::Instance(target), .. }) = retained.as_ref() else {
+            return LaneCurrentGate::Current;
+        };
+        let Some(observed) = observed else {
+            return LaneCurrentGate::ObservationChanged;
+        };
+        let gate = process.source_recovery_target_gate(target, observed);
+        if gate == LaneCurrentGate::InstanceClosed { retained.take(); }
+        gate""",
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lane_process.rs',
+        'LaneProcessOwner::source_recovery_target',
+        """let Owner::Active(owner) = &self.entries.get(&id)?.owner else { return None; };
+        if owner.source_recovery_requirement().is_none() || owner.current_gate(&self.state, observed) != LaneCurrentGate::Current { return None; }""",
+    ),
+    (
+        'crates/iroha_core/src/sumeragi/v2_lane_process.rs',
+        'LaneProcessOwner::source_recovery_target_gate',
+        """let _lease = self.state.consensus_publication_lease();
+        if !target.state_owner.matches_state(&self.state) { return LaneCurrentGate::ObservationChanged; }
+        LaneInstance::gate_for(&target.verified, &self.state, observed)""",
+    ),
+)
+
+NATIVE_SOURCE_RETIREMENT_TRANSITIONS += (
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
+        "NativeRunnerProcess::next_deadline",
+        """if self.awaiting_current_observation { return None; }
+        self.driver.next_deadline()""",
+    ),
+)
+
+NATIVE_RECOVERY_TRANSITIONS = (
+    (
+        "NativeSourceRequest::poll",
+        """match network.post_recoverable(post, self.ticket.take()) {
+            Ok(()) => {
+                self.cursor = (self.cursor + 1) % self.peers.len();
+                self.next_retry = if self.cursor == 0 {
+                    deadline_after(now, retransmit)
+                } else {
+                    now
+                };
+                Ok(())
+            }""",
+    ),
+    (
+        "NativeSourceRequest::poll",
+        """let exact = post.peer_id == *peer
+                    && post.priority == Priority::High
+                    && matches!(&post.data, NetworkMessage::SumeragiBlock(message) if Arc::ptr_eq(message, &self.message));
+                self.returned = Some(post);
+                self.ticket = ticket;
+                if !exact {""",
     ),
 )
 
@@ -829,13 +1232,10 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         "fn",
         "run_lifecycle_active_height",
         (
-            "let mut next_lane_retransmit =",
-            "deadline_after(height_started_at, retransmit_interval)",
-            "if now >= next_lane_retransmit",
-            "service_historical_recovery_tick(&mut lane_work, services)?",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()?",
-            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "native.take_service_publication(services)",
+            "native.service_sources(services, now)?",
+            "native.poll(native_global, native_network, now, receiver)?",
+            "dispatch_queue_plan_admission_effects(",
         ),
     ),
     (
@@ -843,12 +1243,10 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         "fn",
         "run_pending_active_height",
         (
-            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);",
-            "if now >= next_lane_retransmit",
-            "service_historical_recovery_tick(lane_work, services)?",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()?",
-            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "native.take_service_publication(services)",
+            "native.service_sources(services, Instant::now())",
+            "native.poll(native_global, native_network, Instant::now(), receiver)?",
+            "dispatch_queue_plan_admission_effects(",
         ),
     ),
     (
@@ -864,6 +1262,51 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
             "lane_block_execution_preflight_has_rejections_without_sidecar_repair",
             "lane_block_execution_input_available_without_sidecar_repair",
             "lane_block_payload_is_recoverable",
+        ),
+    ),
+)
+
+PASSIVE_RECOVERY_ORDERED_CHECKS += (
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn",
+        "run_non_pending_lifecycle_loop",
+        (
+            "reservation_reconciliation_pending = false;",
+            "reconcile_executor_locked_body(executor, services)?",
+            "preactivation.initialize_recovered_local_proposal(setup_runner)?",
+            "preactivation.activate(height_started_at, local_proposal)?",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
+        "method",
+        "NativeRunnerProcess::poll",
+        (
+            "self.service_native_ingress(receiver)?",
+            "NativeSourceRequest::retire_closed_instance(",
+            "source_gate != LaneCurrentGate::ObservationChanged",
+            "source.poll(network, &self.guard, now, self.retransmit)?",
+            "let Some(observed) = observed else",
+            ".poll(&observed, now)",
+            "self.note_current_observation(Some(&observed))",
+        ),
+    ),
+)
+
+PASSIVE_RECOVERY_ORDERED_CHECKS += (
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
+        "method", "NativeRunnerProcess::service_sources",
+        (
+            "let observed = if needs_current",
+            "NativeSourceRequest::retire_closed_instance(",
+            "== LaneCurrentGate::ObservationChanged",
+            "if let Some(mut source) = self.source.take()",
+            "source.settle(&mut self.driver, services, &mut self.recovered_sources)",
+            ".source_recovery_target(id, observed.as_ref()?)?",
+            "NativeSourceTarget::Instance(target)",
+            "self.source = Some(NativeSourceRequest::new(",
         ),
     ),
 )
@@ -1070,6 +1513,26 @@ PASSIVE_RECOVERY_RAW_TEST_CHECKS = (
     ),
 )
 
+PASSIVE_RECOVERY_RAW_TEST_CHECKS += (
+    (
+        "crates/iroha_core/src/state/lane_driver_tests.rs",
+        "native_source_retirement_fixture",
+        (
+            "native_process_fixture(false, now)",
+            "NativeSourceRequestTestProbe::instance(",
+            ".assert_observation_deadline(",
+            "retained.backpressure()",
+            "NativeSourceRequestTestProbe::non_instance(",
+            "driver.hold_next_body_completion_for_test(",
+            "native_process_advance(&fixture, false)",
+            "native_process_advance(&fixture, true)",
+            "ticket.ticket_drop_cancellations()",
+            "body.requires_recovery()",
+            "guard.restart_required()",
+        ),
+    ),
+)
+
 PASSIVE_RECOVERY_SOURCE_RELATIVES = tuple(
     Path(relative)
     for relative in sorted(
@@ -1236,28 +1699,53 @@ def _validate_source_relations(
                     f"contains repair-capable token {token!r}"
                 )
 
-    for relative, symbol, token, expected_count in (
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "run_lifecycle_active_height",
-            "service_historical_recovery_tick(&mut lane_work, services)?",
-            3,
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
-            "run_pending_active_height",
-            "service_historical_recovery_tick(lane_work, services)?",
-            1,
-        ),
-    ):
-        item = _item_for(
-            root, items, relative, "fn", symbol, errors, rust_binding_item
-        )
-        if item is not None and item.count(token) != expected_count:
+    for relative, symbol, transition in NATIVE_SOURCE_RETIREMENT_TRANSITIONS:
+        item = _item_for(root, items, relative, "method", symbol, errors, rust_binding_item)
+        if item is None:
+            continue
+        compact = "".join(_mask_rust_comments(item).split())
+        if (compact.count("".join(transition.split())) != 1
+                or (symbol == "NativeSourceRequest::retire_closed_instance"
+                    and compact.count("retained.take()") != 1)):
             errors.append(
-                f"{root / relative}: passive/recovery item {symbol} must "
-                "service exactly one retained historical owner in each quiet "
-                f"retransmission corridor (expected {expected_count} corridors)"
+                f"{root / relative}: passive/recovery item {symbol} must preserve "
+                "the exact authenticated source-retirement transition"
+            )
+
+    for symbol, transition in NATIVE_RECOVERY_TRANSITIONS:
+        relative = "crates/iroha_core/src/sumeragi/v2_runner/native_source.rs"
+        item = _item_for(root, items, relative, "method", symbol, errors, rust_binding_item)
+        if item is None:
+            continue
+        # Mask comments with the authenticated shared lexer; whitespace does
+        # not carry Rust semantics, but the branch and statements do.
+        if "".join(transition.split()) not in "".join(_mask_rust_comments(item).split()):
+            errors.append(
+                f"{root / relative}: passive/recovery item {symbol} must preserve "
+                "the exact retained Native retry transition"
+            )
+
+    # Both outer loops select/settle sources before ingress, and both finalized
+    # drains continue polling retained requests and physical Native work. Match
+    # each reviewed loop prefix rather than borrowing a call from another loop.
+    for relative, symbol, prefix in NATIVE_QUIET_LOOP_PREFIXES:
+        item = _item_for(root, items, relative, "fn", symbol, errors, rust_binding_item)
+        if item is not None and "".join(item.split()).count("".join(prefix.split())) != 1:
+            errors.append(
+                f"{root / relative}: passive/recovery item {symbol} must preserve "
+                "the exact Native quiet-loop prefix"
+            )
+
+    for relative, symbol, wait, expected_count in NATIVE_QUIET_WAIT_CHECKS:
+        item = _item_for(root, items, relative, "fn", symbol, errors, rust_binding_item)
+        if item is None:
+            continue
+        compact = "".join(item.split())
+        if (compact.count("".join(wait.split())) != expected_count
+                or len(re.findall(r"\bwake_rx\s*\.\s*recv(?:_timeout)?\s*\(", item)) != expected_count):
+            errors.append(
+                f"{root / relative}: passive/recovery item {symbol} must preserve "
+                f"all {expected_count} bounded Native quiet waits"
             )
 
 

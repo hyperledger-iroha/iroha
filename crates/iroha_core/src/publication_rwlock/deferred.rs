@@ -19,6 +19,11 @@ impl<T> PublicationRwLock<T> {
 }
 
 impl<'lock, T> DeferredPublicationRwLock<'lock, T> {
+    /// End access while retaining this original source through an enclosing State swap.
+    pub(crate) fn into_releases(self) -> DeferredReleaseBatch {
+        self.releases
+    }
+
     /// Acquire the original reader without delivering its release on guard Drop.
     pub(crate) fn read(&mut self) -> DeferredReadGuard<'_, 'lock, T> {
         DeferredReadGuard {

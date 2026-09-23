@@ -282,7 +282,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             hashlib.sha256(b"archive").hexdigest(),
             "bb" * 32,
             "cc" * 32,
-            "software-key-qualified",
+            "packaged",
         ]
         (tmp_path / "archive.tar.zst").write_bytes(b"archive")
     else:
@@ -301,7 +301,7 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
             "x86_64-unknown-linux-gnu",
             "linux/amd64",
             unusual,
-            "iroha3d iroha kagami",
+            "iroha3d iroha kagami sorafs_external_software_signer",
             "aa" * 32,
             "closed-prebuilt",
             json.dumps({"file_count": 1, "sha256": "b" * 64}),
@@ -350,6 +350,10 @@ def test_release_manifest_values_are_passed_as_data(tmp_path: Path, script: Path
         {"file", "sha256", "size"}
     )
     assert set(artifact) == expected_artifact_fields
+    signer = manifest["external_software_signer"]
+    assert signer["packaged"] is True
+    assert "qualification" not in signer
+    assert "backend" not in signer
     assert not sentinel.exists()
 
 
@@ -373,7 +377,7 @@ def test_bundle_profile_values_are_toml_escaped(tmp_path: Path) -> None:
         "arm64",
             "aarch64-apple-darwin",
             unusual,
-            "software-key-qualified",
+            "packaged",
         ]
 
     result = subprocess.run(
@@ -397,6 +401,7 @@ def test_bundle_profile_values_are_toml_escaped(tmp_path: Path) -> None:
         profile = tomllib.load(profile_file)
     assert profile["config"] == unusual
     assert profile["features"] == unusual
+    assert profile["external_software_signer"] == "packaged"
     assert not sentinel.exists()
 
 

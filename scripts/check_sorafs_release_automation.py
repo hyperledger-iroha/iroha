@@ -1261,6 +1261,31 @@ SORAFS_JAVASCRIPT_CHILD_PATHS = frozenset({
     'scripts/tests/sorafs_javascript_child_session_test.mjs',
     'scripts/tests/sorafs_javascript_child_abi_contract_test.py',
     'specs/sorafs/javascript_child_bootstrap_v1.md',
+    "scripts/sorafs_javascript_child_tools.py",
+    "scripts/sorafs_javascript_input_files.py",
+    "scripts/sorafs_javascript_parent_input.py",
+    "scripts/tests/sorafs_javascript_input_files_test.py",
+    "scripts/tests/sorafs_javascript_parent_input_test.py",
+    "specs/sorafs/javascript_parent_input_v1.md",
+    "scripts/sorafs_javascript_runtime_graph.py",
+    "scripts/sorafs_javascript_runtime_inputs.py",
+    "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
+    "scripts/sorafs_javascript_runtime_custody.py",
+    "scripts/tests/sorafs_javascript_runtime_custody_test.py",
+    "scripts/sorafs_javascript_child_process.py",
+    "scripts/tests/sorafs_javascript_child_process_test.py",
+    "specs/sorafs/javascript_runtime_inputs_v1.md",
+    "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py",
+    "scripts/sorafs_python_consumer_artifact.py",
+    "scripts/sorafs_python_consumer_cases.py",
+    "ci/verify_privacy_python_wheel.py",
+    "scripts/sorafs_evidence_json.py",
+    "scripts/sorafs_evidence_paths.py",
+    "scripts/sorafs_evidence_sensitivity.py",
+    "scripts/sorafs_path_identity.py",
+    "scripts/requirements.txt",
+    "ci/check_sorafs_cli_release.sh",
     'scripts/sorafs_javascript_native_cache.mjs',
     'scripts/fixtures/sorafs_javascript_qualification_sources_v1.json',
     "scripts/sorafs_javascript_child_files.mjs",
@@ -1270,7 +1295,16 @@ SORAFS_JAVASCRIPT_CHILD_PATHS = frozenset({
 })
 SORAFS_JAVASCRIPT_PARITY_RUNNER = "ci/sdk_sorafs_orchestrator.sh"
 SORAFS_JAVASCRIPT_SOURCE_COMMAND = '    "${node_binary}" --test "${REPO_ROOT}/scripts/tests/sorafs_javascript_child_contract_test.mjs" "${sdk_root}/test/sorafsNativeSuiteStructure.test.js"'
-SORAFS_JAVASCRIPT_CHILD_ABI_TEST = 'scripts/tests/sorafs_javascript_child_abi_contract_test.py'
+SORAFS_JAVASCRIPT_CHILD_PYTHON_TESTS = (
+    "scripts/tests/sorafs_javascript_child_abi_contract_test.py",
+    "scripts/tests/sorafs_javascript_input_files_test.py",
+    "scripts/tests/sorafs_javascript_parent_input_test.py",
+    "scripts/tests/sorafs_javascript_runtime_inputs_test.py",
+    "scripts/tests/sorafs_javascript_runtime_custody_test.py",
+    "scripts/tests/sorafs_javascript_child_process_test.py",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images",
+    "pytests/scripts/sumeragi_v2_framework_python_relocation_test.py::test_strict_macho_parser_rejects_nonzero_fat64_reserved_field",
+)
 SORAFS_JAVASCRIPT_CHILD_WORKFLOWS = (
     ".github/workflows/sorafs-cli-release.yml",
     ".github/workflows/sorafs-orchestrator-sdk.yml",
@@ -2117,7 +2151,7 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
 
     errors = _validate_cosign_qualification(root, source)
     errors.extend(_validate_native_authority_runtime(root, source))
-    errors.extend(_javascript_child_abi_controls_errors(source))
+    errors.extend(_javascript_child_python_controls_errors(source))
     provenance_commands = tuple(
         re.finditer(
             rf"(?m)^{re.escape(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND)}$",
@@ -2227,13 +2261,14 @@ def _javascript_child_source_controls_errors(source: str) -> list[str]:
     return []
 
 
-def _javascript_child_abi_controls_errors(source: str) -> list[str]:
-    """Require the ABI source contract inside the actual release pytest batch."""
+def _javascript_child_python_controls_errors(source: str) -> list[str]:
+    """Require original ABI/input/runtime controls in the actual release pytest batch."""
     batches = re.findall(r"(?m)^python3 -m pytest -q \\\n((?:  [^\n]+\n)+)", source)
-    line = "  " + SORAFS_JAVASCRIPT_CHILD_ABI_TEST + " \\"
-    if (len(batches) != 1 or batches[0].splitlines().count(line) != 1
-            or source.count(SORAFS_JAVASCRIPT_CHILD_ABI_TEST) != 1):
-        return ["JavaScript child ABI controls must execute once in the release pytest batch"]
+    for test in SORAFS_JAVASCRIPT_CHILD_PYTHON_TESTS:
+        line = "  " + test + " \\"
+        if (len(batches) != 1 or batches[0].splitlines().count(line) != 1
+                or source.count(test) != 1):
+            return [f"JavaScript child Python control {test!r} must execute once in the release pytest batch"]
     return []
 
 
@@ -3060,6 +3095,10 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 errors.append(
                     f"{relative}: reference-SDK evidence must authenticate and "
                     "archive the independently signed topology envelope"
+                )
+            if re.search(r"(?m)^\s*['\"]signer_backend['\"]\s*:", supply_chain_job):
+                errors.append(
+                    f"{relative}: topology trust must not claim a signing backend"
                 )
             if (
                 '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" '

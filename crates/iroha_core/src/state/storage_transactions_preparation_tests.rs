@@ -187,7 +187,7 @@ fn detached_membership_releases_writer_without_copying_or_publishing() {
     stage(&storage, 1, &[key(50)]).commit().unwrap();
     let before = norito::json::to_json(&storage).unwrap();
     let prepared = stage(&storage, 2, &[key(51)]).prepare_commit().unwrap();
-    let allocation: *const HashSet<Key> = &prepared
+    let allocation: *const TipKeys = &prepared
         .as_block()
         .current_block
         .as_ref()
@@ -197,17 +197,16 @@ fn detached_membership_releases_writer_without_copying_or_publishing() {
     assert!(storage.write_lock.try_lock().is_some());
     assert_eq!(detached.predecessor_height(), 1);
     assert!(!detached.replaces_tip());
-    assert_eq!(
-        detached.staged_membership(),
-        (height(2), &HashSet::from([key(51)]))
-    );
+    let (staged_height, staged_keys) = detached.staged_membership();
+    assert_eq!(staged_height, height(2));
+    assert_eq!(staged_keys, &HashSet::from([key(51)]));
     assert_eq!(
         detached.observe_predecessor(&storage),
         MembershipPredecessorStatus::Current
     );
     // Compare the retained set itself: admission moves the existing immutable
     // payload allocation rather than rebuilding a second membership journal.
-    let held: *const HashSet<Key> = detached.staged_membership().1;
+    let held: *const TipKeys = detached.staged_membership().1;
     assert_eq!(held, allocation);
     assert_eq!(norito::json::to_json(&storage).unwrap(), before);
     drop(detached);
@@ -327,7 +326,7 @@ fn restored_membership_mints_a_distinct_process_local_identity() {
     let encoded = norito::json::to_json(&storage).unwrap();
     let restored: TransactionsStorage = norito::json::from_str(&encoded).unwrap();
     assert_eq!(norito::json::to_json(&restored).unwrap(), encoded);
-    assert!(!Arc::ptr_eq(
+    assert!(!Identity::ptr_eq(
         &storage.write_lock.lock(),
         &restored.write_lock.lock(),
     ));

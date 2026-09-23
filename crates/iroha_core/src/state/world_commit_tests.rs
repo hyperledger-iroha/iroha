@@ -519,7 +519,7 @@ fn staged_snapshot_projects_pin_indexes_and_matches_actual_commit() {
     // carrier hash and membership only after the expected snapshot is captured.
     block.finalize_axt_asset_incarnations().unwrap();
     block
-        .stage_canonical_carrier_membership(core::iter::empty(), NonZeroUsize::MIN)
+        .stage_canonical_carrier_membership(Vec::new(), NonZeroUsize::MIN)
         .unwrap();
     let block_hash = block._curr_block.hash();
     block.block_hashes.push(block_hash);

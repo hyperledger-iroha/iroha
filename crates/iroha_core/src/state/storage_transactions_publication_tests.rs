@@ -41,7 +41,9 @@ fn publication_and_abort_keep_original_membership_allocation_and_history() {
     let prepared = prepare(journal, &storage);
     assert!(storage.write_lock.try_lock().is_none());
     assert_eq!(storage.latest_height(), 1);
-    assert_eq!(storage.view().get(&key(3)), None);
+    // The prepared publication owns the active writer. Observe its old cut
+    // through the reader retained before preparation, not a new blocking read.
+    assert_eq!(old_view.get(&key(3)), None);
     let journal = prepared.abort().0;
     assert_eq!(std::ptr::from_ref(journal.staged_membership().1), pointer);
     assert_eq!(
@@ -294,8 +296,8 @@ fn membership_publication_retains_original_cleanup_until_outer_unlock() {
         for unwind in [false, true] {
             let storage = Arc::new(TransactionsStorage::new());
             stage(&storage, 1, &[1]).commit().unwrap();
-            let tip = Arc::downgrade(storage.latest_block.load().as_ref().unwrap());
-            let identity = Arc::downgrade(&storage.write_lock.lock());
+            let tip = tip_weak_for_tests(storage.latest_block.load().as_ref().unwrap());
+            let identity = storage.write_lock.lock().observe_retirement_for_tests();
             let prepared = stage(&storage, 2, &[2]).prepare_commit().unwrap();
             // Detachment also releases its writer: observe only the final owner.
             let publish: Box<dyn FnOnce() -> Box<dyn std::any::Any> + '_> = if detached {

@@ -141,6 +141,7 @@ pub(crate) struct NativeLaneDriver {
     send: mpsc::SyncSender<LaneOutbound>,
     receive: mpsc::Receiver<LaneOutbound>,
     last_serviced: Option<HeightContextId>,
+    last_retirement: Option<HeightContextId>,
     #[cfg(test)]
     held_body: Option<(HeightContextId, Box<dyn FnOnce() + Send>)>,
 }
@@ -170,6 +171,7 @@ impl NativeLaneDriver {
             send,
             receive,
             last_serviced: None,
+            last_retirement: None,
             #[cfg(test)]
             held_body: None,
         })
@@ -525,6 +527,23 @@ impl NativeLaneDriver {
     pub(crate) fn restrict_effect_capacity_to_retained_for_test(&mut self, id: HeightContextId) {
         self.process
             .restrict_effect_capacity_to_retained_for_test(id);
+    }
+
+    /// One production cleanup turn preserves original capacity until the existing
+    /// physical worker returns. Round-robin selection never waits for cleanup.
+    pub(crate) fn prepare_one_retirement(&mut self) -> Result<bool> {
+        let id = self
+            .process
+            .instance_ids()
+            .find(|id| self.last_retirement.is_none_or(|last| *id > last))
+            .or_else(|| self.process.instance_ids().next());
+        let Some(id) = id else {
+            return Ok(false);
+        };
+        self.last_retirement = Some(id);
+        self.process
+            .prepare_retirement(id)
+            .map_err(|error| error.to_string())
     }
 
     /// Deadline belongs to native instances, independently of global view changes.

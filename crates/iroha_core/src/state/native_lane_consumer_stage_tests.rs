@@ -211,7 +211,7 @@ state_test! { sync native_consumer_stage_cannot_publish_through_empty_old_merge_
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let mut overlay = state.prepare_native_batch_on_carrier(carrier.header(), groups.clone()).unwrap().into_overlay_for_test();
     assert!(overlay.start_of_block_effects_applied);
-    overlay.stage_canonical_carrier_membership([],NonZeroUsize::new(carrier.header().height().get() as usize).unwrap()).unwrap();
+    overlay.stage_canonical_carrier_membership(Vec::new(),NonZeroUsize::new(carrier.header().height().get() as usize).unwrap()).unwrap();
     let called=Arc::new(AtomicBool::new(false));
     assert!(matches!(
         overlay.commit_with_state_commit_authorization(Box::new(EmptyOldMergeAuthorization(

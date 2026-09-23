@@ -245,42 +245,28 @@ def test_passive_recovery_contract_rejects_unsigned_retry_bounds(
         ), errors
 
 
+@pytest.mark.parametrize("pending,occurrence", [(False, 0), (False, 1), (True, 0), (True, 1)])
 def test_passive_recovery_contract_rejects_missing_quiet_tick_branch(
-    tmp_path: Path,
+    tmp_path: Path, pending: bool, occurrence: int,
 ) -> None:
-    cases = (
-        (
-            "ordinary",
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "fn run_lifecycle_active_height(",
-            "run_lifecycle_active_height",
-            "service_historical_recovery_tick(&mut lane_work, services)?",
-            "skip_historical_recovery_tick(&mut lane_work, services)?",
-        ),
-        (
-            "pending-kura",
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
-            "fn run_pending_active_height(",
-            "run_pending_active_height",
-            "service_historical_recovery_tick(lane_work, services)?",
-            "skip_historical_recovery_tick(lane_work, services)?",
-        ),
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    relative, symbol, now = (
+        ("lifecycle_pending_kura.rs", "run_pending_active_height", "Instant::now()")
+        if pending else ("lifecycle_run_inner.rs", "run_lifecycle_active_height", "now")
     )
-    for fixture_name, relative, anchor, symbol, old, new in cases:
-        fixture = tmp_path / fixture_name
-        support = load_support()
-        module = support.load_checker()
-        models = copy_fixture(fixture, support, module)
-        support.replace_once_after(fixture / relative, anchor, old, new)
-        errors = validate_fixture(fixture, module, models)
-        assert any(
-            symbol in error
-            and (
-                "source-bound token" in error
-                or "must service exactly one retained historical owner" in error
-            )
-            for error in errors
-        ), errors
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner" / relative
+    source = path.read_text(encoding="utf-8")
+    item, = module._extract_rust_binding_items(source, "fn", symbol)
+    token = f"native.poll(native_global, native_network, {now}, receiver)?;"
+    assert item.count(token) == 2
+    offset = item.index(token) if occurrence == 0 else item.rindex(token)
+    mutated = item[:offset] + item[offset:].replace(token, "skip_native_poll();", 1)
+    path.write_text(source.replace(item, mutated, 1), encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error and "Native quiet-loop prefix" in error for error in errors), errors
 
 
 def test_passive_recovery_contract_rejects_state_control_without_explicit_repair(
@@ -558,3 +544,137 @@ def test_completed_equivocation_recovery_requires_real_cold_control(tmp_path: Pa
     )
     errors = validate_fixture(tmp_path, module, models)
     assert any("focused control" in error and "drop(original)" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("pending,index", [(False, i) for i in range(8)] + [(True, i) for i in range(4)])
+def test_native_quiet_recovery_rejects_each_unbounded_wait(tmp_path, pending, index):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    relative, symbol, argument = (
+        ("lifecycle_pending_kura.rs", "run_pending_active_height", "IDLE_POLL")
+        if pending else ("lifecycle_run_inner.rs", "run_lifecycle_active_height", "native_wait")
+    )
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner" / relative
+    source = path.read_text(encoding="utf-8")
+    item, = module._extract_rust_binding_items(source, "fn", symbol)
+    token = f"wake_rx.recv_timeout({argument})"
+    parts = item.split(token)
+    assert len(parts) == (5 if pending else 9)
+    mutated = token.join(parts[:index + 1]) + "wake_rx.recv()" + token.join(parts[index + 1:])
+    path.write_text(source.replace(item, mutated, 1), encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error and "bounded Native quiet waits" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("NativeSourceRequest::new", "&artifact.validator_set_pops", "&[]"),
+    ("NativeSourceRequest::new", "certificate: artifact.commit_qc.clone()", "certificate: other_certificate"),
+    ("NativeSourceRequest::new", ".filter(|peer| peer != local)", ".filter(|_| true)"),
+    ("NativeSourceRequest::accept", "response.request_hash != request.request_hash()", "false"),
+    ("NativeSourceRequest::accept", "&self.source.finality().height_context", "&another_height_context"),
+    ("NativeSourceRequest::poll", "now < self.next_retry", "false"),
+    ("NativeSourceRequest::poll", "deadline_after(now, retransmit)", "deadline_after(self.next_retry, retransmit)"),
+    ("NativeSourceRequest::poll", "self.ticket.take()", "None"),
+    ("NativeSourceRequest::poll", "Arc::ptr_eq(message, &self.message)", "true"),
+    ("NativeSourceRequest::poll", "self.returned = Some(post)", "self.returned = None"),
+    ("NativeSourceRequest::poll", "self.ticket = ticket", "self.ticket = None"),
+    ("NativeSourceRequest::next_deadline", "self.response.is_none()", "self.response.is_some()"),
+])
+def test_native_source_recovery_rejects_custody_or_deadline_mutation(tmp_path, symbol, old, new):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/native_source.rs"
+    source = path.read_text(encoding="utf-8")
+    item, = module._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1
+    path.write_text(source.replace(item, item.replace(old, new, 1), 1), encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error for error in errors), errors
+
+
+def test_native_source_retry_requires_deadline_inside_accepted_actor_branch(tmp_path):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/native_source.rs"
+    source = path.read_text(encoding="utf-8")
+    item, = module._extract_rust_binding_items(source, "method", "NativeSourceRequest::poll")
+    deadline = """self.next_retry = if self.cursor == 0 {
+                    deadline_after(now, retransmit)
+                } else {
+                    now
+                };"""
+    assert item.count(deadline) == 1
+    mutated = item.replace(deadline, "", 1).replace(
+        "let result = match network.post_recoverable", deadline + "\n        let result = match network.post_recoverable", 1
+    )
+    path.write_text(source.replace(item, mutated, 1), encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, models)
+    assert any("exact retained Native retry transition" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("mutate_source", [False, True])
+def test_native_recovery_generic_bindings_use_actual_sources(tmp_path, mutate_source):
+    """Exercise the unmodified generic model consumer on the new Native owners."""
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    model = next(m for m in models if m["module"] == module.passive_recovery_contract.AUTONOMOUS_MODULE)
+    keys = {
+        (relative, kind, symbol)
+        for _, relative, kind, symbol, _ in module.passive_recovery_contract.NATIVE_RECOVERY_BINDINGS
+    }
+    # Other Autonomous source owners are checked by their own contracts. Keep
+    # the real TLA/config/invariant metadata and isolate these Native bindings.
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if (binding["path"], binding["kind"], binding["symbol"]) in keys
+    ]
+    assert len(model["production_symbols"]) == len(keys)
+    def validate():
+        errors = []
+        with module._reviewed_rust_source_cache():
+            module._validate_model(tmp_path, support.ROOT_DIR / "formal/sumeragi_v2", model, errors)
+        return errors
+    assert validate() == []
+    if mutate_source:
+        support.replace_once_after(
+            tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/native_source.rs",
+            "pub(super) fn poll(",
+            "network.post_recoverable(post, self.ticket.take())",
+            "network.post_recoverable(post, None)",
+        )
+        errors = validate()
+        assert len(errors) == 1, errors
+        assert "NativeSourceRequest::poll" in errors[0] and "self.ticket.take()" in errors[0], errors
+
+
+@pytest.mark.parametrize("relative,symbol,old,new", [
+    ("v2_lane_process.rs", "LaneProcessOwner::source_recovery_target", "let Owner::Active(owner)", "let Owner::Closing(owner)"),
+    ("v2_lane_process.rs", "LaneProcessOwner::source_recovery_target", "owner.current_gate(&self.state, observed) != LaneCurrentGate::Current", "false"),
+    ("v2_lane_process.rs", "LaneProcessOwner::source_recovery_target_gate", "!target.state_owner.matches_state(&self.state)", "false"),
+    ("v2_lane_process.rs", "LaneProcessOwner::source_recovery_target_gate", "LaneInstance::gate_for(&target.verified, &self.state, observed)", "LaneCurrentGate::InstanceClosed"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "return LaneCurrentGate::ObservationChanged", "return LaneCurrentGate::InstanceClosed"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "if gate == LaneCurrentGate::InstanceClosed", "if gate != LaneCurrentGate::ObservationChanged"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::service_sources", ".source_recovery_target(id, observed.as_ref()?)?", ".unchecked_source_target(id)?"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::poll", "source_gate != LaneCurrentGate::ObservationChanged", "true"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::next_deadline", "if self.awaiting_current_observation", "if false"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::note_current_observation", "observed.is_none_or(|observed| !observed.is_current(&self.state))", "observed.is_none()"),
+])
+def test_native_source_retirement_requires_original_authenticated_closure(tmp_path, relative, symbol, old, new):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi" / relative
+    source = path.read_text(encoding="utf-8")
+    item, = module._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1
+    path.write_text(source.replace(item, item.replace(old, new, 1), 1), encoding="utf-8")
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(symbol in error for error in errors), errors

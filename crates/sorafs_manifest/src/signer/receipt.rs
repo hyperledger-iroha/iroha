@@ -58,7 +58,21 @@ impl fmt::Debug for SignerReleaseManifestExpectedV1 {
 /// Canonical public release request committing exactly one reviewed manifest and custody.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::receipt::SignerReleaseManifestRequestV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerReleaseManifestRequestV1 {
     /// Exact independently expected id; one durable operation per id.
     pub operation_id: [u8; 32],

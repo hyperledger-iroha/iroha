@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-22. **Production qualification is unavailable.** The selected
+Updated: 2026-09-23. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -107,6 +107,29 @@ four-validator rollout/recovery remain unfinished. Production consumers, schemas
 fixtures and SDKs must change together after those obligations are met. No
 production profile, limit or admission registry is activated by this slice.
 
+The September 23 anchored-spend model preflight now requires exclusive amount
+shapes before the issuer signs: a clear intent and draft mirror must equal the
+same nonzero scale-zero `u128` scalar in the proof envelope, while a hidden
+intent carries no public amount or scalar and requires one exact nonzero
+commitment mirror. The focused `iroha_data_model anchored_spend_` run passes
+2/2 tests, including altered mirrors and scalar disclosure. This only binds
+the signed outer bytes structurally; it does not verify the FASTPQ hidden
+commitment equation or grant Core admission. The shared `ivm_abi` host/block
+resolver now rejects a redacted intent even when its proof envelope contains a
+public amount scalar; all 47 focused `ivm_abi` AXT tests pass on the current
+checkout. The dependent Core admission selection passes 50/50, and both
+state-level redacted-refusal and clear-amount cross-block budget tests pass;
+the grouped Core host rejection test also passes. The current FASTPQ commitment
+remains a post-proof mirror and
+still needs a private proof-bound replacement in the first-release cutover.
+
+Core still records `AxtHandleFragment` and a per-handle counter/retained replay
+row. That ratchet is not the fresh signed-spend nonce ledger. Kura authenticates
+a full WSV checkpoint hash, but the current execution commitment's pre/post
+roots cover witnessed keys and writes, not the full persisted state relation
+required by the AXT anchor. The finalized-source resolver, successful transfer
+relation, proof-bound hidden amount and budget checks, atomic durable spend
+nonce, restart behavior, and production-size compact verifier remain open.
 The replacement protocol's public-column reconstruction, 606-component DEEP
 arithmetic and radix-2/4/8/16 folding now pass 21 new real-crate tests, alongside
 37 existing framing/profile/codec/API regressions. These private test-registered
@@ -117,7 +140,7 @@ September 22 record binds the executable and subsequent registration correction.
 
 | Goal | Required evidence | Current state |
 | --- | --- | --- |
-| G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Corrections in progress; validation below |
+| G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Core still rejects unanchored spending; signed anchored-spend model amount preflight passes 2/2 focused tests but is not admitted; source/nonce and evidence gaps remain |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
 | G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | One six-lane offline ordinary/AXT quantity verifier is implemented; exact-source full-proof evidence and a production-sized representation remain required; authenticated Core admission is unwired and production still replays |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |

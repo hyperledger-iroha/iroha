@@ -17,7 +17,7 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         verifying_keys::RegisterVerifyingKey,
-        zk::{CreateElection, FinalizeElection, MAX_ELECTION_OPTIONS_V1},
+        zk::{CreateElection, FinalizeElection, MAX_ELECTION_OPTIONS_V1, MIN_ELECTION_OPTIONS_V1},
     },
     permission::Permission,
     prelude::Grant,
@@ -59,7 +59,13 @@ fn election_request(options: u32) -> CreateElection {
 fn election_option_bounds_and_failed_key_lookup_preserve_state() {
     let state = election_state();
     let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
-    for options in [0, MAX_ELECTION_OPTIONS_V1 + 1, MAX_ELECTION_OPTIONS_V1] {
+    for options in [
+        0,
+        1,
+        MIN_ELECTION_OPTIONS_V1,
+        MAX_ELECTION_OPTIONS_V1 + 1,
+        MAX_ELECTION_OPTIONS_V1,
+    ] {
         let mut transaction = block.transaction();
         let permission: Permission = CanManageParliament.into();
         Grant::account_permission(permission, ALICE_ID.clone())
@@ -68,10 +74,10 @@ fn election_option_bounds_and_failed_key_lookup_preserve_state() {
         let error = election_request(options)
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("no election may be created without qualified verifying keys");
-        if options == MAX_ELECTION_OPTIONS_V1 {
+        if options == MIN_ELECTION_OPTIONS_V1 || options == MAX_ELECTION_OPTIONS_V1 {
             assert!(
                 error.to_string().contains("ballot verifying key not found"),
-                "the maximum option count must pass the bounds gate: {error}"
+                "valid option counts must pass the bounds gate: {error}"
             );
         } else {
             assert!(

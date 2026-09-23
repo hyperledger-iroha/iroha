@@ -34,14 +34,43 @@ final class KagemushaCoreCoordinatorBridgeV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.invokeCalls, 0)
   }
 
+  func testCloseRevokesLocallyAndCallsNativeOnce() throws {
+    let endpoint = Endpoint()
+    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
+    try bridge.close()
+    try bridge.close()
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    let id = Data(repeating: 7, count: 32)
+    XCTAssertThrowsError(try bridge.invoke(.reserveOperationID,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data([1])]))
+    XCTAssertEqual(endpoint.invokeCalls, 0)
+  }
+
+  func testFailedNativeTeardownStillRevokesLocalHandle() throws {
+    let endpoint = Endpoint()
+    endpoint.failClose = true
+    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(storagePath: "/durable/store", endpoint: endpoint)
+    XCTAssertThrowsError(try bridge.close())
+    XCTAssertThrowsError(try bridge.invoke(.reserveOperationID,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(22), Data(repeating: 7, count: 32), Data([1])]))
+    XCTAssertEqual(endpoint.closeCalls, 1)
+    XCTAssertEqual(endpoint.invokeCalls, 0)
+  }
+
   private final class Endpoint: KagemushaCoreCoordinatorEndpointV1 {
-    var contractWords: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]
+    var contractWords: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]
     var returnedHandle = UInt64.max
     var openCalls = 0
     var invokeCalls = 0
+    var closeCalls = 0
+    var failClose = false
     var substituteResponse = false
     func contract() throws -> [UInt32] { contractWords }
     func open(storagePath: Data) throws -> UInt64 { openCalls += 1; return returnedHandle }
+    func close(handle: UInt64) throws {
+      closeCalls += 1; XCTAssertEqual(handle, returnedHandle)
+      if failClose { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
       invokeCalls += 1
       XCTAssertEqual(handle, returnedHandle)

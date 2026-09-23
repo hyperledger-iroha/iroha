@@ -129,7 +129,7 @@ v2_apply_test!(
     {
         let fixture = ApplyFixture::new();
         let generation = fixture.state.state_view_generation();
-        let state_block = fixture.state.block(fixture.body.header());
+        let mut state_block = fixture.state.block(fixture.body.header());
         assert!(
             state_block
                 .pending_autoscale_retirement_binding()
@@ -146,11 +146,11 @@ v2_apply_test!(
         let lifecycle = fixture.state.lock_lane_lifecycle_work_admission();
         fixture
             .service
-            .try_validate_prospective_autoscale_retirement_queue(&fixture.body, &state_block)
+            .try_validate_prospective_autoscale_retirement_queue(&fixture.body, &mut state_block)
             .expect("Validate without retirement must not probe either held mutex");
         fixture
             .service
-            .validate_prospective_autoscale_retirement_queue(&fixture.body, &state_block)
+            .validate_prospective_autoscale_retirement_queue(&fixture.body, &mut state_block)
             .expect("Apply without retirement must not acquire either held mutex");
         drop(lifecycle);
         drop(observer);

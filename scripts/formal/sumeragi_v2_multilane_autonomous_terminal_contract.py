@@ -870,7 +870,9 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "reconcile_autonomous_lifecycle_startup(",
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
-            "construct_after_pending_tip_application_recovery(",
+            "reconcile_executor_locked_body(executor, services)?",
+            "preactivation.initialize_recovered_local_proposal(setup_runner)?",
+            "preactivation.activate(height_started_at, local_proposal)?",
         ),
     ),
     (
@@ -889,8 +891,12 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "method",
         "PendingKuraProductionLifecycleV1::prepare_lane_recovery",
         (
-            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+            "let expected = self.installed.expected();",
+            "if !services.matches_installed_pending_kura_tip(expected)",
+            "ProductionLifecyclePreActivationErrorV1::OwnershipMismatch",
+            "let _ = self.installed.take_genesis();",
+            "let Self {\n            installed,\n            launched,\n        } = self;",
+            "Ok(PreparedPendingKuraLaneRecoveryV1 {\n            installed,\n            launched,\n        })",
         ),
     ),
     (
@@ -1615,9 +1621,9 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
             "LaneReservationReconciliationPlanning::Ready(plan) =>",
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
-            "construct_after_pending_tip_application_recovery(",
-            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+            "reconcile_executor_locked_body(executor, services)?",
+            "preactivation.initialize_recovered_local_proposal(setup_runner)?",
+            "preactivation.activate(height_started_at, local_proposal)?",
         ),
     ),
     (
@@ -1645,8 +1651,12 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
         "method",
         "PendingKuraProductionLifecycleV1::prepare_lane_recovery",
         (
-            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
-            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+            "let expected = self.installed.expected();",
+            "if !services.matches_installed_pending_kura_tip(expected)",
+            "ProductionLifecyclePreActivationErrorV1::OwnershipMismatch",
+            "let _ = self.installed.take_genesis();",
+            "let Self {\n            installed,\n            launched,\n        } = self;",
+            "Ok(PreparedPendingKuraLaneRecoveryV1 {\n            installed,\n            launched,\n        })",
         ),
     ),
 )

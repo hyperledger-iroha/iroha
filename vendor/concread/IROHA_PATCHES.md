@@ -61,6 +61,17 @@ frees the exact control block before returning its moved payload and charge;
 payload destruction precedes refund. Concurrent releases use release/acquire
 reference counting. Payload unwind retains the charge conservatively.
 
+The same `shared::Reserved` shell now exposes a consuming public preallocation
+API. `try_new` allocates its exact concrete layout once and returns the original
+opaque charge on allocator refusal. `initialize` moves a later payload into that
+same shell without allocation, cloning or callbacks. Existing constructors keep
+their allocation-error behavior through this one kernel. The sole existing test
+allocator observes exact padded layouts, unused/partial shell cleanup, allocation
+refusal and retry, payload lifetime and the free-before-refund order. Admission
+must still be performed by the caller before constructing a shell; opaque charges
+do not establish a pool limit or fund nested allocations. TODO: connect these
+shells to the original hot-tip source/finalizer owners and complete State admission.
+
 Charged writer acquisition has no untracked convenience path. Existing maps use
 the explicit `Untracked` type until complete node/vector/payload funding exists.
 Attached abort releases the lock before private work destruction while retaining
@@ -283,7 +294,7 @@ allocation without acquiring credits. The last reference frees the control block
 destroys its moved payload, then drops its charge. Payload unwind conservatively
 retains the charge. There is no weak-reference or raw-ownership API. MV uses this
 owner for funded publication identities instead of guessing a standard-library
-`Arc` layout. The internal reserved-shell and reclamation operations remain private.
+`Arc` layout. The internal reclamation operations remain private.
 
 ### Physical reader readiness
 

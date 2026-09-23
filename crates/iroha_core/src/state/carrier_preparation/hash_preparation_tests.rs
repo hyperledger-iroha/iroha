@@ -249,6 +249,9 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
             transactions: membership.prepare_commit().unwrap().detach(),
             block_hashes: state.block_hashes.block().detach(),
         };
+        // Four original runtime cells and the transaction membership writer
+        // accompany every captured World field; hash ownership is probed above.
+        let expected_participants = probes.world.field_count() + 5;
         let callback = Arc::new(AggregateProbe {
             fences: Probe {
                 state: Arc::clone(&state),
@@ -316,9 +319,9 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
             counts[1], 0,
             "no original writer survives its first callback"
         );
-        assert_eq!(counts.iter().sum::<usize>(), 283);
+        assert_eq!(counts.iter().sum::<usize>(), expected_participants);
         if !unwind_owner {
-            assert_eq!(counts, [283, 0, 0]);
+            assert_eq!(counts, [expected_participants, 0, 0]);
         }
         let mut wait = future.lock().unwrap().take().unwrap();
         assert!(

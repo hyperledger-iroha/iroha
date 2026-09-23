@@ -1,7 +1,7 @@
-//! Inactive process-lived native owner assembly and bounded physical workers.
-//! The table contains actual instance/job/result custody, never reducer facts.
-//! TODO: wire fair native ingress, transport acknowledgements, first-source
-//! recovery and the sole economic Apply consumer, then retire old signers atomically.
+//! Process-lived Native owner assembly and bounded physical workers.
+//! The production runner connects fair ingress, exact transport, source recovery
+//! and published Apply settlement. This table owns actual instance/job/result
+//! custody; it does not introduce another reducer or publication authority.
 
 use super::*;
 use crate::kura::Kura;
@@ -52,13 +52,14 @@ enum Kind {
     Body,
     OpeningDrain,
     ClosedDrain,
+    Retirement,
 }
 impl Kind {
     fn class(self) -> LaneWorkerClass {
         match self {
             Self::Opening | Self::OpeningDrain => LaneWorkerClass::Opening,
             Self::Wal => LaneWorkerClass::Wal,
-            Self::Body | Self::ClosedDrain => LaneWorkerClass::Body,
+            Self::Body | Self::ClosedDrain | Self::Retirement => LaneWorkerClass::Body,
         }
     }
 }
@@ -72,6 +73,10 @@ enum Job {
     Body(LaneBodyJob),
     OpeningDrain(LaneOpeningDrain),
     ClosedDrain(LaneClosedInstance),
+    Retirement {
+        ticket: Arc<()>,
+        retirement: LaneRetirement,
+    },
 }
 enum Completed {
     Opening(LaneOpeningCompletion),
@@ -79,6 +84,7 @@ enum Completed {
     Body(LaneBodyCompletion),
     OpeningDrained(LaneOpeningDrained),
     ClosedDrained(LaneClosedInstance),
+    Retirement(Arc<()>),
 }
 struct PhysicalWork {
     issued: Arc<IssuedWork>,
@@ -99,6 +105,12 @@ impl PhysicalWork {
             Job::Wal(job) => Completed::Wal(job.run()),
             Job::Body(job) => Completed::Body(job.run(state)),
             Job::OpeningDrain(job) => Completed::OpeningDrained(job.run()),
+            Job::Retirement { ticket, retirement } => {
+                // Original immutable result allocations are released on the existing
+                // bounded Body worker, never under a State publication lease.
+                drop(retirement);
+                Completed::Retirement(ticket)
+            }
             Job::ClosedDrain(mut closed) => {
                 // These destructors/physical owner releases never run on control.
                 drop(closed.owner.wal.take());
@@ -130,6 +142,17 @@ impl Drop for LanePhysicalCompletion {
     fn drop(&mut self) {
         if self.armed {
             self.guard.close_admission_for_restart();
+        }
+    }
+}
+#[cfg(test)]
+impl LanePhysicalCompletion {
+    /// Substitute only the inner cleanup receipt while retaining the real outer
+    /// physical job/result. The caller can restore the same original receipt.
+    pub(crate) fn swap_retirement_ticket_for_test(&mut self, ticket: Arc<()>) -> Option<Arc<()>> {
+        match self.result.as_mut()? {
+            Completed::Retirement(issued) => Some(std::mem::replace(issued, ticket)),
+            _ => None,
         }
     }
 }
@@ -399,6 +422,19 @@ pub(crate) enum LaneProcessProgress {
     Body(LaneBodyProgress),
     Failed(String),
 }
+/// Immutable original source target; only a productive table owner issues it.
+/// It carries no worker, signing, Decision or Apply authority.
+pub(crate) struct LaneSourceRecoveryTarget {
+    state_owner: crate::state::NativeLaneStateOwner,
+    verified: Arc<VerifiedLaneContext>,
+}
+impl LaneSourceRecoveryTarget {
+    /// Original frozen instance, never inferred from a new global height.
+    pub(crate) fn instance_id(&self) -> HeightContextId {
+        self.verified.instance_id()
+    }
+}
+
 /// Sole process-lifetime owner, independent of global height/view rollover.
 /// Construction is inactive until old production signers are removed atomically.
 pub(crate) struct LaneProcessOwner {
@@ -446,6 +482,42 @@ impl LaneProcessOwner {
             .get(&id)
             .is_some_and(|entry| matches!(entry.owner, Owner::Active(_)))
     }
+    /// Borrow a source target only while its original instance is productively current.
+    /// Closed inspection custody must never create a new network recovery request.
+    pub(crate) fn source_recovery_target(
+        &self,
+        id: HeightContextId,
+        observed: &VerifiedLaneContexts,
+    ) -> Option<LaneSourceRecoveryTarget> {
+        let _lease = self.state.consensus_publication_lease();
+        let Owner::Active(owner) = &self.entries.get(&id)?.owner else {
+            return None;
+        };
+        if owner.source_recovery_requirement().is_none()
+            || owner.current_gate(&self.state, observed) != LaneCurrentGate::Current
+        {
+            return None;
+        }
+        Some(LaneSourceRecoveryTarget {
+            state_owner: owner.state_owner.clone(),
+            verified: Arc::clone(&owner.verified),
+        })
+    }
+
+    /// Authenticate absence without consuming the original table/worker obligations.
+    /// A stale observation or another State family never authorizes retirement.
+    pub(crate) fn source_recovery_target_gate(
+        &self,
+        target: &LaneSourceRecoveryTarget,
+        observed: &VerifiedLaneContexts,
+    ) -> LaneCurrentGate {
+        let _lease = self.state.consensus_publication_lease();
+        if !target.state_owner.matches_state(&self.state) {
+            return LaneCurrentGate::ObservationChanged;
+        }
+        LaneInstance::gate_for(&target.verified, &self.state, observed)
+    }
+
     /// Transfer one actual diagnostic effect to its explicit reporting consumer.
     /// This never acknowledges a Decision, Apply, body or transport effect.
     pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<reducer::Effect> {
@@ -780,6 +852,23 @@ impl LaneProcessOwner {
                     Completed::Body(result),
                 )),
             },
+            Completed::Retirement(ticket) => {
+                let owner = match &mut entry.owner {
+                    Owner::Active(owner) | Owner::Closing(owner) => Some(owner.as_mut()),
+                    Owner::Closed(closed) => Some(closed.owner.as_mut()),
+                    _ => None,
+                };
+                match owner {
+                    Some(owner) => owner
+                        .finish_retirement_cleanup(&ticket)
+                        .map(|()| LaneProcessProgress::Idle)
+                        .map_err(|error| (error, Completed::Retirement(ticket))),
+                    None => Err((
+                        bad("retirement completion lost its original instance"),
+                        Completed::Retirement(ticket),
+                    )),
+                }
+            }
             Completed::OpeningDrained(result) => {
                 if matches!(entry.owner, Owner::DrainingOpening) && result.instance_id() == id {
                     Ok(LaneProcessProgress::OpeningDrained)
@@ -942,6 +1031,30 @@ impl LaneProcessOwner {
         );
         Ok(LaneProcessProgress::Idle)
     }
+    /// Queue at most one original nonterminal retirement on the existing Body
+    /// class. The original descriptor remains charged until its exact return.
+    /// Body work sorts ahead of cleanup within an instance; pool admission stays
+    /// bounded and uses the existing round-robin instance dispatch.
+    pub(crate) fn prepare_retirement(&mut self, id: HeightContextId) -> Result<bool> {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return Ok(false);
+        };
+        if entry.work.contains_key(&Kind::Retirement) {
+            return Ok(false);
+        }
+        let owner = match &mut entry.owner {
+            Owner::Active(owner) | Owner::Closing(owner) => owner.as_mut(),
+            Owner::Closed(closed) => closed.owner.as_mut(),
+            _ => return Ok(false),
+        };
+        let Some((ticket, retirement)) = owner.take_retirement_cleanup(&self.state, &self.guard)?
+        else {
+            return Ok(false);
+        };
+        entry.queue(id, Kind::Retirement, Job::Retirement { ticket, retirement });
+        Ok(true)
+    }
+
     /// Transfer retained closed obligations to an explicit downstream owner. No
     /// transport acknowledgement or ApplicationCompleted is synthesized here.
     pub(crate) fn take_closed(&mut self, id: HeightContextId) -> Option<LaneClosedInstance> {

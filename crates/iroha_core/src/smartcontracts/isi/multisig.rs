@@ -552,6 +552,29 @@ fn rekey_account_id(
     // Rewriting historical participants would invalidate the complete intent hash.
     // Pin every receipt variant before any account, permission or index mutation.
     ensure_settlement_receipts_allow_rekey(state_transaction, old_account)?;
+    let privacy_reserve_custody = crate::privacy_state::load_privacy_public_reserve_custody_v1(
+        &state_transaction.world.privacy_commitments,
+    )
+    .map_err(|message| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: privacy reserve custody is invalid: {message}"
+            )
+            .into(),
+        )
+    })?;
+    if let Some((_, owner)) = privacy_reserve_custody
+        .iter()
+        .find(|(asset_id, _)| asset_id.account() == old_account)
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it is the reserve account for governed privacy pool {:?}",
+                owner.namespace()
+            )
+            .into(),
+        ));
+    }
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
         .account_aliases_by_account
@@ -6013,6 +6036,85 @@ mod tests {
         assert!(
             !holders.contains(&old_account),
             "old account should be removed from holder index"
+        );
+    }
+    #[test]
+    fn rekey_rejects_privacy_reserve_before_moving_account_or_asset() {
+        use iroha_data_model::privacy::{
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        };
+
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-privacy-reserve-rekey"
+        );
+        let domain_id = DomainId::try_new("default", "universal").expect("domain ID");
+        let old_account = new_account_id(&checked_keypair());
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&old_account, &mut tx)
+            .expect("domain registration");
+        account!(tx, old_account, domain_id, old_account, "reserve account");
+        let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("asset name"),
+        );
+        Register::asset_definition(iroha_data_model::asset::AssetDefinition::numeric(
+            definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&old_account, &mut tx)
+        .expect("reserve definition");
+        let old_asset_id =
+            iroha_data_model::asset::AssetId::new(definition_id.clone(), old_account.clone());
+        let (_, value) =
+            iroha_data_model::asset::Asset::new(old_asset_id.clone(), Quantity::from(5_u32))
+                .into_key_value();
+        tx.world.assets.insert(old_asset_id.clone(), value);
+        tx.world.track_asset_holder(&old_asset_id);
+        let owner = crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
+            namespace: PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: PrivacyPoolIdV1::new([0xD7; 32]),
+                }),
+            ),
+            bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1::new([0xD8; 32]),
+        };
+        let custody_key = crate::privacy_state::PrivacyCommitmentKeyV1::public_reserve_custody(
+            owner.protocol_id(),
+            &old_asset_id,
+        )
+        .expect("custody key");
+        let custody_row = crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(
+            old_asset_id.clone(),
+            owner,
+        )
+        .expect("custody row");
+        tx.world
+            .privacy_commitments
+            .insert(custody_key, custody_row.clone());
+        let new_account = new_account_id(&checked_keypair());
+        let new_asset_id =
+            iroha_data_model::asset::AssetId::new(definition_id, new_account.clone());
+        let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
+            .expect_err("reserve account cannot be rekeyed while backing a pool");
+        assert!(error.to_string().contains("reserve account"));
+        assert!(tx.world.accounts.get(&old_account).is_some());
+        assert!(tx.world.accounts.get(&new_account).is_none());
+        assert_eq!(
+            tx.world.assets.get(&old_asset_id).unwrap().as_ref(),
+            &Quantity::from(5_u32)
+        );
+        assert!(tx.world.assets.get(&new_asset_id).is_none());
+        assert_eq!(
+            tx.world.privacy_commitments.get(&custody_key),
+            Some(&custody_row)
         );
     }
     #[test]

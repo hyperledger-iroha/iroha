@@ -2220,6 +2220,8 @@ fn provider_policy_tree(
             super::KagemushaHardwarePlatformClassV1::AppleOemService => 1,
             super::KagemushaHardwarePlatformClassV1::DedicatedSecureElement => 2,
             super::KagemushaHardwarePlatformClassV1::OtherQualified => 3,
+            super::KagemushaHardwarePlatformClassV1::AppleAppAttest => 4,
+            super::KagemushaHardwarePlatformClassV1::AndroidKeyMint => 5,
         };
         let mut leaf = Sha256::new();
         leaf.update(b"iroha:kagemusha:v1:hardware-policy-leaf\0");

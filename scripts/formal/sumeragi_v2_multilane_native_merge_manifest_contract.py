@@ -1106,17 +1106,7 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
             "stage_merge_lane_frontier_markers",
         ),
     ),
-    (
-        "crates/iroha_core/src/state.rs",
-        "fn",
-        "replay_blocks_from_kura_range_inner",
-        (
-            "from_result_bearing_block_and_merge_entry",
-            "state_block.staged_merge_entry()",
-            "execution_commitment_from_validated_block",
-            "replayed_execution_commitment != finality.commit_qc.execution_commitment",
-        ),
-    ),
+    native_preparation.NATIVE_REPLAY_TAIL_BINDING,
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
         "fn",
@@ -1306,7 +1296,8 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "method",
         "PrefixPreparation::capture",
         "let manifest = exec::NativeAmxApplicationManifestV1::"
-        "from_result_bearing_block_and_merge_entry( block, None, )?;",
+        "from_result_bearing_block_and_merge_entry( block, None, )"
+        ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -1343,7 +1334,7 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "replay_blocks_from_kura_range_inner",
         "let native_amx_manifest = crate::sumeragi::exec::"
         "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry( "
-        "valid_block.as_ref(), state_block.staged_merge_entry(), )",
+        "replay.valid.as_ref(), replay.state.staged_merge_entry(), )",
     ),
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",

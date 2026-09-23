@@ -5126,6 +5126,7 @@ impl FairV2Ingress {
         Ok(operation(value))
     }
     /// Prove that the closed physical ingress has no queued or in-flight owner.
+    #[cfg(test)]
     pub(crate) fn ensure_closed_drained_cut(&self) -> Result<(), String> {
         let _service_guard = self.service_lock.lock();
         let _publication_guard = self.producer_publication_lock.lock();
@@ -7139,6 +7140,15 @@ impl SumeragiHandle {
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
         }
+        // QueuePlan has the sole live owner for this channel. Returning the
+        // original message prevents an obsolete relay producer from treating
+        // a successful enqueue as durable protocol admission.
+        if !matches!(
+            &message,
+            LaneRelayMessage::QueuePlanAdmissionCertificate { .. }
+        ) {
+            return SumeragiIngressDisposition::Rejected(message);
+        }
         if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
             && (certificate.is_empty()
                 || certificate.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES)
@@ -7146,47 +7156,6 @@ impl SumeragiHandle {
             iroha_logger::debug!(
                 bytes = certificate.len(),
                 "rejecting malformed QueuePlan admission certificate before lane ingress"
-            );
-            return SumeragiIngressDisposition::Rejected(message);
-        }
-        if let LaneRelayMessage::CertifiedMergeSidecar {
-            sender,
-            reply_route,
-            message: sidecar,
-        } = &message
-        {
-            let allocating_requester = match sidecar {
-                CertifiedMergeSidecarMessage::Request(request) => Some(&request.requester),
-                CertifiedMergeSidecarMessage::Close(close) => Some(&close.requester),
-                CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-                | CertifiedMergeSidecarMessage::Chunk(_) => None,
-            };
-            // The handle can authenticate only the semantic transport
-            // identity and reply capability. A removed validator's exact
-            // Kura/finality authority is verified by the serialized lane
-            // adapter before it may allocate responder state; the sync
-            // channel below remains the bounded handoff corridor.
-            if allocating_requester.is_some_and(|requester| {
-                requester != sender
-                    || !reply_route
-                        .as_ref()
-                        .is_some_and(|route| route.is_active() && route.semantic_target() == sender)
-            }) {
-                iroha_logger::debug!(
-                    %sender,
-                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"
-                );
-                return SumeragiIngressDisposition::Rejected(message);
-            }
-        }
-        if let LaneRelayMessage::DrainVote { sender, vote } = &message
-            && (sender != &vote.signer || vote.validate_ingress().is_err())
-        {
-            iroha_logger::debug!(
-                %sender,
-                signer = %vote.signer,
-                "rejecting unauthenticated or invalid lane-drain vote before bounded ingress"
             );
             return SumeragiIngressDisposition::Rejected(message);
         }

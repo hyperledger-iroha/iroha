@@ -17,7 +17,7 @@ and IVM readback behavior without a runtime environment skip:
   only the exact rejection event is emitted.
 - `gov_finalize_real_vk`: unsupported tally roles cannot mark a retained election
   finalized or replace its tally, nullifiers or ciphertexts.
-- `zk_vote_get_tally`: the actual IVM syscall returns the finalized `[4]` snapshot,
+- `zk_vote_get_tally`: the actual IVM syscall returns the finalized `[4, 0]` snapshot,
   including after an invalid replacement was rejected. This tests typed state
   readback, not cryptographic tally verification or consensus finality.
 

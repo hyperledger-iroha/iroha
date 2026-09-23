@@ -180,6 +180,7 @@ impl State {
                 .into_fields();
             let block = StateBlock::from_fields(StateBlockFields {
                 state_ref: self,
+                read_releases: StateViewReleases::new(self),
                 da_rewind_releases,
                 canonical_runtime: block_field::BlockField::new(canonical_runtime),
                 block_hashes: block_hash_field::BlockHashField::new(block_hashes),

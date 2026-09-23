@@ -14,7 +14,10 @@ import java.math.BigInteger
  */
 class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
-) : KagemushaNativeCoreCoordinatorV1 {
+) : KagemushaNativeCoreCoordinatorV1, AutoCloseable {
+    /** Revoke this native owner during logout or account switch. A new open needs a new process. */
+    override fun close() = bridge.close()
+
     override fun beginObservation(operation: Int, canonicalCommand: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION,
             listOf(u32(operation), canonicalCommand)).single().also {

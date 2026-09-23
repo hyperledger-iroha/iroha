@@ -7085,7 +7085,7 @@ mod validation_fee_registry_restore_tests {
     fn restore_world_with_network(
         world: World,
         restored_network_id: iroha_data_model::NetworkId,
-    ) -> Result<Box<State>, json::Error> {
+    ) -> Result<Box<State>, StateRestoreError> {
         let mut state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -7138,15 +7138,15 @@ mod validation_fee_registry_restore_tests {
         .into_state_from_json(snapshot)
     }
 
-    fn restore_world(world: World) -> Result<Box<State>, json::Error> {
+    fn restore_world(world: World) -> Result<Box<State>, StateRestoreError> {
         restore_world_with_network(world, network_id())
     }
 
-    fn assert_registry_restore_error(error: &json::Error, expected: &str) {
+    fn assert_registry_restore_error(error: &StateRestoreError, expected: &str) {
         assert!(
             matches!(
                 error,
-                json::Error::InvalidField { field, message }
+                StateRestoreError::Serialization(json::Error::InvalidField { field, message })
                     if field == "parameters" && message.contains(expected)
             ),
             "restore rejection must identify the protected registry provenance: {error}"
@@ -7190,7 +7190,7 @@ mod validation_fee_registry_restore_tests {
         assert!(
             matches!(
                 &error,
-                json::Error::InvalidField { field, message }
+                StateRestoreError::Serialization(json::Error::InvalidField { field, message })
                     if field == "parliament_attempts"
                         && message.contains("missing exact governance proposal")
             ),
@@ -7243,7 +7243,7 @@ mod validation_fee_registry_restore_tests {
         assert!(
             matches!(
                 &error,
-                json::Error::InvalidField { field, message }
+                StateRestoreError::Serialization(json::Error::InvalidField { field, message })
                     if field == "state.durable_merge_ledger"
                         && message.contains("validation-fee policy network mismatch")
             ),
@@ -7283,13 +7283,15 @@ mod validation_fee_registry_restore_tests {
             &activation,
             &lineage,
         ));
+        let kura = Kura::blank_kura_for_testing();
         let error = build_state(
             BuildStateInputs {
                 lane_manifests: Arc::new(LaneManifestRegistry::empty()),
                 canonical_runtime,
                 world,
                 block_hashes: BlockHashes::new(block_hashes),
-                transactions: TransactionsStorage::new(),
+                transactions: TransactionsStorage::try_new(kura.transaction_history_budget())
+                    .expect("fund emergency-fast fixture membership"),
                 commit_topology: Cell::new(Vec::new()),
                 prev_commit_topology: Cell::new(Vec::new()),
                 lane_consensus_contexts: Cell::new(LaneConsensusContextsV1::default()),
@@ -7301,7 +7303,7 @@ mod validation_fee_registry_restore_tests {
                 network_id: network_id(),
                 snapshot_v2_bootstrap_candidate: None,
                 nexus_runtime_restored_from_snapshot: false,
-                kura: Kura::blank_kura_for_testing(),
+                kura,
                 query_handle: LiveQueryStore::start_test(),
                 #[cfg(feature = "telemetry")]
                 telemetry: crate::telemetry::StateTelemetry::default(),
@@ -7886,7 +7888,7 @@ fn parse_world(
                 message: error.to_string(),
             })?;
     }
-    crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+    crate::privacy_state::validate_privacy_public_reserve_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
         &asset_definitions.view(),

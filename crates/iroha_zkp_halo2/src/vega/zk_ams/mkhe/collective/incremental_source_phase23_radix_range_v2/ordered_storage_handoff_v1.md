@@ -58,6 +58,10 @@ The delta gap `[12728,18576)` remains in the original inventory. A stored point,
 valid scalar or matching ordinal alone cannot replace its admitted ticket/rho.
 AEAD plus the retained immutable pair preserves the original written value
 bytes; this replay does not re-prove their commitment with a second MSM.
+Before returning the local verified owner, completion revalidates the original
+source replay/opening/materialization records and requires the sealed pair's
+exact context to match those records. A full read cursor or pair digest alone
+cannot mint that owner.
 The final local owner retains both source and pair and exposes no source,
 snapshot, plaintext, proof-provider or materializer conversion. Any future
 Q-mask continuation must consume that fully verified stored owner explicitly;

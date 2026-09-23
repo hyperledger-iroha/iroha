@@ -4122,28 +4122,25 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
-        use crate::state::BlockHashAdmissionError;
-        if let BlockValidationError::BlockHashAdmission(refusal) = error {
-            let wait = match refusal {
-                BlockHashAdmissionError::Busy(wait) | BlockHashAdmissionError::Changed(wait) => {
-                    Some(wait)
-                }
-                BlockHashAdmissionError::Capacity(
-                    mv::allocation::AllocationRefusal::Capacity { release, .. },
-                ) => Some(release),
-                _ => None,
-            };
+        let local = match error {
+            BlockValidationError::BlockHashAdmission(error) => Some((
+                "block_hash_history",
+                error.release_wait(),
+                error.to_string(),
+            )),
+            BlockValidationError::MembershipAdmission(error) => Some((
+                "transaction_membership_history",
+                error.release_wait(),
+                error.to_string(),
+            )),
+            _ => None,
+        };
+        if let Some((owner, wait, reason)) = local {
             return V2ApplyError::LocalValidation(match wait {
                 Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(
-                    BodyValidationBusy::new(
-                        "block_hash_history",
-                        wait.clone(),
-                        self.queue.sumeragi_waker(),
-                    ),
+                    BodyValidationBusy::new(owner, wait.clone(), self.queue.sumeragi_waker()),
                 ),
-                None => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
-                    refusal.to_string(),
-                ),
+                None => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason),
             });
         }
         Self::classify_candidate_validation_error(merge_reference, failed_block, error)
@@ -4155,6 +4152,11 @@ impl V2ApplyService {
         error: &BlockValidationError,
     ) -> V2ApplyError {
         if let BlockValidationError::BlockHashAdmission(reason) = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
+            );
+        }
+        if let BlockValidationError::MembershipAdmission(reason) = error {
             return V2ApplyError::LocalValidation(
                 super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
             );
@@ -5103,7 +5105,7 @@ impl V2ApplyService {
     #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn prospective_autoscale_retirement_queue_binding(
         block: &SignedBlock,
-        state_block: &crate::state::StateBlock<'_>,
+        state_block: &mut crate::state::StateBlock<'_>,
     ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, V2ApplyError> {
         // The overlay owns its original canonical predecessor. Derive the
         // retirement identity before touching node-local Queue owners; an
@@ -5119,11 +5121,11 @@ impl V2ApplyService {
         };
         Ok(binding)
     }
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
+    #[cfg(test)]
     fn try_validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
-        state_block: &crate::state::StateBlock<'_>,
+        state_block: &mut crate::state::StateBlock<'_>,
     ) -> Result<(), V2ApplyError> {
         let Some((lane_id, dataspace_id, lane_incarnation)) =
             Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
@@ -5140,7 +5142,7 @@ impl V2ApplyService {
     fn validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
-        state_block: &crate::state::StateBlock<'_>,
+        state_block: &mut crate::state::StateBlock<'_>,
     ) -> Result<(), V2ApplyError> {
         let Some((lane_id, dataspace_id, lane_incarnation)) =
             Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
@@ -5293,24 +5295,35 @@ impl V2ApplyService {
         self.test_failures
             .candidate_executions
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let prepared = ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
-            body.clone(),
-            &topology,
-            &self.genesis_account,
-            &TimeSource::new_system(),
-            self.block_cadence,
-            crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
-            self.state.as_ref(),
-            &mut voting_block,
-        )
-        .map_err(|(failed_block, error)| {
-            self.classify_validation_failure(merge_reference, failed_block.as_ref(), error.as_ref())
-        })?;
+        let mut prepared =
+            ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
+                body.clone(),
+                &topology,
+                &self.genesis_account,
+                &TimeSource::new_system(),
+                self.block_cadence,
+                crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
+                self.state.as_ref(),
+                &mut voting_block,
+            )
+            .map_err(|(failed_block, error)| {
+                self.classify_validation_failure(
+                    merge_reference,
+                    failed_block.as_ref(),
+                    error.as_ref(),
+                )
+            })?;
         debug_assert_eq!(prepared.context(), context);
-        self.try_validate_prospective_autoscale_retirement_queue(
-            prepared.block(),
-            prepared.state(),
-        )?;
+        if let Some((lane_id, dataspace_id, lane_incarnation)) = prepared
+            .autoscale_retirement_binding()
+            .map_err(Self::classify_lane_lifecycle_validation_error)?
+        {
+            self.try_validate_autoscale_retirement_queue_binding(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )?;
+        }
         self.kura
             .validate_native_amx_participant_application_evidence_byte_budget(
                 prepared.native_amx_manifest(),
@@ -5488,7 +5501,10 @@ impl V2ApplyService {
                 )
             })?;
         timings.record();
-        self.validate_prospective_autoscale_retirement_queue(valid_block.as_ref(), &state_block)?;
+        self.validate_prospective_autoscale_retirement_queue(
+            valid_block.as_ref(),
+            &mut state_block,
+        )?;
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;

@@ -5041,8 +5041,8 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
     let refused =
         State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| {
             attempts += 1;
-            Err(crate::state::BlockHashAdmissionError::Busy(
-                original.clone(),
+            Err(crate::state::StateAdmissionError::History(
+                crate::state::BlockHashAdmissionError::Busy(original.clone()),
             ))
         });
     assert_eq!(
@@ -5050,7 +5050,7 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         "local pressure cannot trigger smaller source retries"
     );
     assert!(
-        matches!(refused, Err(crate::state::BlockHashAdmissionError::Busy(wait)) if wait == original)
+        matches!(refused, Err(crate::state::StateAdmissionError::History(crate::state::BlockHashAdmissionError::Busy(wait))) if wait == original)
     );
 }
 

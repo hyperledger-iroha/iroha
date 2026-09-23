@@ -59,7 +59,10 @@ use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{OnceLock, TryLockError};
+
+mod retained_mutex;
+use retained_mutex::{Mutex, MutexGuard};
 
 use crate::shared::{Reserved, Shared};
 
@@ -307,7 +310,11 @@ where
         let Some(LinCowCellCommitPhase::Writer(writer)) = self.phase.as_ref() else {
             panic!("original writer prepares once");
         };
-        let active = writer.caller.lock_active();
+        let active = if writer.guard.is_retained() {
+            writer.caller.lock_active_retained()
+        } else {
+            writer.caller.lock_active()
+        };
         self.install_active(active);
         self.validate();
     }
@@ -317,7 +324,11 @@ where
         let Some(LinCowCellCommitPhase::Writer(writer)) = self.phase.as_ref() else {
             panic!("original writer prepares once");
         };
-        let active = writer.caller.try_lock_active()?;
+        let active = if writer.guard.is_retained() {
+            writer.caller.try_lock_active_retained()?
+        } else {
+            writer.caller.try_lock_active()?
+        };
         self.install_active(active);
         self.validate();
         Ok(())
@@ -578,6 +589,15 @@ pub struct LinCowCellReadTxn<'a, T, R, U, Charge = Untracked> {
     work: Shared<LinCowCellInner<R, Charge>, Charge>,
 }
 
+impl<T, R, U, Charge> Clone for LinCowCellReadTxn<'_, T, R, U, Charge> {
+    fn clone(&self) -> Self {
+        Self {
+            _caller: self._caller,
+            work: self.work.clone(),
+        }
+    }
+}
+
 impl<R, Charge> LinCowCellInner<R, Charge> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {
@@ -618,6 +638,12 @@ impl<T, R, U, Charge> LinCowCell<T, R, U, Charge> {
         self.active_released.observe()
     }
 
+    /// Retain actual releases from this original active-reader mutex in constant
+    /// space. The caller keeps the batch beyond every enclosing physical fence.
+    pub fn reader_release_batch(&self) -> crate::release::DeferredReleaseBatch {
+        self.active_released.deferred_batch()
+    }
+
     fn lock_active(&self) -> ActiveGuard<'_, R, Charge> {
         self.active_released.poisoning_guard(
             self.active_released
@@ -625,6 +651,27 @@ impl<T, R, U, Charge> LinCowCell<T, R, U, Charge> {
                     self.active.lock().expect("original reader lock poisoned")
                 }),
         )
+    }
+
+    // Only sealed retained preparation uses this read-only physical owner.
+    // Mutable access arms the original primitive before any root transfer.
+    fn lock_active_retained(&self) -> ActiveGuard<'_, R, Charge> {
+        self.active_released.observed_guard(
+            self.active
+                .lock_retained()
+                .expect("original reader lock poisoned"),
+            self.active.poison_flag(),
+        )
+    }
+
+    fn try_lock_active_retained(&self) -> Result<ActiveGuard<'_, R, Charge>, OwnedWriteError> {
+        match self.active.try_lock_retained() {
+            Ok(active) => Ok(self
+                .active_released
+                .observed_guard(active, self.active.poison_flag())),
+            Err(TryLockError::WouldBlock) => Err(OwnedWriteError::Busy),
+            Err(TryLockError::Poisoned(_)) => Err(OwnedWriteError::Poisoned),
+        }
     }
 
     fn try_lock_active(&self) -> Result<ActiveGuard<'_, R, Charge>, OwnedWriteError> {
@@ -715,6 +762,80 @@ where
         Ok(LinCowCellReadTxn {
             _caller: self,
             work: active.clone(),
+        })
+    }
+
+    /// Pin the current original reader, deferring its actual acquisition release
+    /// into the caller's original batch. Foreign batches refuse before acquiring
+    /// anything. Poisoned acquisitions are also unlocked and recorded in the batch.
+    pub fn read_retaining(
+        &self,
+        releases: &mut crate::release::DeferredReleaseBatch,
+    ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
+        self.read_retaining_impl(releases, false)
+    }
+
+    /// Nonblocking original reader acquisition with the same deferred custody.
+    /// Busy records no release. A foreign batch returns Changed before probing.
+    pub fn try_read_retaining(
+        &self,
+        releases: &mut crate::release::DeferredReleaseBatch,
+    ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
+        self.read_retaining_impl(releases, true)
+    }
+
+    fn read_retaining_impl(
+        &self,
+        releases: &mut crate::release::DeferredReleaseBatch,
+        nonblocking: bool,
+    ) -> Result<LinCowCellReadTxn<'_, T, R, U, Charge>, OwnedWriteError> {
+        if !self.active_released.owns_batch(releases) {
+            return Err(OwnedWriteError::Changed);
+        }
+        // Retain even an acquired poisoned guard. Erasing that guard into an
+        // error would lose its actual release or notify inside the caller's fence.
+        let (active, poisoned) = if nonblocking {
+            match self.active.try_lock() {
+                Ok(active) => (active, false),
+                Err(TryLockError::WouldBlock) => return Err(OwnedWriteError::Busy),
+                Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
+            }
+        } else {
+            match self.active.lock() {
+                Ok(active) => (active, false),
+                Err(error) => (error.into_inner(), true),
+            }
+        };
+        let active = self
+            .active_released
+            .observed_guard(active, self.active.poison_flag());
+        // The existing transfer engine owns unwind: it releases this exact guard
+        // before recording its permanent poison in the caller's same-source batch.
+        // Cloning the shared reader invokes no payload code or allocation.
+        match active.try_release_into(releases, |active| {
+            if poisoned {
+                Err(OwnedWriteError::Poisoned)
+            } else {
+                Ok(LinCowCellReadTxn {
+                    _caller: self,
+                    work: active.clone(),
+                })
+            }
+        }) {
+            Ok(result) => result,
+            Err(_) => unreachable!("original reader batch checked before acquisition"),
+        }
+    }
+
+    /// Borrow the exact retained reader in this same original family. No lock,
+    /// allocation, current-generation sampling or notification occurs.
+    pub fn read_predecessor(
+        &self,
+        predecessor: &LinCowCellRetainedPredecessor<T, R, Charge>,
+    ) -> Option<LinCowCellReadTxn<'_, T, R, U, Charge>> {
+        Shared::ptr_eq(&self.write, &predecessor.root).then(|| LinCowCellReadTxn {
+            _caller: self,
+            work: predecessor.base.clone(),
         })
     }
 
@@ -825,10 +946,41 @@ where
         LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
         (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
     > {
+        self.acquire_owned(owned, false)
+    }
+
+    /// Reacquire unchanged original roots for a retained publication owner.
+    /// An unrelated outer unwind may abandon this private cursor without
+    /// poisoning untouched roots. Mutable access and joint publication arm
+    /// permanent mutation poison before exposing or modifying original data.
+    /// Every refusal retains the same original cursor and physical ownership.
+    pub fn try_acquire_owned_retained(
+        &self,
+        owned: LinCowCellOwned<T, R, U, Charge>,
+    ) -> Result<
+        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
+        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
+    > {
+        self.acquire_owned(owned, true)
+    }
+
+    fn acquire_owned(
+        &self,
+        owned: LinCowCellOwned<T, R, U, Charge>,
+        retained: bool,
+    ) -> Result<
+        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,
+        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),
+    > {
         if !Shared::ptr_eq(&self.write, &owned.root) {
             return Err((owned, OwnedWriteError::Changed));
         }
-        let (guard, poisoned) = match self.write.try_lock() {
+        let acquired = if retained {
+            self.write.try_lock_retained()
+        } else {
+            self.write.try_lock()
+        };
+        let (guard, poisoned) = match acquired {
             Ok(guard) => (guard, false),
             Err(TryLockError::WouldBlock) => return Err((owned, OwnedWriteError::Busy)),
             Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
@@ -1009,6 +1161,10 @@ where
             next,
             base,
         } = self;
+        // The sealed transfer may touch both original roots. From here until
+        // complete publication, an unwind poisons both physical owners.
+        guard.begin_retained_mutation();
+        active.begin_retained_mutation();
         let ((newdata, engine), cursor_charge) = work
             .into_inner()
             .expect("prepared unique cursor")
@@ -1021,6 +1177,11 @@ where
         // assignments cannot reclaim a payload or invoke a charge destructor.
         guard.current = new_inner.clone();
         **active = new_inner;
+        // Both original roots now name the completed generation. Only retained
+        // custody may disarm after this point; ordinary guards remain conservative.
+        // Earlier unwind keeps mutation poison armed on the actual primitives.
+        guard.complete_retained_mutation();
+        active.complete_retained_mutation();
         LinCowCellPublished {
             guard,
             active,
@@ -2329,3 +2490,10 @@ mod identity_preparation_tests {
 
 #[cfg(test)]
 mod commit_slot_tests;
+
+#[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
+mod retained_mutex_tests;
+
+#[cfg(all(test, not(feature = "dhat-heap"), not(miri)))]
+#[path = "reader_release_tests.rs"]
+mod reader_release_tests;

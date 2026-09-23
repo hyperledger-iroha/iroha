@@ -3472,6 +3472,7 @@ impl V2BodyStore {
     /// because validation consumes the signed body and immutable height
     /// context, not the manifest round; every round-local marker remains
     /// checked against that result.
+    #[cfg(test)]
     pub(crate) fn revalidate_recovered_markers<F, E>(
         &mut self,
         mut validator: F,
@@ -3970,7 +3971,7 @@ impl V2BodyStore {
     /// and decoded. A success or deterministic rejection result is minted only
     /// after its closed outcome marker has crossed the file-and-directory
     /// durability boundary. Missing-sidecar deferrals are never persisted.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn execute_durable_validation<F, E>(
         &mut self,
         durable: DurableBodyReceipt,

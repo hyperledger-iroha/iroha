@@ -1,4 +1,5 @@
 include!("v2_worker/pending_kura_apply_io_snapshot.rs");
+include!("v2_worker/retained_apply.rs");
 
 /// Read-only ownership census emitted only when the outer lifecycle runner
 /// has stopped reaching a non-empty fair-ingress queue.
@@ -34,6 +35,7 @@ pub(in crate::sumeragi) struct LifecycleIoSchedulerSnapshotV1 {
     completion_max_service_debt: u64,
     local_completions: usize,
     held_completion: bool,
+    retained_apply_dependency: Option<&'static str>,
     sender_open: bool,
     receiver_open: bool,
 }
@@ -194,25 +196,32 @@ impl ProductionV2Services {
     }
 
     /// Requeue the original Apply only after its actual local dependency releases.
-    fn retry_local_apply(&mut self) -> Result<(), String> {
-        let Some((task, refusal)) = self.pending_local_apply.take() else {
+    ///
+    /// Completion rank services this owner even when the physical completion
+    /// queue is empty: a dependency release must not require unrelated work.
+    pub(in crate::sumeragi) fn retry_local_apply(&mut self) -> Result<(), String> {
+        if self.output_guard.restart_required() {
+            return Err(self.output_guard.restart_error());
+        }
+        let Some(mut retained) = self.pending_local_apply.take() else {
             return Ok(());
         };
-        match local_apply_refusal_ready(&refusal) {
+        match retained.dependency.ready() {
             Ok(false) => {
-                self.pending_local_apply = Some((task, refusal));
+                self.pending_local_apply = Some(retained);
                 return Ok(());
             }
             Err(reason) => {
-                self.pending_local_apply = Some((task, refusal));
+                self.pending_local_apply = Some(retained);
                 return Err(reason);
             }
             Ok(true) => {}
         }
         let Some(io) = self.io.as_ref() else {
-            self.pending_local_apply = Some((task, refusal));
+            self.pending_local_apply = Some(retained);
             return Err("retained Apply lost its worker".into());
         };
+        let RetainedLocalApply { task, dependency } = retained;
         let (command, reason) = match io.try_enqueue(V2IoCommand::Apply(task)) {
             Ok(()) => return Ok(()),
             Err(V2IoTrySendError::Full(command)) => (command, None),
@@ -231,7 +240,7 @@ impl ProductionV2Services {
         let V2IoCommand::Apply(task) = command else {
             unreachable!("I/O admission returns the original command");
         };
-        self.pending_local_apply = Some((task, refusal));
+        self.pending_local_apply = Some(RetainedLocalApply { task, dependency });
         reason.map_or(Ok(()), Err)
     }
 
@@ -3216,7 +3225,7 @@ impl ProductionV2Services {
                 };
                 self.next_completion_source = CompletionSource::Local;
                 Ok(LifecycleCompletionTakeV1::Apply(
-                    PreparedLifecycleDecisionApplyCompletionV1 { guarded, work_ack },
+                    PreparedLifecycleDecisionApplyCompletionV1::new(guarded, work_ack),
                 ))
             }
             V2IoCompletion::RecoveredLifecycleSign(guarded) => {
@@ -3530,7 +3539,10 @@ impl ProductionV2Services {
                                 self,
                             ));
                         }
-                        self.pending_local_apply = Some((task, refusal));
+                        self.pending_local_apply = Some(RetainedLocalApply {
+                            task,
+                            dependency: RetainedApplyDependency::new(&refusal),
+                        });
                     }
                     #[cfg(test)]
                     PendingServiceCompletion::Io {
@@ -4182,6 +4194,8 @@ impl ProductionV2Services {
             completion_max_service_debt: completion.max_service_debt,
             local_completions: self.local_completions.len(),
             held_completion: self.held_io_completion.is_some(),
+            retained_apply_dependency: self.pending_local_apply.as_ref()
+                .map(|retained| retained.dependency.name()),
             sender_open,
             receiver_open,
         })

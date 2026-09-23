@@ -3252,7 +3252,10 @@ pub(crate) fn prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(
 /// Verify a canonical BFV full-bootstrap native STARK/FRI AIR proof envelope.
 ///
 /// This is the default-limit companion to
-/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits`].
+/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits`]. The supplied
+/// full material is self-contained; callers with governed artifacts should use
+/// [`verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits`]
+/// to replay its arithmetic source.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope(
     bytes: &[u8],
@@ -3421,13 +3424,43 @@ fn bfv_full_bootstrap_air_openings_match_public_opening_material_v1(
                 == Some(opening.next_row.as_slice())
     })
 }
+/// Verify a BFV full-bootstrap native proof against concrete governed artifacts.
+///
+/// The standalone full-material verifier checks the proof against the material it receives.
+/// This wrapper first reconstructs that material from the caller's public key, bootstrap key,
+/// artifact bundle, and Galois keys, including every coefficient of the execution trace.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits(
+    bytes: &[u8],
+    limits: &StarkVerifierLimits,
+    params: &iroha_crypto::BfvParameters,
+    public_key: &iroha_crypto::BfvPublicKey,
+    bootstrap_key: &iroha_crypto::BfvBootstrapKey,
+    artifacts: &iroha_crypto::BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[iroha_crypto::BfvGaloisKey],
+    material: &iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
+) -> bool {
+    iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_for_public_key_and_artifacts_v1(
+        params,
+        public_key,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        material,
+    )
+    .is_ok()
+        && verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(bytes, limits, material)
+}
 /// Verify a BFV full-bootstrap native STARK/FRI AIR proof envelope with limits.
 ///
 /// Generic STARK verification is only the first stage. This BFV wrapper also requires the exact
 /// first-release BFV STARK parameters, the statement-bound domain tag, the canonical BFV circuit
 /// id, the statement hash as the public digest, the canonical opening count, sampled public-padding
 /// rows that match the BFV statement header, and the typed public-opening material carried by the
-/// governed execution prover-input package.
+/// execution prover-input package. This self-contained check does not replay external governed
+/// artifacts; use [`verify_stark_fri_bfv_full_bootstrap_air_envelope_for_artifacts_with_limits`]
+/// when those artifacts are the source of authority.
 #[must_use]
 pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     bytes: &[u8],

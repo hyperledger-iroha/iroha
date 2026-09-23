@@ -1429,7 +1429,7 @@ impl LifecycleLedgerStoreV1 {
     /// Authenticate one exact physically present canonical frame.
     ///
     /// Returning `None` for the ordinary missing-path empty fallback is the
-    /// security boundary used by non-genesis CompleteTip recovery.
+    /// boundary used by physical-frame CompleteTip recovery at every height.
     fn authenticate_present_frame(
         &self,
         expected: &LifecycleLedgerV1,

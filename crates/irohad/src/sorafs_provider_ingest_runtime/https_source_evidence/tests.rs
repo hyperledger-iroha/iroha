@@ -3,6 +3,7 @@ use super::*;
 use crate::sorafs_provider_ingest_runtime::https_source::ProviderIngestHttpsSourceLeaseV1;
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_data_model::block::BlockHeader;
+use iroha_data_model::sorafs::capacity::ProviderId;
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, compute_chunk_plan_digest_sha3, compute_por_root,
     gateway::{GatewayProviderInput, GatewaySourceLimitsV1},
@@ -51,6 +52,27 @@ impl Fixture {
 }
 fn fixture() -> Fixture {
     fixture_with_torii_authority("source.sorafs.example")
+}
+#[test]
+fn current_evidence_rejects_even_valid_council_and_advert_without_live_finality() {
+    let fixture = fixture();
+    fixture.check().expect("independent fixture evidence");
+    let (_root, finalized) =
+        ArchivedProviderIngestFinalizedLedgerV1::unfinalized_for_https_evidence_test(
+            fixture.config.network_id,
+            ProviderId::new(fixture.request.authorization().provider_id()),
+        );
+    assert_eq!(
+        validate_provider_ingest_current_https_evidence_v1(
+            &finalized,
+            &fixture.config,
+            &fixture.evidence(),
+            &fixture.grant,
+            NOW,
+        ),
+        Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+        "a signed admission and cached advert cannot stand in for a current finalized assignment"
+    );
 }
 fn fixture_council_signature(digest: &[u8]) -> CouncilSignature {
     let key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x45; 32]).unwrap();

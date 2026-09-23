@@ -259,10 +259,46 @@ state_test! { sync native_candidate_uses_exact_decisions_and_canonical_recorded_
     }
 }
 
+state_test! { sync native_candidate_after_idle_uses_input_time_in_full_preparation
+    use crate::sumeragi::v2_candidate::{CandidateAssemblyOutcome, CandidateAttachments};
+    for atomic in [false, true] {
+        let fixture = native_candidate_fixture(&[NativeEconomicCase::TransferAfterParent(25, 10_000)], atomic);
+        let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
+        let CandidateAssemblyOutcome::Assembled(candidate) = assemble_native_candidate_for_test(
+            &fixture, 16, 2 * 1024 * 1024, CandidateAttachments::default()).unwrap()
+        else { panic!("one finite input after an idle parent must produce a carrier"); };
+        let block = candidate.block();
+        let input_time = fixture.work.batch().groups[0].payload.input.entrypoint.creation_time_ms().unwrap();
+        assert_eq!(block.header().creation_time_ms, input_time + 1);
+        assert!(block.header().creation_time() > fixture.parent.header().creation_time()
+            + fixture.state.sumeragi_block_cadence());
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state
+            .prepare_proposed_native_lane_batch_source(block, &[]).unwrap()
+        else { panic!("original authenticated input remains available"); };
+        let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
+        // The actual preflight must derive the same time from the Native source,
+        // independently of the validator's local wall clock.
+        let (_, clock) = iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(1));
+        let prepared = source.prepare_candidate(context,
+            &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID, &clock,
+            fixture.state.sumeragi_block_cadence()).unwrap().unwrap();
+        assert_eq!(prepared.block().canonical_resultless_proposal(), *block);
+        assert_eq!(prepared.block().execution_outputs().len(), 1);
+        assert!(prepared.block().execution_outputs()[0].result().is_ok());
+        prepared.block().validate_execution_result_structure().unwrap();
+        drop(prepared);
+        drop(candidate);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
+    }
+}
+
 state_test! { sync native_candidate_fits_whole_priority_prefix_before_signing
     use crate::sumeragi::v2_candidate::{CandidateAssemblyOutcome, CandidateAttachments, CandidateError};
-    let fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25), NativeEconomicCase::Transfer(10)], false);
+    let fixture = native_candidate_fixture(&[NativeEconomicCase::TransferAfterParent(25, 10_000), NativeEconomicCase::TransferAfterParent(10, 20_000)], false);
     assert_eq!(fixture.work.batch().groups.len(), 2);
+    let full_time = fixture.work.batch().groups.iter()
+        .map(|group| group.payload.input.entrypoint.creation_time_ms().unwrap() + 1)
+        .max().unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
     let CandidateAssemblyOutcome::Assembled(one) = assemble_native_candidate_for_test(
         &fixture, 1, 2 * 1024 * 1024, CandidateAttachments::default()).unwrap()
@@ -272,12 +308,17 @@ state_test! { sync native_candidate_fits_whole_priority_prefix_before_signing
     assert_eq!(one.scan_report().native_deferred, 1);
     let expected = one.block().execution_context().unwrap().native_lane_decisions.clone();
     assert_eq!(expected.as_ref().unwrap().groups, fixture.work.batch().groups[..1]);
+    let first_time = expected.as_ref().unwrap().groups[0].payload.input.entrypoint.creation_time_ms().unwrap() + 1;
+    assert_eq!(one.block().header().creation_time_ms, first_time);
+    assert!(first_time < full_time, "admission order retains the earlier input first");
     drop(one);
     let CandidateAssemblyOutcome::Assembled(fitted) = assemble_native_candidate_for_test(
         &fixture, 16, one_bytes, CandidateAttachments::default()).unwrap()
     else { panic!("exact complete wire budget must fit the same one-group prefix"); };
     assert_eq!(fitted.block().encode_wire().unwrap().len(), one_bytes);
     assert_eq!(fitted.block().execution_context().unwrap().native_lane_decisions, expected);
+    assert_eq!(fitted.block().header().creation_time_ms, first_time,
+        "byte trimming recomputes time without the deferred later input");
     assert_eq!(fitted.scan_report().native_selected, 1);
     assert_eq!(fitted.scan_report().native_deferred, 1);
     drop(fitted);
@@ -287,6 +328,7 @@ state_test! { sync native_candidate_fits_whole_priority_prefix_before_signing
         &fixture, 16, 2 * 1024 * 1024, CandidateAttachments::default()).unwrap()
     else { panic!("deferred groups must still be available"); };
     assert_eq!(all.scan_report().native_selected, 2);
+    assert_eq!(all.block().header().creation_time_ms, full_time);
     assert_eq!(all.block().execution_context().unwrap().native_lane_decisions.as_deref(), Some(fixture.work.batch()));
     assert_eq!(fixture.work.batch().groups.len(), 2, "fitting never mutates original evidence");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
@@ -310,7 +352,7 @@ state_test! { sync native_candidate_stale_observation_waits_without_signing_or_c
 
 state_test! { sync native_candidate_controls_fit_without_displacing_or_duplicating_economic_input
     use crate::sumeragi::v2_candidate::{CandidateAssemblyOutcome, CandidateAttachments};
-    let fixture = native_candidate_fixture(&[NativeEconomicCase::Transfer(25)], false);
+    let fixture = native_candidate_fixture(&[NativeEconomicCase::TransferAfterParent(25, 10_000)], false);
     let input = &fixture.work.batch().groups[0].payload.input;
     let control = norito::encode_canonical(input).unwrap();
     let attachments = CandidateAttachments { queue_plan_admissions: vec![control.clone()], ..CandidateAttachments::default() };
@@ -318,6 +360,8 @@ state_test! { sync native_candidate_controls_fit_without_displacing_or_duplicati
         &fixture, 16, 2 * 1024 * 1024, attachments.clone()).unwrap()
     else { panic!("input and independent control fit"); };
     assert_eq!(complete.block().network_entrypoint_count(), 1);
+    assert_eq!(complete.block().header().creation_time_ms,
+        input.entrypoint.creation_time_ms().unwrap() + 1);
     assert_eq!(complete.block().execution_context().unwrap().queue_plan_admissions(), &[control]);
     assert!(complete.block().external_entrypoints_slice().is_empty());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(complete.block(), &[]).unwrap()
@@ -356,6 +400,9 @@ state_test! { sync native_candidate_controls_fit_without_displacing_or_duplicati
     assert!(context.native_lane_decisions.is_none());
     assert_eq!(context.queue_plan_admissions(), &[control]);
     assert!(admission_only.block().external_entrypoints_slice().is_empty());
+    assert_eq!(admission_only.block().header().creation_time(),
+        fixture.parent.header().creation_time() + fixture.state.sumeragi_block_cadence(),
+        "an admission control carries no execution clock floor");
     assert!(admission_only.block().encode_wire().unwrap().len() < budget);
 }
 

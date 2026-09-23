@@ -16,6 +16,8 @@ fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture 
         ],
     )
     .unwrap();
+    // The two-lane catalog is the immutable pre-genesis authority for both
+    // State and Kura; adding it after opening a default Kura must be refused.
     let (state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         World::default(),
         nexus,

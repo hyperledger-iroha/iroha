@@ -27,17 +27,22 @@ region|certified_serve_production_surface|certified_serve_store|at|pub(crate) st
 required|certified_serve_production_surface|fn open_with_kura_authority(|production Certified-Serve storage must consume recovery-minted Kura authority
 forbidden|certified_serve_production_surface|fn open_with_kura(|production Certified-Serve storage must not mint authority at the point of use
 region|quarantine|body_store|after|impl QuarantinedV2BodyStore {|before|impl RevalidatedV2BodyStore {
+region|scalar_replay_fixture|body_store|begin|-|end|-
+required|scalar_replay_fixture|#[cfg(test)]\n    pub(crate) fn revalidate_recovered_markers<F, E>|scalar recovery callbacks must remain test-only
 required|quarantine|fn into_revalidated_lifecycle_startup(|quarantined recovered-startup cut must expose the fixed lifecycle replay
 forbidden|quarantine|fn retain_recovered_markers_for_subject(|quarantined recovered-startup cut must not expose marker subject filtering
 forbidden|quarantine|fn retain_recovered_markers_for_authority(|quarantined recovered-startup cut must not expose marker authority filtering
 forbidden|quarantine|fn revalidate_recovered_markers<|quarantined recovered-startup cut must not expose arbitrary marker replay
 forbidden|quarantine|fn into_revalidated_startup(|quarantined recovered-startup cut must not expose an unbound revalidated startup
-required|quarantine|apply_service.recovered_finality_subject(context)|derive recovered-finality authority inside fixed replay
+required|quarantine|apply_service.recovered_finality_subject(context.context())|derive recovered-finality authority inside fixed replay
 required|quarantine|.retain_recovered_markers_for_subject(subject)|filter markers to recovered finality first
 required|quarantine|.retain_recovered_markers_for_authority(validation_authority)|then filter markers to WAL authority
-required|quarantine|.revalidate_recovered_markers(\pbody\p|semantically replay retained markers
+required|quarantine|service.revalidate_recovered_markers(&mut self.0)|semantically replay retained markers
 required|quarantine|self.0.into_revalidated_startup()|seal only replayed marker state
-order|quarantine|5|apply_service.recovered_finality_subject(context)|.retain_recovered_markers_for_subject(subject)|.retain_recovered_markers_for_authority(validation_authority)|.revalidate_recovered_markers(\pbody\p|self.0.into_revalidated_startup()|recovered finality, subject filtering, authority filtering, semantic replay, and marker sealing must remain ordered
+required|quarantine|NativeApplyService::new(apply_service, &self.0, context)|replay must retain exact store-owned validation custody
+required|quarantine|Ok((store, service))|replay must transfer the same retained service into the worker
+forbidden|quarantine|.revalidate_recovered_markers(\pbody\p|replay must not reopen a scalar validation callback
+order|quarantine|6|apply_service.recovered_finality_subject(context.context())|.retain_recovered_markers_for_subject(subject)|.retain_recovered_markers_for_authority(validation_authority)|NativeApplyService::new(apply_service, &self.0, context)|service.revalidate_recovered_markers(&mut self.0)|self.0.into_revalidated_startup()|recovered finality, subject filtering, authority filtering, semantic replay, and marker sealing must remain ordered
 required|factory|project_recovered_wal_control_sign|control projection is in the unified factory
 required|factory|project_recovered_wal_decision_fetch|Decision Fetch projection is in the unified factory
 required|factory|detach_recovered_decision_apply_body|locate the opaque Decision body preflight
@@ -2008,7 +2013,7 @@ region|cold_census|lifecycle_open|at|pub(super) fn exact_ready_ordinals_for_regi
 region|cold_runner|runner|after|fn advance_executor(|before|fn reconcile_executor_locked_body(
 region|cold_height_driver|runner_height_driver|at|fn recovered_output_drain_disposition(|before|\n/// Drain one bounded ordinary Completion/Runtime/Ingress batch through
 region|registry_output_census|registry|at|fn exact_optional_recovered_wal_authority(|before|/// Install one work value without overwriting an incumbent address.
-region|launch_output_census|launch|at|pub(in crate::sumeragi) fn launch(|before|let recovered_validate_sidecar =
+region|launch_output_census|launch|at|pub(in crate::sumeragi) fn launch(|before|let recovered_validate_retry_census =
 region|coordinator|coordinator|begin|-|end|-
 region|export|coordinator|after|pub(crate) use work_registry::{|before|};
 forbidden|prefix|SchedulerInputs|registry acquired forbidden scheduler authority: {forbidden}
@@ -2367,7 +2372,7 @@ count|production|prepare_durable_validate_execution(|1|the registry must expose 
 required|scheduler|.begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)|the lifecycle scheduler omitted the durable Validate dispatch join
 required|scheduler|reservation.commit(dispatch)|the lifecycle scheduler omitted exact Validate queue publication
 required|worker_path|V2IoCommand::LifecycleValidate(task)|the bounded worker omitted lifecycle Validate execution
-required|worker_path|.validate_candidate(&context, body)|the bounded worker omitted deterministic candidate validation
+required|worker_path|task.dispatch.execute_retained(|the bounded worker omitted deterministic candidate validation
 required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|the bounded worker omitted typed Validate completion
 required|turn_driver|PendingLifecycleCompletionV1::take_validate(|the turn driver omitted guarded Validate completion ownership
 required|turn_driver|.complete_durable_validate_dispatch(|the turn driver omitted atomic Validate completion publication
@@ -2489,7 +2494,10 @@ forbidden|declarations|TurnPlan|detached Validate declarations acquired forbidde
 forbidden|declarations|TurnOutcome|detached Validate declarations acquired forbidden scheduler surface: TurnOutcome
 count|implementation|pub(super) fn execute|0|detached Validate execution must remain private
 count|implementation|fn execute|1|detached Validate implementation must contain one execution method
-count|implementation|execute_durable_validation(|1|detached Validate implementation must invoke durable validation exactly once
+forbidden|production|fn execute<F, E>|scalar detached validation must remain confined to unit fixtures
+forbidden|implementation|execute_durable_validation(|detached production validation must retain its original carrier
+required|implementation|service: &mut RetainedBodyValidationService<P>|detached validation must borrow the original store-owned service
+count|implementation|execute_retained_durable_validation(|1|detached Validate implementation must invoke durable validation exactly once
 forbidden|implementation|EffectWorkId|detached Validate implementation acquired forbidden authority: EffectWorkId
 forbidden|implementation|BodyValidationTask|detached Validate implementation acquired forbidden authority: BodyValidationTask
 forbidden|implementation|RuntimeEffectOwnership|detached Validate implementation acquired forbidden authority: RuntimeEffectOwnership
@@ -2509,6 +2517,14 @@ forbidden|implementation|.insert(|detached Validate implementation acquired forb
 forbidden|implementation|.remove(|detached Validate implementation acquired forbidden authority: .remove(
 forbidden|implementation|enqueue_|detached Validate implementation acquired forbidden authority: enqueue_
 forbidden|implementation|.publish_ready(|detached Validate implementation acquired forbidden authority: .publish_ready(
+region|retained_execution|retained_validation|after|pub(crate) fn execute_retained_durable_validation<P: CarrierValidator>(|before|#[cfg(test)]
+region|retained_replay|native_validation|after|impl NativeApplyService {|end|-
+required|retained_execution|service.matches_store(&self.instance_identity())|retained validation must authenticate original open-store custody
+required|retained_execution|self.load_validation_envelope(&durable, expected_manifest_hash)|retained validation must bind exact receipt and manifest before execution
+required|retained_execution|service.prepare_marker(|retained validation must execute through the single retained candidate owner
+order|retained_execution|3|service.prepare_marker(|self.persist_validated_receipt(&durable, commitment)|service.confirm(&validated)|candidate validation must precede durable marker and exact confirmation
+required|retained_replay|store.revalidate_retained_markers(&mut self.validation)|recovery must use the same retained validation service as live execution
+forbidden|retained_execution|execute_durable_validation(|retained execution must not fall back to the retired scalar path
 forbidden|implementation|.replace_before_publication(|detached Validate implementation acquired forbidden authority: .replace_before_publication(
 required|reattachment|ConcreteWorkAddress::new|detached Validate reattachment omitted ConcreteWorkAddress::new
 required|reattachment|work.validates_at(request.address)|detached Validate reattachment omitted work.validates_at(request.address)
@@ -2533,7 +2549,7 @@ forbidden|caller|DetachedDurableValidateExecution|detached Validate handoff esca
 forbidden|caller|reattach_durable_validate_execution|detached Validate handoff escaped its closed registry surface: reattach_durable_validate_execution
 required|scheduler|.begin_durable_validate_dispatch(|scheduler omitted the sealed durable Validate handoff
 required|worker_path|V2IoCommand::LifecycleValidate(task)|worker omitted the typed durable Validate command
-required|worker_path|.validate_candidate(&context, body)|worker omitted deterministic durable Validate execution
+required|worker_path|task.dispatch.execute_retained(|worker omitted deterministic durable Validate execution
 required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted exact durable Validate reattachment and publication
 end
 case|durable_validate_wait_dispatch_is_move_only_and_scheduler_owned
@@ -2567,7 +2583,11 @@ forbidden|declarations|RuntimeEffectOwnership|wait-dispatch declaration acquired
 forbidden|declarations|RuntimeLifecycleOrdinalSource|wait-dispatch declaration acquired legacy authority: RuntimeLifecycleOrdinalSource
 forbidden|declarations|lifecycle_ordinal|wait-dispatch declaration acquired legacy authority: lifecycle_ordinal
 count|implementation|pub(in crate::sumeragi) fn execute|1|wait-dispatch implementation must expose one worker execution entry
-required|implementation|request.execute(body_store, validator)|wait-dispatch execution lost its detached request
+required|implementation|request.execute_retained(body_store, service)|wait-dispatch execution lost its detached request
+forbidden|registry_production|fn execute<F, E>|scalar dispatch must remain confined to unit fixtures
+forbidden|worker_dispatch|task.dispatch.execute(|worker must not resurrect scalar execution
+required|worker_dispatch|retained_validation.matches_store(&body_store.instance_identity())|worker must authenticate the exact retained store/service pair
+required|worker_dispatch|let (apply_service, mut retained_validation) = apply_service.into_parts()|worker must consume the replay-owned validator
 required|implementation|Err((error, Self { request, wake }))|wait-dispatch execution lost its recoverable error return
 forbidden|implementation|EffectWorkId|wait-dispatch execution acquired forbidden authority: EffectWorkId
 forbidden|implementation|BodyValidationTask|wait-dispatch execution acquired forbidden authority: BodyValidationTask
@@ -2625,7 +2645,7 @@ required|coordinator_export|pub(in crate::sumeragi) use work_registry|coordinato
 required|coordinator_export|DurableValidateDispatch|coordinator lost the reviewed Validate dispatch re-export
 required|worker_dispatch|struct LifecycleValidateTaskV1|worker lost the exact lifecycle Validate command
 required|worker_dispatch|dispatch: DurableValidateDispatch|worker command lost its move-only registry dispatch
-required|worker_dispatch|task.dispatch.execute(|worker lost the sole exact Validate execution path
+required|worker_dispatch|task.dispatch.execute_retained(|worker lost the sole exact Validate execution path
 required|worker_dispatch|struct LifecycleValidateCapacityReservationV1|worker lost pre-claim Validate capacity ownership
 order|scheduler_dispatch|6|.attest_ready_validate_demand(|services.capture_lifecycle_completion_capacity_census(probes)|self.coordinator.plan_turn(inputs)|.select_validate(ordinal)|.begin_durable_validate_dispatch(|reservation.commit(dispatch)|Validate attestation, capacity freeze, claim, dispatch sealing, and queue publication must remain ordered
 forbidden|caller|begin_durable_validate_dispatch|durable Validate wait dispatch escaped its closed caller surface: begin_durable_validate_dispatch
@@ -3389,10 +3409,9 @@ required|post_apply_output|self.lifecycle_decision_apply_successor_outputs = Non
 required|finish_gate|self.pending_lifecycle_output_admissions.is_empty()|height finish omitted pending post-Apply output debt
 required|finish_gate|self.lifecycle_decision_apply_successor_outputs.is_none()|height finish omitted the sealed post-Apply proof debt
 required|completion_retry|ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied|Applied completion stopped re-entering the post-Apply output corridor before Runtime
-order|completion_dispatch|3|self.services.take_next_lifecycle_completion()|LifecycleCompletionTakeV1::Apply(completion)|settle_lifecycle_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer neutral Apply ownership directly to settlement
-required|settlement|LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted typed deferred Apply ownership
-required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted exact sidecar owner validation
-required|settlement|LifecycleDecisionApplySidecarWaitV1|settlement omitted the lineage-neutral sidecar wait
+order|completion_dispatch|3|self.services.take_next_lifecycle_completion()|LifecycleCompletionTakeV1::Apply(completion)|settle_lifecycle_decision_apply_completion_owner(completion)|unified completion classification must transfer neutral Apply ownership directly to settlement
+required|settlement|RetainedLifecycleDecisionApplyDeferredV1 { completion }|settlement must retain the original guarded deferred Apply
+forbidden|settlement|LifecycleDecisionApplySidecarWaitV1|settlement must not recreate a retired Apply sidecar wait
 required|settlement|LifecycleDecisionApplyWorkerResultV1::Applied(applied)|settlement omitted typed applied ownership
 required|settlement|prepare_lifecycle_decision_apply_terminal_transition(|settlement omitted lineage-aware terminal preparation
 required|settlement|executor.prepare_lifecycle_decision_apply_completion(authority)|settlement omitted lineage-aware executor preparation
@@ -3405,16 +3424,25 @@ required|settlement|executor.commit_lifecycle_decision_apply_finality(finality)|
 required|settlement|completion.acknowledge_after_owner_settlement()|settlement omitted worker ownership acknowledgement
 required|settlement|status::set_v2_status(status)|settlement omitted terminal status publication
 required|deferred_retry|completion.retry_deferred()|deferred Apply retry lost its retained completion
-required|deferred_retry|fn retry_after_available(self)|deferred Apply retry lost its available transition
+required|deferred_retry|fn retry_after_local_release(self)|deferred Apply retry must use its original local dependency
 forbidden|deferred_retry|dispatch_lane_work_effects(|deferred Apply retry reopened broad lane dispatch
 forbidden|deferred_retry|effect_limit|deferred Apply retry acquired a broad effect limit
-required|drive|authorizes_sidecar_owner(&self.services, lane_work)|sidecar drive omitted exact service and lane ownership
-required|drive|deferred.sidecar.register(lane_work)|sidecar drive omitted exact registration
-required|drive|dispatch_next_lifecycle_decision_apply_sidecar_request(|sidecar drive retained a recovered-only dispatcher
-required|drive|deferred.retry_after_available()|sidecar drive omitted the unchanged-task retry
 forbidden|drive|dispatch_lane_work_effects(|sidecar drive reopened broad lane dispatch
 forbidden|drive|effect_limit|sidecar drive acquired a broad effect limit
-order|drive|3|authorizes_sidecar_owner|deferred.sidecar.register(lane_work)|MergeSidecarDeferralDisposition::Available|sidecar ownership, registration, and availability must remain ordered
+required|drive|deferred.retry_after_local_release()|Apply drive must retry the same retained local owner
+forbidden|drive|lane_work|Apply local retry must not acquire a second recovery service
+region|worker_retry|worker|after|impl PreparedLifecycleDecisionApplyCompletionV1 {|before|struct LifecycleValidateCompletionDropGuardV1 {
+region|dependency|worker|after|enum RetainedApplyDependency {|before|/// Read-only ownership census
+required|worker_retry|Some(RetainedApplyDependency::new(refusal))|deferred Apply must retain its original refusal observation
+required|worker_retry|self.dependency.as_mut().map(RetainedApplyDependency::ready)|retry must poll the retained release registration
+required|worker_retry|Some(Ok(false)) => return LifecycleDecisionApplyDeferredRetryV1::Unavailable(self)|pending dependency must return the same whole completion
+required|worker_retry|work_ack.queue.retry_lifecycle_decision_apply(task)|retry must enqueue the exact original task
+required|worker_retry|LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }|queue pressure must retain the original task and refusal
+required|worker_retry|dependency,|queue pressure must retain the same release registration
+order|worker_retry|3|work_ack.queue.retry_lifecycle_decision_apply(task)|work_ack.acknowledge_retry_publication()|completion_guard.disarm()|retry must publish queue ownership before releasing completion guards
+forbidden|worker_retry|local_apply_refusal_ready|retry must not cancel its release registration between probes
+required|dependency|pending: concread::release::ReleaseFuture|original dependency must own its registered future
+required|dependency|std::pin::Pin::new(pending)|retry must poll the retained future
 required|sidecar|fn defer_missing_lifecycle_decision_apply_sidecar(|lane work lost the lineage-neutral Apply sidecar registration surface
 required|sidecar|lifecycle_decision_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>|lane work lost its lifecycle-neutral Apply wait owner
 required|sidecar|rejected_lifecycle_decision_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>|lane work lost its lifecycle-neutral Apply rejection owner
@@ -3565,7 +3593,7 @@ required|runtime_capacity|Self::LifecycleDecisionApply(_)|Apply completion lost 
 required|unified_take|V2IoCompletion::LifecycleDecisionApply(guarded)|unified completion classifier lost neutral Apply ownership
 required|unified_take|prepare_lifecycle_decision_apply_ack|unified completion classifier lost neutral Apply acknowledgement preparation
 required|unified_take|LifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
-required|unified_take|PreparedLifecycleDecisionApplyCompletionV1 { guarded, work_ack }|unified completion classifier lost its guarded neutral Apply handoff
+required|unified_take|PreparedLifecycleDecisionApplyCompletionV1::new(guarded, work_ack)|unified completion classifier lost its guarded neutral Apply handoff
 required|whole|fn authorizes_sidecar_owner(|Apply sidecar owner oracle is missing
 required|whole|V2IoCommand::LifecycleDecisionApply|worker lost its neutral lifecycle Apply command
 required|whole|V2IoCompletion::LifecycleDecisionApply|worker lost its neutral lifecycle Apply completion
@@ -3600,6 +3628,7 @@ end
 case|durable_validation_surface_has_no_scheduler_identity_or_ordinal
 region|surface|body_store|after|// DURABLE_BODY_VALIDATION_SURFACE_BEGIN|before|// DURABLE_BODY_VALIDATION_SURFACE_END
 region|api|body_store|after|// DURABLE_BODY_VALIDATION_API_BEGIN|before|// DURABLE_BODY_VALIDATION_API_END
+required|api|#[cfg(test)]\n    pub(crate) fn execute_durable_validation<F, E>|scalar body-store callbacks must remain test-only
 region|error|body_store|after|pub(crate) trait BodyValidationError|before|pub(crate) enum BlockSignaturePolicy
 region|replay|body_store|after|pub(crate) fn revalidate_recovered_markers|before|/// Retire restart vote authority
 forbidden|surface|EffectWorkId|new durable validation surface must not contain {forbidden}

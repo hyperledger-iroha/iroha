@@ -4,6 +4,9 @@ use std::collections::BTreeSet;
 
 use super::*;
 use crate::kagemusha::{
+    KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1, KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1,
+    KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
+    KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
     KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
 };
@@ -136,6 +139,7 @@ fn hardware_profile(
     qualification_report_digest: [u8; 32],
 ) -> KagemushaHardwareProfileV1 {
     KagemushaHardwareProfileV1 {
+        app_attestation_authority_policy_digest: [0xA5; 32],
         version: KAGEMUSHA_WIRE_VERSION_V1,
         protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
         hardware_profile_id: [0; 32],
@@ -155,6 +159,47 @@ fn hardware_profile(
     }
     .seal_hardware_profile_id()
     .expect("hardware profile identity")
+}
+
+#[test]
+fn hardware_profiles_bind_exact_platform_guarantees_and_u32_preimage() {
+    let base = hardware_profile(7, [0x71; 32], [0x72; 32]);
+    assert_eq!(base.capability_mask, 0xffff);
+    assert_eq!(
+        base.canonical_id_preimage_bytes().unwrap().len(),
+        KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1
+    );
+    let bytes = base.canonical_id_preimage_bytes().unwrap();
+    assert_eq!(
+        &bytes[KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1[11].clone()],
+        &base.capability_mask.to_le_bytes()
+    );
+    for (class, guarantees) in [
+        (
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1,
+        ),
+        (
+            KagemushaHardwarePlatformClassV1::AndroidKeyMint,
+            KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1,
+        ),
+    ] {
+        let mut profile = base;
+        profile.platform_class = class;
+        profile.capability_mask = guarantees;
+        let profile = profile.seal_hardware_profile_id().unwrap();
+        profile.validate().expect("exact ordinary-app guarantees");
+        assert_ne!(profile.hardware_profile_id, base.hardware_profile_id);
+        let mut false_oem_claim = profile;
+        false_oem_claim.capability_mask = KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1;
+        assert!(
+            false_oem_claim
+                .seal_hardware_profile_id()
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
 }
 
 fn enabled_profile(seed: u8, vk_digest: [u8; 32]) -> KagemushaEnabledProfileV1 {
@@ -733,6 +778,10 @@ fn provider_policy_root_matches_python_golden_and_excludes_later_release_inputs(
         .unwrap();
     profile.hardware_profile = profile.hardware_profile.seal_hardware_profile_id().unwrap();
     profile.hardware_profile_id = profile.hardware_profile.hardware_profile_id;
+    assert_eq!(
+        hex::encode(profile.hardware_profile_id),
+        "a0a2b5d1a83a45f04e4552e4110893861c54aa5c03af4d466e7fa8aa3ef0a841"
+    );
     profile.qualification_digest = [0x22; 32];
     let entries = [authorized_provider_entry(
         &profile,
@@ -746,7 +795,7 @@ fn provider_policy_root_matches_python_golden_and_excludes_later_release_inputs(
     let mut leaf = Sha256::new();
     leaf.update(b"iroha:kagemusha:v1:hardware-policy-leaf\0");
     leaf.update(profile.hardware_profile_id);
-    leaf.update([2, 255, 255]);
+    leaf.update([2, 255, 255, 0, 0]);
     leaf.update(entries[0].provider_authority_commitment);
     let mut recovered: [u8; 32] = leaf.finalize().into();
     for (depth, sibling) in path.into_iter().enumerate() {
@@ -760,7 +809,7 @@ fn provider_policy_root_matches_python_golden_and_excludes_later_release_inputs(
     assert!(kagemusha_provider_policy_path_v1(&[profile], &entries, [0xEF; 32]).is_err());
     assert_eq!(
         hex::encode(root),
-        "01e5b53f36db41dcd2f9db725171d6405005ca6ad5374b23b3cbce6e1efdc100"
+        "b710ef16a83d8fdc2fe333360c754d49a181ca3c4cd768308dc37a2a39b5386a"
     );
     profile.vk_digest = [0x32; 32];
     profile.qualification_digest = [0x33; 32];
@@ -817,15 +866,18 @@ fn provider_policy_requires_complete_ordered_distinct_registry_positions() {
 }
 
 #[test]
-fn provider_policy_admits_all_four_governed_platform_classes() {
+fn provider_policy_binds_all_six_governed_platform_classes() {
     for class in [
         KagemushaHardwarePlatformClassV1::AndroidOemService,
         KagemushaHardwarePlatformClassV1::AppleOemService,
         KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
         KagemushaHardwarePlatformClassV1::OtherQualified,
+        KagemushaHardwarePlatformClassV1::AppleAppAttest,
+        KagemushaHardwarePlatformClassV1::AndroidKeyMint,
     ] {
         let mut profile = enabled_profile(0x41, [0x21; 32]);
         profile.hardware_profile.platform_class = class;
+        profile.hardware_profile.capability_mask = class.required_guarantees();
         profile.hardware_profile = profile.hardware_profile.seal_hardware_profile_id().unwrap();
         profile.hardware_profile_id = profile.hardware_profile.hardware_profile_id;
         profile.qualification_digest = [0x22; 32];

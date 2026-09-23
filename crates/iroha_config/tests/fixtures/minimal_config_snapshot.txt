@@ -681,6 +681,13 @@ Root {
         block_hash_history_bytes: Bytes(
             268435456,
         ),
+        transaction_history_bytes: Bytes(
+            268435456,
+        ),
+        membership_storage: KuraMembershipStoragePolicy {
+            max_bytes: 268435456,
+            memory_bytes: 67108864,
+        },
         lane_history_retention: 512,
         replica_advert: KuraReplicaAdvertPolicy {
             eviction_required_replicas: 3,
@@ -836,7 +843,7 @@ Root {
                     scale: 0,
                 },
             ),
-            stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
+            stake_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         },

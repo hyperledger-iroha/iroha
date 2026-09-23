@@ -75,6 +75,236 @@ def _require_lifecycle_stack_test_body(
     return body
 
 
+def _ordinary_native_ingress_owner_source_fidelity_errors(
+    paths, sources, errors, item, qualified_item, require_order, reject_tokens,
+) -> None:
+    """Bind the retained physical Native occurrence to its one process owner."""
+    consume = item("ordinary_consumer", "consume_prepared_native_ingress")
+    require_order(
+        "ordinary_consumer", consume,
+        "Native physical retry authenticates the original receiver and output owner",
+        (
+            "if !prepared.matches_ingress(receiver)",
+            "|| !native_lanes.matches_output_guard(&prepared.output_guard)",
+            "prepared.close_output_for_restart()", "return Err(",
+            "let initial_admission = prepared.output_guard.acquire()",
+            "drop(initial_admission)", "let inbound = prepared.inbound.take()",
+            "native_lanes.admit_owned(inbound)",
+            "NativeLaneOwnedAdmission::Accepted => {}",
+            "NativeLaneOwnedAdmission::Retry(inbound)",
+            "prepared.inbound = Some(inbound)", "return Ok(Some(prepared))",
+            "NativeLaneOwnedAdmission::Rejected { inbound, reason }", "drop(inbound)",
+            "let final_admission = output_guard.acquire()", "prepared.complete()",
+            "drop(final_admission)", "Ok(None)",
+        ),
+    )
+    _require_rust_item_context(
+        paths["ordinary_consumer"], consume, (),
+        "Native physical ingress production owner", errors,
+    )
+    pending = qualified_item(
+        "native_process", "has_pending_ingress", ("impl", "NativeRunnerProcess"),
+        "Native pending ingress projection retains the actual slot",
+    )
+    _require_exact_rust_tokens(
+        paths["native_process"], pending,
+        "pub(in crate::sumeragi) fn has_pending_ingress(&self) -> bool { self.pending_ingress.is_some() }",
+        "Native pending ingress projection uses the original retained owner", errors,
+    )
+    process_consume = qualified_item(
+        "native_process", "consume_native_ingress", ("impl", "NativeRunnerProcess"),
+        "original Native physical process ingress owner",
+    )
+    require_order(
+        "native_process", process_consume,
+        "Native process refuses a second dequeue and retains the original retry",
+        (
+            "if self.pending_ingress.is_some()", "prepared.close_output_for_restart()",
+            "return Err(",
+            "self.pending_ingress = ordinary_ingress_consumer::consume_prepared_native_ingress(",
+            "prepared, receiver, &mut self.driver,", "Ok(())",
+        ),
+    )
+    poll = qualified_item(
+        "native_process", "poll", ("impl", "NativeRunnerProcess"),
+        "Native physical process poll",
+    )
+    require_order(
+        "native_process", poll,
+        "Native poll preserves publication and services the retained physical carrier",
+        (
+            "self.settle_pending_publication()?", "self.poll_candidate()?",
+            "self.service_native_ingress(receiver)?", "if let Some(source) = self.source.as_mut()",
+            "source.poll(network, &self.guard, now, self.retransmit)?",
+            "if let Some(prepared) = self.pending_ingress.take()",
+            "self.consume_native_ingress(prepared, receiver)?",
+            "self.driver.poll(&observed, now)",
+        ),
+    )
+    source = item("ordinary_consumer", "consume_prepared_native_source_response")
+    require_order(
+        "ordinary_consumer", source,
+        "Native source response preserves exact selected request and physical terminal owner",
+        (
+            "if !prepared.matches_ingress(receiver)",
+            "!native.driver_mut().matches_output_guard(&prepared.output_guard)",
+            "prepared.close_output_for_restart()", "return Err(",
+            "let mut inbound = prepared.inbound.take()",
+            "if !native.admits_source_response(inbound.message())", "return Err(",
+            "let mut ownership = inbound.take_ingress_ownership()",
+            "if !ownership.validate_exact()", "!ownership.matches_message(inbound.message())",
+            "!ownership.matches_semantic_origin(inbound.sender())",
+            "!ownership.matches_reply_routes(inbound.reply_routes())", "return Err(",
+            "bind_leader_wire_runtime_ownership(&mut ownership)",
+            "inbound.into_message_sender_and_reply_routes()", "message.validate_version()",
+            "wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)",
+            "native.accept_source_response(response, &sender)?",
+            "let permit = output_guard.acquire()", "mark_leader_wire_volatile(receiver, &ownership)?",
+            "prepared.complete()", "drop(permit)",
+        ),
+    )
+    _require_rust_item_context(
+        paths["ordinary_consumer"], source, (),
+        "Native source-response production owner", errors,
+    )
+    for name, target in (("ordinary_consumer", consume), ("native_process", process_consume)):
+        reject_tokens(name, target, "physical Native custody has no reconstructed substitute",
+                      (".clone()", "PreparedDequeuedV2IngressV1::", "mem::replace"))
+
+
+def _ordinary_native_runner_barrier_source_fidelity_errors(
+    paths, sources, errors, item, qualified_item, require_order, reject_tokens,
+) -> None:
+    """Bind Native dependency clocks without reopening generic Runtime or Producer."""
+    active = item("lifecycle_run_inner", "run_lifecycle_active_height")
+    _require_rust_item_context(
+        paths["lifecycle_run_inner"], active, (),
+        "ordinary Native runner production owner", errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
+    )
+    require_order(
+        "lifecycle_run_inner", active,
+        "ordinary runner services its original Native process before sampling typed ownership",
+        (
+            "native: &mut super::native_process::NativeRunnerProcess",
+            "if output_guard.restart_required()", "if shutdown_signal.is_sent()",
+            "native.take_service_publication(services)", "native.service_sources(services, now)?",
+            "native.poll(native_global, native_network, now, receiver)?",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
+            "let mut producer_claim = activated.producer_claim_projection()?",
+            "let lane_only_completion_barrier = producer_claim.blocks_runtime()",
+            "if let Some(cut) = terminal_finalization_cut.as_ref()",
+            "reconcile_decided_lane_certified_serve(", "reconcile_terminal_lane_output_handoffs(",
+            "else if lane_only_completion_barrier",
+            "producer_claim.native_source_pacemaker_escape_permit()",
+            "activated.prepare_native_source_pacemaker_ingress_turn(permit)?",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+            "&mut active_runner, prepared, native,",
+            "producer_claim.decided_lane_recovery_permit()",
+            "reconcile_decided_lane_certified_serve(",
+            "if let Some(_permit) = producer_claim.native_source_pacemaker_escape_permit()",
+            "set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?",
+            "prepare_completion_runtime_cut(executor.remaining_completion_capacity() != 0,)",
+            "V2CompletionRuntimeCutDecisionV1::RetryCompletion => {}",
+            "V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut)",
+            "step_pacemaker_after_completion_runtime_cut(completion_cut, services,)",
+            "V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut)",
+            "step_completion_capacity_relief_after_cut(completion_cut, services,)",
+            "let directive = reconcile_executor_locked_body(executor, services)?",
+            "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
+            "executor.acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject(),)?",
+            "producer_claim.decided_native_source_recovery_permit(directive.decided_subject().is_some(),)",
+            "drain_decided_lane_recovery_ingress(",
+            "if producer_claim.permits_decided_lane_recovery_ingress()",
+            "producer_claim.decided_lane_recovery_permit()",
+            "settle_apply_barrier_runner_decision_handoff(",
+            "reconcile_terminal_lane_output_handoffs(",
+            "if producer_claim.permits_open_decided_lane_recovery_ingress()",
+            "drain_decided_lane_recovery_ingress(",
+            "drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view(),)",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity,)",
+            "broadcast_npos_beacon_messages(",
+            "let discovery_was_outstanding = if terminal_finalization_fenced",
+            "else if lane_only_completion_barrier", "block_sync_request.is_some()",
+            "services.retry_pending_exact_output()",
+            "reconcile_executor_locked_body(executor, services)?",
+            "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
+            "executor.acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject(),)?",
+            "services.replay_buffered_chunks(executor)", "drain_lifecycle_v2_ingress(",
+        ),
+    )
+    # Inspect the full balanced blocked-runtime branch. A nested `else` cannot
+    # truncate the checked region and hide a forbidden ordinary operation.
+    if active is not None:
+        structural = mask_rust_comments_and_literals(active.source)
+        match = re.search(r"\belse\s+if\s+lane_only_completion_barrier\s*\{", structural)
+        barrier = ""
+        if match:
+            start = match.end() - 1
+            depth = 0
+            for end in range(start, len(structural)):
+                if structural[end] == "{":
+                    depth += 1
+                elif structural[end] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        barrier = active.source[start + 1:end]
+                        break
+        if not barrier:
+            errors.append(f"{paths['lifecycle_run_inner']}: missing exact blocked-runtime branch")
+        tokens = rust_code_tokens(barrier)
+        for token, expected in (
+            ("drain_decided_lane_recovery_ingress(", 2),
+            ("reconcile_executor_locked_body(", 1),
+            ("executor.step_pacemaker_after_completion_runtime_cut(", 1),
+            ("executor.step_completion_capacity_relief_after_cut(", 1),
+            ("drain_lane_relay_ingress(", 1),
+            ("dispatch_queue_plan_admission_effects(", 1),
+        ):
+            observed = _token_sequence_count(tokens, rust_code_tokens(token))
+            if observed != expected:
+                errors.append(f"{paths['lifecycle_run_inner']}: Native blocked-runtime branch requires {expected} {token!r}; found {observed}")
+        structural_barrier = mask_rust_comments_and_literals(barrier)
+        permit_header = rust_code_tokens("if let Some(_permit) = producer_claim.native_source_pacemaker_escape_permit()")
+        for guarded in (
+            "set_ingress_physical_cut", "prepare_completion_runtime_cut",
+            "reconcile_executor_locked_body", "step_pacemaker_after_completion_runtime_cut",
+            "step_completion_capacity_relief_after_cut", "acknowledge_runner_decision_cleanup",
+        ):
+            for occurrence in re.finditer(r"\b" + guarded + r"\s*\(", structural_barrier):
+                if permit_header not in _rust_brace_context(structural_barrier, occurrence.start()):
+                    errors.append(f"{paths['lifecycle_run_inner']}: {guarded} must remain inside the exact Native-source pacemaker permit")
+        for forbidden in (
+            "advance_executor(", "replay_buffered_chunks(", "broadcast_npos_beacon_messages(",
+            "services.retry_pending_exact_output(", "retry_exact_output_and_apply_sidecar_admissions(",
+            "service_kura_replica_advert_refresh_turn(", "schedule_local_proposal(",
+            "drive_merge_sidecar_recovery(", "validate_sidecar_pacemaker_escape_permit(",
+        ):
+            if _token_sequence_count(tokens, rust_code_tokens(forbidden)):
+                errors.append(f"{paths['lifecycle_run_inner']}: Native blocked-runtime branch contains forbidden ordinary/retired authority {forbidden!r}")
+    permit = qualified_item(
+        "height_driver", "native_source_pacemaker_escape_permit",
+        ("impl", "LifecycleProducerClaimDispositionV1"),
+        "only the retained Native-source claim mints pacemaker escape authority",
+    )
+    require_order(
+        "height_driver", permit, "Native-source pacemaker permit excludes Apply and terminal claims",
+        ("if matches!(self, Self::AwaitingNativeSource)",
+         "Some(LifecycleNativeSourcePacemakerEscapePermitV1 {",
+         "_seal: LifecycleNativeSourcePacemakerEscapePermitSealV1", "else { None }"),
+    )
+    decided = qualified_item(
+        "height_driver", "decided_native_source_recovery_permit",
+        ("impl", "LifecycleProducerClaimDispositionV1"),
+        "decided Native source escape requires actual Decision",
+    )
+    require_order(
+        "height_driver", decided, "Native source recovery requires its retained claim and actual Decision",
+        ("if matches!(self, Self::AwaitingNativeSource) && decided_subject_present",
+         "Some(LifecycleDecidedLaneRecoveryPermitV1 {", "else { None }"),
+    )
+
+
 def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Pin the queue-owned ordinary/Serve ingress turn prerequisite."""
 
@@ -177,6 +407,14 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root: Pa
         (
             "pending_runner",
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        ),
+        (
+            "native_process",
+            "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
+        ),
+        (
+            "native_finalized_output",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
         ),
         (
             "runner_authority",
@@ -1078,6 +1316,13 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         completion_pre_gate,
         "lifecycle Completion parked-owner and physical-head pre-gate order",
         (
+            "if !self.runner_turn_matches(",
+            "crate::sumeragi::v2_runner::LifecycleRunnerRankTarget::Completion",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "if let Err(reason) = self.services.retry_local_apply()",
+            ".retain_effect_failure(reason)",
+            "self.close_output_for_restart()",
+            "ProductionLifecycleCompletionSelectionV1::RestartRequired",
             "self.pending_lifecycle_completion.take()",
             "match pending",
             "self.services.take_next_lifecycle_completion()",
@@ -1110,9 +1355,6 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     for variant, retry, waiting, error_action in (
         ("LocalValidate(retained)", "self.retry_local_lifecycle_validate(retained)",
          "LifecycleValidateLocalWaiting", "self.services.lifecycle_output_guard().retain_effect_failure(reason)"),
-        ("RegisteredDeferredValidate(registration)",
-         "self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)",
-         "LifecycleValidateSidecarWaiting", "iroha_logger::error!("),
     ):
         require_order(
             "driver", completion_pre_gate,
@@ -1134,15 +1376,35 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 6:
+        if ordinary_returns != 5:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
                 "pre-gate must return the exact ordinary cursor for a foreign runner "
                 "rank, the unchanged-Validate-fence bypass, the retained LocalValidate "
-                "and registered-sidecar waits, an unpermitted ordinary "
+                "wait, an unpermitted ordinary "
                 "head, and an ordinary head whose Ready Proposal Sign is not exact; "
                 f"found {ordinary_returns} sites"
             )
+    reject_tokens(
+        "driver", completion_pre_gate,
+        "retained-only Completion validation ownership",
+        ("RegisteredDeferredValidate", "drive_registered_lifecycle_validate_sidecar", "lane_work"),
+    )
+    require_order(
+        "driver", completion_pre_gate,
+        "ordinary Completion head retains exact Proposal Sign preemption authority",
+        (
+            "Ok(LifecycleCompletionTakeV1::PassThrough)",
+            "if proposal_sign_preemption.is_none()",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "self.executor.lifecycle_reducer_fence_observation()",
+            ".ready_proposal_sign_preempts_bounded_producer_point(fence)",
+            "Ok(true)", "Ok(false)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "Err(error)", "self.close_output_for_restart()",
+            "ProductionLifecycleCompletionSelectionV1::RestartRequired",
+        ),
+    )
     require_order(
         "driver",
         ready_completion,
@@ -1162,7 +1424,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         completion,
         "test-only composed lifecycle Completion pre-gate and Ready order",
         (
-            "self.drive_completion_pre_gate(runner, lane_work)",
+            "self.drive_completion_pre_gate(runner)",
             "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
             "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
             "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
@@ -1170,6 +1432,12 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
     )
     for target, token, count, label in (
+        (
+            completion_pre_gate,
+            "self.services.retry_local_apply()",
+            1,
+            "lifecycle Completion single retained Apply retry",
+        ),
         (
             completion_pre_gate,
             "self.services.take_next_lifecycle_completion()",
@@ -1184,7 +1452,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
         (
             completion,
-            "self.drive_completion_pre_gate(runner, lane_work)",
+            "self.drive_completion_pre_gate(runner)",
             1,
             "composed lifecycle Completion single pre-gate",
         ),
@@ -2436,7 +2704,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "single exact ordinary post-dequeue runner tail",
         (
             "BlockMessage::KuraReplicaAdvert(_) =>",
-            "BlockMessage::LaneHistoricalRecoveryResponse(_) => { let _ = lane_work.accept_lane_message_with_ingress_ownership(",
+            "native.consume_native_ingress(prepared, receiver)?;",
             "FairV2IngressDequeueDisposition::RetireObsolete",
             "wire::ConsensusMessageV2Payload::Proposal(proposal)",
             "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
@@ -2528,18 +2796,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "KuraReplicaAdvert",
         ),
     )
-    blocked_drain = item("runner", "drain_blocked_ordinary_lane_local_ingress")
-    require_order(
-        "runner",
-        blocked_drain,
-        "blocked ordinary ingress verifies and commits exactly one lane-local occurrence",
-        (
-            "select_blocked_ordinary_lane_local_ingress(receiver, permit)?",
-            "inbound.message().is_lane_local()",
-            "return Err(V2RunnerError::Service(",
-            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?",
-            "Ok(true)",
-        ),
+    _ordinary_native_ingress_owner_source_fidelity_errors(
+        paths, sources, errors, item, qualified_item, require_order, reject_tokens,
     )
     decided_commit = item("runner", "commit_decided_lane_recovery_drain")
     require_order(
@@ -2689,7 +2947,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         apply_ingress_barrier,
         "typed Apply ingress barrier",
         (
-            "Self::AwaitingCompletion | Self::AwaitingValidateSidecar | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
+            "Self::AwaitingCompletion | Self::AwaitingNativeSource | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled | Self::AwaitingReplayCompletion",
         ),
     )
     apply_yield_barriers = [
@@ -4207,7 +4465,7 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "settle_one_recovered_lifecycle_output(",
             "recovered_output_drain_disposition(recovered_output_settlement, producer_claim)",
             "LifecycleRunnerRankTarget::Completion",
-            "activated.drive_completion_pre_gate(current_turn, lane_work)",
+            "activated.drive_completion_pre_gate(current_turn)",
             "PreGate::Ordinary(ordinary_turn)",
             "drain_one_ordinary_completion_after_lifecycle_pass_through",
             "PreGate::Selected(selected)",
@@ -4228,7 +4486,7 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "blocked_runtime_drain_disposition(producer_claim)",
             "advance_executor(",
             "LifecycleRunnerRankTarget::Ingress",
-            "activated.drive_ingress_turn(current_turn)",
+            "activated.drive_ingress_turn(current_turn, native.has_pending_ingress())",
             "activated.consume_prepared_ordinary_ingress_turn(",
         ),
     )
@@ -4425,144 +4683,12 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "local_proposal",
             ".state",
             ".reconcile(LocalProposalOwner::from(directive))",
-            "lane_work.retain_merge_sidecars_for_global_view(",
-            "Some(decided_subject)",
             "executor.acknowledge_runner_decision_cleanup(directive.tag(), Some(decided_subject))?",
         ),
     )
-    require_order(
-        "lifecycle_run_inner",
-        lifecycle_live_loop,
-        "pre-drain lane-only auxiliary-runtime barrier",
-        (
-            "let lane_only_completion_barrier = producer_claim.blocks_runtime()",
-            "if let Some(cut) = terminal_finalization_cut.as_ref()",
-            "reconcile_decided_lane_certified_serve(",
-            "reconcile_terminal_lane_output_handoffs(",
-            "else if lane_only_completion_barrier",
-            "if producer_claim.permits_decided_lane_recovery_ingress()",
-            "settle_apply_barrier_runner_decision_handoff(",
-            "reconcile_terminal_lane_output_handoffs(",
-            "if producer_claim.permits_open_decided_lane_recovery_ingress()",
-            "drain_decided_lane_recovery_ingress(",
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-            "drain_lane_relay_ingress(",
-            "drive_merge_sidecar_recovery(",
-            "service_historical_recovery_tick(",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()",
-            "dispatch_lane_work_effects(",
-            "else",
-            "broadcast_npos_beacon_messages(",
-            "let discovery_was_outstanding = if terminal_finalization_fenced",
-            "else if lane_only_completion_barrier",
-            "block_sync_request.is_some()",
-            "retry_exact_output_and_apply_sidecar_admissions(",
-            "drain_lifecycle_v2_ingress(",
-        ),
+    _ordinary_native_runner_barrier_source_fidelity_errors(
+        paths, sources, errors, item, qualified_item, require_order, reject_tokens,
     )
-    require_order(
-        "lifecycle_run_inner",
-        lifecycle_live_loop,
-        "post-reconciliation blocked ordinary lane-local progress",
-        (
-            "let discovery_was_outstanding = if terminal_finalization_fenced",
-            "else if lane_only_completion_barrier",
-            "let directive = reconcile_executor_locked_body(executor, services)?",
-            "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
-            "lane_work.retain_merge_sidecars_for_global_view(",
-            "executor.acknowledge_runner_decision_cleanup(",
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-            "services.replay_buffered_chunks(executor)",
-        ),
-    )
-    if lifecycle_live_loop is not None:
-        barrier_start = lifecycle_live_loop.source.find(
-            "if lane_only_completion_barrier {"
-        )
-        barrier_end = lifecycle_live_loop.source.find("} else {", barrier_start)
-        barrier_source = (
-            lifecycle_live_loop.source[barrier_start:barrier_end]
-            if barrier_start >= 0 and barrier_end > barrier_start
-            else ""
-        )
-        barrier_tokens = rust_code_tokens(barrier_source)
-        for required in (
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-            "drain_lane_relay_ingress(",
-            "drive_merge_sidecar_recovery(",
-            "service_historical_recovery_tick(",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()",
-            "dispatch_lane_work_effects(",
-        ):
-            count = _token_sequence_count(barrier_tokens, rust_code_tokens(required))
-            if count != 1:
-                errors.append(
-                    f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                    "lane-transport-only barrier must retain exactly "
-                    f"one {required!r} seam; found {count}"
-                )
-        for required, expected in (
-            ("drain_decided_lane_recovery_ingress(", 2),
-            ("reconcile_executor_locked_body(", 1),
-            ("executor.step_pacemaker_after_completion_runtime_cut(", 1),
-            ("executor.step_completion_capacity_relief_after_cut(", 1),
-        ):
-            count = _token_sequence_count(barrier_tokens, rust_code_tokens(required))
-            if count != expected:
-                errors.append(
-                    f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                    f"typed sidecar/Apply barrier requires {expected} {required!r} seams; found {count}"
-                )
-        structural_barrier = mask_rust_comments_and_literals(barrier_source)
-        permit_header = rust_code_tokens(
-            "if let Some(_permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()"
-        )
-        for guarded in (
-            "reconcile_executor_locked_body", "step_pacemaker_after_completion_runtime_cut",
-            "step_completion_capacity_relief_after_cut",
-        ):
-            for occurrence in re.finditer(r"\b" + guarded + r"\s*\(", structural_barrier):
-                if permit_header not in _rust_brace_context(structural_barrier, occurrence.start()):
-                    errors.append(
-                        f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                        f"{guarded} must remain inside the exact Validate-sidecar pacemaker permit"
-                    )
-        for required in (
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-        ):
-            count = _token_sequence_count(
-                rust_code_tokens(lifecycle_live_loop.source), rust_code_tokens(required)
-            )
-            if count != 2:
-                errors.append(
-                    f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                    "blocked ordinary lane-local progress must retain exactly two "
-                    f"{required!r} seams; found {count}"
-                )
-        forbidden = tuple(
-            token
-            for token in (
-                "advance_executor(",
-                "retry_exact_output_and_apply_sidecar_admissions(",
-                "replay_buffered_chunks(",
-                "broadcast_npos_beacon_messages(",
-                "service_kura_replica_advert_refresh_turn(",
-                "schedule_local_proposal(",
-            )
-            if _token_sequence_count(barrier_tokens, rust_code_tokens(token))
-        )
-        if forbidden:
-            errors.append(
-                f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
-                "lane-transport-only barrier retains forbidden "
-                f"ordinary runtime authority {forbidden!r}"
-            )
     require_order(
         "lifecycle_run_inner",
         lifecycle_live_loop,
@@ -4575,10 +4701,10 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "executor.ready_to_finish()",
             "AdvanceExecutorSliceOutcomeV1::Idle",
             "else",
-            "retry_exact_output_and_apply_sidecar_admissions(",
+            "services.retry_pending_exact_output()",
             "let executor_slice = advance_executor(",
             "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
-            "retry_exact_output_and_apply_sidecar_admissions(",
+            "services.retry_pending_exact_output()",
             "let directive = reconcile_executor_locked_body(executor, services)",
             "ready_proposal_sign_preempts_bounded_producer_point(fence)",
             "match executor_slice",
@@ -4596,7 +4722,8 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "if terminal_planning_fenced && !ready_to_finish",
             "close_admission_for_restart()",
             "pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)",
-            "refresh_pending_queue_plan_admission_handoffs(active_view)",
+            "queue_plan.needs_refresh(active_view)?",
+            "queue_plan.refresh(active_view)?",
             "let producer_turn = if terminal_planning_fenced",
             "None",
             "claim_producer_turn_for_local_proposal",
@@ -4936,17 +5063,12 @@ let directive = reconcile_executor_locked_body(executor, services)?;
 local_proposal
     .state
     .reconcile(LocalProposalOwner::from(directive));
-lane_work.retain_merge_sidecars_for_global_view(
-    directive.tag().view(),
-    directive.locked_subject(),
-    directive.decided_subject(),
-)?;
 executor.acknowledge_runner_decision_cleanup(
     directive.tag(),
     directive.decided_subject(),
 )?;
 """,
-        "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
+        "each contiguous ordinary reconciliation point must settle the original local proposal before acknowledging exact runner Decision cleanup",
         errors,
         count=3,
     )
@@ -4978,7 +5100,7 @@ executor.acknowledge_runner_decision_cleanup(
             "finalized_ingress_closed = true",
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
-            "dispatch_lane_work_effects(",
+            "dispatch_queue_plan_admission_effects(",
             "reconcile_terminal_lane_output_handoffs(",
             "if block_sync_server.has_pending_historical_body_serve()",
             "continue",
@@ -5017,6 +5139,18 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         "ordinary finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
         errors,
     )
+    require_order(
+        "lifecycle_run_inner", lifecycle_active,
+        "post-slice Decision cleanup retires discovered block sync before exact local proposal acknowledgement",
+        (
+            "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
+            "let directive = reconcile_executor_locked_body(executor, services)?",
+            "if directive.decided_subject().is_some()",
+            "retire_block_sync_request_after_decision(",
+            "local_proposal.state.reconcile(LocalProposalOwner::from(directive))",
+            "executor.acknowledge_runner_decision_cleanup(directive.tag(), directive.decided_subject(),)?",
+        ),
+    )
     lifecycle_finalization = item("lifecycle_run_inner", "finalize_lifecycle_height")
     require_order(
         "lifecycle_run_inner",
@@ -5025,8 +5159,8 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         (
             "activated.into_finalized_rollover(active_runner)",
             "finalized.finality()",
-            "prepare_successor(receipt, artifact, &mut lane_work)",
-            "finalized.rollover_outputs(",
+            "prepare_successor(receipt, artifact)",
+            "finalized.rollover_outputs(active_runner, native, &next_context, control_queue_capacity)",
             "post_output.retire_lifecycle_stores()",
             "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
         ),
@@ -5045,16 +5179,17 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "let terminal_planning_fenced = terminal_finalization_fenced || producer_claim.apply_terminal_settled()",
             "if terminal_planning_fenced && !ready_to_finish",
             "pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)",
-            "refresh_pending_queue_plan_admission_handoffs(active_view)",
+            "queue_plan.needs_refresh(active_view)?",
+            "queue_plan.refresh(active_view)?",
             "let producer_turn = if terminal_planning_fenced",
             "match activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
             "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some())",
             "schedule_local_proposal(",
-            "dispatch_lane_work_effects(",
+            "dispatch_queue_plan_admission_effects(",
             "if let Some(claimed) = producer_turn",
             "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
             "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)",
-            "let finalization_ready = if ready_to_finish",
+            "let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve()",
             "activated.ready_for_finalized_rollover(&mut active_runner)",
             "finalize_lifecycle_height(",
         ),

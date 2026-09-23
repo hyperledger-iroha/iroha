@@ -4,7 +4,10 @@ use std::{
     future::Future,
     ops::{Deref, DerefMut},
     pin::Pin,
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, Weak,
+    },
     task::{Context, Poll, Waker},
 };
 
@@ -71,6 +74,12 @@ impl ReleaseNotification {
         }
     }
 
+    /// Check original batch custody before acquiring a physical owner. This
+    /// observation grants no authority to record a release or signal a wake.
+    pub(crate) fn owns_batch(&self, batch: &DeferredReleaseBatch) -> bool {
+        Arc::ptr_eq(&self.state, &batch.notification.state)
+    }
+
     /// Bind a physical guard to notification after its actual release.
     /// Read guards and locks without poisoning use this form: their unwind does
     /// not turn later ordinary contention into a poisoned-writer failure.
@@ -78,7 +87,7 @@ impl ReleaseNotification {
         ReleaseGuard {
             inner: Some(guard),
             notification: self,
-            poison_on_unwind: false,
+            poison: PoisonPolicy::Never,
         }
     }
 
@@ -89,7 +98,22 @@ impl ReleaseNotification {
         ReleaseGuard {
             inner: Some(guard),
             notification: self,
-            poison_on_unwind: true,
+            poison: PoisonPolicy::Unwind,
+        }
+    }
+
+    /// Bind the native lock's permanent poison flag to its exact release.
+    /// Private retained owners distinguish immutable abandonment from a failed
+    /// mutation; observe after unlocking, before any user wake callback.
+    pub(crate) fn observed_guard<'a, T>(
+        &'a self,
+        guard: T,
+        poisoned: &'a AtomicBool,
+    ) -> ReleaseGuard<'a, T> {
+        ReleaseGuard {
+            inner: Some(guard),
+            notification: self,
+            poison: PoisonPolicy::Observed(poisoned),
         }
     }
 
@@ -274,6 +298,24 @@ impl Drop for ReleaseFuture {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PoisonPolicy<'a> {
+    Never,
+    Unwind,
+    Observed(&'a AtomicBool),
+    Fixed(bool),
+}
+impl PoisonPolicy<'_> {
+    fn observe(self) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Unwind => std::thread::panicking(),
+            Self::Observed(flag) => flag.load(Ordering::Acquire),
+            Self::Fixed(value) => value,
+        }
+    }
+}
+
 /// Physical guard that signals only after its inner guard has been released.
 ///
 /// Drop covers abort/unwind as well as ordinary release. This wrapper deliberately
@@ -281,7 +323,7 @@ impl Drop for ReleaseFuture {
 pub struct ReleaseGuard<'owner, T> {
     inner: Option<T>,
     notification: &'owner ReleaseNotification,
-    poison_on_unwind: bool,
+    poison: PoisonPolicy<'owner>,
 }
 
 /// Original notification retained after physical unlock until aggregate cleanup.
@@ -334,19 +376,19 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         }
         struct Record<'a> {
             batch: &'a mut DeferredReleaseBatch,
-            poison_on_unwind: bool,
+            poison: PoisonPolicy<'a>,
         }
         impl Drop for Record<'_> {
             fn drop(&mut self) {
                 self.batch.released = true;
-                self.batch.poisoned |= self.poison_on_unwind && std::thread::panicking();
+                self.batch.poisoned |= self.poison.observe();
             }
         }
         // On callback unwind the original physical owner drops before this
         // record. The batch remains in its caller's aggregate throughout.
         let record = Record {
             batch,
-            poison_on_unwind: self.poison_on_unwind,
+            poison: self.poison,
         };
         let inner = self.inner.take().expect("owned release guard");
         let _transferred = std::mem::ManuallyDrop::new(self);
@@ -360,8 +402,10 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// release allocates nothing and runs no wake callback; the returned owner is
     /// dropped only after every enclosing publication fence has released.
     pub fn release_deferred<R>(self, release: impl FnOnce(T) -> R) -> (R, DeferredRelease) {
-        let poisoned = self.poison_on_unwind && std::thread::panicking();
+        let policy = self.poison;
         let mut retirement = self.release_retaining(release);
+        // Actual primitive poison is established when its guard is released.
+        let poisoned = policy.observe();
         let notification = DeferredRelease {
             notification: ReleaseNotification {
                 state: Arc::clone(&retirement.notification.state),
@@ -451,13 +495,13 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
             Ok(inner) => Ok(ReleaseGuard {
                 inner: Some(inner),
                 notification: transferred.notification,
-                poison_on_unwind: transferred.poison_on_unwind,
+                poison: transferred.poison,
             }),
             Err((inner, error)) => Err((
                 Self {
                     inner: Some(inner),
                     notification: transferred.notification,
-                    poison_on_unwind: transferred.poison_on_unwind,
+                    poison: transferred.poison,
                 },
                 error,
             )),
@@ -476,13 +520,13 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
             Ok(inner) => Ok(ReleaseGuard {
                 inner: Some(inner),
                 notification: self.notification,
-                poison_on_unwind: self.poison_on_unwind,
+                poison: self.poison,
             }),
             Err((inner, error)) => Err((
                 Self {
                     inner: Some(inner),
                     notification: self.notification,
-                    poison_on_unwind: self.poison_on_unwind,
+                    poison: self.poison,
                 },
                 error,
             )),
@@ -502,7 +546,7 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
         let result = ReleaseGuard {
             inner: Some(inner),
             notification: self.notification,
-            poison_on_unwind: self.poison_on_unwind,
+            poison: self.poison,
         };
         // The empty predecessor owns no allocation or physical guard. Its
         // notification has moved to result and must not run at this transition.
@@ -516,7 +560,11 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
     /// behavior; a later cleanup unwind must not poison an already healthy lock.
     pub fn release_retaining<R>(self, release: impl FnOnce(T) -> R) -> ReleaseGuard<'owner, R> {
         let mut retirement = self.map_preserving_release(release);
-        retirement.poison_on_unwind = false;
+        retirement.poison = match retirement.poison {
+            PoisonPolicy::Observed(flag) => PoisonPolicy::Fixed(flag.load(Ordering::Acquire)),
+            PoisonPolicy::Fixed(value) => PoisonPolicy::Fixed(value),
+            _ => PoisonPolicy::Never,
+        };
         retirement
     }
 
@@ -640,12 +688,12 @@ impl<'owner, T> ReleaseGuard<'owner, T> {
                     ReleaseGuard {
                         inner: Some(first),
                         notification: _first.notification,
-                        poison_on_unwind: _first.poison_on_unwind,
+                        poison: _first.poison,
                     },
                     ReleaseGuard {
                         inner: Some(second),
                         notification: _second.notification,
-                        poison_on_unwind: _second.poison_on_unwind,
+                        poison: _second.poison,
                     },
                 ))
             }
@@ -672,17 +720,16 @@ impl<T> Drop for ReleaseGuard<'_, T> {
     fn drop(&mut self) {
         struct SignalAfterRelease<'a> {
             notification: &'a ReleaseNotification,
-            poison_on_unwind: bool,
+            poison: PoisonPolicy<'a>,
         }
         impl Drop for SignalAfterRelease<'_> {
             fn drop(&mut self) {
-                self.notification
-                    .released(self.poison_on_unwind && std::thread::panicking());
+                self.notification.released(self.poison.observe());
             }
         }
         let signal = SignalAfterRelease {
             notification: self.notification,
-            poison_on_unwind: self.poison_on_unwind,
+            poison: self.poison,
         };
         // Even a panic in the inner destructor must run its drop glue before
         // signaling. The local guard keeps that ordering on both exits.

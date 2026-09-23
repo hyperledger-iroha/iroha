@@ -46,6 +46,18 @@ network and election selector. `tally_from_columns` reads only one `u64` count
 per option. These shapes do not define ballot encryption, credential-based
 uniqueness or a tally relation over the actual accepted corpus.
 
+The standalone ZK ballot and final-tally execution routes now retain an explicit
+fail-closed semantic admission guard after verifying-key role resolution and
+before proof verification or accepted-state mutation. A future key-registration
+change alone cannot open these routes. The guard must remain until reviewed
+relations prove credential-linked anonymous authority, a confidential bond
+weighted in the asset's frozen smallest units, choice-preserving conviction
+updates, and the exact closed accepted corpus. Public PLAIN ballots continue to
+use their separate frozen-scale arithmetic and funded escrow protocol. The
+current closed key registry still rejects vote roles before this guard can be
+reached by an instruction; the guard is independent defense against a later
+registry or role change and does not qualify standalone ZK elections.
+
 The [standalone protocol contract](standalone_election_protocol_contract.md)
 requires anonymous, aggregate-only, committee-free, non-reconstructing dropout
 completion. Its construction remains unresolved. The retained standalone

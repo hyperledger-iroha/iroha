@@ -97,6 +97,18 @@ this same owner with `u8`; ordered membership batches can use fixed-width hashes
 Referenced storage, comparison callbacks and surrounding control owners require
 their own admission. This buffer alone does not fund membership publication.
 
+`ChargedBuffer::try_from_charge` constructs this same backing from an original
+charge split from a complete operation's prepaid reservation. It validates the
+exact typed array layout, including alignment, before allocation. Refusal returns
+the unchanged charge; a caller can retain already allocated siblings and retry
+without refunding or reserving new capacity. The existing budget-taking `new`
+constructor uses the same allocation kernel and retains its original refund and
+error behavior. Tests combine the buffer with Concread's original reserved Shared
+header and check exact aggregate demand, partial refusal, retry and last-owner
+retirement. TODO: thread these original preparations from authenticated carrier
+input through State staging and publication before replacing the hot-tip set.
+This prerequisite adds no State, Queue or Kura admission authority by itself.
+
 Writer admission carries original move-only input alongside exact shell charges.
 The existing B+tree wrappers expose `Prepaid<P>` for closed admitted edits:
 under the original writer lock, it plans node/buffer/shell layouts and an explicit

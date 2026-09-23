@@ -9809,7 +9809,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             let (reason, detail) = match err {
                 axt::HandleAmountResolutionError::MissingAmount => (
                     AxtRejectReason::Budget,
-                    "intent amount is hidden and proof has no committed amount",
+                    "redacted remote spend amount has no qualified private proof relation",
                 ),
                 axt::HandleAmountResolutionError::InvalidProofEnvelope => (
                     AxtRejectReason::Proof,
@@ -26517,11 +26517,11 @@ seiyaku DurableOwner {
     fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut valid = BTreeMap::new();
-        valid.insert("valid".to_string(), (1, false, vec![0]));
+        valid.insert("valid".to_string(), (2, false, vec![0, 0]));
         host.set_zk_elections_snapshot(valid)
-            .expect("one-option election is valid");
+            .expect("two-option election is valid");
         let mut invalid_selector = BTreeMap::new();
-        invalid_selector.insert("invalid/election".to_owned(), (1, false, vec![0]));
+        invalid_selector.insert("invalid/election".to_owned(), (2, false, vec![0, 0]));
         assert_eq!(
             host.set_zk_elections_snapshot(invalid_selector),
             Err(ivm::VMError::NoritoInvalid)
@@ -26532,6 +26532,7 @@ seiyaku DurableOwner {
         );
         for (id, options, tally) in [
             ("zero-options", 0, Vec::new()),
+            ("one-option", 1, vec![0]),
             ("zero-tally", 64, Vec::new()),
             ("long-tally", 64, vec![0; 65]),
             ("oversized", 65, vec![0; 65]),
@@ -26567,6 +26568,7 @@ seiyaku DurableOwner {
         );
         for (id, options, tally) in [
             ("response-zero-options", 0, Vec::new()),
+            ("response-one-option", 1, vec![0]),
             ("response-zero-tally", 64, Vec::new()),
             ("response-long-tally", 64, vec![0; 65]),
             ("response-oversized", 65, vec![0; 65]),
@@ -26611,7 +26613,7 @@ seiyaku DurableOwner {
 
         host.set_zk_elections_snapshot(BTreeMap::from([(
             "prior-election".to_owned(),
-            (1, true, vec![9]),
+            (2, true, vec![9, 0]),
         )]))
         .expect("seed prior election snapshot");
 
@@ -26643,8 +26645,8 @@ seiyaku DurableOwner {
         world.elections.insert(
             "invalid/election".to_owned(),
             ElectionState {
-                options: 1,
-                tally: vec![0],
+                options: 2,
+                tally: vec![0, 0],
                 ..ElectionState::default()
             },
         );
@@ -26669,6 +26671,9 @@ seiyaku DurableOwner {
     fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
         for (options, tally_len, valid) in [
             (0, 0, false),
+            (1, 1, false),
+            (2, 1, false),
+            (2, 2, true),
             (64, 0, false),
             (64, 64, true),
             (64, 65, false),
@@ -26687,22 +26692,22 @@ seiyaku DurableOwner {
             let view = state.view();
             let mut host = CoreHost::new(fixture_account("alice"));
             let mut prior = BTreeMap::new();
-            prior.insert("prior".to_string(), (1, true, vec![9]));
+            prior.insert("prior".to_string(), (2, true, vec![9, 0]));
             host.set_zk_elections_snapshot(prior)
                 .expect("seed prior snapshot");
             let result = host.set_zk_snapshots_from_world(view.world(), &view.zk);
             if valid {
-                result.expect("64-option, 64-counter snapshot is valid");
+                result.expect("valid option and tally widths hydrate");
                 assert_eq!(
                     host.zk_elections.get("candidate").cloned(),
-                    Some((64, false, vec![0; 64]))
+                    Some((options, false, vec![0; tally_len]))
                 );
                 assert!(!host.zk_elections.contains_key("prior"));
             } else {
                 assert_eq!(result, Err(ivm::VMError::NoritoInvalid));
                 assert_eq!(
                     host.zk_elections.get("prior").cloned(),
-                    Some((1, true, vec![9]))
+                    Some((2, true, vec![9, 0]))
                 );
                 assert!(!host.zk_elections.contains_key("candidate"));
             }
@@ -26711,8 +26716,8 @@ seiyaku DurableOwner {
         world.elections.insert(
             "candidate/alias".to_owned(),
             ElectionState {
-                options: 1,
-                tally: vec![0],
+                options: 2,
+                tally: vec![0, 0],
                 ..ElectionState::default()
             },
         );
@@ -26724,7 +26729,7 @@ seiyaku DurableOwner {
         let view = state.view();
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut prior = BTreeMap::new();
-        prior.insert("prior".to_owned(), (1, true, vec![9]));
+        prior.insert("prior".to_owned(), (2, true, vec![9, 0]));
         host.set_zk_elections_snapshot(prior)
             .expect("seed prior snapshot");
         assert_eq!(
@@ -26733,7 +26738,7 @@ seiyaku DurableOwner {
         );
         assert_eq!(
             host.zk_elections.get("prior").cloned(),
-            Some((1, true, vec![9])),
+            Some((2, true, vec![9, 0])),
             "failed hydration must preserve the prior snapshot"
         );
         assert!(!host.zk_elections.contains_key("candidate/alias"));

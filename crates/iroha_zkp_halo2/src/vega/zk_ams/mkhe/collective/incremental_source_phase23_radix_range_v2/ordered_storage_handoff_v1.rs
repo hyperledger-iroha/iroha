@@ -255,6 +255,8 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> OrderedMaterializedRepla
     ) -> Result<VerifiedStoredMaterializedSourceV1<R, K, P>, MaterializedStorageErrorV1> {
         let live = self.live.take().ok_or(MaterializedStorageErrorV1::Source)?;
         if live.next_slot != SLOTS_V1
+            || live.source.next_comparator_plane != PLANES_V1
+            || live.source.ordered_writer.is_some()
             || live
                 .snapshot
                 .snapshot_digest_v1()
@@ -263,6 +265,16 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> OrderedMaterializedRepla
         {
             return Err(MaterializedStorageErrorV1::Source);
         }
+        let context = materialized_plane_context_digest_v1(
+            &live
+                .source
+                .validated_plane_context_v1()
+                .map_err(|_| MaterializedStorageErrorV1::Source)?,
+        )
+        .map_err(|_| MaterializedStorageErrorV1::Source)?;
+        live.snapshot
+            .require_context_v1(context)
+            .map_err(MaterializedStorageErrorV1::Storage)?;
         Ok(VerifiedStoredMaterializedSourceV1 { live })
     }
 }

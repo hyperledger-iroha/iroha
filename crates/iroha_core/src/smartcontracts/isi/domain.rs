@@ -1453,26 +1453,26 @@ pub mod isi {
                 )
                 .into());
             }
-            let orchard_pool_references =
-                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+            let privacy_reserve_custody =
+                crate::privacy_state::load_privacy_public_reserve_custody_v1(
                     &state_transaction.world.privacy_commitments,
                 )
                 .map_err(|message| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister account {account_id}: persisted Orchard pool state is invalid: {message}"
+                            "cannot unregister account {account_id}: privacy reserve custody is invalid: {message}"
                         )
                         .into(),
                     )
                 })?;
-            if let Some(reference) = orchard_pool_references
+            if let Some((_, owner)) = privacy_reserve_custody
                 .iter()
-                .find(|reference| reference.reserve_account() == &account_id)
+                .find(|(asset_id, _)| asset_id.account() == &account_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the reserve account for governed Orchard pool {:?}",
-                        reference.namespace()
+                        "cannot unregister account {account_id}: it is the reserve account for governed privacy pool {:?}",
+                        owner.namespace()
                     )
                     .into(),
                 )
@@ -2553,26 +2553,26 @@ pub mod isi {
                 )
                     .into());
             }
-            let orchard_pool_references =
-                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+            let privacy_reserve_custody =
+                crate::privacy_state::load_privacy_public_reserve_custody_v1(
                     &state_transaction.world.privacy_commitments,
                 )
                 .map_err(|message| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: persisted Orchard pool state is invalid: {message}"
+                            "cannot unregister asset definition {asset_definition_id}: privacy reserve custody is invalid: {message}"
                         )
                         .into(),
                     )
                 })?;
-            if let Some(reference) = orchard_pool_references
+            if let Some((_, owner)) = privacy_reserve_custody
                 .iter()
-                .find(|reference| reference.asset_definition_id() == &asset_definition_id)
+                .find(|(asset_id, _)| asset_id.definition() == &asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it backs governed Orchard pool {:?}",
-                        reference.namespace()
+                        "cannot unregister asset definition {asset_definition_id}: it backs governed privacy pool {:?}",
+                        owner.namespace()
                     )
                     .into(),
                 )
@@ -3890,6 +3890,26 @@ mod tests {
         .expect("canonical Orchard dependency-guard bootstrap");
         let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
             .expect("canonical Orchard dependency-guard state");
+        let reserve_asset_id = iroha_data_model::asset::AssetId::with_scope(
+            pool_state.asset_definition_id().clone(),
+            pool_state.reserve_account().clone(),
+            pool_state.public_balance_scope(),
+        );
+        let owner = crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
+            namespace,
+            bootstrap_digest: pool_state.bootstrap_digest(),
+        };
+        let custody_key = crate::privacy_state::PrivacyCommitmentKeyV1::public_reserve_custody(
+            owner.protocol_id(),
+            &reserve_asset_id,
+        )
+        .expect("canonical Orchard reserve key");
+        let custody_record =
+            crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(
+                reserve_asset_id,
+                owner,
+            )
+            .expect("canonical Orchard reserve record");
         let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
             .expect("canonical Orchard dependency-guard key");
         let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -3899,6 +3919,13 @@ mod tests {
                 .world
                 .privacy_commitments
                 .insert(key, record)
+                .is_none()
+        );
+        assert!(
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(custody_key, custody_record)
                 .is_none()
         );
         key
@@ -4221,7 +4248,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("reserve account for governed Orchard pool"),
+                .contains("reserve account for governed privacy pool"),
             "{error}"
         );
         assert!(transaction.world.accounts.get(&reserve_account).is_some());
@@ -4267,7 +4294,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("governed Orchard backing definition must remain registered");
         assert!(
-            error.to_string().contains("backs governed Orchard pool"),
+            error.to_string().contains("backs governed privacy pool"),
             "{error}"
         );
         assert!(
@@ -4320,7 +4347,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("domain cascade must retain governed Orchard backing definition");
         assert!(
-            error.to_string().contains("backs governed Orchard pool"),
+            error.to_string().contains("backs governed privacy pool"),
             "{error}"
         );
         assert!(transaction.world.domains.get(&domain_id).is_some());

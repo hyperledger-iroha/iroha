@@ -124,6 +124,18 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(saw_successor_proposal);
+    // The same bounded cleanup phase used by NativeRunnerProcess must never
+    // consume a live Decision or its original unapplied economic effect.
+    for driver in &mut drivers {
+        let decision = driver.process().instance(id).unwrap().native_decision().unwrap();
+        for _ in 0..12 {
+            driver.prepare_one_retirement().unwrap();
+            driver.poll(&observed, due).unwrap();
+        }
+        assert_eq!(driver.process().instance(id).unwrap().native_decision().unwrap(), decision);
+        assert!(driver.process().instance(id).unwrap().held_effects()
+            .any(|effect| matches!(effect, core::Effect::Apply { .. })));
+    }
     for driver in &drivers {
         let instance = driver.process().instance(id).unwrap();
         assert!(matches!(&instance.native_records()[0].record,
@@ -524,6 +536,20 @@ state_test! { sync native_driver_taken_unfinished_closed_body_keeps_original_out
         "the original completed descriptor moves once into retirement without headroom");
     assert_eq!(driver.process().instance(id).unwrap().native_records(), original_records);
     assert_eq!(driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>(), original_effects);
+    // A closure-body result is not an obsolete control/result. Even repeated
+    // production cleanup turns must leave its original output fence armed.
+    for _ in 0..12 {
+        driver.prepare_one_retirement().unwrap();
+        driver.poll(&closed, now).unwrap();
+    }
+    // Closing moves the actual owner to a physical drain worker. Polling a
+    // fixed number of times cannot promise that its exact result has returned.
+    while driver.process().instance(id).is_none() {
+        driver.poll(&closed, now).unwrap();
+        assert!(Instant::now() < until, "the original closed owner must return from its physical drain");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(driver.process().instance(id).unwrap().retirement_count(), 1);
     let retirement = driver.take_retirement(id).expect("Driver transfers the original completion once");
     assert!(driver.take_retirement(id).is_none());
     assert_eq!(retirement.instance(), id);
@@ -870,4 +896,532 @@ state_test! { sync native_driver_owned_control_and_decision_require_exact_messag
             "fair ownership and Native admission do not authorize economic Apply");
         driver.shutdown().join().unwrap();
     }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_production_cleanup_releases_repeated_obsolete_control_capacity
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_core as core,
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+    };
+    use iroha_data_model::block::lane_consensus::LaneMessageV1;
+    use std::time::Instant;
+    let now = Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let signer = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() != lane.reducer_context().leader(0)).unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.outbound = nonzero!(1_usize);
+    limits.process.effect_limit = 3 * core::MAX_EFFECTS_PER_STEP;
+    let rounds = limits.process.effect_limit + 8;
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, signer), limits).unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    while driver.process().instance(id).is_none() {
+        driver.poll(&observed, now).unwrap();
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let original = std::ptr::from_ref(driver.process().instance(id).unwrap());
+    let mut retired_controls = 0;
+    // Keep the real outbox full. Each genuine certified view advance obsoletes
+    // retained control output, so this exceeds the complete descriptor limit.
+    // No test removes a retirement or enlarges that limit.
+    for view in 0..u64::try_from(rounds).unwrap() {
+        for signer in 0..3 {
+            let mut envelope = native_driver_control_for_test(&fixture, lane, signer);
+            let LaneMessageV1::TimeoutVote(vote) = &mut envelope.message else { unreachable!() };
+            vote.body.round.voting_view = view;
+            vote.share.signature = Signature::try_new(
+                native_process_key(&fixture, lane, signer).private_key(),
+                &vote.body.signature_preimage().unwrap(),
+            ).unwrap().payload().to_vec();
+            assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(envelope)),
+                NativeLaneAdmission::Accepted));
+        }
+        while driver.process().instance(id).unwrap().tag().view() != view + 1 {
+            driver.prepare_one_retirement().unwrap();
+            driver.poll(&observed, now).unwrap();
+            assert!(Instant::now() < until, "retired control capacity cannot strand a later timeout certificate");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let retained = driver.process().instance(id).unwrap().retirement_count();
+        retired_controls += retained;
+        if retained != 0 {
+            // Queueing cleanup only moves custody; it cannot release the original
+            // instance descriptor before the exact physical completion returns.
+            for _ in 0..driver.process().occupancy().instances {
+                driver.prepare_one_retirement().unwrap();
+            }
+            assert_eq!(driver.process().instance(id).unwrap().retirement_count(), retained);
+        }
+        while driver.process().instance(id).unwrap().retirement_count() != 0 {
+            driver.prepare_one_retirement().unwrap();
+            driver.poll(&observed, now).unwrap();
+            assert!(Instant::now() < until, "existing bounded Body worker must return cleanup custody");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(std::ptr::from_ref(driver.process().instance(id).unwrap()), original);
+        assert!(!driver.process().instance(id).unwrap().held_effects()
+            .any(|effect| matches!(effect, core::Effect::Apply { .. })));
+        assert!(!guard.restart_required());
+    }
+    assert!(retired_controls >= rounds - 2, "each later view retires real retained output");
+    assert_eq!(driver.process().instance(id).unwrap().tag().view(), u64::try_from(rounds).unwrap());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_cleanup_exact_completion_keeps_capacity_and_closed_body_authority
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard, v2_core as core,
+        v2_lane_instance::{LaneInputOutcome, LanePhysicalPool, LaneProcessOwner, LaneWorkerClass},
+    };
+    use std::{sync::mpsc, time::Instant};
+    let now = Instant::now();
+    let due = now + Duration::from_secs(1);
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let signer = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() == lane.reducer_context().leader(1)).unwrap();
+    assert_ne!(lane.reducer_context().leader(0), lane.reducer_context().leader(1));
+    let guard = ConsensusOutputGuard::isolated();
+    let limits = native_process_limits_for_test();
+    let pool = LanePhysicalPool::new(Arc::clone(&fixture.state), Arc::clone(&guard), limits).unwrap();
+    let mut table = LaneProcessOwner::new(Arc::clone(&fixture.state), Arc::clone(&guard), limits).unwrap();
+    native_process_open_for_test(&mut table, &pool, &fixture, &observed, lane, signer, now);
+    let until = Instant::now() + Duration::from_secs(30);
+    let pump = |table: &mut LaneProcessOwner| {
+        if let Some(completed) = pool.try_completion().unwrap() {
+            table.accept_completion(completed, &observed).unwrap();
+        }
+        table.service_one(id, &observed, due).unwrap();
+        table.prepare_persistence(id).unwrap();
+        table.dispatch_one(&pool, LaneWorkerClass::Wal).unwrap();
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    table.poll_clock(id, &observed, due).unwrap();
+    while !table.instance(id).unwrap().held_effects().any(|effect|
+        matches!(effect, core::Effect::Broadcast(core::ConsensusMessageV2::TimeoutVote(_)))) {
+        pump(&mut table);
+    }
+    // These actual signed shares retire the held local timeout only after the
+    // matching InstallTimeout record is fsynced and acknowledged by the reducer.
+    for signer in 0..3 {
+        let envelope = native_driver_control_for_test(&fixture, lane, signer);
+        loop {
+            if !matches!(table.offer(id, &observed, &envelope.message).unwrap(), LaneInputOutcome::Backpressured) { break; }
+            pump(&mut table);
+        }
+    }
+    while table.instance(id).unwrap().tag().view() != 1
+        || table.instance(id).unwrap().timeout_deadline() != Some(due + Duration::from_secs(2)) {
+        pump(&mut table);
+    }
+    let retained = table.instance(id).unwrap().retirement_count();
+    assert!(retained > 0);
+    let records = table.instance(id).unwrap().native_records().to_vec();
+    table.prepare_body(id, &observed).unwrap();
+    assert!(table.prepare_retirement(id).unwrap());
+    assert!(!table.prepare_retirement(id).unwrap(), "one original cleanup job per instance");
+    assert_eq!(table.instance(id).unwrap().retirement_count(), retained);
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    table.hold_next_completion_for_test(id, LaneWorkerClass::Body, move || {
+        entered.send(()).unwrap();
+        let _ = release_rx.recv();
+    }).unwrap();
+    table.dispatch_one(&pool, LaneWorkerClass::Body).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(table.queued_context_for_test(id, LaneWorkerClass::Body).is_none(),
+        "the genuine body job wins before cleanup on the same physical class");
+    assert!(table.has_queued_job_for_test(id, LaneWorkerClass::Body), "cleanup still owns its queued job");
+    table.dispatch_one(&pool, LaneWorkerClass::Body).unwrap();
+    assert_eq!(table.occupancy().transferred, 2,
+        "the body worker is held and the one-slot Body queue retains cleanup");
+    assert_eq!(table.instance(id).unwrap().retirement_count(), retained);
+    native_process_advance(&fixture, true);
+    let closed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    assert!(closed.contexts().is_empty());
+    table.reconcile(&closed);
+    table.prepare_closed_drain(id).unwrap();
+    assert!(table.take_closed(id).is_none(), "physical closure cannot bypass in-flight cleanup");
+    assert!(!guard.restart_required());
+    release.send(()).unwrap();
+    let forged = Arc::new(());
+    let (mut completed, original) = loop {
+        let mut completed = native_process_receive(&pool);
+        if let Some(original) = completed.swap_retirement_ticket_for_test(Arc::clone(&forged)) {
+            break (completed, original);
+        }
+        table.accept_completion(completed, &closed).unwrap();
+    };
+    let charged = table.instance(id).unwrap().retirement_count();
+    let (_, returned) = table.accept_completion(completed, &closed).err().expect("foreign inner cleanup ticket must fail");
+    completed = returned;
+    assert_eq!(table.instance(id).unwrap().retirement_count(), charged,
+        "even a real outer completion cannot release another cleanup receipt");
+    assert!(guard.restart_required(), "substituted physical completion fences output");
+    assert!(Arc::ptr_eq(&completed.swap_retirement_ticket_for_test(original).unwrap(), &forged));
+    table.accept_completion(completed, &closed).unwrap();
+    assert_eq!(table.instance(id).unwrap().retirement_count(), charged - 1);
+    assert!(!table.prepare_retirement(id).unwrap(), "closure body still requires genuine publication");
+    assert_eq!(table.instance(id).unwrap().native_records(), records);
+    table.prepare_closed_drain(id).unwrap();
+    table.dispatch_one(&pool, LaneWorkerClass::Body).unwrap();
+    table.accept_completion(native_process_receive(&pool), &closed).unwrap();
+    let mut owner = table.take_closed(id).expect("only exact physical completions release closed custody");
+    let body = owner.take_retirement().expect("original closed-body result remains owned");
+    assert!(body.requires_recovery());
+    assert!(body.body_bytes().is_some());
+    assert!(!owner.instance().held_effects().any(|effect| matches!(effect, core::Effect::Apply { .. })));
+    drop(body);
+    drop(owner);
+    drop(table);
+    pool.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_source_closure_releases_exact_request_before_response
+    native_source_retirement_fixture(false, false);
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_source_closure_releases_exact_buffered_response
+    native_source_retirement_fixture(true, false);
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_source_closure_preserves_original_physical_body_and_output_fence
+    native_source_retirement_fixture(false, true);
+}
+
+fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::NativeLaneDriver,
+        v2_lane_instance::{LaneCurrentGate, LaneProcessOwner},
+        v2_runner::NativeSourceRequestTestProbe,
+    };
+    use std::{sync::mpsc, time::Instant};
+    let now = Instant::now();
+    let mut fixture = native_process_fixture(false, now);
+    let observed = fixture
+        .state
+        .verified_lane_consensus_contexts()
+        .unwrap()
+        .unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let leader = lane
+        .reducer_context()
+        .roster()
+        .iter()
+        .position(|member| member.id() == lane.reducer_context().leader(0))
+        .unwrap();
+    let (request, response, outstanding) = native_driver_recovery_exchange_for_test(&fixture);
+    fixture
+        .state
+        .kura
+        .evict_first_admission_body_for_testing(
+            NonZeroUsize::new(fixture.block.header().height().get() as usize).unwrap(),
+            fixture.block.hash(),
+        )
+        .unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(
+        Arc::clone(&fixture.state),
+        Arc::clone(&guard),
+        native_process_key(&fixture, lane, leader),
+        native_driver_limits_for_test(),
+    )
+    .unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        driver.poll(&observed, now).unwrap();
+        if driver
+            .process()
+            .instance(id)
+            .is_some_and(|owner| owner.source_recovery_requirement().is_some())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "real Native body job returns its authenticated source need"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let source = Arc::new(
+        driver
+            .process()
+            .instance(id)
+            .unwrap()
+            .source_recovery_requirement()
+            .unwrap()
+            .clone(),
+    );
+    let source_keys = native_preparation_global_keys(&source.finality().height_context);
+    #[cfg(feature = "bls")]
+    NativeSourceRequestTestProbe::instance(
+        driver
+            .process()
+            .source_recovery_target(id, &observed)
+            .unwrap(),
+        Arc::clone(&source),
+        &source_keys[0],
+        now,
+    )
+    .assert_observation_deadline(Arc::clone(&fixture.state), &source_keys[0], now);
+    let target = driver
+        .process()
+        .source_recovery_target(id, &observed)
+        .unwrap();
+    assert_eq!(target.instance_id(), id);
+    let foreign_fixture = native_process_fixture(false, now);
+    let foreign = LaneProcessOwner::new(
+        Arc::clone(&foreign_fixture.state),
+        ConsensusOutputGuard::isolated(),
+        native_process_limits_for_test(),
+    )
+    .unwrap();
+    assert_eq!(
+        foreign.source_recovery_target_gate(&target, &observed),
+        LaneCurrentGate::ObservationChanged,
+        "another original State family cannot consume this target"
+    );
+    let mut retained =
+        NativeSourceRequestTestProbe::instance(target, Arc::clone(&source), &source_keys[0], now);
+    let ticket = retained.backpressure();
+    assert!(
+        retained.admits_hash(request.request_hash()),
+        "the real constructor signs the exact historical request"
+    );
+    assert_eq!(
+        retained.retire(driver.process(), None),
+        LaneCurrentGate::ObservationChanged
+    );
+    assert_eq!(
+        retained.retire(driver.process(), Some(&observed)),
+        LaneCurrentGate::Current
+    );
+    assert!(retained.retains_request());
+    assert_eq!(ticket.waiter_count(), 1);
+    assert_eq!(ticket.ticket_drop_cancellations(), 0);
+    if buffered_response {
+        retained.accept(response.response().clone(), &request.request().requester);
+    }
+    let mut validation =
+        NativeSourceRequestTestProbe::non_instance(Arc::clone(&source), &source_keys[0], now, true);
+    let mut candidate = NativeSourceRequestTestProbe::non_instance(
+        Arc::clone(&source),
+        &source_keys[0],
+        now,
+        false,
+    );
+    let mut release_body = None;
+    if hold_body {
+        driver
+            .complete_source_recovery(id, &request, &response)
+            .unwrap();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        driver.hold_next_body_completion_for_test(id, move || {
+            entered.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        loop {
+            driver.poll(&observed, now).unwrap();
+            if entered_rx.try_recv().is_ok() {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "the original body remains in a real physical worker"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(driver.process().occupancy().transferred > 0);
+        release_body = Some(release);
+    }
+    // A new global carrier with the same immutable lane instance is not closure.
+    fixture.block = native_process_advance(&fixture, false);
+    let current = fixture
+        .state
+        .verified_lane_consensus_contexts()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        retained.retire(driver.process(), Some(&observed)),
+        LaneCurrentGate::ObservationChanged
+    );
+    assert_eq!(
+        retained.retire(driver.process(), Some(&current)),
+        LaneCurrentGate::Current
+    );
+    assert!(retained.retains_request());
+    assert_eq!(ticket.waiter_count(), 1);
+    let original = std::ptr::from_ref(driver.process().instance(id).unwrap());
+    let original_records = driver
+        .process()
+        .instance(id)
+        .unwrap()
+        .native_records()
+        .to_vec();
+    let original_effects = driver
+        .process()
+        .instance(id)
+        .unwrap()
+        .held_effects()
+        .cloned()
+        .collect::<Vec<_>>();
+    let original_work = driver.process().occupancy().transferred;
+    fixture.block = native_process_advance(&fixture, true);
+    let closed = fixture
+        .state
+        .verified_lane_consensus_contexts()
+        .unwrap()
+        .unwrap();
+    assert!(closed.contexts().is_empty());
+    assert!(
+        driver
+            .process()
+            .source_recovery_target(id, &current)
+            .is_none(),
+        "stale observation cannot issue a target"
+    );
+    assert!(
+        driver
+            .process()
+            .source_recovery_target(id, &closed)
+            .is_none(),
+        "authenticated closure cannot issue a target even before table drain"
+    );
+    assert_eq!(
+        retained.retire(driver.process(), Some(&closed)),
+        LaneCurrentGate::InstanceClosed
+    );
+    assert!(
+        !retained.retains_request(),
+        "the sole source slot is available for another retained requirement"
+    );
+    assert!(
+        !retained.admits_hash(request.request_hash()),
+        "a late response cannot reacquire the retired slot"
+    );
+    assert_eq!(ticket.waiter_count(), 0);
+    assert_eq!(
+        ticket.ticket_drop_cancellations(),
+        1,
+        "only this exact actor wait was cancelled"
+    );
+    assert_eq!(
+        retained.retire(driver.process(), Some(&closed)),
+        LaneCurrentGate::Current,
+        "retirement is consumed once"
+    );
+    assert_eq!(
+        std::ptr::from_ref(driver.process().instance(id).unwrap()),
+        original
+    );
+    assert_eq!(
+        driver.process().instance(id).unwrap().native_records(),
+        original_records
+    );
+    assert_eq!(
+        driver
+            .process()
+            .instance(id)
+            .unwrap()
+            .held_effects()
+            .cloned()
+            .collect::<Vec<_>>(),
+        original_effects
+    );
+    assert_eq!(driver.process().occupancy().transferred, original_work);
+    if !hold_body {
+        assert_eq!(
+            driver
+                .process()
+                .instance(id)
+                .unwrap()
+                .source_recovery_requirement()
+                .unwrap()
+                .carrier_hash(),
+            source.carrier_hash(),
+            "request retirement cannot settle original body/source custody"
+        );
+    }
+    for retained in [&mut validation, &mut candidate] {
+        assert_eq!(
+            retained.retire(driver.process(), Some(&closed)),
+            LaneCurrentGate::Current
+        );
+        assert!(
+            retained.retains_request(),
+            "validation and candidate owners need their own completion/cancellation authority"
+        );
+    }
+    assert_eq!(
+        outstanding.len(),
+        1,
+        "unrelated global request custody is intact"
+    );
+    assert!(!guard.restart_required());
+    if let Some(release) = release_body {
+        release.send(()).unwrap();
+        loop {
+            driver.poll(&closed, now).unwrap();
+            if driver
+                .process()
+                .instance(id)
+                .is_some_and(|owner| owner.retirement_count() != 0)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "original closed body completion must remain owned"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            driver
+                .process()
+                .source_recovery_target(id, &closed)
+                .is_none()
+        );
+        let body = driver
+            .take_retirement(id)
+            .expect("only the body owner transfers its original result");
+        assert!(body.requires_recovery());
+        assert!(body.body_bytes().is_some());
+        assert!(!guard.restart_required());
+        drop(body);
+        assert!(
+            guard.restart_required(),
+            "the original unfinished body still fences output"
+        );
+    } else {
+        for _ in 0..4 {
+            driver.poll(&closed, now).unwrap();
+        }
+        assert!(
+            driver
+                .process()
+                .source_recovery_target(id, &closed)
+                .is_none(),
+            "Closing/Closed inspection never admits another request"
+        );
+        assert!(!guard.restart_required());
+    }
+    driver.shutdown().join().unwrap();
 }

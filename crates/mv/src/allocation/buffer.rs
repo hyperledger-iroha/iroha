@@ -59,6 +59,48 @@ impl From<AllocationRefusal> for ChargedBufferError {
     }
 }
 
+/// Refusal to construct a buffer from one original prepaid allocation charge.
+///
+/// The constructor returns the same charge separately on every error. These
+/// checks do not acquire pool capacity or turn a different layout into funding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargedBufferFromChargeError {
+    /// The requested typed array layout cannot be represented.
+    DemandOverflow,
+    /// The original charge covers a different size or alignment.
+    LayoutMismatch {
+        /// Exact backing layout computed from the element type and capacity.
+        expected: Layout,
+        /// Unchanged layout retained by the returned original charge.
+        actual: Layout,
+    },
+    /// The global allocator refused the exact already admitted layout.
+    Allocator {
+        /// Requested backing allocation layout, including its alignment.
+        layout: Layout,
+    },
+}
+
+impl std::fmt::Display for ChargedBufferFromChargeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DemandOverflow => AllocationRefusal::DemandOverflow.fmt(formatter),
+            Self::LayoutMismatch { expected, actual } => write!(
+                formatter,
+                "buffer requires layout {expected:?} but original charge covers {actual:?}"
+            ),
+            Self::Allocator { layout } => write!(
+                formatter,
+                "failed to allocate {} admitted buffer bytes with alignment {}",
+                layout.size(),
+                layout.align()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ChargedBufferFromChargeError {}
+
 impl<T: Copy> ChargedBuffer<T> {
     /// Admit the exact backing layout before requesting it from the allocator.
     ///
@@ -75,17 +117,68 @@ impl<T: Copy> ChargedBuffer<T> {
         let charge = reservation
             .try_split(layout)
             .expect("the exact backing layout was reserved above");
+        Self::allocate(capacity, layout, charge).map_err(|_charge| ChargedBufferError::Allocator {
+            requested_bytes: layout.size(),
+        })
+    }
+
+    /// Construct fixed backing from its exact original prepaid layout charge.
+    ///
+    /// A caller may reserve a complete operation once, split the actual backing
+    /// and control-header layouts, then retain partial allocation owners on
+    /// failure. This method never reacquires capacity, refunds a returned charge,
+    /// or substitutes a new pool. The charge's size **and alignment** must match
+    /// `Layout::array::<T>(capacity)`, even for a zero-byte layout.
+    ///
+    /// On success this same charge stays with the backing until deallocation.
+    /// On every refusal the caller receives the original charge for retry or
+    /// abandonment. Zero capacity and zero-sized elements allocate no backing,
+    /// but still retain that original charge and the fixed logical capacity.
+    /// The caller remains responsible for admitting every nested/control owner
+    /// and deferring refunds until all enclosing physical guards are released.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, an exact-layout mismatch before any
+    /// allocation, or allocator refusal after layout validation. No input values
+    /// are consumed or initialized by this constructor.
+    pub fn try_from_charge(
+        capacity: usize,
+        charge: AllocationCharge,
+    ) -> Result<Self, (AllocationCharge, ChargedBufferFromChargeError)> {
+        let Ok(layout) = Layout::array::<T>(capacity) else {
+            return Err((charge, ChargedBufferFromChargeError::DemandOverflow));
+        };
+        if charge.layout() != layout {
+            let actual = charge.layout();
+            return Err((
+                charge,
+                ChargedBufferFromChargeError::LayoutMismatch {
+                    expected: layout,
+                    actual,
+                },
+            ));
+        }
+        Self::allocate(capacity, layout, charge)
+            .map_err(|charge| (charge, ChargedBufferFromChargeError::Allocator { layout }))
+    }
+
+    // Both callers validate this concrete layout and its original charge before
+    // entering the sole backing-allocation kernel. Null returns the same charge;
+    // only the caller decides whether that original custody is retained or freed.
+    fn allocate(
+        capacity: usize,
+        layout: Layout,
+        charge: AllocationCharge,
+    ) -> Result<Self, AllocationCharge> {
         let values = if layout.size() == 0 {
             Vec::new()
         } else {
             // SAFETY: layout is nonzero and checked above. The original credit
             // already covers exactly this global allocator request. A null
-            // result installs no allocation and drops the unused charge.
+            // result installs no allocation and returns the original charge.
             let pointer = unsafe { std::alloc::alloc(layout) };
             if pointer.is_null() {
-                return Err(ChargedBufferError::Allocator {
-                    requested_bytes: layout.size(),
-                });
+                return Err(charge);
             }
             // SAFETY: pointer came from the global allocator with precisely
             // Layout::array::<T>(capacity). Length zero exposes no uninitialized

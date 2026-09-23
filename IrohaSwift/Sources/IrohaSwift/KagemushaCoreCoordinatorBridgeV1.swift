@@ -8,21 +8,24 @@ protocol KagemushaCoreCoordinatorEndpointV1: AnyObject {
   func contract() throws -> [UInt32]
   func open(storagePath: Data) throws -> UInt64
   func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data
+  func close(handle: UInt64) throws
 }
 
 /// Serialized transport to the process-owned native coordinator, without a software backend.
 /// Contract matching proves ABI compatibility only; native Core must admit its qualified hardware.
-/// Returned Norito archives remain opaque. The native ABI owns handles for the process lifetime.
+/// Returned Norito archives remain opaque. Close revokes the handle; a new open needs a fresh process.
 public final class KagemushaCoreCoordinatorBridgeV1 {
   private let endpoint: any KagemushaCoreCoordinatorEndpointV1
-  private let handle: UInt64
+  private var handle: UInt64
   private let lock = NSLock()
-  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff]
+  private static let expectedContract: [UInt32] = [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]
 
   private init(endpoint: any KagemushaCoreCoordinatorEndpointV1, handle: UInt64) {
     self.endpoint = endpoint
     self.handle = handle
   }
+
+  deinit { try? close() }
 
   /// Open the exact native ABI. Missing symbols, a mismatched contract or absent backend fails closed.
   public static func open(storagePath: String) throws -> KagemushaCoreCoordinatorBridgeV1 {
@@ -47,9 +50,20 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
   public func invoke(_ method: KagemushaCoreCoordinatorMethodV1, fields: [Data]) throws -> [Data] {
     lock.lock()
     defer { lock.unlock() }
+    guard handle != 0 else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: fields)
     let response = try endpoint.invoke(handle: handle, method: method.rawValue, request: request)
     return try KagemushaCoreCoordinatorFrameV1.decodeResponse(method, requestFrame: request, responseFrame: response)
+  }
+
+  /// Revoke locally before delegated teardown; repeated close is harmless.
+  public func close() throws {
+    lock.lock()
+    defer { lock.unlock() }
+    let closing = handle
+    if closing == 0 { return }
+    handle = 0
+    try endpoint.close(handle: closing)
   }
 
   private static func validatePath(_ path: String) throws -> Data {
@@ -68,17 +82,20 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       UInt64, UInt8, UnsafePointer<UInt8>?, Int,
       UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<Int>?
     ) -> Int32
+    private typealias CloseFn = @convention(c) (UInt64) -> Int32
     private typealias FreeFn = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
     private let contractFunction: ContractFn
     private let openFunction: OpenFn
     private let invokeFunction: InvokeFn
+    private let closeFunction: CloseFn
     private let freeFunction: FreeFn
 
-    private init(contract: @escaping ContractFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, free: @escaping FreeFn) {
+    private init(contract: @escaping ContractFn, open: @escaping OpenFn, invoke: @escaping InvokeFn, close: @escaping CloseFn, free: @escaping FreeFn) {
       contractFunction = contract
       openFunction = open
       invokeFunction = invoke
+      closeFunction = close
       freeFunction = free
     }
 
@@ -88,17 +105,19 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
         let contract = dlsym(image, "connect_norito_kagemusha_core_coordinator_contract_v1"),
         let open = dlsym(image, "connect_norito_kagemusha_core_coordinator_open_v1"),
         let invoke = dlsym(image, "connect_norito_kagemusha_core_coordinator_invoke_v1"),
+        let close = dlsym(image, "connect_norito_kagemusha_core_coordinator_close_v1"),
         let free = dlsym(image, "connect_norito_free")
       else { return nil }
       return NativeEndpoint(
         contract: unsafeBitCast(contract, to: ContractFn.self), open: unsafeBitCast(open, to: OpenFn.self),
-        invoke: unsafeBitCast(invoke, to: InvokeFn.self), free: unsafeBitCast(free, to: FreeFn.self))
+        invoke: unsafeBitCast(invoke, to: InvokeFn.self), close: unsafeBitCast(close, to: CloseFn.self),
+        free: unsafeBitCast(free, to: FreeFn.self))
     }
 
     func contract() throws -> [UInt32] {
-      var words = [UInt32](repeating: 0, count: 10)
+      var words = [UInt32](repeating: 0, count: 11)
       let status = words.withUnsafeMutableBufferPointer { contractFunction($0.baseAddress, $0.count) }
-      guard status == 10 else { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(status) }
+      guard status == 11 else { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(status) }
       return words
     }
 
@@ -126,6 +145,10 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
       return Data(bytes: pointer, count: length)
     }
 
+    func close(handle: UInt64) throws {
+      try requireSuccess(closeFunction(handle))
+    }
+
     private func requireSuccess(_ status: Int32) throws {
       if status == -312 { throw KagemushaCoreCoordinatorErrorV1.unavailable }
       guard status == 0 else { throw KagemushaCoreCoordinatorErrorV1.nativeFailure(status) }
@@ -135,6 +158,7 @@ public final class KagemushaCoreCoordinatorBridgeV1 {
     func contract() throws -> [UInt32] { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func open(storagePath: Data) throws -> UInt64 { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    func close(handle: UInt64) throws { throw KagemushaCoreCoordinatorErrorV1.unavailable }
     #endif
   }
 }

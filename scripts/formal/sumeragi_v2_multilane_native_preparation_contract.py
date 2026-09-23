@@ -76,8 +76,8 @@ ORDINARY_ORDERED = (
     "Self::maximum_index_growth_for_unresolved_sidecar_write(",
     "Ok(total)",
 )
-# Recorded Native execution owns verified context and pristine controls, but
-# remains disposable: none of these relations opens the live ValidBlock gate.
+# Recorded Native execution owns verified context and pristine controls; live
+# preparation and authenticated historical replay share the same execution kernel.
 NATIVE_CONTROL_BINDINGS = (
     (BODY_STORE, "fn", "verify_origin_block_signature", (
         "context: &wire::HeightContext", "block: &SignedBlock", "policy: &BlockSignaturePolicy",
@@ -99,7 +99,7 @@ NATIVE_CONTROL_BINDINGS = (
         "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
         "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
     )),
-    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::prepare_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded\n            .into_preparation_parts()\n            .map_err(NativeCandidatePreparationError::Preparation)?', 'Arc::new(native.context().context().clone())', 'PreparedCarrier::prepare(ValidatedCarrierPreparationInput', 'native: Some(native)')),
+    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::validate_and_record_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash)', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'Ok(Some(ValidatedCarrierPreparationInput {', 'native: Some(native)')),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ValidBlock::prepare_native_candidate(", "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
@@ -155,7 +155,7 @@ NATIVE_CONTROL_BINDINGS = (
         "frozen.network_id != *view.network_id()", "frozen.height != block.header().height().get()",
         "height.checked_add(1)", "!= Some(frozen.height)",
         "block.header().prev_block_hash() != view.latest_block_hash()",
-        ".map(|qc| qc.subject.block_hash)\n                    != view.latest_block_hash()",
+        ".map(|qc| qc.subject.block_hash)\n                    .or_else(|| {\n                        frozen\n                            .snapshot_bootstrap\n                            .map(|anchor| anchor.snapshot_block_hash)\n                    })\n                    != view.latest_block_hash()",
         "active_proof_policy_bundle_at_height(&view.nexus, frozen.height)",
         "block.header().da_proof_policies_hash() != Some(HashOf::new(&expected_da_policy))",
         "committed_nexus_amx_context_hash(state)", "committed_execution_policy_hash(state)",
@@ -348,21 +348,31 @@ PREPARATION_OWNER_BINDINGS = (
     (PREFIX, "struct", "PrefixPreparation", (
         "state: Box<StateBlock<'state>>", "prefix: ValidatedExecutionPrefix",
     )),
-    (PREFIX, "method", "PrefixPreparation::capture", (
-        "native: Option<lane_decision_batch::NativeExecutionCustody>", "let authority = match native",
-        "Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>",
-        "PrefixSourceAuthority::Native(Box::new(native))",
-        "None if state.native_lane_stage.is_none()", "state.merge_carrier_entrypoints.is_empty()",
-        "context.native_lane_decisions.is_some()", "state.staged_merge_entry.is_some()",
-        "state.canonical_wsv_merge_commit_authorization.is_some()",
-        "state.verify_execution_output_seal(block)?", "state.verified_fastpq_source_inventory_for_capture()?",
-        "state.verify_cached_ordinary_witness_content(&verified_inventory)?", ".exec_witness",
-        "from_result_bearing_block_and_merge_entry", "LaneFinalityManifestV1::from_result_bearing_block(block)?",
-        "execution_commitment_from_validated_block(witness, &manifest, &lanes, block)",
-        ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
-        "sealed.sources().is_native()", "sealed.sources().proposal() != block.hash()",
-        "Arc::ptr_eq(&inventory, &verified_inventory)", "let prefix = ValidatedExecutionPrefix {",
-        "Ok((Self { state, prefix }, manifest, commitment))",
+    (PREFIX, 'method', 'PrefixPreparation::capture', (
+        'native: Option<lane_decision_batch::NativeExecutionCustody>',
+        'let authority = match native',
+        'Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>',
+        'PrefixSourceAuthority::Native(Box::new(native))',
+        'None if state.native_lane_stage.is_none()',
+        'state.merge_carrier_entrypoints.is_empty()',
+        'context.native_lane_decisions.is_some()',
+        'state.staged_merge_entry.is_some()',
+        'state.canonical_wsv_merge_commit_authorization.is_some()',
+        'state\n            .verify_execution_output_seal(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verified_fastpq_source_inventory_for_capture()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verify_cached_ordinary_witness_content(&verified_inventory)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        '.exec_witness',
+        'from_result_bearing_block_and_merge_entry',
+        'LaneFinalityManifestV1::from_result_bearing_block(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'execution_commitment_from_validated_block(witness, &manifest, &lanes, block)',
+        '.replace(output_capacity::ExecutionOutputPlanState::Captured)',
+        'sealed.sources().is_native()',
+        'sealed.sources().proposal() != block.hash()',
+        'Arc::ptr_eq(&inventory, &verified_inventory)',
+        'let prefix = ValidatedExecutionPrefix {',
+        'Ok((Self { state, prefix }, manifest, commitment))',
+        'MergeLedgerCommitError,\n    >',
+        'let inventory = state\n            .fastpq_source_inventory\n            .take()\n            .ok_or_else(|| {\n                MergeLedgerCommitError::ExecutionBatchInvalid(\n                    "carrier prefix lost its owned source inventory".to_owned(),\n                )\n            })?\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;',
     )),
     (PREFIX, "method", "ValidatedExecutionPrefix::retains_closed_state", (
         "self.sealed.proposal() == state._curr_block.hash()",
@@ -371,20 +381,39 @@ PREPARATION_OWNER_BINDINGS = (
         "state.parliament_timed_ovn_casting_bindings.is_none()", "state.native_lane_stage.is_none()",
         "PrefixSourceAuthority::Native(native) => native.retains_state(state)",
     )),
-    (PREFIX, "method", "PrefixPreparation::prepare_world_effects", (
-        "let state = &mut *self.state", "!self.prefix.retains_closed_state(state)",
-        "!state\n                .block_hashes\n                .pending()\n                .iter()\n                .copied()\n                .eq([state._curr_block.hash()])",
-        "state.validate_canonical_runtime_projection()?", "state.verify_lane_consensus_contexts_publication()?",
-        "validate_merge_carrier_entrypoint_binding()", "finalize_axt_asset_incarnations()",
-        "finalize_axt_policy_transition_ratchets()", "state.prune_axt_replay_ledger(",
-        "validate_owned_runtime_catalog_overlay()", "ensure_pending_autoscale_lifecycle_staking_is_safe(",
-        "world_commit::PreparedWorldCommit::prepare_overlay(",
+    (PREFIX, 'method', 'PrefixPreparation::prepare_world_effects', (
+        'let state = &mut *self.state',
+        '!self.prefix.retains_closed_state(state)',
+        '!state\n                .block_hashes\n                .pending()\n                .iter()\n                .copied()\n                .eq([state._curr_block.hash()])',
+        'state\n            .validate_canonical_runtime_projection()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verify_lane_consensus_contexts_publication()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'validate_merge_carrier_entrypoint_binding()',
+        'finalize_axt_asset_incarnations()',
+        'finalize_axt_policy_transition_ratchets()',
+        'state.prune_axt_replay_ledger(',
+        'validate_owned_runtime_catalog_overlay()',
+        'ensure_pending_autoscale_lifecycle_staking_is_safe(',
+        'world_commit::PreparedWorldCommit::prepare_overlay(',
+        'Result<world_commit::PreparedWorldEffects, MergeLedgerCommitError>',
+        'state.validate_merge_carrier_entrypoint_binding()?;',
+        'state\n            .finalize_axt_asset_incarnations()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;',
+        'state\n            .finalize_axt_policy_transition_ratchets()\n            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;',
+        'state\n            .validate_owned_runtime_catalog_overlay()\n            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;',
+        'world_commit::PreparedWorldCommit::prepare_overlay(\n            &mut fields.world,\n            height,\n            &fields.nexus,\n            &fields.lane_incarnation_activation_heights,\n            fields.pending_da_pin_intents.as_ref(),\n            fields.pending_autoscale_lifecycle.as_ref(),\n        )\n        .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)',
     )),
-    (PREFIX, "fn", "prepare", (
-        "input.into_parts()", "PrefixPreparation::capture(state, &valid, native)?",
-        "prepare_deterministic_carrier_metadata", "preparation.prepare_world_effects()?",
-        "prepare_carrier_publication_events(block.header())",
-        "prefix: source_prefix", "Ok(PreparedCarrier::new(super::PreparedCarrierFields {", "Err(error) => Err((Box::new(valid.into()), error))",
+    (PREFIX, 'fn', 'prepare', (
+        'input.into_parts()',
+        'PrefixPreparation::capture(state, &valid, native)?',
+        'prepare_deterministic_carrier_metadata',
+        'preparation.prepare_world_effects()?',
+        'prepare_carrier_publication_events(block.header())',
+        'prefix: source_prefix',
+        'Ok(PreparedCarrier::new(super::PreparedCarrierFields {',
+        'Err(error) => Err((Box::new(valid.into()), error))',
+        'MergeLedgerCommitError',
+        'if !preparation.state.autoscale_lifecycle_evaluated {\n            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(',
+        'preparation.state.prepare_deterministic_carrier_metadata(\n            block,\n            context\n                .roster\n                .iter()\n                .map(|entry| entry.validator.clone())\n                .collect(),\n            ApplyTopologyAuthority::V2Finality,\n        )?;',
+        'preparation\n            .state\n            .prepare_carrier_publication_events(block.header())?;',
     )),
     (JOURNALS, "struct", "CarrierJournalInputs", (
         "pub(crate) valid:", "pub(crate) state:", "pub(crate) prefix:",
@@ -527,13 +556,11 @@ WITNESS_LEASE = "crates/iroha_core/src/kura/publication_lease.rs"
 SERVICE_QUEUE = "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs"
 CARRIER_QUEUE = "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs"
 TERMINAL_OWNER_BINDINGS = (
-    (WITNESS_CARRIER, "fn", "publish_execution_witness", (
-        "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
-        "self.journals.checkpoint", "drop(lease)", "stage_kagemusha_finality_sidecar(",
-        "self.finality.artifact().height", "self.finality.artifact().block_hash",
-        "self.journals.source_prefix.witness()", "self.journals.execution_prefix",
-        "self.journals\n                    .source_prefix\n                    .parliament_timed_ovn_casting_bindings()\n                    .unwrap_or(&[])",
-        "promote_kagemusha_finality_sidecar(\n                self.finality.artifact(),\n                self.checkpoint.finality_receipt(),\n            )",
+    (WITNESS_CARRIER, 'fn', 'publish_execution_witness', (
+        '&mut self',
+        "lease: &KuraPublicationLease<'_>",
+        'lease\n            .reauthenticate_checkpoint(\n                &self.checkpoint,\n                self.finality.artifact(),\n                self.journals.checkpoint,\n            )\n            .map_err(CarrierExecutionWitnessPublicationError::Checkpoint)?;',
+        'lease\n            .publish_execution_witness(\n                self.finality.artifact(),\n                self.checkpoint.finality_receipt(),\n                self.journals.source_prefix.witness(),\n                self.journals\n                    .source_prefix\n                    .parliament_timed_ovn_casting_bindings()\n                    .unwrap_or(&[]),\n            )\n            .map_err(CarrierExecutionWitnessPublicationError::Witness)',
     )),
     (WITNESS_LEASE, "method", "KuraPublicationLease::reauthenticate_execution_witness", (
         "self.kura.kagemusha_finality_sidecar_path(finality.height)",
@@ -554,12 +581,14 @@ TERMINAL_OWNER_BINDINGS = (
         "Some(self.seal.batch.as_ref())", "self.sources.len() == self.seal.batch.groups.len()",
         "self.executions.len() == self.sources.len()", "source.body().payload() == &wire.payload && source.decisions() == wire.decisions",
     )),
-    (ARCHIVE_CARRIER, "fn", "publish_archives", (
-        "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
-        "self.journals.checkpoint", "drop(lease)", "self.checkpoint.finality_receipt()",
-        "self.journals.provider_capture.as_mut()", "self.journals.reputation_capture.as_mut()",
-        "provider\n                .publish_under_publication_lease(&lease, receipt)",
-        "reputation\n                .publish_under_publication_lease(&lease, receipt)",
+    (ARCHIVE_CARRIER, 'fn', 'publish_archives', (
+        '&mut self',
+        "lease: &KuraPublicationLease<'_>",
+        'lease\n            .reauthenticate_checkpoint(\n                &self.checkpoint,\n                self.finality.artifact(),\n                self.journals.checkpoint,\n            )\n            .map_err(CarrierArchivePublicationError::Checkpoint)?;',
+        'let receipt = self.checkpoint.finality_receipt();',
+        'if let Some(provider) = self.journals.provider_capture.as_mut() {\n            provider\n                .publish_under_publication_lease(lease, receipt)\n                .map_err(CarrierArchivePublicationError::Provider)?;\n        }',
+        'if let Some(reputation) = self.journals.reputation_capture.as_mut() {\n            reputation\n                .publish_under_publication_lease(lease, receipt)\n                .map_err(CarrierArchivePublicationError::Reputation)?;\n        }',
+        'Ok(())',
     )),
     (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_new", (
         "let owner = Self { decision, kura };", "let original = &owner.decision;",
@@ -571,7 +600,15 @@ TERMINAL_OWNER_BINDINGS = (
         'if let Some(capture) = original.journals.provider_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Provider)?;\n            }',
         'if let Some(capture) = original.journals.reputation_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Reputation)?;\n            }',
     )),
-    ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'fn', 'try_prepare_physical', ('    pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<\n        \'target,\n        Installation,\n        E,\n    >(\n        self,\n        target: &\'target State,\n        queue_source: Option<&OriginalCarrierQueue<\'target>>,\n        admit: impl FnOnce(&Self, &State) -> Result<Installation, E>,\n    ) -> Result<\n        PhysicallyPreparedCarrier<\'target, Admission, BindingAdmission, Installation>,\n        (Self, CarrierPhysicalPreparationError<E>),\n    > {\n        // Shadow the original after declaring installation: even an unwind in\n        // an early probe drops every retained original before its reservation.\n        let installation;\n        let mut original = self;\n        installation = match admit(&original, target) {\n            Ok(guard) => guard,\n            Err(error) => {\n                return Err((original, CarrierPhysicalPreparationError::Admission(error)));\n            }\n        };\n        if !target.matches_kura_instance(&original.journals.kura) {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignKura));\n        }\n        // The original geometry pins the State identity as well as its header.\n        // Reject another State sharing this Kura before any durable side effect;\n        // physical predecessor and terminal geometry checks still follow below.\n        if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }\n        if original.journals.geometry.requires_queue_custody() {\n            let refusal = match queue_source {\n                None => Some(CarrierQueueRetirementError::Missing),\n                Some(source) if !source.belongs_to(target) => {\n                    Some(CarrierQueueRetirementError::ForeignState)\n                }\n                Some(_) => None,\n            };\n            if let Some(error) = refusal {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n            }\n        }\n        // Reject substituted execution or archive custody before any derived\n        // persistence can modify its durable namespace. Release the temporary\n        // lease before the continuations enter their own storage APIs; the final\n        // lease below must authenticate all these same owners again.\n        let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };\n        original = match SourceAuthenticatedCarrier::try_new(original, kura) {\n            Ok(owner) => owner.release(),\n            Err((original, error)) => {\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        if let Err(error) = original.publish_execution_witness() {\n            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;\n            let error = match error {\n                CarrierExecutionWitnessPublicationError::Kura(error) => {\n                    CarrierPhysicalPreparationError::Kura(error)\n                }\n                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                CarrierExecutionWitnessPublicationError::Witness(error) => {\n                    CarrierPhysicalPreparationError::ExecutionWitness(error)\n                }\n            };\n            drop(installation);\n            return Err((original, error));\n        }\n        if let Err(error) = original.publish_archives() {\n            use super::archive_publication::CarrierArchivePublicationError;\n            let error = match error {\n                CarrierArchivePublicationError::Kura(error) => {\n                    CarrierPhysicalPreparationError::Kura(error)\n                }\n                CarrierArchivePublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                error => CarrierPhysicalPreparationError::Archive(error),\n            };\n            drop(installation);\n            return Err((original, error));\n        }\n        // Borrow the exact target\'s Arc, never a self-referential field inside\n        // the retained carrier. Identity equality above joins that same owner.\n        let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };\n        // Join the original source and checkpoint under all four Kura fences\n        // before any State probe. The complete owner carries this authentication\n        // only while that same lease remains held.\n        let authenticated = match SourceAuthenticatedCarrier::try_new(original, kura) {\n            Ok(owner) => owner,\n            Err((original, error)) => {\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        if let Err(error) = authenticated\n            .kura\n            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())\n        {\n            let original = authenticated.release();\n            drop(installation);\n            return Err((\n                original,\n                CarrierPhysicalPreparationError::ExecutionWitness(error),\n            ));\n        }\n        // Queue transition ownership precedes lifecycle; all later probes are\n        // try-only because ordinary ingress may own a State view before Queue.\n        let queue_observer = if authenticated\n            .decision\n            .journals\n            .geometry\n            .requires_queue_custody()\n        {\n            let source = queue_source.expect("required original source checked before persistence");\n            match source.try_observe() {\n                Ok(observer) => Some(observer),\n                Err(wait) => {\n                    let original = authenticated.release();\n                    drop(installation);\n                    return Err((\n                        original,\n                        CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {\n                            field: "lane_reservation_transition_lock",\n                            wait,\n                        }),\n                    ));\n                }\n            }\n        } else {\n            None\n        };\n        let state = match StateFences::try_acquire(target) {\n            Ok(fences) => fences,\n            Err((error, state_retirement)) => {\n                let queue_retirement = queue_observer.map(|observer| observer.release_deferred());\n                let SourceAuthenticatedCarrier {\n                    decision: original,\n                    kura,\n                } = authenticated;\n                let kura_retirement = kura.release_deferred();\n                drop((state_retirement, queue_retirement, kura_retirement));\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        let queue = match queue_observer {\n            Some(observer) => {\n                let source = queue_source.expect("original service source remains borrowed");\n                let acquired = observer\n                    .try_into_cut()\n                    .map_err(|(error, cleanup)| {\n                        (\n                            CarrierQueueRetirementError::Busy {\n                                field: error.field,\n                                wait: error.wait,\n                            },\n                            cleanup,\n                        )\n                    })\n                    .and_then(|cut| {\n                        CarrierQueueRetirement::try_new(\n                            target,\n                            &authenticated.decision.journals.geometry,\n                            authenticated.decision.block().header(),\n                            source,\n                            cut,\n                        )\n                    });\n                match acquired {\n                    Ok(cut) => Some(cut),\n                    Err((error, queue_retirement)) => {\n                        let state_retirement = state.release_deferred();\n                        let SourceAuthenticatedCarrier {\n                            decision: original,\n                            kura,\n                        } = authenticated;\n                        let kura_retirement = kura.release_deferred();\n                        drop((queue_retirement, state_retirement, kura_retirement));\n                        drop(installation);\n                        return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n                    }\n                }\n            }\n            None => None,\n        };\n        let SourceAuthenticatedCarrier {\n            decision: original,\n            kura,\n        } = authenticated;\n        let fences = CarrierFences {\n            _state: state,\n            _queue: queue,\n            _kura: kura,\n        };\n        let binding_admission;\n        let Self {\n            checkpoint,\n            finality,\n            committed_event,\n            journals,\n            _binding_admission: original_binding_admission,\n        } = original;\n        binding_admission = original_binding_admission;\n        let prepared = journals.try_map_components(|original| {\n            let mut preparation = CarrierPreparation::new(original, target, fences);\n            match preparation.try_prepare::<E>() {\n                Ok(()) => Ok(preparation.into_prepared()),\n                Err(error) => {\n                    let original = preparation.recover_original();\n                    drop(preparation);\n                    Err((original, error))\n                }\n            }\n        });\n        macro_rules! retain {\n            ($journals:expr) => {\n                DecisionBoundCarrierJournals {\n                    checkpoint,\n                    finality,\n                    committed_event,\n                    journals: $journals,\n                    _binding_admission: binding_admission,\n                }\n            };\n        }\n        match prepared {\n            Ok(journals) => Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n                installation,\n            }),\n            Err((journals, error)) => {\n                // All partially acquired writers, State fences and Kura lease are gone.\n                drop(installation);\n                Err((retain!(journals), error))\n            }\n        }\n    }',)),
+    (PHYSICAL_CARRIER, 'fn', 'try_prepare_physical', (
+        "fn try_prepare_physical<'target>(\n        self,\n        target: &'target State,\n        queue_source: Option<&OriginalCarrierQueue<'target>>,\n    )",
+        'let original = self;',
+        'if !target.matches_kura_instance(&original.journals.kura) {\n            return Err((original, CarrierPhysicalPreparationError::ForeignKura));\n        }',
+        'if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }',
+        'if original.journals.geometry.requires_queue_custody() {\n            let refusal = match queue_source {\n                None => Some(CarrierQueueRetirementError::Missing),\n                Some(source) if !source.belongs_to(target) => {\n                    Some(CarrierQueueRetirementError::ForeignState)\n                }\n                Some(_) => None,\n            };\n            if let Some(error) = refusal {\n                return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n            }\n        }',
+        'let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };',
+        'let authenticated = SourceAuthenticatedCarrier::try_new(original, kura)?;\n        authenticated.try_prepare(target, queue_source)',
+    )),
     (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::is_identity_transition", (
         "self._header == header", "self._pending.is_none()", "self._certified_frontiers.is_empty()",
         "self._previous_runtime_catalog == self._accepted_runtime_catalog",
@@ -644,7 +681,7 @@ TERMINAL_OWNER_BINDINGS = (
         "queue.map(CarrierQueueRetirement::release_deferred)", "kura.release_deferred()",
         "CompletionFences {", "_commit: commit", "_state: state", "_queue: queue", "_kura: kura",
     )),
-    ('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', ('let mut publication_notice = self.target.state_view_publication();', 'let mut this = self;', 'queue.ensure_available().err()', 'Some(CarrierPublicationError::QueueRetirement(error))', 'journals.effects.replay_prevalidation', 'journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)', 'journals.effects.header != journals.valid.as_ref().header()', 'journals.staged_legacy_source()', 'journals\n            .geometry\n            .matches_publication_target(this.target, journals.effects.header)', 'journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()', '!journals.geometry.has_queue_custody(\n            this.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )', 'Some(CarrierPublicationError::QueueRetirementRequired)', 'journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'this\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'CarrierPublicationError::QueueRetirement(error)', 'journals.native_amx_manifest.entries().is_empty()', 'return Err((this.abort(), error))', 'let update_da_mapping = match this.try_complete_geometry()', 'return Err((\n                    this.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))', 'publication_notice.begin()', 'transactions.publish()', 'runtime.publish()', 'world.publish()', 'world_effects.publish(\n            target,\n            effect_locks\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pin cache"),\n        )', 'if update_da_mapping', 'effect_locks\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .sync_mapping(&effects.nexus.lane_config)', 'let mut lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'let mut da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry))', 'hash_retirement = block_hashes.publish()', '**effect_locks\n            .latest_block_header\n            .as_mut()\n            .expect("prepared header") = Some(effects.header)', 'drop(generation)', 'if let Some(post) = da_post_publication {\n            post.publish(target);\n        }', 'if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }', 'fences.release_for_completion()', 'effects.publish_observability(target)', 'target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)', 'tiered_snapshot.publish(target, false)', 'target.enforce_nexus_storage_budget(height)', 'target.persist_query_index_status(height, Some(effects.header.hash()))', 'publication_events.append(&mut extra_events)', 'drop(commit)', 'drop(membership_retirement)', 'drop(hash_retirement)', 'Ok(PublishedCarrier {', 'source: source_prefix', '_admission: admission,\n            _binding: binding,\n            _installation: installation', 'let mut effect_cleanup;', 'effect_cleanup = original_effect_locks;', 'let mut effect_locks = effect_cleanup.physical_scope();', 'effect_locks.release_writers();', 'post.capture_snapshot(')),
+    ('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', ('let mut publication_notice = self.target.state_view_publication();', 'let mut this = self;', 'queue.ensure_available().err()', 'Some(CarrierPublicationError::QueueRetirement(error))', 'journals.effects.replay_prevalidation', 'journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)', 'journals.effects.header != journals.valid.as_ref().header()', 'journals.staged_legacy_source()', 'journals\n            .geometry\n            .matches_publication_target(this.target, journals.effects.header)', 'journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()', '!journals.geometry.has_queue_custody(\n            this.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )', 'Some(CarrierPublicationError::QueueRetirementRequired)', 'journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'this\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'CarrierPublicationError::QueueRetirement(error)', 'journals.native_amx_manifest.entries().is_empty()', 'return Err((this.abort(), error))', 'let update_da_mapping = match this.try_complete_geometry()', 'return Err((\n                    this.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))', 'publication_notice.begin()', 'transactions.publish()', 'runtime.publish()', 'world.publish()', 'world_effects.publish(\n            target,\n            effect_locks\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pin cache"),\n        )', 'if update_da_mapping', 'effect_locks\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .sync_mapping(&effects.nexus.lane_config)', 'let mut lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'let mut da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry))', 'hash_retirement = block_hashes.publish()', '**effect_locks\n            .latest_block_header\n            .as_mut()\n            .expect("prepared header") = Some(effects.header)', 'drop(generation)', 'if let Some(post) = da_post_publication {\n            post.publish(target);\n        }', 'if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }', 'fences.release_for_completion()', 'effects.publish_observability(target)', 'target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)', 'tiered_snapshot.publish(target, false)', 'target.enforce_nexus_storage_budget(height)', 'target.persist_query_index_status(height, Some(effects.header.hash()))', 'publication_events.append(&mut extra_events)', 'drop(commit)', 'drop(membership_retirement)', 'drop(hash_retirement)', 'Ok(PublishedCarrier {', 'source: source_prefix', '_admission: admission', 'let mut effect_cleanup;', 'effect_cleanup = original_effect_locks;', 'let mut effect_locks = effect_cleanup.physical_scope();', 'effect_locks.release_writers();', 'post.capture_snapshot(')),
 )
 PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
 
@@ -871,7 +908,7 @@ RETAINED_CARRIER_BINDINGS = (
     (DECISION_CARRIER, "enum", "RetainedCarrier", (
         "Capturing(Box<super::StagedCarrierCapture<Admission>>)",
         "Validated(PreparedCarrierJournals<Admission>)",
-        "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
+        "Decided(DecisionBoundCarrierJournals<Admission>)",
         "super::DetachedCarrierComponents", "crate::kura::KuraWsvCheckpointReceipt",
     )),
     (DECISION_CARRIER, "method", "RetainedCarrier::matches_validation_candidate", (
@@ -1138,7 +1175,7 @@ CARRIER_QUEUE_BINDINGS = (
         "if let Some(original) = self.original.take()", "drop(original.abort())",
     )),
     ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'AcquiredCarrierParticipants::abort', ('    fn abort(self) -> DetachedCarrierComponents {\n        // Reverse local drop order also keeps fences behind all components if\n        // abort bookkeeping unwinds before the explicit release below.\n        let mut effect_cleanup;\n        let fences;\n        let Self {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n            effect_locks: original_effect_locks,\n            _fences: original_fences,\n        } = self;\n        fences = original_fences;\n        effect_cleanup = original_effect_locks;\n        let mut effect_locks = effect_cleanup.physical_scope();\n        let (world, world_retirement) = world.abort();\n        let (runtime, runtime_retirement) = runtime.abort();\n        let (transactions, transactions_retirement) = transactions.abort();\n        let (block_hashes, block_hashes_retirement) = block_hashes.abort();\n        effect_locks.release_writers();\n        drop(fences.release_for_completion());\n        drop((\n            world_retirement,\n            runtime_retirement,\n            transactions_retirement,\n            block_hashes_retirement,\n        ));\n        DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        }\n    }',)),
-    (PHYSICAL_CARRIER, 'method', 'StateFences::try_acquire', ('fn try_acquire<E>(\n        target: &\'target State,\n    ) -> Result<\n        Self,\n        (\n            CarrierPhysicalPreparationError<E>,\n            [Option<concread::release::DeferredRelease>; 3],\n        ),\n    > {\n        let acquire = |field, lock: &\'target crate::publication_lock::PublicationMutex| {\n            lock.try_lock_or_wait()\n                .map_err(|wait| CarrierPhysicalPreparationError::Fence { field, wait })\n        };\n        let commit = acquire("state_commit_lock", &target.state_commit_lock)\n            .map_err(|error| (error, [None, None, None]))?;\n        let lifecycle = match acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock) {\n            Ok(guard) => guard,\n            Err(error) => return Err((error, [None, None, Some(commit.release_deferred())])),\n        };\n        let write = match acquire("state_write_lock", &target.state_write_lock) {\n            Ok(guard) => guard,\n            Err(error) => {\n                let lifecycle = lifecycle.release_deferred();\n                let commit = commit.release_deferred();\n                return Err((error, [None, Some(lifecycle), Some(commit)]));\n            }\n        };\n        Ok(Self {\n            _write: write,\n            _lifecycle: lifecycle,\n            _commit: commit,\n        })\n    }',)),
+    (PHYSICAL_CARRIER, 'method', 'StateFences::try_acquire', ('fn try_acquire(\n        target: &\'target State,\n    ) -> Result<\n        Self,\n        (\n            CarrierPhysicalPreparationError,\n            [Option<concread::release::DeferredRelease>; 3],\n        ),\n    > {\n        let acquire = |field, lock: &\'target crate::publication_lock::PublicationMutex| {\n            lock.try_lock_or_wait()\n                .map_err(|wait| CarrierPhysicalPreparationError::Fence { field, wait })\n        };\n        let commit = acquire("state_commit_lock", &target.state_commit_lock)\n            .map_err(|error| (error, [None, None, None]))?;\n        let lifecycle = match acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock) {\n            Ok(guard) => guard,\n            Err(error) => return Err((error, [None, None, Some(commit.release_deferred())])),\n        };\n        let write = match acquire("state_write_lock", &target.state_write_lock) {\n            Ok(guard) => guard,\n            Err(error) => {\n                let lifecycle = lifecycle.release_deferred();\n                let commit = commit.release_deferred();\n                return Err((error, [None, Some(lifecycle), Some(commit)]));\n            }\n        };\n        Ok(Self {\n            _write: write,\n            _lifecycle: lifecycle,\n            _commit: commit,\n        })\n    }',)),
 )
 PREPARATION_OWNER_BINDINGS += CARRIER_QUEUE_BINDINGS
 
@@ -1364,7 +1401,6 @@ AGGREGATE_ABANDONMENT_BINDINGS = (
 PREPARATION_OWNER_BINDINGS += AGGREGATE_ABANDONMENT_BINDINGS
 
 PARTIAL_FENCE_REFUSAL_BINDINGS = (
-    ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'SourceAuthenticatedCarrier::release', ('drop(kura.release_deferred())',)),
     ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'StateFences::release_deferred', ('self._write.release_deferred()', 'self._lifecycle.release_deferred()', 'self._commit.release_deferred()')),
     ('crates/iroha_core/src/queue.rs', 'struct', 'QueueRetirementCleanup', ('released: [Option<concread::release::DeferredRelease>; 3]',)),
     ('crates/iroha_core/src/queue.rs', 'method', 'QueueLaneRetirementObserver::release_deferred', ('self._reservation_transition_guard.release_deferred()',)),
@@ -1872,7 +1908,7 @@ RETAINED_HASH_PREPARATION_BINDINGS = (
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'struct', 'ReleasedCarrierFences', ('struct ReleasedCarrierFences {\n    _state: [concread::release::DeferredRelease; 3],\n    _queue: Option<ReleasedCarrierQueue>,\n    _kura: KuraPublicationCleanup,\n}',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'struct', 'CarrierPreparation', ("pub(super) struct CarrierPreparation<'target> {\n    world: Option<WorldPublicationSlot<'target, (), ()>>,\n    runtime: Option<RuntimePublicationSlot<'target, (), ()>>,\n    transactions: Option<DetachedTransactionsPublicationSlot<'target, ()>>,\n    block_hashes: RetainedHashSlot<'target, ()>,\n    effect_locks: Option<crate::state::effect_publication::StateEffectLocks<'target>>,\n    fences: Option<CarrierFences<'target>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    retired_fences: Option<ReleasedCarrierFences>,\n}",)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', ("    pub(super) fn new(\n        original: DetachedCarrierComponents,\n        target: &'target State,\n        fences: CarrierFences<'target>,\n    ) -> Self {\n        let DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        } = original;\n        Self {\n            world: Some(world.publication_slot(&target.world, None)),\n            runtime: Some(runtime.publication_slot(target)),\n            transactions: Some(transactions.publication_slot(&target.transactions)),\n            block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),\n            effect_locks: Some(crate::state::effect_publication::StateEffectLocks::new(\n                target,\n            )),\n            fences: Some(fences),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            retired_fences: None,\n        }\n    }",)),
-    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', ('    pub(super) fn try_prepare<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            "carrier preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let result = self.prepare_inner();\n        self.retryable = true;\n        self.complete = result.is_ok();\n        result\n    }',)),
+    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', ('    pub(super) fn try_prepare(&mut self) -> Result<(), CarrierPhysicalPreparationError> {\n        assert!(\n            !self.attempted && !self.released,\n            "carrier preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let result = self.prepare_inner();\n        self.retryable = true;\n        self.complete = result.is_ok();\n        result\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::release_fences', ('    fn release_fences(&mut self) {\n        if let Some(fences) = self.fences.take() {\n            let CarrierFences {\n                _state: state,\n                _queue: queue,\n                _kura: kura,\n            } = fences;\n            self.retired_fences = Some(ReleasedCarrierFences {\n                _state: state.release_deferred(),\n                _queue: queue.map(CarrierQueueRetirement::release_deferred),\n                _kura: kura.release_deferred(),\n            });\n        }\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::recover_original', ('    pub(super) fn recover_original(&mut self) -> DetachedCarrierComponents {\n        assert!(\n            self.retryable && !self.released,\n            "unwound or released carrier grants no retry authority"\n        );\n        self.complete = false;\n        self.released = true;\n        // Normal recovery moves the original journals and retains every release\n        // in the installed slots. It invokes no callback or new admission.\n        let original = DetachedCarrierComponents {\n            world: self\n                .world\n                .as_mut()\n                .expect("original World slot")\n                .recover_original(),\n            runtime: self\n                .runtime\n                .as_mut()\n                .expect("original runtime slot")\n                .recover_original(),\n            transactions: self\n                .transactions\n                .as_mut()\n                .expect("original membership slot")\n                .recover_original(),\n            block_hashes: self.block_hashes.recover_original(),\n        };\n        self.effect_locks\n            .as_mut()\n            .expect("original effect locks")\n            .release_writers();\n        self.release_fences();\n        original\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::into_prepared', ('    pub(super) fn into_prepared(mut self) -> AcquiredCarrierComponents<\'target> {\n        assert!(\n            self.complete && !self.released,\n            "complete original carrier preparation"\n        );\n        self.released = true;\n        AcquiredCarrierComponents {\n            original: Some(AcquiredCarrierParticipants {\n                world: self\n                    .world\n                    .take()\n                    .expect("complete original World")\n                    .into_prepared(),\n                runtime: self\n                    .runtime\n                    .take()\n                    .expect("complete original runtime")\n                    .into_prepared(),\n                transactions: self\n                    .transactions\n                    .take()\n                    .expect("complete original membership")\n                    .into_prepared(),\n                block_hashes: self.block_hashes.take_prepared(),\n                effect_locks: self.effect_locks.take().expect("prepared effect locks"),\n                _fences: self.fences.take().expect("original carrier fences"),\n            }),\n        }\n    }',)),
@@ -1971,7 +2007,7 @@ GROUP_COMPONENT_INVOCATIONS = (
 )
 
 WORLD_CARRIER_PREPARATION_BINDINGS = (
-    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', ('    fn prepare_inner<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {\n        self.block_hashes\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "block_hashes",\n                cause,\n            })?;\n        self.transactions\n            .as_mut()\n            .expect("original membership slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "transactions",\n                cause,\n            })?;\n        self.runtime\n            .as_mut()\n            .expect("original runtime slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::Runtime)?;\n        self.world\n            .as_mut()\n            .expect("original World slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::World)?;\n        self.effect_locks\n            .as_mut()\n            .expect("original effect lock slot")\n            .try_prepare()\n            .map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait })?;\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', ('    fn prepare_inner(&mut self) -> Result<(), CarrierPhysicalPreparationError> {\n        self.block_hashes\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "block_hashes",\n                cause,\n            })?;\n        self.transactions\n            .as_mut()\n            .expect("original membership slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "transactions",\n                cause,\n            })?;\n        self.runtime\n            .as_mut()\n            .expect("original runtime slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::Runtime)?;\n        self.world\n            .as_mut()\n            .expect("original World slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::World)?;\n        self.effect_locks\n            .as_mut()\n            .expect("original effect lock slot")\n            .try_prepare()\n            .map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait })?;\n        Ok(())\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'struct', 'Fields', ("struct Fields<'target, Admission> {\n    mode: BlockMode,\n    fields: PreparedWorldFields<'target>,\n    retry: Vec<Box<dyn RetainedWorldField>>,\n    dataspace_catalog: Option<DataSpaceCatalog>,\n    external_event_buf: Option<Vec<EventBox>>,\n    admission: Option<Admission>,\n}",)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'struct', 'WorldPublicationSlot', ("pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {\n    target: &'target World,\n    scope: Option<&'target AllocationScope<'target>>,\n    phase: Option<Phase<'target, Admission>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    installation: Option<Installation>,\n}",)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'enum', 'Phase', ("enum Phase<'target, Admission> {\n    Original(DetachedWorld<Admission>),\n    Fields(Fields<'target, Admission>),\n}",)),
@@ -2191,6 +2227,826 @@ COMMITTED_DRAIN_RELEASE_BINDINGS = (
 )
 PREPARATION_OWNER_BINDINGS += COMMITTED_DRAIN_RELEASE_BINDINGS
 
+# These owners make one physical boundary continuous from the authenticated
+# original source through durable proof publication and every State/Queue writer.
+# They replace the retired split-lease path; this is not scalar admission evidence.
+SINGLE_LEASE_ADDITIONAL_BINDINGS = (
+    (PHYSICAL_CARRIER, "struct", "SourceAuthenticatedCarrier", (
+        "struct SourceAuthenticatedCarrier<'target, Admission> {\n    // Unlock the complete physical boundary before original values/admission\n    // can run cleanup callbacks during abandonment or unwind.\n    kura: KuraPublicationLease<'target>,\n    decision: DecisionBoundCarrierJournals<\n        Admission,\n        DetachedCarrierComponents,\n        KuraWsvCheckpointReceipt,\n    >,\n}",
+    )),
+    (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::release", (
+        'let Self { decision, kura } = self;\n        drop(kura.release_deferred());\n        decision',
+    )),
+    (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_prepare", (
+        "fn try_prepare(\n        mut self,\n        target: &'target State,\n        queue_source: Option<&OriginalCarrierQueue<'target>>,\n    )",
+        'if let Err(error) = self.decision.publish_execution_witness(&self.kura) {\n            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;\n            let error = match error {\n                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                CarrierExecutionWitnessPublicationError::Witness(error) => {\n                    CarrierPhysicalPreparationError::ExecutionWitness(error)\n                }\n            };\n            return Err((self.release(), error));\n        }',
+        'if let Err(error) = self.decision.publish_archives(&self.kura) {\n            use super::archive_publication::CarrierArchivePublicationError;\n            let error = match error {\n                CarrierArchivePublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                error => CarrierPhysicalPreparationError::Archive(error),\n            };\n            return Err((self.release(), error));\n        }',
+        "let authenticated = self;",
+        'if let Err(error) = authenticated\n            .kura\n            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())\n        {\n            let original = authenticated.release();\n\n            return Err((\n                original,\n                CarrierPhysicalPreparationError::ExecutionWitness(error),\n            ));\n        }',
+        'let queue_observer = if authenticated\n            .decision\n            .journals\n            .geometry\n            .requires_queue_custody()\n        {\n            let source = queue_source.expect("required original source checked before persistence");\n            match source.try_observe() {\n                Ok(observer) => Some(observer),\n                Err(wait) => {\n                    let original = authenticated.release();\n\n                    return Err((\n                        original,\n                        CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {\n                            field: "lane_reservation_transition_lock",\n                            wait,\n                        }),\n                    ));\n                }\n            }\n        } else {\n            None\n        };',
+        'let state = match StateFences::try_acquire(target) {\n            Ok(fences) => fences,\n            Err((error, state_retirement)) => {\n                let queue_retirement = queue_observer.map(|observer| observer.release_deferred());\n                let SourceAuthenticatedCarrier {\n                    decision: original,\n                    kura,\n                } = authenticated;\n                let kura_retirement = kura.release_deferred();\n                drop((state_retirement, queue_retirement, kura_retirement));\n\n                return Err((original, error));\n            }\n        };',
+        'let queue = match queue_observer {\n            Some(observer) => {\n                let source = queue_source.expect("original service source remains borrowed");\n                let acquired = observer\n                    .try_into_cut()\n                    .map_err(|(error, cleanup)| {\n                        (\n                            CarrierQueueRetirementError::Busy {\n                                field: error.field,\n                                wait: error.wait,\n                            },\n                            cleanup,\n                        )\n                    })\n                    .and_then(|cut| {\n                        CarrierQueueRetirement::try_new(\n                            target,\n                            &authenticated.decision.journals.geometry,\n                            authenticated.decision.block().header(),\n                            source,\n                            cut,\n                        )\n                    });\n                match acquired {\n                    Ok(cut) => Some(cut),\n                    Err((error, queue_retirement)) => {\n                        let state_retirement = state.release_deferred();\n                        let SourceAuthenticatedCarrier {\n                            decision: original,\n                            kura,\n                        } = authenticated;\n                        let kura_retirement = kura.release_deferred();\n                        drop((queue_retirement, state_retirement, kura_retirement));\n\n                        return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n                    }\n                }\n            }\n            None => None,\n        };',
+        'let SourceAuthenticatedCarrier {\n            decision: original,\n            kura,\n        } = authenticated;\n        let fences = CarrierFences {\n            _state: state,\n            _queue: queue,\n            _kura: kura,\n        };',
+        'let DecisionBoundCarrierJournals {\n            checkpoint,\n            finality,\n            committed_event,\n            journals,\n        } = original;',
+        'let prepared = journals.try_map_components(|original| {\n            let mut preparation = CarrierPreparation::new(original, target, fences);\n            match preparation.try_prepare() {\n                Ok(()) => Ok(preparation.into_prepared()),\n                Err(error) => {\n                    let original = preparation.recover_original();\n                    drop(preparation);\n                    Err((original, error))\n                }\n            }\n        });',
+        'macro_rules! retain {\n            ($journals:expr) => {\n                DecisionBoundCarrierJournals {\n                    checkpoint,\n                    finality,\n                    committed_event,\n                    journals: $journals,\n                }\n            };\n        }',
+        'match prepared {\n            Ok(journals) => Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n            }),\n            Err((journals, error)) => {\n                // All partially acquired writers, State fences and Kura lease are gone.\n\n                Err((retain!(journals), error))\n            }\n        }',
+    )),
+    (WITNESS_LEASE, "method", "KuraPublicationLease::publish_execution_witness", (
+        "&self", "finality: &super::V2FinalityArtifact", "receipt: &super::KuraV2CommitReceipt", "witness: &super::ExecWitness",
+        "parliament_timed_ovn_casting_bindings: &[super::ParliamentTimedOvnCastingContextBindingV1]",
+        "self.kura.durable_mutation_authorized()?;",
+        'self.kura\n            .authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;',
+        'let staged = Kura::prepare_kagemusha_finality_sidecar(\n            finality.height,\n            finality.block_hash,\n            witness,\n            finality.commit_qc.execution_commitment,\n            parliament_timed_ovn_casting_bindings,\n        )?;',
+        'self.kura\n            .stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;',
+        'self.kura\n            .promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;',
+        "self.reauthenticate_execution_witness(finality)",
+    )),
+    (KURA, "method", "Kura::authenticate_kagemusha_finality_receipt_under_publication_guards", (
+        'if receipt.height != artifact.height\n            || receipt.block_hash != artifact.block_hash\n            || receipt.context_id != artifact.context_id()\n            || receipt.subject != artifact.subject\n            || receipt.certificate != artifact.commit_qc.as_ref()\n            || receipt.artifact_hash != HashOf::new(artifact)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let durable = self\n            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?\n            .map(|(_, artifact, _)| artifact)\n            .ok_or_else(|| {\n                Error::KagemushaFinalitySidecar(',
+        'if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {\n            return Err(Error::KagemushaFinalitySidecar(', "Ok(())",
+    )),
+    (KURA, "method", "Kura::prepare_kagemusha_finality_sidecar", (
+        "crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)",
+        "crate::state::LaneConsensusContextsWitnessV1::from_witness(witness)",
+        "crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)",
+        "crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)",
+        'if validation_fee_root != expected.ordinary_writes_root\n            || lane_contexts_root != expected.ordinary_writes_root\n            || lane_consensus_contexts_witness.carrier_height() != height\n            || !lane_consensus_contexts_witness.verify_root(expected.ordinary_writes_root)\n            || casting_root != expected.ordinary_writes_root\n            || kagemusha_root != expected.ordinary_writes_root\n            || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)\n            || !parliament_timed_ovn_casting_witness.verify(expected.ordinary_writes_root)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let validation_fee_snapshot = validation_fee_policy_witness\n            .commitment()', 'if validation_fee_snapshot.evaluated_height != height {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let casting_snapshot = parliament_timed_ovn_casting_witness\n            .commitment()',
+        'ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(\n                height,\n                parliament_timed_ovn_casting_bindings,\n            )',
+        'if casting_snapshot != rebuilt_casting_snapshot {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "ordinary_writes_root: expected.ordinary_writes_root", "post_state_root: expected.post_state_root",
+        "parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec()", "Ok(staged)",
+    )),
+    (KURA, "method", "Kura::stage_kagemusha_finality_sidecar_under_sidecar_guard", (
+        "self.durable_mutation_authorized()?;", "let bytes = staged.encode();", "if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES",
+        "self.kagemusha_finality_staging_path(staged.height)",
+        'if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {\n            if &existing == staged\n                && identity.bytes == bytes\n                && identity.bytes_hash == Hash::new(&bytes)\n            {\n                return Ok(());\n            }\n            return Err(Error::KagemushaFinalitySidecar(',
+        'self\n            .begin_total_disk_usage_mutation()\n            .with_resource_paths(vec![path.clone()])',
+        "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+        'if &existing != staged {\n                return Err(Error::KagemushaFinalitySidecar(',
+        'let Some((persisted, identity)) = self.decode_staged_kagemusha_finality(&path)? else {\n            return Err(',
+        'if &persisted != staged\n            || identity.bytes != bytes\n            || identity.bytes_hash != Hash::new(&bytes)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())",
+    )),
+    (KURA, "method", "Kura::promote_kagemusha_finality_sidecar_under_sidecar_guard", (
+        "self.durable_mutation_authorized()?;",
+        "let final_path = self.kagemusha_finality_sidecar_path(artifact.height);",
+        "let staged_path = self.kagemusha_finality_staging_path(artifact.height);",
+        'if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {\n            Self::validate_kagemusha_finality_sidecar(&existing, artifact)?;\n            if let Some((staged, identity)) = self.decode_staged_kagemusha_finality(&staged_path)? {\n                Self::validate_staged_kagemusha_finality(&staged, artifact)?;\n                self.remove_exact_staged_kagemusha_finality(&staged_path, &identity)?;\n            }\n            return Ok(());\n        }',
+        'let Some((staged, staged_identity)) =\n            self.decode_staged_kagemusha_finality(&staged_path)?\n        else {\n            return Err(',
+        '};\n        Self::validate_staged_kagemusha_finality(&staged, artifact)?;\n        let final_sidecar = KagemushaFinalitySidecarV1 {', "finality_artifact_hash: receipt.artifact_hash",
+        "Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;",
+        "let bytes = final_sidecar.encode();", "if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES",
+        'self\n            .begin_total_disk_usage_mutation()\n            .with_resource_paths(vec![final_path.clone()])',
+        "if !self.write_atomic_synced_noclobber(&final_path, &bytes)?",
+        'if existing != final_sidecar {\n                return Err(Error::KagemushaFinalitySidecar(',
+        'let Some((persisted, identity)) = self.decode_kagemusha_finality_sidecar(&final_path)?\n        else {\n            return Err(',
+        'if persisted != final_sidecar\n            || identity.bytes != bytes\n            || identity.bytes_hash != Hash::new(&bytes)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;",
+        "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())",
+    )),
+    (KURA, "method", "Kura::stage_kagemusha_finality_sidecar", (
+        "self.durable_mutation_authorized()?;",
+        'let staged = Self::prepare_kagemusha_finality_sidecar(\n            height,\n            block_hash,\n            witness,\n            expected,\n            parliament_timed_ovn_casting_bindings,\n        )?;',
+        "let _guard = self.sidecar_lock.lock();",
+        "self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)",
+    )),
+)
+SINGLE_LEASE_OWNER_BINDINGS = tuple(
+    binding for binding in TERMINAL_OWNER_BINDINGS
+    if binding[2] in {
+        "publish_execution_witness", "publish_archives", "try_prepare_physical",
+        "SourceAuthenticatedCarrier::try_new",
+        "KuraPublicationLease::reauthenticate_execution_witness",
+    }
+) + SINGLE_LEASE_ADDITIONAL_BINDINGS
+SINGLE_LEASE_OWNER_KEYS = frozenset(binding[:3] for binding in SINGLE_LEASE_OWNER_BINDINGS)
+PREPARATION_OWNER_BINDINGS += SINGLE_LEASE_ADDITIONAL_BINDINGS
+
+
+def _validate_single_lease_publication_contract(
+    root: Path, rows: Any, errors: list[str], rust_binding_item: Callable,
+) -> dict[str, str]:
+    """Bind the continuous original lease and guarded proof cores to real owners."""
+    items = {}
+    for path, kind, symbol, tokens in SINGLE_LEASE_OWNER_BINDINGS:
+        matches = [row for row in rows if isinstance(row, dict)
+                   and (row.get("path"), row.get("kind"), row.get("symbol"))
+                   == (path, kind, symbol)]
+        if len(matches) != 1:
+            errors.append(f"Native single-lease ledger owner {symbol} must occur exactly once")
+        elif tuple(matches[0].get("required_tokens", ())) != tokens:
+            errors.append(f"Native single-lease reviewed tokens changed for {symbol}")
+        source = rust_binding_item(root, path, kind, symbol, "Native single-lease", errors)
+        if source is None:
+            continue
+        item = items[symbol] = _code(source)
+        if symbol in {"SourceAuthenticatedCarrier", "SourceAuthenticatedCarrier::try_prepare"} and re.search(
+            r"\bpub(?:\s*\([^)]*\))?\s+(?:fn|struct)\s+(?:try_prepare|SourceAuthenticatedCarrier)\b",
+            _mask_rust_comments(source),
+        ):
+            errors.append(f"Native single-lease {symbol} exposes its private executable relation")
+        for token in tokens:
+            if _code(token) not in item:
+                errors.append(f"Native single-lease {symbol} missing executable relation {token!r}")
+
+    def ordered(symbol: str, *relations: str) -> None:
+        cursor = 0
+        for relation in relations:
+            body = items.get(symbol)
+            if body is None:
+                return
+            index = body.find(_code(relation), cursor)
+            if index < 0:
+                errors.append(f"Native single-lease {symbol} reorders executable relation {relation!r}")
+                return
+            cursor = index + len(_code(relation))
+
+    def exact_count(symbol: str, token: str, expected: int) -> None:
+        if symbol in items and items[symbol].count(_code(token)) != expected:
+            errors.append(f"Native single-lease {symbol} repeats or omits executable relation {token!r}")
+
+    ordered("try_prepare_physical", "target.matches_kura_instance(&original.journals.kura)",
+            "original.journals.geometry.matches_publication_target(target, original.block().header())",
+            "if original.journals.geometry.requires_queue_custody()",
+            "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)?;",
+            "authenticated.try_prepare(target, queue_source)")
+    exact_count("try_prepare_physical", "try_publication_lease(", 1)
+    exact_count("try_prepare_physical", "SourceAuthenticatedCarrier::try_new(", 1)
+    ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
+            "original.journals.source_prefix.authenticate_durable_carrier(",
+            "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()",
+            "Ok(()) => Ok(owner)", "Err(error) => Err((owner.release(), error))")
+    ordered("SourceAuthenticatedCarrier::try_prepare", "self.decision.publish_execution_witness(&self.kura)",
+            "self.decision.publish_archives(&self.kura)", "let authenticated = self;",
+            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
+            "let queue_observer = if authenticated.decision.journals.geometry.requires_queue_custody()",
+            "source.try_observe()", "StateFences::try_acquire(target)", "observer.try_into_cut()",
+            "CarrierQueueRetirement::try_new(target, &authenticated.decision.journals.geometry, authenticated.decision.block().header(), source, cut,)",
+            "let fences = CarrierFences { _state: state, _queue: queue, _kura: kura, }",
+            "journals.try_map_components(")
+    for operation in ("publish_execution_witness(", "publish_archives(",
+                      "reauthenticate_execution_witness(", "source.try_observe()",
+                      "StateFences::try_acquire(target)", "observer.try_into_cut()", "journals.try_map_components("):
+        exact_count("SourceAuthenticatedCarrier::try_prepare", operation, 1)
+    # All releases are in the exact immediate-refusal branches bound above;
+    # no extra release or fence extraction may be inserted on the success path.
+    for operation, count in (("self.release()", 2), ("authenticated.release()", 2),
+                             ("kura.release_deferred()", 2), ("state.release_deferred()", 1),
+                             ("observer.release_deferred()", 1),
+                             ("SourceAuthenticatedCarrier { decision: original, kura, } = authenticated;", 3)):
+        exact_count("SourceAuthenticatedCarrier::try_prepare", operation, count)
+    ordered("publish_execution_witness", "lease.reauthenticate_checkpoint(", "lease.publish_execution_witness(")
+    ordered("publish_archives", "lease.reauthenticate_checkpoint(", "let receipt = self.checkpoint.finality_receipt();",
+            "provider.publish_under_publication_lease(lease, receipt)",
+            "reputation.publish_under_publication_lease(lease, receipt)", "Ok(())")
+    ordered("KuraPublicationLease::publish_execution_witness", "durable_mutation_authorized()?;",
+            "authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;",
+            "Kura::prepare_kagemusha_finality_sidecar(",
+            "stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;",
+            "promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;",
+            "self.reauthenticate_execution_witness(finality)")
+    ordered("KuraPublicationLease::reauthenticate_execution_witness",
+            "decode_kagemusha_finality_sidecar(&path)", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)",
+            "regular_sidecar_metadata(&path, &directory)", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())")
+    ordered("Kura::authenticate_kagemusha_finality_receipt_under_publication_guards",
+            "receipt.height != artifact.height", "v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?",
+            "if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash", "Ok(())")
+    ordered("Kura::stage_kagemusha_finality_sidecar_under_sidecar_guard", "let bytes = staged.encode();",
+            "self.decode_staged_kagemusha_finality(&path)?", "self.write_atomic_synced_noclobber(&path, &bytes)?",
+            "let Some((persisted, identity))", "resource_mutation.finish_resources_before_disk_rescan();")
+    ordered("Kura::promote_kagemusha_finality_sidecar_under_sidecar_guard",
+            "Self::validate_staged_kagemusha_finality(&staged, artifact)?;", "let final_sidecar =",
+            "Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;",
+            "self.write_atomic_synced_noclobber(&final_path, &bytes)?", "let Some((persisted, identity))",
+            "self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;",
+            "resource_mutation.finish_resources_before_disk_rescan();")
+    ordered("Kura::stage_kagemusha_finality_sidecar", "Self::prepare_kagemusha_finality_sidecar(",
+            "self.sidecar_lock.lock()", "self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)")
+    for symbol in items:
+        forbidden = [".await", "mem::forget", "ManuallyDrop", "block_on("]
+        if symbol not in {"try_prepare_physical", "Kura::stage_kagemusha_finality_sidecar"}:
+            forbidden += ["try_publication_lease(", ".lock()", "stage_kagemusha_finality_sidecar(",
+                          "promote_kagemusha_finality_sidecar(", "v2_finality_artifact("]
+        if symbol in {"try_prepare_physical", "publish_execution_witness", "publish_archives",
+                      "KuraPublicationLease::publish_execution_witness"}:
+            forbidden += [".release()", "release_deferred("]
+        if symbol != "SourceAuthenticatedCarrier::release":
+            forbidden += ["drop(lease)", "drop(kura)", "drop(self.kura)", "drop(authenticated)"]
+        for token in forbidden:
+            if _code(token) in items[symbol]:
+                errors.append(f"Native single-lease {symbol} splits or replaces executable relation {token!r}")
+    return items
+
+
+# Actual Native recovery custody supplements the detached execution phase. These
+# shapes retain concrete owners; neither one is aggregate process-memory admission.
+NATIVE_VALIDATION = "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs"
+NATIVE_VALIDATION_OWNER_BODIES = {
+    "NativeValidationCandidate": """{
+        phase: Box<Option<NativeValidationPhase>>,
+        _container_admission: AllocationCharge,
+    }""",
+    "NativeValidationPhase": """{
+        AwaitingSource(AwaitingNativeSource),
+        Stopped { context_id: wire::HeightContextId, proposal_hash: iroha_crypto::Hash, reason: String, },
+        Executed { carrier: RetainedCarrier<CarrierShellAdmission>, evidence_ready: bool, },
+        Published { carrier: PublishedNativeCarrier, outbox_published: bool, queue_cleaned: bool, },
+    }""",
+    "AwaitingNativeSource": """{
+        class: CurrentCarrierSourceClass, context: VerifiedHeightContext, proposal: SignedBlock,
+        recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>, pending: Option<PendingNativeSource>,
+        shell_admission: CarrierShellAdmission,
+    }""",
+    "NativeValidationCandidate::matches_candidate": """{
+        match self.phase.as_ref().as_ref().expect("original Native validation phase") {
+            NativeValidationPhase::AwaitingSource(source) => {
+                source.context.context() == context && source.proposal == *body
+            }
+            NativeValidationPhase::Stopped { context_id, proposal_hash, .. } => {
+                *context_id == context.id() && body.canonical_proposal_wire_hash().is_ok_and(|hash| hash == *proposal_hash)
+            }
+            NativeValidationPhase::Executed { carrier, .. } => {
+                carrier.matches_validation_candidate(context, body)
+            }
+            NativeValidationPhase::Published { carrier, .. } => {
+                carrier.artifact().height_context == *context
+                    && carrier.block().canonical_proposal_wire_hash().ok() == body.canonical_proposal_wire_hash().ok()
+            }
+        }
+    }""",
+    "NativeValidationCandidate::ready_commitment": """{
+        match self.phase.as_ref().as_ref().expect("original Native validation phase") {
+            NativeValidationPhase::AwaitingSource(_) | NativeValidationPhase::Stopped { .. } => { None }
+            NativeValidationPhase::Executed { carrier, evidence_ready, } => evidence_ready.then(|| carrier.ready_commitment()).flatten(),
+            NativeValidationPhase::Published { carrier, .. } => {
+                Some(carrier.artifact().commit_qc.execution_commitment)
+            }
+        }
+    }""",
+}
+NATIVE_CURRENT_OWNER_BINDINGS = (
+    (SERVICE_QUEUE, "method", "OriginalCarrierQueue::from_service", (
+        "pub(super) fn from_service(service: &'service super::V2ApplyService) -> Self",
+        'Self {\n            state: &service.state,\n            queue: &service.queue,\n        }',
+    )),
+    (NATIVE_VALIDATION, "struct", "NativeValidationCandidate", (
+        "pub(crate) struct NativeValidationCandidate", "phase: Box<Option<NativeValidationPhase>>",
+        "_container_admission: AllocationCharge",
+    )),
+    (NATIVE_VALIDATION, "enum", "NativeValidationPhase", (
+        "enum NativeValidationPhase", "AwaitingSource(AwaitingNativeSource)",
+        "carrier: RetainedCarrier<CarrierShellAdmission>", "carrier: PublishedNativeCarrier",
+    )),
+    (NATIVE_VALIDATION, "struct", "AwaitingNativeSource", (
+        "context: VerifiedHeightContext", "proposal: SignedBlock",
+        "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
+        "pending: Option<PendingNativeSource>", "shell_admission: CarrierShellAdmission",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::matches_candidate", (
+        "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",
+        "carrier.matches_validation_candidate(context, body)",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::ready_commitment", (
+        "fn ready_commitment(&self) -> Option<wire::ExecutionCommitment>",
+        "evidence_ready.then(|| carrier.ready_commitment()).flatten()",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::try_publish", (
+        'NativeValidationPhase::Executed {\n                carrier,\n                evidence_ready: true,\n            }',
+        'let queue = super::carrier_queue_retirement::OriginalCarrierQueue::from_service(\n                    &validator.service,\n                );',
+        'match carrier.try_publish(\n                    &validator.service.state,\n                    &queue,\n                    finality,\n                    validator.service.queue.sumeragi_waker(),\n                )',
+        '*self.phase = Some(NativeValidationPhase::Executed {\n                            carrier,\n                            evidence_ready: true,\n                        });\n                        return Err((self, refusal));',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += NATIVE_CURRENT_OWNER_BINDINGS
+
+
+# Reviewed Native substitutions for retired lane transport declarations. These
+# bindings retain the same physical process, original source and guarded Apply
+# completion already checked by the successor-production consumer.
+NATIVE_CURRENT_RUNNER_OWNER_BODIES = {
+    "LifecycleProducerClaimDispositionV1::blocks_runtime": """{
+        matches!(self, Self::AwaitingNativeSource | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled)
+    }""",
+    "LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner": """{
+        let owner = &mut self.owner;
+        let executor = &mut self.executor;
+        if matches!(completion.result(), LifecycleDecisionApplyWorkerResultV1::Deferred { .. }) {
+            return Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(
+                RetainedLifecycleDecisionApplyDeferredV1 { completion },
+            ));
+        }
+        settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
+    }""",
+}
+
+NATIVE_CURRENT_RUNNER_BINDINGS = (
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs', 'method', 'LifecycleProducerClaimDispositionV1::blocks_runtime', (
+        'Self::AwaitingApplyCompletion',
+        'Self::ApplyTerminalSettled',
+        'Self::AwaitingNativeSource',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs', 'method', 'LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner', (
+        'ProductionLifecycleDecisionApplyCompletionV1::Deferred(',
+        'settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)',
+        'LifecycleDecisionApplyWorkerResultV1::Deferred { .. }',
+        'RetainedLifecycleDecisionApplyDeferredV1 { completion }',
+        'let owner = &mut self.owner;',
+        'let executor = &mut self.executor;',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs', 'fn', 'run_lifecycle_active_height', (
+        'let lane_only_completion_barrier = producer_claim.blocks_runtime();',
+        'if lane_only_completion_barrier {',
+        'drain_lane_relay_ingress(',
+        'let discovery_was_outstanding = if terminal_finalization_fenced {',
+        '.terminal_settlement_stops_runtime()',
+        'AdvanceExecutorSliceOutcomeV1::Idle',
+        'let terminal_planning_fenced =',
+        'producer_claim.apply_terminal_settled();',
+        'if terminal_planning_fenced && !ready_to_finish {',
+        'let producer_turn = if terminal_planning_fenced {',
+        'if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {',
+        'if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {',
+        'if ready_to_finish && !finalization_ready {',
+        'if finalization_ready && !rollover_ready {',
+        'deadline_after(now, retransmit_interval)',
+        'native.take_service_publication(services);',
+        'native.service_sources(services, now)?;',
+        'native.poll(native_global, native_network, now, receiver)?;',
+        'let ingress_snapshot = receiver.snapshot_at(now);',
+        'producer_claim.native_source_pacemaker_escape_permit()',
+        'producer_claim.decided_native_source_recovery_permit(',
+        'native.next_deadline().map_or(IDLE_POLL, |deadline| {',
+        'wake_rx.recv_timeout(native_wait)',
+        'native.take_service_publication(services);\n                native.service_sources(services, now)?;\n                Ok::<_, V2RunnerError>(())\n            },\n        )?;\n        native.poll(native_global, native_network, now, receiver)?;',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs', 'fn', 'run_pending_active_height', (
+        'native.take_service_publication(services);',
+        'native.service_sources(services, Instant::now())',
+        'native.poll(native_global, native_network, Instant::now(), receiver)?;',
+        'dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)',
+        'activated.settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)',
+        'native.take_service_publication(services);\n            native.service_sources(services, Instant::now())\n        })?;\n        native.poll(native_global, native_network, Instant::now(), receiver)?;',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += NATIVE_CURRENT_RUNNER_BINDINGS
+
+SERVICE_PUBLICATION = "crates/iroha_core/src/state/carrier_preparation/service_publication.rs"
+# This is the live retained-owner publication seam. Its durability receipt follows
+# the captured checkpoint/manifest; these relations do not claim full memory admission.
+LIVE_PUBLICATION_BINDINGS = (
+    (SERVICE_PUBLICATION, "method", "RetainedCarrier::try_publish", (
+        "self,\n        target: &State,\n        queue: &OriginalCarrierQueue<'_>,\n        finality: VerifiedV2FinalityArtifact,\n        wake: Waker,\n    )",
+        "Result<PublishedCarrier<A>, (Self, LocalValidationRefusal)>",
+        "let original = match self.resume_capture()",
+        "Err((owner, error)) => return Err((owner, archive_refusal(&error, &wake)))",
+        "target.matches_kura_instance(&journals.kura)\n                    && journals\n                        .geometry\n                        .matches_publication_target(target, journals.valid.as_ref().header())",
+        "target.matches_kura_instance(&decision.journals.kura)\n                    && decision\n                        .journals\n                        .geometry\n                        .matches_publication_target(target, decision.block().header())",
+        "if !matches_target || !queue.belongs_to(target)",
+        'original,\n                LocalValidationRefusal::RecoveryRequired(\n                    "carrier publication belongs to another original State, Kura or Queue"',
+        "Self::Validated(journals) => match journals.bind_decision(finality.clone())",
+        "Self::Validated(refusal.journals),\n                        LocalValidationRefusal::RecoveryRequired(refusal.error.to_string())",
+        "Self::Decided(decision) => decision.finality() == finality.artifact()",
+        "Self::Checkpointed(decision) => decision.finality() == finality.artifact()",
+        "if !same_finality",
+        'original,\n                LocalValidationRefusal::RecoveryRequired(\n                    "retry finality differs from the original retained decision"',
+        "let kura = &decision.journals.kura;",
+        "kura.store_block(decision.block().clone())?;",
+        "let artifact = decision.finality();",
+        "let checkpoint = decision.journals.checkpoint;",
+        "kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;",
+        "kura.store_commit_manifest(\n                        CommitManifest::new(\n                            artifact.height,\n                            artifact.block_hash,\n                            None,\n                            None,\n                            checkpoint,\n                            None,\n                        )\n                        .with_authenticated_v2_commit_authority(artifact),\n                    )?;",
+        "let receipt = kura.store_v2_finality_artifact(artifact)?;",
+        "kura.persist_wsv_checkpoint_for_v2_commit(\n                        &receipt,\n                        decision.journals.checkpoint,\n                    )",
+        "Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint))",
+        'Self::Decided(decision),\n                            LocalValidationRefusal::RecoveryRequired(format!(\n                                "carrier durability: {error}"',
+        "let Self::Checkpointed(decision) = original else",
+        "let prepared = match decision.try_prepare_physical(target, Some(queue))",
+        "Self::Checkpointed(decision),\n                    physical_refusal(&error, &wake)",
+        "prepared.publish().map_err(|(decision, error)|",
+        "CarrierPublicationError::GeometryStorage(\n                    crate::state::LaneLifecycleError::PublicationBusy { field, wait },\n                ) => busy(field, wait, &wake)",
+        "_ => LocalValidationRefusal::RecoveryRequired(error.to_string())",
+        "(Self::Checkpointed(decision), refusal)",
+    )),
+    (SERVICE_PUBLICATION, "fn", "busy", (
+        "wait: &concread::release::ReleaseWait", "wake: &Waker",
+        "LocalValidationRefusal::PhysicalBusy(BodyValidationBusy::new(field, wait.clone(), wake.clone()))",
+    )),
+    (SERVICE_PUBLICATION, "fn", "archive_refusal", (
+        # Bind each typed arm to its own release; string labels are normalized away.
+        'E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. }) => {\n            let P::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_index", wait, wake)\n        }',
+        'E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. }) => {\n            let R::IndexBusy { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_index", wait, wake)\n        }',
+        'E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. }) => {\n            let P::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("provider_archive_capture", wait.release_wait(), wake)\n        }',
+        'E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. }) => {\n            let R::CaptureReserved { wait } = error.as_ref() else {\n                unreachable!()\n            };\n            busy("reputation_archive_capture", wait.release_wait(), wake)\n        }',
+
+        "E::Provider(error) if matches!(error.as_ref(), P::IndexBusy { .. })",
+        "E::Reputation(error) if matches!(error.as_ref(), R::IndexBusy { .. })",
+        "E::Provider(error) if matches!(error.as_ref(), P::CaptureReserved { .. })",
+        "E::Reputation(error) if matches!(error.as_ref(), R::CaptureReserved { .. })",
+        'busy("provider_archive_index", wait, wake)',
+        'busy("reputation_archive_index", wait, wake)',
+        'busy("provider_archive_capture", wait.release_wait(), wake)',
+        'busy("reputation_archive_capture", wait.release_wait(), wake)',
+        "_ => LocalValidationRefusal::RecoveryRequired(error.to_string())",
+    )),
+    (SERVICE_PUBLICATION, "fn", "physical_refusal", (
+        # Bind each typed arm to its own release; string labels are normalized away.
+        'E::Provider(P::IndexBusy { wait }) | E::Archive(A::Provider(P::IndexBusy { wait })) => {\n            busy("provider_archive_index", wait, wake)\n        }',
+        'E::Reputation(RArch::IndexBusy { wait })\n        | E::Archive(A::Reputation(RArch::IndexBusy { wait })) => {\n            busy("reputation_archive_index", wait, wake)\n        }',
+
+        "E::Fence { field, wait }\n        | E::Queue(Q::Busy { field, wait })\n        | E::Kura(K::Busy { field, wait })",
+        "M::Busy(wait)", "}) => busy(field, wait, wake)",
+        'E::Queue(Q::Pending { wait, .. }) => busy("retiring_lane_queue", wait, wake)',
+        "E::World(W::Field(refusal)) => match &refusal.cause",
+        "M::Admission(mv::storage::AdmittedStorageError::Busy { release, .. })",
+        "mv::allocation::AllocationRefusal::Capacity { release, .. }",
+        ")) => busy(refusal.field, release, wake)",
+        'busy("provider_archive_index", wait, wake)',
+        'busy("reputation_archive_index", wait, wake)',
+        '\n        _ => LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))',
+        '_ => {\n                LocalValidationRefusal::RecoveryRequired(format!("carrier publication: {error:?}"))\n            }',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += LIVE_PUBLICATION_BINDINGS
+
+
+def _validate_live_publication(items: dict[str, str], errors: list[str]) -> None:
+    """Bind the actual durable sequence and exact phase retained at each cut."""
+    symbol = "RetainedCarrier::try_publish"
+    body = items.get(symbol)
+    if body is None:
+        return  # The defining-item/ledger check already reports the missing owner.
+    sequence = (
+        "self.resume_capture()", "let matches_target = match &original",
+        "if !matches_target || !queue.belongs_to(target)",
+        "journals.bind_decision(finality.clone())", "let same_finality = match &original",
+        "if !same_finality", "let kura = &decision.journals.kura;",
+        "kura.store_block(decision.block().clone())?;", "let artifact = decision.finality();",
+        "let checkpoint = decision.journals.checkpoint;",
+        "kura.store_wsv_checkpoint(artifact.height, artifact.block_hash, checkpoint)?;",
+        "kura.store_commit_manifest(", ".with_authenticated_v2_commit_authority(artifact)",
+        "let receipt = kura.store_v2_finality_artifact(artifact)?;",
+        "kura.persist_wsv_checkpoint_for_v2_commit(&receipt, decision.journals.checkpoint,)",
+        "Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint))",
+        "let Self::Checkpointed(decision) = original else",
+        "decision.try_prepare_physical(target, Some(queue))", "prepared.publish().map_err(",
+    )
+    cursor = 0
+    for token in sequence:
+        index = body.find(_code(token), cursor)
+        if index < 0:
+            errors.append(f"Native live publication {symbol} reorders authenticated publication: {token}")
+            break
+        cursor = index + len(_code(token))
+    # Presence alone cannot reject an early duplicate finality/visibility write,
+    # or a replacement writer inserted before the authenticated sequence.
+    for operation in (
+        ".resume_capture(", ".bind_decision(", ".store_block(",
+        ".store_wsv_checkpoint(", ".store_commit_manifest(",
+        "CommitManifest::new(", ".with_authenticated_v2_commit_authority(",
+        ".store_v2_finality_artifact(", ".persist_wsv_checkpoint_for_v2_commit(",
+        ".attach_checkpoint(", ".try_prepare_physical(", ".publish(",
+    ):
+        if body.count(_code(operation)) != 1:
+            errors.append(f"Native live publication {symbol} repeats or omits original operation: {operation}")
+    target_relations = (
+        ("target.matches_kura_instance(&journals.kura)", 1),
+        ("target.matches_kura_instance(&decision.journals.kura)", 2),
+        (".matches_publication_target(target, journals.valid.as_ref().header())", 1),
+        (".matches_publication_target(target, decision.block().header())", 2),
+        ("other => other", 2),
+    )
+    for token, count in target_relations:
+        if body.count(_code(token)) != count:
+            errors.append(f"Native live publication {symbol} loses exact phase identity: {token}")
+    # Finite critical branches, not a digest of the entire method: every durable
+    # error must return the original Decided owner; every physical retry must
+    # preserve its original Checkpointed owner and typed wake/refusal.
+    for relation in (
+        '''match durable {
+            Ok(checkpoint) => Self::Checkpointed(decision.attach_checkpoint(checkpoint)),
+            Err(error) => {
+                return Err((Self::Decided(decision),
+                    LocalValidationRefusal::RecoveryRequired(format!("carrier durability: {error}")),
+                ));
+            }
+        }''',
+        '''let prepared = match decision.try_prepare_physical(target, Some(queue)) {
+            Ok(prepared) => prepared,
+            Err((decision, error)) => {
+                return Err((Self::Checkpointed(decision), physical_refusal(&error, &wake)));
+            }
+        };''',
+    ):
+        if _code(relation) not in body:
+            errors.append(f"Native live publication {symbol} loses original refusal phase")
+    for forbidden in (
+        "CapturedStateSnapshot::capture(", "capture_wsv_checkpoint(",
+        "validate_and_apply(", "execute_exact_apply(", "validate_and_prepare",
+        "rejected_outcome", "semantic_rejection", "unwrap_or_default(",
+        "mem::forget(", "ManuallyDrop", "unsafe{",
+    ):
+        if _code(forbidden) in body:
+            errors.append(f"Native live publication {symbol} reconstructs or discards original authority: {forbidden}")
+
+
+LIVE_DURABILITY_BINDINGS = (
+    (KURA, "method", "Kura::store_commit_manifest", (
+        "let _prune_guard = self.prune_lock.lock();", "self.ensure_prune_recovery_not_required()?;",
+        "self.durable_mutation_authorized()?;", "let _guard = self.sidecar_lock.lock();",
+        "self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;",
+        "self.ensure_checkpoint_accepts_manifest_write(&manifest)?;",
+        "let dir = self.commit_manifest_dir();", "create_dir_all_with_context(&dir)?;",
+        "let path = self.commit_manifest_path(manifest.height);",
+        "let namespace = self.open_bound_progress_namespace(&path, &path)?;",
+        "let bytes = manifest.encode();", "MAX_COMMIT_MANIFEST_BYTES,\n        )?;",
+        "file.write_all(&bytes)?;\n            file.flush()?;\n            file.sync_data()",
+        "std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;",
+        "Self::sync_bound_progress_intent_directories(&namespace)\n            .map_err(|error| Error::IO(error, dir.clone()))?;",
+        "if !self.bound_progress_namespace_unchanged(&namespace)",
+        '"commit manifest namespace changed during durability publication"',
+        "self.bind_wsv_checkpoint_to_manifest(&manifest)?;",
+        "resource_mutation.finish_resources_before_disk_rescan();",
+    )),
+    (KURA, "method", "Kura::store_v2_finality_artifact", (
+        "let _prune_guard = self.prune_lock.lock();",
+        "self.ensure_prune_recovery_not_required()?;", "self.ensure_canonical_storage_not_poisoned()?;",
+        "artifact.validate()?;", "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+        "self.durable_mutation_authorized()?;", "self.ensure_durable_block_at_height(height, block_hash)?;",
+        "artifact.validate_for_header(&canonical_header)?;",
+        "artifact.commit_qc.execution_commitment.merge_carrier != expected_merge_carrier",
+        "if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?",
+        "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+        "if retained_header != existing.block_header", "if existing.artifact != *artifact",
+        "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+        "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+        "return Ok(v2_commit_receipt(&existing.artifact));",
+        "self.verify_v2_finality_crypto(artifact)?;",
+        "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+        "self.cache_newly_verified_v2_finality(&path, &dir, &record)?;",
+        "Ok(v2_commit_receipt(artifact))",
+    )),
+    (KURA, "method", "Kura::resync_verified_v2_finality_record", (
+        "verified: &StableSidecarRead,\n    ) -> Result<()>",
+        "let namespace = self.open_bound_progress_namespace(path, path)?;",
+        "let file = Self::open_bound_progress_file(&namespace, path, &verified.metadata)?;",
+        "file.sync_all()\n            .map_err(|error| Error::IO(error, path.to_path_buf()))?;",
+        "Self::sync_bound_progress_intent_directories(&namespace)\n            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;",
+        ".read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?",
+        '"verified v2 finality disappeared during durability retry"',
+        "let opened = secure_file_metadata::from_file(&file)",
+        "if readback.bytes != verified.bytes\n            || readback.bytes_hash != verified.bytes_hash\n            || !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)\n            || !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)\n            || !self.bound_progress_namespace_unchanged(&namespace)",
+        '"verified v2 finality changed during durability retry"',
+        "Ok(())",
+    )),
+)
+PREPARATION_OWNER_BINDINGS += LIVE_DURABILITY_BINDINGS
+
+
+def _validate_live_durability(items: dict[str, str], errors: list[str]) -> None:
+    """Follow the live writers down to their original file and ancestor barriers."""
+    def ordered(symbol: str, *tokens: str) -> None:
+        body = items.get(symbol)
+        if body is None:
+            return
+        cursor = 0
+        for token in tokens:
+            index = body.find(_code(token), cursor)
+            if index < 0:
+                errors.append(f"Native live durability {symbol} reorders authenticated barrier: {token}")
+                return
+            cursor = index + len(_code(token))
+
+    manifest = "Kura::store_commit_manifest"
+    ordered(manifest, "let _prune_guard = self.prune_lock.lock();",
+            "self.durable_mutation_authorized()?;", "let _guard = self.sidecar_lock.lock();",
+            "self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;",
+            "self.ensure_checkpoint_accepts_manifest_write(&manifest)?;",
+            "create_dir_all_with_context(&dir)?;", "self.open_bound_progress_namespace(&path, &path)?",
+            "file.write_all(&bytes)?;", "file.sync_data()", "std::fs::rename(&tmp_path, &path)",
+            "Self::sync_bound_progress_intent_directories(&namespace)",
+            "if !self.bound_progress_namespace_unchanged(&namespace)", "return Err(Error::IO(",
+            "self.bind_wsv_checkpoint_to_manifest(&manifest)?;",
+            "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())")
+    for token, count in (
+        ("self.ensure_durable_block_at_height(manifest.height, manifest.block_hash)?;", 2),
+        ("self.bind_wsv_checkpoint_to_manifest(", 1),
+        ("Self::sync_bound_progress_intent_directories(", 1),
+        ("self.bound_progress_namespace_unchanged(", 1),
+    ):
+        if manifest in items and items[manifest].count(_code(token)) != count:
+            errors.append(f"Native live durability {manifest} repeats or omits exact barrier: {token}")
+
+    resync = "Kura::resync_verified_v2_finality_record"
+    ordered(resync, "self.open_bound_progress_namespace(path, path)?",
+            "Self::open_bound_progress_file(&namespace, path, &verified.metadata)?",
+            "file.sync_all()", "Self::sync_bound_progress_intent_directories(&namespace)",
+            ".read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?",
+            "secure_file_metadata::from_file(&file)", "if readback.bytes != verified.bytes",
+            "|| readback.bytes_hash != verified.bytes_hash",
+            "|| !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)",
+            "|| !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)",
+            "|| !self.bound_progress_namespace_unchanged(&namespace)",
+            "return Err(Error::IO(", "Ok(())")
+    for operation in ("file.sync_all(", "Self::sync_bound_progress_intent_directories(",
+                      "self.bound_progress_namespace_unchanged(", "Ok(())"):
+        if resync in items and items[resync].count(_code(operation)) != 1:
+            errors.append(f"Native live durability {resync} repeats or omits exact barrier: {operation}")
+
+    finality = "Kura::store_v2_finality_artifact"
+    ordered(finality, "let _prune_guard = self.prune_lock.lock();",
+            "artifact.validate()?;", "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "self.ensure_durable_block_at_height(height, block_hash)?;",
+            "artifact.validate_for_header(&canonical_header)?;",
+            "artifact.commit_qc.execution_commitment.merge_carrier != expected_merge_carrier",
+            "if let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?",
+            "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+            "if retained_header != existing.block_header", "if existing.artifact != *artifact",
+            "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+            "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+            "self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(",
+            "return Ok(v2_commit_receipt(&existing.artifact));",
+            "self.verify_v2_finality_crypto(artifact)?;",
+            "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+            "Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;",
+            "if existing.artifact != *artifact",
+            "self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;",
+            "self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;",
+            "self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(",
+            "return Ok(v2_commit_receipt(&existing.artifact));",
+            "self.cache_newly_verified_v2_finality(&path, &dir, &record)?;",
+            "Ok(v2_commit_receipt(artifact))")
+    for token, count in (
+        ("self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;", 2),
+        ("self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;", 2),
+        ("v2_commit_receipt(", 3),
+        ("self.write_atomic_synced_noclobber(", 1),
+    ):
+        if finality in items and items[finality].count(_code(token)) != count:
+            errors.append(f"Native live durability {finality} repeats or omits authenticated receipt gate: {token}")
+
+
+# Historical Native execution shares the original source kernel. Replay keeps
+# source custody through its own authenticated output/checkpoint tail; it never
+# captures a live PreparedCarrier or grants publication on a current QC alone.
+NATIVE_REPLAY_BINDINGS = (
+    (BLOCK, "method", "ValidBlock::prepare_native_candidate", (
+        "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
+        "context: crate::sumeragi::v2::VerifiedHeightContext",
+        "let Some(execution) = Self::validate_and_record_native_candidate(",
+        "source, context, genesis_account, time_source, block_cadence",
+        "return Ok(None);", "PreparedCarrier::prepare(execution)",
+        ".map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))",
+    )),
+    (BLOCK, "struct", "ValidatedReplayExecution", (
+        "pub(crate) valid: ValidBlock", "pub(crate) state: Box<StateBlock<'state>>",
+        "pub(crate) native: Option<crate::state::NativeExecutionCustody>",
+    )),
+    (CONTROLS, "method", "VerifiedReplayProposal::new", (
+        "verified: &super::VerifiedV2FinalityArtifact", "let artifact = verified.artifact();",
+        ".validate_for_header(&executed.header())", "let wire = executed.encode_wire()",
+        "let commitment = &artifact.commit_qc.execution_commitment;",
+        "if !executed.has_results()", "u64::try_from(wire.len()).ok() != Some(commitment.executed_block_wire_len)",
+        "Hash::new(&wire) != commitment.executed_block_wire_hash", "executed.canonical_proposal_wire_hash()",
+        "if proposal_wire_hash != artifact.subject.payload_hash", "(None, None) => {}",
+        "(Some(reference), Some(entry)) if reference.matches_entry(entry) => {}",
+        "network_id: artifact.height_context.network_id", "block_hash: executed.hash()",
+        "proposal_wire_hash,", "carrier_header: executed.header()",
+        "merge_entry: merge_entry.cloned().map(std::sync::Arc::new)",
+        "context: SumeragiV2ValidationContext::from_height_context(&artifact.height_context)",
+    )),
+    (CONTROLS, "method", "VerifiedReplayProposal::validate", (
+        "proposal: &SignedBlock", "state: &impl StateReadOnly", "let wire = proposal.encode_wire()",
+        "if !proposal.is_resultless_proposal()", "proposal.hash() != self.block_hash",
+        "Hash::new(&wire) != self.proposal_wire_hash", "*state.network_id() != self.network_id",
+        "proposal.header().height().get() != self.context.height", "u64::try_from(state.height())",
+        ".and_then(|height| height.checked_add(1))", "!= Some(self.context.height)",
+        "proposal.header().prev_block_hash() != state.latest_block_hash()", "return Err(",
+    )),
+    (CONTROLS, "method", "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block", (
+        "verified: &super::VerifiedV2FinalityArtifact", "Result<ValidatedReplayExecution<'state>, Error>",
+        "VerifiedReplayProposal::new(&executed, verified, merge_entry)",
+        "let proposal = executed.canonical_resultless_proposal();",
+        ".is_some_and(|bundle| bundle.native_lane_decisions.is_some())",
+        "authority.validate(&proposal, &state.query_view())?;", "let frozen = &verified.height_context;",
+        "if !topology", ".eq(frozen.roster.iter().map(|entry| &entry.validator))",
+        "if frozen.snapshot_bootstrap.is_some()", "state.authenticated_snapshot_v2_bootstrap()",
+        "record.context == *frozen && record.validator_set_pops == verified.validator_set_pops",
+        "VerifiedHeightContext::snapshot_bootstrap(bootstrap)", "frozen.height.checked_sub(1)",
+        ".filter(|height| *height != 0)", "state.kura().v2_finality_artifact_with_receipt(parent_height)",
+        "VerifiedHeightContext::successor(",
+        "frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops",
+        "state.prepare_proposed_native_lane_batch_source(&proposal, &[])",
+        "NativeLaneBatchSourcePreparationV1::Ready(source) => source",
+        "NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {",
+        "NativeLaneBatchSourcePreparationV1::ObservationChanged => {",
+        "Self::validate_and_record_native_candidate(", "valid: input.valid", "state: input.state", "native: input.native",
+        "return native.map_err(|error| (Box::new(executed), Box::new(error)));",
+        "Self::validate_keep_voting_block_inner(", "ConsensusValidationProfile::VerifiedReplay {",
+        "native: None",
+    )),
+    (STATE, "fn", "replay_blocks_from_kura_range_inner", (
+        "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block(", "signed_block.clone(),",
+        "merge_carrier.as_ref().map(|carrier| &carrier.entry)", "&validation_topology,",
+        "verify_replay_bootstrap_binding(state, &signed_block, finality)?;",
+        "let mut replay = match validation", 'let has_native_inputs = signed_block\n            .execution_context()\n            .is_some_and(|bundle| bundle.native_lane_decisions.is_some());',
+        "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+        "!native.retains_carrier(replay.valid.as_ref(), &finality.height_context)",
+        "let witness = replay.state.take_exec_witness().ok_or_else(",
+        "from_result_bearing_block_and_merge_entry", "replay.state.staged_merge_entry()",
+        'let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(\n            replay.valid.as_ref(),\n            replay.state.staged_merge_entry(),\n        )', 'let lane_finality_manifest =\n            crate::sumeragi::exec::LaneFinalityManifestV1::from_result_bearing_block(\n                replay.valid.as_ref(),\n            )', 'let replayed_execution_commitment =\n            crate::sumeragi::exec::execution_commitment_from_validated_block(\n                &witness,\n                &native_amx_manifest,\n                &lane_finality_manifest,\n                replay.valid.as_ref(),\n            )', 'let result_check = ensure_replayed_results_match_committed(\n            height,\n            &signed_block,\n            committed_block.as_ref(),\n        )',
+        "execution_commitment_from_validated_block(", "if replayed_execution_commitment != finality.commit_qc.execution_commitment",
+        ".commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)",
+        "ensure_replayed_results_match_committed(", ".authorize_execution_output_publication(&committed_block, &witness)",
+        ".apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)",
+        ".prepare_replay_checkpoint_preview()", "canonical_staged_state_snapshot_hash(&replay.state)",
+        "if actual != wsv_checkpoint.state_hash()", "!native.retains_carrier(committed_block.as_ref(), &finality.height_context)",
+        "replay.state.commit()", "drop(replay.native)", "MergeLedgerPublicationMode::Replay",
+    )),
+    (STATE, "fn", "verify_replay_bootstrap_binding", (
+        "state.authenticated_snapshot_v2_bootstrap()", "u64::try_from(state.committed_height()) == Ok(anchor.snapshot_height)",
+        "if height != bootstrap.context.height", "if artifact.height_context != bootstrap.context",
+        "artifact.validator_set_pops != bootstrap.validator_set_pops", "block.header().prev_block_hash() != Some(anchor.snapshot_block_hash)",
+        "state.latest_block_hash_fast() != Some(anchor.snapshot_block_hash)",
+        "canonical_state_snapshot_hash(state)?", "if live_state_hash != anchor.snapshot_state_hash", "return Err(",
+    )),
+)
+NATIVE_REPLAY_TAIL_BINDING = next(row for row in NATIVE_REPLAY_BINDINGS if row[2] == "replay_blocks_from_kura_range_inner")
+PREPARATION_OWNER_BINDINGS += NATIVE_REPLAY_BINDINGS
+
+
+def _validate_native_replay(items: dict[str, str], errors: list[str]) -> None:
+    def ordered(symbol: str, *tokens: str) -> None:
+        body = items.get(symbol, "")
+        cursor = 0
+        for token in tokens:
+            index = body.find(_code(token), cursor)
+            if index < 0:
+                errors.append(f"Native replay {symbol} missing or reorders {token!r}")
+                return
+            cursor = index + len(_code(token))
+
+    ordered("ValidBlock::prepare_native_candidate",
+            "let Some(execution) = Self::validate_and_record_native_candidate(",
+            "source, context, genesis_account, time_source, block_cadence",
+            "return Ok(None);", "PreparedCarrier::prepare(execution)")
+    struct = items.get("ValidatedReplayExecution", "")
+    expected = "{ pub(crate) valid: ValidBlock, pub(crate) state: Box<StateBlock<'state>>, pub(crate) native: Option<crate::state::NativeExecutionCustody>, }"
+    if _code(expected) not in struct:
+        errors.append("Native replay custody fields must release State writers before original Native sources")
+    for owner in ("ValidBlock::validate_and_record_native_candidate",
+                  "ValidBlock::validate_sumeragi_v2_replay_keep_voting_block"):
+        body = items.get(owner, "")
+        for retired in ("PreparedCarrier::prepare(", "PrefixPreparation::capture(", "prepare_journals("):
+            if _code(retired) in body:
+                errors.append(f"Native replay {owner} captures live metadata before its consumer owns the tail")
+    body = items.get("ValidBlock::prepare_native_candidate", "")
+    if "record_execution(" in body or "validate_static_state_dependent(" in body:
+        errors.append("Native replay live wrapper duplicates shared execution")
+    ordered("ValidBlock::validate_sumeragi_v2_replay_keep_voting_block",
+            "VerifiedReplayProposal::new(&executed, verified, merge_entry)",
+            "let proposal = executed.canonical_resultless_proposal();",
+            "bundle.native_lane_decisions.is_some()", "authority.validate(&proposal, &state.query_view())?;",
+            "if !topology", "let context =", "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
+            "v2_finality_artifact_with_receipt(parent_height)", "VerifiedHeightContext::successor(",
+            "prepare_proposed_native_lane_batch_source(&proposal, &[])",
+            "Self::validate_and_record_native_candidate(", "Ok(ValidatedReplayExecution {",
+            "return native.map_err(", "Self::validate_keep_voting_block_inner(")
+    replay = items.get("ValidBlock::validate_sumeragi_v2_replay_keep_voting_block", "")
+    for result in ("FirstInputRecoveryRequired { .. } => { return Err(",
+                   "ObservationChanged => { return Err("):
+        if _code(result) not in replay:
+            errors.append("Native replay incomplete source must retain its explicit refusal: " + result)
+    kernel = items.get("ValidBlock::validate_and_record_native_candidate", "")
+    controls = items.get("ValidBlock::prepare_native_execution_controls", "")
+    parent = ".parent_commit_qc.as_ref().map(|qc| qc.subject.block_hash).or_else(|| frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash))"
+    for name, body, expected in (("shared preflight", kernel, parent), ("execution controls", controls, parent.replace("|| frozen", "|| { frozen").replace("block_hash))", "block_hash) })"))):
+        if _code(expected) not in body:
+            errors.append("Native replay " + name + " must join the exact QC or authenticated snapshot parent")
+    ordered("replay_blocks_from_kura_range_inner",
+            "let mut replay = match validation", "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+            "!native.retains_carrier(replay.valid.as_ref(), &finality.height_context)",
+            "let witness = replay.state.take_exec_witness()", "execution_commitment_from_validated_block(",
+            "if replayed_execution_commitment != finality.commit_qc.execution_commitment",
+            ".commit_with_verified_v2_artifact(finality.clone(), replayed_execution_commitment)",
+            "ensure_replayed_results_match_committed(", ".authorize_execution_output_publication(&committed_block, &witness)",
+            ".apply_without_execution_with_verified_v2_finality_for_replay(&committed_block)",
+            ".prepare_replay_checkpoint_preview()", "canonical_staged_state_snapshot_hash(&replay.state)",
+            "if actual != wsv_checkpoint.state_hash()", "if replay.native.is_some() != has_native_inputs", "!native.retains_state(&replay.state)",
+            "!native.retains_carrier(committed_block.as_ref(), &finality.height_context)",
+            "replay.state.commit()", "drop(replay.native)")
+    tail = items.get("replay_blocks_from_kura_range_inner", "")
+    if tail.count(_code("if replay.native.is_some() != has_native_inputs")) != 2:
+        errors.append("Native replay custody presence must equal actual Native input presence at both checks")
+    if tail.count("drop(replay.native)") != 1:
+        errors.append("Native replay must drop its sole custody only after State commit")
+    if tail.count("!native.retains_state(&replay.state)") != 2:
+        errors.append("Native replay must authenticate State custody before witness and before commit")
+
+
 # Binding owners are authoritative inputs; mutation fixtures must copy every
 # referenced owner without a second manually synchronized Rust path inventory.
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(dict.fromkeys((
@@ -2214,6 +3070,8 @@ def validate_native_preparation_contract(
     raw_items = {}
     scoped_items = {}
     for path, kind, symbol, tokens in bindings:
+        if (path, kind, symbol) in SINGLE_LEASE_OWNER_KEYS:
+            continue
         matches = [r for r in rows if isinstance(r, dict)
                    and (r.get("path"), r.get("kind"), r.get("symbol")) == (path, kind, symbol)]
         if len(matches) != 1:
@@ -2228,6 +3086,10 @@ def validate_native_preparation_contract(
             for token in tokens:
                 if _code(token) not in items[symbol]:
                     errors.append(f"Native preparation {symbol} missing executable relation {token!r}")
+
+    items.update(_validate_single_lease_publication_contract(
+        root, rows, errors, rust_binding_item,
+    ))
 
     # Both concrete guard types must use the reviewed physical-only Drop kernel.
     _, deferred_source = _read_reviewed_rust_source(
@@ -2259,6 +3121,10 @@ def validate_native_preparation_contract(
                 errors.append(f"Native preparation {symbol} missing or reorders executable relation {relation!r}")
                 return
             cursor = index + len(needle)
+
+    _validate_live_publication(items, errors)
+    _validate_live_durability(items, errors)
+    _validate_native_replay(items, errors)
 
     # Lower owners have repeated method/type names in Cell and Storage. Keep
     # these ordering checks path-qualified so one sibling cannot satisfy another.
@@ -2358,8 +3224,8 @@ def validate_native_preparation_contract(
         "RetainedCarrier": """{
             Capturing(Box<super::StagedCarrierCapture<Admission>>),
             Validated(PreparedCarrierJournals<Admission>),
-            Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
-            Checkpointed(DecisionBoundCarrierJournals<Admission, BindingAdmission,
+            Decided(DecisionBoundCarrierJournals<Admission>),
+            Checkpointed(DecisionBoundCarrierJournals<Admission,
                 super::DetachedCarrierComponents, crate::kura::KuraWsvCheckpointReceipt>),
         }""",
         "Candidate": "{ subject: wire::BlockSubject, owner: Option<O> }",
@@ -2478,6 +3344,7 @@ def validate_native_preparation_contract(
         "CarrierQueueRetirement": "{ state_owner: NativeLaneStateOwner, header: BlockHeader, routes: Vec<(LaneId, DataSpaceId, Hash)>, _cut: QueueLaneRetirementCut<'queue>, }",
         "OriginalCarrierQueue": "{ state: &'service State, queue: &'service Queue }",
         "OriginalCarrierQueue::new": "{ Self { state, queue } }",
+        "OriginalCarrierQueue::from_service": "{ Self { state: &service.state, queue: &service.queue, } }",
         "OriginalCarrierQueue::belongs_to": "{ core::ptr::eq(self.state, state) }",
         "OriginalCarrierQueue::owns_cut": "{ cut.belongs_to(self.queue) }",
         "CarrierQueueRetirement::ensure_available": """{
@@ -2499,6 +3366,8 @@ def validate_native_preparation_contract(
             Ok(Self { validator, identity, candidates, markers, limit, _descriptor_admission: descriptor_admission, })
         }""",
     })
+    retained_bodies.update(NATIVE_VALIDATION_OWNER_BODIES)
+    retained_bodies.update(NATIVE_CURRENT_RUNNER_OWNER_BODIES)
     for symbol, body in retained_bodies.items():
         if symbol in items and items[symbol].partition("{")[2] != _code(body)[1:]:
             errors.append(f"Native preparation retained carrier {symbol} replaces or duplicates original custody")
@@ -2570,8 +3439,8 @@ def validate_native_preparation_contract(
     if custody_source is not None:
         custody = _code(custody_source)
         phase_impl = _code("""
-            impl<A: Send + 'static, B: Send + 'static> RetainedValidationOwner
-                for crate::state::RetainedCarrier<A, B> {
+            impl<A: Send + 'static> RetainedValidationOwner
+                for crate::state::RetainedCarrier<A> {
                 fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
                     self.matches_validation_candidate(context, body)
                 }
@@ -2597,11 +3466,23 @@ def validate_native_preparation_contract(
             errors.append("Native preparation retained carrier exposes the fixture owner in production")
         for trait in ("sealed::Owner", "RetainedValidationOwner"):
             implementations = list(re.finditer(r"impl(?:<[^{}]*?>)?" + re.escape(trait) + r"for([^{}]+)\{", custody))
-            if sorted(m[1] for m in implementations) != ["TrackedOwner", "crate::state::RetainedCarrier<A,B>"]:
+            expected = ["TrackedOwner", "crate::state::RetainedCarrier<A>"]
+            if trait == "sealed::Owner":
+                expected.append("super::native_validation::NativeValidationCandidate")
+            if sorted(m[1] for m in implementations) != sorted(expected):
                 errors.append(f"Native preparation retained carrier allows another {trait} implementation")
             if any(m[1] == "TrackedOwner" and not fixture_start < m.start() < fixture_end
                    for m in implementations):
                 errors.append("Native preparation retained carrier fixture implementation escapes its test gate")
+
+    # The Native candidate is the only additional production delegate; it retains
+    # the exact preallocated phase through recovery, execution and publication.
+    _, native_source = _read_reviewed_rust_source(root, NATIVE_VALIDATION, "Native preparation", errors)
+    if native_source is not None:
+        native_code = _code(native_source)
+        implementations = re.findall(r"impl(?:<[^{}]*?>)?RetainedValidationOwnerfor([^{}]+)\{", native_code)
+        if implementations != ["NativeValidationCandidate"]:
+            errors.append("Native preparation retained carrier changes its sole Native delegate")
 
     # Close the production constructor surface, including the real fixture's gate.
     # Private fields alone do not prevent an added public constructor in this module.
@@ -2609,20 +3490,34 @@ def validate_native_preparation_contract(
     if queue_source is not None:
         masked = _mask_rust_comments(queue_source)
         methods = re.findall(r"\bfn\s+(\w+)\s*(?:<[^{}]*>)?\s*\(", masked)
-        if sorted(methods) != sorted(("new", "belongs_to", "try_observe", "owns_cut", "for_test")):
+        if sorted(methods) != sorted(("new", "from_service", "belongs_to", "try_observe", "owns_cut", "for_test")):
             errors.append("Native preparation original Queue source changes closed constructor executable relation")
         fixture_constructor = _code("""#[cfg(test)]
             pub(crate) fn for_test(state: &'service State, queue: &'service Queue) -> Self {
                 Self::new(state, queue)
             }""")
+        constructor = _code("""#[cfg(test)]
+            pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self {
+                Self { state, queue }
+            }""")
+        if constructor not in _code(queue_source):
+            errors.append("Native preparation original Queue constructor escapes its test-gated executable relation")
         if fixture_constructor not in _code(queue_source):
             errors.append("Native preparation original Queue fixture constructor escapes its test-gated executable relation")
+
+    _, apply_source = _read_reviewed_rust_source(root, APPLY, "Native preparation", errors)
+    if apply_source is not None and _code("""#[cfg(test)]
+        pub(crate) fn carrier_queue_source(&self) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {
+            carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)
+        }""") not in _code(apply_source):
+        errors.append("Native preparation original Queue service fixture escapes its test-gated executable relation")
 
     # The service capability and move-only proof cannot expose a public arbitrary
     # Queue constructor, retain only a scalar observation, or reorder release.
     for symbol, body in {
         "OriginalCarrierQueue": "{ state: &'service State, queue: &'service Queue, }",
         "OriginalCarrierQueue::new": "{ Self { state, queue } }",
+        "OriginalCarrierQueue::from_service": "{ Self { state: &service.state, queue: &service.queue, } }",
         "OriginalCarrierQueue::belongs_to": "{ core::ptr::eq(self.state, state) }",
         "OriginalCarrierQueue::owns_cut": "{ cut.belongs_to(self.queue) }",
         "OriginalCarrierQueue::try_observe": "{ self.queue.try_lock_lane_retirement_observer() }",
@@ -2661,7 +3556,7 @@ def validate_native_preparation_contract(
     for symbol in ("CarrierQueueRetirement::try_new", "CarrierQueueRetirement::authenticates",
                    "CarrierQueueRetirement::ensure_available", "OriginalCarrierQueue::try_observe",
                    "QueueLaneRetirementCut::lane_pending_work_release", "StateFences::try_acquire",
-                   "try_prepare_physical"):
+                   "try_prepare_physical", "SourceAuthenticatedCarrier::try_prepare"):
         body = items.get(symbol, "")
         for forbidden in (".await", ".lock()", "mem::forget", "ManuallyDrop", "block_on(",
                           "Queue::new", "State::new"):
@@ -2798,49 +3693,6 @@ def validate_native_preparation_contract(
             if forbidden in body:
                 errors.append(f"Native preparation retained geometry {owner} reconstructs original custody: {forbidden}")
 
-    ordered("publish_execution_witness",
-            "try_publication_lease()", "reauthenticate_checkpoint(", "drop(lease)",
-            "stage_kagemusha_finality_sidecar(", "promote_kagemusha_finality_sidecar(")
-    ordered("KuraPublicationLease::reauthenticate_execution_witness",
-            "decode_kagemusha_finality_sidecar(&path)", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)",
-            "regular_sidecar_metadata(&path, &directory)", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())")
-    ordered("publish_archives",
-            "try_publication_lease()", "reauthenticate_checkpoint(",
-            "provider.publish_under_publication_lease(&lease, receipt)",
-            "reputation.publish_under_publication_lease(&lease, receipt)", "drop(lease)")
-    archive_publication = items.get("publish_archives", "")
-    if archive_publication and archive_publication.count(_code("drop(lease)")) != 1:
-        errors.append("Native preparation publish_archives loses its single final lease-release executable relation")
-    ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
-            "original.journals.source_prefix.authenticate_durable_carrier(",
-            "original.journals.provider_capture.as_ref()",
-            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
-            ".map_err(CarrierPhysicalPreparationError::Provider)?;",
-            "original.journals.reputation_capture.as_ref()",
-            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
-            ".map_err(CarrierPhysicalPreparationError::Reputation)?;")
-    ordered("try_prepare_physical",
-            "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
-            "if !original.journals.geometry.matches_publication_target(target, original.block().header())",
-            "drop(installation);", "return Err((original, CarrierPhysicalPreparationError::ForeignTarget));",
-            "if original.journals.geometry.requires_queue_custody()",
-            "None => Some(CarrierQueueRetirementError::Missing)",
-            "Some(source) if !source.belongs_to(target)",
-            "Some(CarrierQueueRetirementError::ForeignState)",
-            "return Err((original, CarrierPhysicalPreparationError::Queue(error)))",
-            "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
-            "original.publish_execution_witness()", "original.publish_archives()", "target.kura.try_publication_lease()",
-            "SourceAuthenticatedCarrier::try_new(original, kura)",
-            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
-            "let queue_observer = if authenticated.decision.journals.geometry.requires_queue_custody()",
-            "source.try_observe()", "StateFences::try_acquire(target)",
-            "observer.try_into_cut()", "CarrierQueueRetirement::try_new(target, &authenticated.decision.journals.geometry, authenticated.decision.block().header(), source, cut,)",
-            "let fences = CarrierFences { _state: state, _queue: queue, _kura: kura, }",
-            "journals.try_map_components(")
-    physical = items.get("try_prepare_physical", "")
-    for operation in ("source.try_observe()", "StateFences::try_acquire(target)", "observer.try_into_cut()", "journals.try_map_components("):
-        if physical and physical.count(_code(operation)) != 1:
-            errors.append(f"Native preparation Queue acquisition repeats or omits executable relation {operation}")
     ordered("CarrierFences::release_for_completion", "write.release_deferred()", "lifecycle.release_deferred()",
             "queue.map(CarrierQueueRetirement::release_deferred)", "kura.release_deferred()", "CompletionFences {")
     ordered("CarrierQueueRetirement::try_new", "!source.belongs_to(target)",
@@ -3097,7 +3949,27 @@ def validate_native_preparation_contract(
             "self.construct_acquired_block(acquired, curr_block, core::convert::identity)",
             "state_block.freeze_fastpq_source_context()", "state_block.freeze_axt_block_start()", "Ok(state_block)")
     ordered("schedule_local_proposal", "proposal_state.reconcile(LocalProposalOwner::from(directive))",
-            "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "lane_work.schedule_autonomous_lane_production(")
+            "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "let Some(assembly) = native.assemble_candidate(")
+    ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
+            "let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;",
+            "native.retain_candidate_source(source);", "let assembly = outcome?;")
+    scheduler = items.get("schedule_local_proposal", "")
+    for operation in ("native.assemble_candidate(", "native.retain_candidate_source(source);", "let assembly = outcome?;"):
+        if scheduler.count(_code(operation)) != 1:
+            errors.append("Native preparation scheduler loses original source executable relation: " + operation)
+    if _code("lane_work.schedule_autonomous_lane_production(") in scheduler:
+        errors.append("Native preparation scheduler reintroduces retired lane production executable relation")
+    for symbol in ("run_lifecycle_active_height", "run_pending_active_height"):
+        ordered(symbol, "native.take_service_publication(services);", "native.service_sources(services,",
+                "native.poll(native_global, native_network,", "dispatch_queue_plan_admission_effects(")
+        flow = tuple(_code(token) for token in ("native.take_service_publication(services);", "native.service_sources(services,", "native.poll(native_global, native_network,"))
+        body = items.get(symbol, "")
+        if all(token in body for token in flow) and not (body.index(flow[0]) < body.index(flow[1]) < body.index(flow[2])):
+            errors.append(f"Native preparation {symbol} reorders original service executable relation")
+        for retired in ("lane_work.schedule_retransmission(", "dispatch_lane_work_effects(",
+                        "schedule_autonomous_new_view_timeouts("):
+            if _code(retired) in items.get(symbol, ""):
+                errors.append(f"Native preparation {symbol} revives retired transport executable relation {retired}")
     ordered("refresh_merge_candidates", "if let Some((view, pending)) = &mut self.merge_history_wait",
             "if *view == active_view && !pending.is_ready(&wake)", "self.merge_history_wait = None",
             "let refresh_generation = self.state.state_view_generation()", "self.build_and_memoize_merge_execution_candidate(",
@@ -3231,26 +4103,26 @@ def validate_native_preparation_contract(
     common = items.get("ValidBlock::finalize_common_execution_metadata", "")
     if common and common.find("finalize_axt_policy_transition_ratchets()") < common.find("evaluate_nexus_autoscale(block,fragments)"):
         errors.append("Native preparation common policy metadata before autoscale")
-    ordered("ValidBlock::prepare_native_candidate", "ensure_state_access_without_exec_witness()",
+    ordered("ValidBlock::validate_and_record_native_candidate", "ensure_state_access_without_exec_witness()",
             "source.preparation_input()", "verify_origin_block_signature(",
             "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
             "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
-            "recorded.into_preparation_parts()", "PreparedCarrier::prepare(ValidatedCarrierPreparationInput")
+            "recorded.into_preparation_parts()", "Ok(Some(ValidatedCarrierPreparationInput")
     ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared\n            .verify_source_binding()",
             "verify_execution_output_seal(&self.carrier)", "validate_native_output_source(&self.carrier)",
             "let seal = Arc::clone(", "= self.prepared", "NativeExecutionCustody")
     require("PreparedCarrier::prepare", "execution_prefix::prepare(input)")
     require("PrefixPreparation::capture",
             "let block = valid.as_ref();",
-            "let witness = state.exec_witness.as_ref().ok_or(",
-            "let manifest = exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, None,)?;",
-            "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(str::to_owned)?;",
-            "let inventory = state.fastpq_source_inventory.take().ok_or(",
-            "let witness = state.exec_witness.take().ok_or(",
+            "let witness = state.exec_witness.as_ref().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
+            "let manifest = exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, None,).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
+            "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_owned()))?;",
+            "let inventory = state.fastpq_source_inventory.take().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
+            "let witness = state.exec_witness.take().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
             "let prefix = ValidatedExecutionPrefix { sealed, authority, _inventory: inventory, witness, _fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
     ordered("PrefixPreparation::capture", "let authority = match native",
-            "state.verify_execution_output_seal(block)?;",
-            "state.verify_cached_ordinary_witness_content(&verified_inventory)?;",
+            "state.verify_execution_output_seal(block).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
+            "state.verify_cached_ordinary_witness_content(&verified_inventory).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
             "let manifest =", "let commitment =", ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
             "let inventory =", "let witness = state.exec_witness.take()", "let prefix =")
     ordered("prepare", "let (valid, state, context, native) = input.into_parts();",

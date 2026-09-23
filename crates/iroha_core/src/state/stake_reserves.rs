@@ -225,7 +225,7 @@ mod tests {
         (world, asset)
     }
 
-    fn restore(value: json::Value) -> Result<Box<State>, json::Error> {
+    fn restore(value: json::Value) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura: Kura::blank_kura_for_testing(),

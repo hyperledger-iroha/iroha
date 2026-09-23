@@ -26,6 +26,18 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /** Scripted endpoints test mapping and rejection, never manufacture qualified native evidence. */
 @Tag("host-native")
 class KagemushaNativeCoreCoordinatorAdapterV1Test {
+    @Test fun `typed adapter close revokes native handle`() {
+        val endpoint = Endpoint()
+        val core = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/test/store", endpoint)
+        core.close()
+        core.close()
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> {
+            core.reserveOperationId(22, ByteArray(32), byteArrayOf(1))
+        }
+        assertEquals(0, endpoint.calls)
+    }
+
     @Test fun `all eleven typed methods map exact fields through native transport`() {
         val f = Fixture()
         val endpoint = Endpoint()
@@ -198,8 +210,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(f.requestBytes.size.toLong()).array() + f.requestBytes))
         val admitted = mutableListOf<Pair<Int, ByteArray>>()
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
             override fun open(storagePath: String) = 1L
+            override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
                 1 -> arrayOf(fields[1])
                 11 -> arrayOf(digest(97))
@@ -294,8 +307,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 active.coreAuthorizationKeyReference(), NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareProfileShape(active.profile), null).payload,
                 NoritoHeader.decode(KagemushaNoritoV1.encodeHardwareCredentialShape(active.credential), null).payload))
         val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
             override fun open(storagePath: String) = 1L
+            override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
                 1 -> arrayOf(fields[1])
                 11 -> arrayOf(digest(97))
@@ -344,14 +358,16 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
 
     private class Endpoint : KagemushaCoreCoordinatorEndpointV1 {
         var calls = 0
+        var closeCalls = 0
         private var method = 0
         private var request: List<ByteArray>? = null
         private var response = emptyList<ByteArray>()
         fun expect(method: Int, request: List<ByteArray>?, response: List<ByteArray>) {
             this.method = method; this.request = request; this.response = response
         }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
         override fun open(storagePath: String) = 1L
+        override fun close(handle: Long): Int { closeCalls++; assertEquals(1L, handle); return 0 }
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> {
             calls++
             assertEquals(this.method, method)
@@ -530,8 +546,9 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
         private var outstandingObservation: Triple<Int, ByteArray, ByteArray>? = null
         private var terminalReply: ByteArray? = null
         private val endpoint = object : KagemushaCoreCoordinatorEndpointV1 {
-            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff)
+            override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1)
             override fun open(storagePath: String): Long { outstandingObservation = null; return 1L }
+            override fun close(handle: Long) = 0
             override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray> = when (method) {
                 1 -> {
                     val operation = fields[0][0].toInt()
@@ -641,7 +658,8 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
             val old = initial.credential
             val credential = KagemushaHardwareCredentialV1(1, digest(93), old.networkId, old.hardwareProfileId(), old.suiteId(),
                 old.firmwarePolicyDigest(), old.policyEpoch, old.laneCommitment(), digest(94), old.hardwareEpochGeneration + 1,
-                key, digest(95), old.issuedAtMs, old.expiresAtMs, old.governanceSignature)
+                key, digest(95), old.issuedAtMs, old.expiresAtMs, old.appPolicyBindingDigest(),
+                old.governanceSignature)
             return KagemushaHardwareQualificationV1(1, initial.profile, credential, initial.releaseId(), initial.hardwarePolicyDigest(),
                 initial.coreAuthorizationKeyReference(), initial.capabilities())
         }
@@ -704,10 +722,11 @@ class KagemushaNativeCoreCoordinatorAdapterV1Test {
                 credential.hardwareProfileId(), credential.suiteId(), credential.firmwarePolicyDigest(), credential.policyEpoch,
                 credential.laneCommitment(), if (generation == credential.hardwareEpochGeneration) credential.hardwareEpochId() else digest(77),
                 generation, credential.devicePublicKey, credential.deviceKeyReference(), credential.issuedAtMs,
-                credential.expiresAtMs, credential.governanceSignature)
+                credential.expiresAtMs, credential.appPolicyBindingDigest(), credential.governanceSignature)
             val profile = KagemushaHardwareProfileV1(1, 1, active.hardwareProfileId(), digest(67),
                 KagemushaHardwarePlatformClassV1.ANDROID_OEM_SERVICE, digest(68), active.firmwarePolicyDigest(),
-                digest(69), digest(70), digest(71), active.policyEpoch, active.devicePublicKey, 0xffff, digest(72), 1, 20000)
+                digest(69), digest(70), digest(71), active.policyEpoch, active.devicePublicKey, 0xffff, digest(72), 1, 20000,
+                digest(73))
             return KagemushaHardwareQualificationV1(1, profile, active, request.releaseId(), digest(66), digest(65),
                 EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java))
         }

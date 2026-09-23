@@ -594,7 +594,7 @@ pub struct AxtProofEnvelope {
     /// Structured FASTPQ binding used to reconstruct the verified batch.
     #[norito(required)]
     pub fastpq_binding: Option<AxtFastpqBinding>,
-    /// Optional non-zero scalar committed by the versioned FASTPQ proof statement.
+    /// Optional non-zero *public* scalar committed by the versioned FASTPQ proof statement.
     ///
     /// This is deliberately a fixed-width proof field, not a business-facing
     /// monetary quantity. Callers must convert a clear [`Quantity`] exactly at
@@ -602,7 +602,8 @@ pub struct AxtProofEnvelope {
     /// present, the value must exactly match the proof-bound AXT batch metadata.
     #[norito(required)]
     pub committed_amount: Option<u128>,
-    /// Optional commitment for hidden-amount intents.
+    /// Optional commitment for hidden-amount intents. An anchored V1 hidden
+    /// spend must not also carry a public `committed_amount` scalar.
     #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
 }
@@ -2063,10 +2064,10 @@ pub struct AxtAnchoredSpendDraftV1 {
     /// Exact proof whose canonical bytes are authenticated by the spend signature.
     #[norito(required)]
     pub proof: Option<ProofBlob>,
-    /// Clear amount mirror, or `None` for a proof-hidden amount.
+    /// Exact clear intent amount mirror, or `None` for a proof-hidden amount.
     #[norito(required)]
     pub amount: Option<Quantity>,
-    /// Hidden-amount commitment mirror, when applicable.
+    /// Exact hidden-amount commitment mirror, when applicable.
     #[norito(required)]
     pub amount_commitment: Option<[u8; 32]>,
 }
@@ -2240,10 +2241,38 @@ impl AxtAnchoredSpendDraftV1 {
         if envelope.da_commitment != Some(anchor.da_manifest_digest.into()) {
             return Err(AxtAnchoredSpendValidationErrorV1::DaManifest);
         }
+        match self.intent.op.amount.as_ref() {
+            Some(clear_amount) => {
+                if self.amount_commitment.is_some() || envelope.amount_commitment.is_some() {
+                    return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
+                }
+                if self.amount.as_ref() != Some(clear_amount) {
+                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+                }
+                if envelope.committed_amount.is_none_or(|amount| amount == 0)
+                    || clear_amount.scale() != 0
+                    || clear_amount.as_numeric().try_mantissa_u128() != envelope.committed_amount
+                {
+                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+                }
+            }
+            None => {
+                if self.amount.is_some() || envelope.committed_amount.is_some() {
+                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+                }
+                if self.amount_commitment.is_none_or(|bytes| bytes == [0; 32]) {
+                    return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
+                }
+            }
+        }
+        if self.amount_commitment != envelope.amount_commitment {
+            return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
+        }
         // source_tx_commitment identifies one execution, not the whole ordered set.
         // The FASTPQ owner must verify its exact membership in the anchored canonical
         // transaction wires and compare the proof's PublicIO roots/set digest. This
-        // model-only signature/shape check cannot authenticate opaque proof bytes.
+        // model-only signature/shape check cannot authenticate opaque proof bytes,
+        // including the hidden-amount commitment equation.
         Ok(AxtAnchoredSpendIssuerPayloadV1 {
             handle_replay_key: AxtHandleReplayKey::from_handle(anchor.dataspace_id, &self.handle),
             handle_digest: axt_framed_digest_v1(
@@ -2386,6 +2415,12 @@ pub enum AxtAnchoredSpendValidationErrorV1 {
     /// Proof and finalized anchor bind different DA manifests.
     #[error("AXT anchored spend DA-manifest binding is invalid")]
     DaManifest,
+    /// Clear/hidden amount modes or exact proof scalar and intent mirrors disagree.
+    #[error("AXT anchored spend amount binding is invalid")]
+    Amount,
+    /// Hidden commitment is missing or differs between spend and proof envelope.
+    #[error("AXT anchored spend amount commitment binding is invalid")]
+    AmountCommitment,
     /// Reusable handle signature is invalid for authoritative WSV context.
     #[error("AXT anchored spend handle signature is invalid")]
     HandleSignature,

@@ -2784,6 +2784,7 @@ pub mod extractors {
             let suite_id = [0x4B; 32];
             let recipient_lane_id = [0x46; 32];
             let mut hardware_credential = KagemushaHardwareCredentialV1 {
+                app_policy_binding_digest: [0xA6; 32],
                 version: KAGEMUSHA_WIRE_VERSION_V1,
                 credential_id: [0; 32],
                 network_id,

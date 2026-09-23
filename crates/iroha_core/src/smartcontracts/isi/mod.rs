@@ -58,6 +58,8 @@ pub mod sorafs_orderbook;
 pub mod sorafs_pop_registry;
 /// Finalized chain-authoritative `SoraFS` PDP and PoTR outcome handlers.
 pub mod sorafs_proof_outcome;
+/// Closed role-13 release-manifest instruction and distinct deployment permissions.
+pub mod sorafs_release_manifest_authority;
 /// Authoritative native `SoraFS` reputation recorder policy and source journal.
 pub mod sorafs_reputation;
 /// Authoritative `SoraFS` reserve/rent instruction handlers.
@@ -325,6 +327,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> => CoreAuthorized,
@@ -825,6 +828,9 @@ mod registry_dispatch_tests {
             BTreeSet::from([
                 core::any::type_name::<iroha_data_model::isi::sorafs::RegisterProviderOwner>(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>(),
+                core::any::type_name::<
+                    iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority,
+                >(),
             ]),
         );
     }

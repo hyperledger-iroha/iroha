@@ -38,7 +38,10 @@ fn apply_marker(block: &mut StateBlock<'_>, value: u8, source: Option<Hash>) {
 fn stage_membership(block: &mut StateBlock<'_>, source: Option<Hash>) {
     block
         .stage_canonical_carrier_membership(
-            source.map(HashOf::<TransactionEntrypoint>::from_untyped_unchecked),
+            source
+                .map(HashOf::<TransactionEntrypoint>::from_untyped_unchecked)
+                .into_iter()
+                .collect(),
             nonzero!(1_usize),
         )
         .unwrap();

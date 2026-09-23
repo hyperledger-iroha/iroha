@@ -41,9 +41,13 @@ Important flag patterns:
 
 - Aggregate release manifests are authenticated through
   `scripts/release_sorafs_cli.sh`, the `authenticated_external_signer` provider
-  with exact `software` backend, a governed raw Ed25519 public key and
-  fingerprint, and a SHA256-pinned `iroha app sorafs toolkit release-manifest` binary.
-  Successful output is `software-key-qualified`.
+  with software or optional hardware custody, a governed raw Ed25519 public key
+  and fingerprint, and a SHA256-pinned `iroha app sorafs toolkit release-manifest`
+  binary. Successful verification authenticates the manifest against the reviewed
+  key without a backend-origin claim.
+- Candidate and bundle manifests report whether the signer binary is packaged;
+  this inventory does not qualify deployed custody, finalized authority, or a
+  completed signing operation.
 - Reusable CI examples live in `fixtures/documentation/sorafs_ci.md`; release checks are scripted by `ci/check_sorafs_cli_release.sh`.
 - Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.
 - Runtime secrets such as external-signer credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.

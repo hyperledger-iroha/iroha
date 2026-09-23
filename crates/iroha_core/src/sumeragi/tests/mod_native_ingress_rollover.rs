@@ -121,7 +121,13 @@ fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts()
             state.leader_wire_lifecycle_gate.as_ref().unwrap().clone(),
         )
     };
+    ingress.close();
+    assert!(
+        ingress.ensure_closed_global_drained_cut().is_err(),
+        "a queued global proposal still prevents the global cut"
+    );
     ingress.retire_leader_wire_lifecycle_gate(&gate).unwrap();
+    ingress.ensure_closed_global_drained_cut().unwrap();
     assert!(
         ingress.ensure_closed_drained_cut().is_err(),
         "Native bytes still prevent a full shutdown drain"
@@ -169,6 +175,93 @@ fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts()
     assert!(!ingress.state.lock().lanes.contains_key(&source));
     ingress.close();
     ingress.ensure_closed_drained_cut().unwrap();
+    ingress.ensure_closed_global_drained_cut().unwrap();
+}
+
+#[test]
+fn native_ingress_global_cut_preserves_multiple_original_occurrences() {
+    let (_handle, ingress, _relay) = test_sumeragi_handle_with_source_geometry(40, Some(2));
+    let validators = validator_peers(4);
+    ingress.close();
+    ingress.configure_roster(validators.clone()).unwrap();
+    ingress.open().unwrap();
+    for message in native_wire_classification_fixtures() {
+        for _ in 0..2 {
+            ingress.try_push_owned_at(
+                InboundBlockMessage::from_authenticated_peer(message.clone(), validators[0].clone()),
+                Instant::now(),
+            ).unwrap();
+        }
+    }
+    assert!(ingress.ensure_closed_global_drained_cut().is_err());
+    ingress.close();
+    let original = {
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 2, "duplicates retain the two original occurrences");
+        let entries = &state.lanes[&super::FairV2IngressSource::Native(validators[0].clone())].entries;
+        entries.iter().map(|entry| (
+            Arc::as_ptr(&entry.inbound), entry.encoded_bytes.as_ptr(), entry.admission_ordinal,
+            entry.ownership_snapshot.process_local_projection_hash(), entry.encoded_len,
+        )).collect::<Vec<_>>()
+    };
+    ingress.ensure_closed_global_drained_cut().expect("global finality cannot require Native delivery");
+    assert!(ingress.ensure_closed_drained_cut().is_err(), "process-wide drain still sees both owners");
+    for (allocation, bytes, ordinal, projection, length) in original {
+        {
+            let state = ingress.state.lock();
+            let entry = &state.lanes[&super::FairV2IngressSource::Native(validators[0].clone())].entries[0];
+            assert_eq!(Arc::as_ptr(&entry.inbound), allocation);
+            assert_eq!(entry.encoded_bytes.as_ptr(), bytes);
+            assert_eq!(entry.admission_ordinal, ordinal);
+            assert_eq!(entry.ownership_snapshot.process_local_projection_hash(), projection);
+            assert_eq!(entry.encoded_len, length);
+        }
+        let inbound = ingress.try_recv_if_checked(|message| message.message().is_native_lane()).unwrap().unwrap();
+        assert_eq!(inbound.ingress_ownership().unwrap().physical_admission_ordinal(), Some(ordinal));
+        ingress.ensure_closed_global_drained_cut().unwrap();
+    }
+    ingress.ensure_closed_drained_cut().unwrap();
+}
+
+#[test]
+fn native_ingress_global_cut_rejects_corrupted_retained_accounting_and_custody() {
+    for corruption in 0..13 {
+        let (_handle, ingress, _relay) = test_sumeragi_handle_with_source_geometry(40, Some(2));
+        let validators = validator_peers(4);
+        ingress.close();
+        ingress.configure_roster(validators.clone()).unwrap();
+        ingress.open().unwrap();
+        let [message, _] = native_wire_classification_fixtures();
+        ingress.try_push_owned_at(
+            InboundBlockMessage::from_authenticated_peer(message, validators[0].clone()),
+            Instant::now(),
+        ).unwrap();
+        ingress.close();
+        ingress.ensure_closed_global_drained_cut().unwrap();
+        {
+            let mut state = ingress.state.lock();
+            if corruption == 0 { state.bytes += 1; }
+            else if corruption == 1 { state.len += 1; }
+            else if corruption == 2 { state.ready.clear(); }
+            else if corruption == 3 { state.pending_wire_owners.clear(); }
+            else if corruption == 4 { state.nonempty_since = None; }
+            else {
+                let lane = state.lanes.get_mut(&super::FairV2IngressSource::Native(validators[0].clone())).unwrap();
+                match corruption {
+                    5 => lane.bytes += 1,
+                    6 => lane.pending_wire.clear(),
+                    7 => lane.progress_len += 1,
+                    8 => lane.timeout_vote_bytes += 1,
+                    9 => lane.transport_completion_len += 1,
+                    10 => lane.entries[0].admission_ordinal += 1,
+                    11 => Arc::make_mut(&mut lane.entries[0].inbound).sender = validators[1].clone(),
+                    12 => Arc::make_mut(&mut lane.entries[0].ownership_snapshot).admission_count += 1,
+                    _ => unreachable!(),
+                }
+            }
+        }
+        assert!(ingress.ensure_closed_global_drained_cut().is_err(), "corruption {corruption}");
+    }
 }
 
 #[test]

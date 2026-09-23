@@ -72,6 +72,7 @@ struct RepeatableFixtureSnapshotV2 {
     drops: Rc<Cell<u32>>,
     poisoned: Rc<Cell<bool>>,
     fault: FixtureSourceFaultV2,
+    snapshot_generation: Cell<u64>,
 }
 
 impl Drop for RepeatableFixtureSnapshotV2 {
@@ -92,7 +93,7 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for RepeatableFixtureSnapshotV2 {
             ZkAmsMkheRnsNativeSourceArenaV1::Main => b"main-snapshot",
             ZkAmsMkheRnsNativeSourceArenaV1::Nonce => b"nonce-snapshot",
         };
-        fixture_digest_v2(label, 0)
+        fixture_digest_v2(label, self.snapshot_generation.get())
     }
 
     fn read_slot(
@@ -220,6 +221,7 @@ fn fixture_snapshot_v2(
         drops,
         poisoned,
         fault,
+        snapshot_generation: Cell::new(0),
     }
 }
 
@@ -528,4 +530,86 @@ fn accounting_is_exact_and_scoped_v2() {
         292_406
     );
     assert_eq!(ledger.known_new_peak_bytes, 301_673);
+}
+
+/// Deliberately violates the immutable snapshot contract after the coordinator
+/// captures receipt A. Later receipt queries return stable, valid receipt B.
+struct ReceiptCaptureDriftSnapshotV2 {
+    inner: RepeatableFixtureSnapshotV2,
+    receipt_calls: Rc<Cell<u32>>,
+}
+
+impl ZkAmsMkheRnsNativeSourceSnapshotV1 for ReceiptCaptureDriftSnapshotV2 {
+    type Chunk = FixtureChunkV2;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.inner.layout()
+    }
+
+    fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
+        self.inner.snapshot_digest(arena)
+    }
+
+    fn structural_receipt(
+        &self,
+    ) -> Result<ZkAmsMkheRnsNativeSourceReceiptV1, ZkAmsMkheRnsNativeSourceErrorV1> {
+        let receipt = self.inner.structural_receipt()?;
+        self.receipt_calls.set(self.receipt_calls.get() + 1);
+        self.inner.snapshot_generation.set(1);
+        Ok(receipt)
+    }
+
+    fn read_slot(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        self.inner.read_slot(arena, slot)
+    }
+}
+
+impl ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1 for ReceiptCaptureDriftSnapshotV2 {}
+
+#[test]
+fn receipt_drift_between_coordinator_capture_and_source_scan_is_rejected_v2() {
+    let source_reads = Rc::new(Cell::new(0));
+    let source_drops = Rc::new(Cell::new(0));
+    let bridge_drops = Rc::new(Cell::new(0));
+    let receipt_calls = Rc::new(Cell::new(0));
+    let inner = fixture_snapshot_v2(
+        Rc::clone(&source_reads),
+        Rc::clone(&source_drops),
+        Rc::new(Cell::new(false)),
+        FixtureSourceFaultV2::None,
+    );
+    let original = inner
+        .structural_receipt()
+        .expect("valid original receipt A");
+    inner.snapshot_generation.set(1);
+    let changed = inner.structural_receipt().expect("valid changed receipt B");
+    assert_ne!(original, changed);
+    original.validate(inner.layout()).unwrap();
+    changed.validate(inner.layout()).unwrap();
+    inner.snapshot_generation.set(0);
+    let source = ReceiptCaptureDriftSnapshotV2 {
+        inner,
+        receipt_calls: Rc::clone(&receipt_calls),
+    };
+    assert_eq!(
+        prepare_fixture_harness_v2(
+            fixture_bridge_v2(
+                Rc::new(RefCell::new(Vec::new())),
+                Rc::clone(&bridge_drops),
+                false,
+                false,
+            ),
+            source,
+        )
+        .map(|_| ()),
+        Err(RnsNativePreTranscriptPublicStatementErrorV2::Source)
+    );
+    assert_eq!(receipt_calls.get(), 1, "the scan must not recapture B");
+    assert_eq!(source_reads.get(), 0, "reject drift before source I/O");
+    assert_eq!(source_drops.get(), 1);
+    assert_eq!(bridge_drops.get(), 1, "no retry or prepared owner escapes");
 }

@@ -176,7 +176,7 @@ fn actual_cold_capture_and_incremental_publication_have_identical_roots() {
     assert_members(&before, &mut store, &[(1, 1), (2, 2), (3, 2)]);
     let mut block = storage.block();
     block.insert_block([key(1), key(4)].into_iter().collect(), height(3));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     let candidate = prepared
         .prepare_membership_root(&before, &mut store, &mut workspace)
         .unwrap();
@@ -186,6 +186,7 @@ fn actual_cold_capture_and_incremental_publication_have_identical_roots() {
         "preparation never publishes"
     );
     assert_members(&before, &mut store, &[(1, 1), (2, 2), (3, 2)]);
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("original preparation"));
@@ -209,10 +210,11 @@ fn replacement_restores_older_alias_values_and_removes_abandoned_tip_members() {
     let before = cold(&storage, &mut store, &mut workspace);
     let mut block = storage.block_and_revert();
     block.insert_block([key(4), key(5)].into_iter().collect(), height(2));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     let candidate = prepared
         .prepare_membership_root(&before, &mut store, &mut workspace)
         .unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("original replacement"));
@@ -291,10 +293,11 @@ fn repeated_publication_preserves_identity_and_empty_frontiers_are_committed() {
     let empty = cold(&storage, &mut store, &mut workspace);
     let mut block = storage.block();
     block.insert_block(HashSet::new(), height(1));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     let candidate = prepared
         .prepare_membership_root(&empty, &mut store, &mut workspace)
         .unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (first, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("first empty publication"));
@@ -307,7 +310,7 @@ fn repeated_publication_preserves_identity_and_empty_frontiers_are_committed() {
     );
     let mut block = storage.block();
     block.insert_block(HashSet::new(), height(1));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     store.reads = 0;
     store.writes = 0;
     store.height_reads = 0;
@@ -315,11 +318,12 @@ fn repeated_publication_preserves_identity_and_empty_frontiers_are_committed() {
     let candidate = prepared
         .prepare_membership_root(&first, &mut store, &mut workspace)
         .unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (again, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("repeated publication"));
     drop(retirement);
-    assert!(Arc::ptr_eq(&first.identity, &again.identity));
+    assert!(Identity::ptr_eq(&first.identity, &again.identity));
     assert_eq!(first.commitment(), again.commitment());
     assert_eq!(
         (
@@ -507,10 +511,13 @@ fn failed_cold_capture_keeps_state_and_restoration_requires_its_own_identity() {
     }
     let restored_root = cold(&restored, &mut store, &mut workspace);
     assert_eq!(restored_root.commitment(), baseline.commitment());
-    assert!(!Arc::ptr_eq(&restored_root.identity, &baseline.identity));
+    assert!(!Identity::ptr_eq(
+        &restored_root.identity,
+        &baseline.identity
+    ));
     let mut block = restored.block();
     block.insert_block([key(25)].into_iter().collect(), height(3));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     store.reads = 0;
     store.writes = 0;
     store.height_reads = 0;
@@ -531,6 +538,7 @@ fn failed_cold_capture_keeps_state_and_restoration_requires_its_own_identity() {
     let candidate = prepared
         .prepare_membership_root(&restored_root, &mut store, &mut workspace)
         .unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("restored original publication"));
@@ -578,10 +586,11 @@ fn equal_current_membership_cannot_hide_different_rollback_values() {
     for (storage, baseline, expected) in [(&first, a, 1), (&second, b, 2)] {
         let mut replacement = storage.block_and_revert();
         replacement.insert_block(HashSet::new(), height(3));
-        let prepared = replacement.prepare_commit().unwrap();
+        let mut prepared = replacement.prepare_commit().unwrap();
         let candidate = prepared
             .prepare_membership_root(&baseline, &mut store, &mut workspace)
             .unwrap();
+        prepared.try_prepare_physical().unwrap();
         let (after, retirement) = prepared
             .publish_with_membership_root(candidate)
             .unwrap_or_else(|_| panic!("original replacement"));
@@ -623,11 +632,12 @@ fn all_publication_modes_retain_the_exact_original_rollback_cut() {
             storage.block()
         };
         block.insert_block(keys.into_iter().map(key).collect(), height(at));
-        let prepared = block.prepare_commit().unwrap();
+        let mut prepared = block.prepare_commit().unwrap();
         let candidate = prepared
             .prepare_membership_root(&baseline, &mut store, &mut workspace)
             .unwrap();
         assert_eq!(candidate.after.predecessor, expected);
+        prepared.try_prepare_physical().unwrap();
         let (after, retirement) = prepared
             .publish_with_membership_root(candidate)
             .unwrap_or_else(|_| panic!("original mode"));
@@ -852,7 +862,7 @@ fn height_write_unwind_keeps_the_original_preparation_and_store_for_retry() {
     let baseline = cold(&storage, &mut original, &mut workspace);
     let mut block = storage.block_and_revert();
     block.insert_block([key(4), key(5)].into_iter().collect(), height(2));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     let mut successful = original.clone();
     successful.height_writes = 0;
     let expected = prepared
@@ -899,6 +909,7 @@ fn height_write_unwind_keeps_the_original_preparation_and_store_for_retry() {
         last_retry = Some((retried, failed));
     }
     let (candidate, mut store) = last_retry.unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("same original preparation"));
@@ -926,7 +937,7 @@ fn replacement_repairs_a_missing_old_height_from_the_original_state() {
     );
     let mut block = storage.block_and_revert();
     block.insert_block(HashSet::new(), height(2));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     store.fail_height_write = Some(store.height_writes + 1);
     assert!(matches!(
         prepared.prepare_membership_root(&baseline, &mut store, &mut workspace),
@@ -941,6 +952,7 @@ fn replacement_repairs_a_missing_old_height_from_the_original_state() {
     let candidate = prepared
         .prepare_membership_root(&baseline, &mut store, &mut workspace)
         .unwrap();
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("original replacement"));
@@ -1076,7 +1088,7 @@ fn writing_a_new_height_location_does_not_repair_an_original_rollback_location()
 
     let mut block = storage.block_and_revert();
     block.insert_block(HashSet::new(), height(2));
-    let prepared = block.prepare_commit().unwrap();
+    let mut prepared = block.prepare_commit().unwrap();
     let candidate = prepared
         .prepare_membership_root(&baseline, &mut store, &mut workspace)
         .unwrap();
@@ -1084,6 +1096,7 @@ fn writing_a_new_height_location_does_not_repair_an_original_rollback_location()
     assert_ne!(new_location, old_location);
     assert_eq!(store.heights.get(&new_location), Some(&1));
     assert_eq!(store.heights.get(&old_location), None);
+    prepared.try_prepare_physical().unwrap();
     let (after, retirement) = prepared
         .publish_with_membership_root(candidate)
         .unwrap_or_else(|_| panic!("original replacement"));
@@ -1108,4 +1121,49 @@ fn writing_a_new_height_location_does_not_repair_an_original_rollback_location()
         );
     }
     assert_eq!(after.read(&key(1), &mut store).unwrap(), Some(height(1)));
+}
+
+#[test]
+fn matching_root_requires_original_physical_preparation_before_publication() {
+    let storage = TransactionsStorage::new();
+    let mut store = Store::default();
+    let mut workspace = MerkleMapUpdateWorkspace::new();
+    let baseline = cold(&storage, &mut store, &mut workspace);
+    let mut block = storage.block();
+    block.insert_block([key(1)].into_iter().collect(), height(1));
+    let prepared = block.prepare_commit().unwrap();
+    let candidate = prepared
+        .prepare_membership_root(&baseline, &mut store, &mut workspace)
+        .unwrap();
+    let original_identity = prepared.next_identity.clone();
+    let reserved = storage.budget.reserved_bytes();
+    let sequence = storage.publication_sequence.load(Ordering::Acquire);
+    let (mut prepared, candidate) = prepared
+        .publish_with_membership_root(candidate)
+        .err()
+        .expect("matching root cannot acquire physical authority in publication");
+    assert!(Identity::ptr_eq(
+        &prepared.next_identity,
+        &original_identity
+    ));
+    assert!(Identity::ptr_eq(&candidate.preparation, &original_identity));
+    assert!(!prepared.publication_started);
+    assert!(!prepared.published);
+    assert!(!prepared.is_physically_prepared());
+    assert_eq!(
+        storage.publication_sequence.load(Ordering::Acquire),
+        sequence
+    );
+    assert_eq!(storage.budget.reserved_bytes(), reserved);
+    assert_eq!(storage.view().get(&key(1)), None);
+    prepared.try_prepare_physical().unwrap();
+    assert!(prepared.is_physically_prepared());
+    assert_eq!(storage.budget.reserved_bytes(), reserved);
+    let (after, retirement) = prepared
+        .publish_with_membership_root(candidate)
+        .unwrap_or_else(|_| panic!("same original physical preparation"));
+    assert!(Identity::ptr_eq(&after.identity, &original_identity));
+    assert_eq!(storage.view().get(&key(1)), Some(height(1)));
+    drop(retirement);
+    assert_members(&after, &mut store, &[(1, 1)]);
 }

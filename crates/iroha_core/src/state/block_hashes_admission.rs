@@ -8,12 +8,43 @@ use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeCloning, NodeFunding, PlanningError,
 };
 
+/// Local admission for the two original committed-history owners.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum StateAdmissionError {
+    /// Original block-hash history admission.
+    #[error(transparent)]
+    History(#[from] BlockHashAdmissionError),
+    /// Original replay-membership history admission.
+    #[error(transparent)]
+    Membership(#[from] storage_transactions::MembershipAdmissionError),
+}
+impl StateAdmissionError {
+    /// Original resource release, when releasing retained custody can help.
+    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+        match self {
+            Self::History(e) => e.release_wait(),
+            Self::Membership(e) => e.release_wait(),
+        }
+    }
+}
+impl From<StateAdmissionError> for MergeLedgerCommitError {
+    fn from(error: StateAdmissionError) -> Self {
+        match error {
+            StateAdmissionError::History(e) => Self::BlockHashAdmission(e),
+            StateAdmissionError::Membership(e) => Self::MembershipAdmission(e),
+        }
+    }
+}
+
 /// Separate local acquisition refusal from the caller's deterministic start stage.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateBlockStartError<E: std::fmt::Debug> {
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
     History(#[from] BlockHashAdmissionError),
+    /// No World owner or start effect was acquired before this local refusal.
+    #[error(transparent)]
+    Membership(#[from] storage_transactions::MembershipAdmissionError),
     /// The caller's original pristine/after-start failure.
     #[error("block start stage failed: {0:?}")]
     Stage(E),
@@ -22,6 +53,7 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
     fn from(error: StateBlockStartError<MergeLedgerCommitError>) -> Self {
         match error {
             StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            StateBlockStartError::Membership(error) => Self::MembershipAdmission(error),
             StateBlockStartError::Stage(error) => error,
         }
     }
@@ -62,11 +94,20 @@ impl BlockHashAdmissionError {
         }
     }
 }
+impl<E: std::fmt::Debug> From<StateAdmissionError> for StateBlockStartError<E> {
+    fn from(error: StateAdmissionError) -> Self {
+        match error {
+            StateAdmissionError::History(e) => Self::History(e),
+            StateAdmissionError::Membership(e) => Self::Membership(e),
+        }
+    }
+}
 impl<E: std::fmt::Debug> StateBlockStartError<E> {
     /// Preserve the original history release without retrying a deterministic stage failure.
     pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
             Self::History(error) => error.release_wait(),
+            Self::Membership(error) => error.release_wait(),
             Self::Stage(_) => None,
         }
     }

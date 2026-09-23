@@ -26,20 +26,20 @@ use crate::{
         PrivacyOrchardPoolStateV1, PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
         PrivacyProofManagedAccumulatorStateV1, PrivacyProofManagedPoolAccumulatorStateV1,
-        PrivacyProofManagedPoolSnapshotV1, PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1,
-        PrivacyRootKeyV1, PrivacyRootProvenanceV1, PrivacyRootRetentionAnchorV1,
-        PrivacyStateItemRecordV1, PrivacyVegaIssuerRegistryFactsV1,
+        PrivacyProofManagedPoolSnapshotV1, PrivacyPublicReserveOwnerV1, PrivacyRootHeadKeyV1,
+        PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
+        PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1, PrivacyVegaIssuerRegistryFactsV1,
         compute_privacy_pgc_account_state_root_v1, load_privacy_bootle_lantern_issuer_policy_v1,
         load_privacy_orchard_pool_snapshot_v1, load_privacy_pgc_pool_snapshot_v1,
         load_privacy_proof_managed_pool_snapshot_v1, load_privacy_vega_issuer_v1,
         load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
         load_privacy_zk_x509_authoritative_state_v1, load_privacy_zk_x509_certificate_policy_v1,
         load_privacy_zk_x509_trust_anchor_v1, plan_privacy_root_history_update_v1,
-        privacy_bootle_lantern_issuer_policy_count_v1, privacy_vega_issuer_record_count_v1,
-        privacy_vega_issuer_registry_facts_v1, privacy_zk_ace_policy_count_v1,
-        privacy_zk_x509_ca_namespace_v1, privacy_zk_x509_crl_lineage_count_v1,
-        privacy_zk_x509_governance_record_counts_v1, proof_managed_pool_root_role_v1,
-        resolve_qualified_privacy_activation_v1,
+        privacy_bootle_lantern_issuer_policy_count_v1, privacy_public_reserve_owner_v1,
+        privacy_vega_issuer_record_count_v1, privacy_vega_issuer_registry_facts_v1,
+        privacy_zk_ace_policy_count_v1, privacy_zk_x509_ca_namespace_v1,
+        privacy_zk_x509_crl_lineage_count_v1, privacy_zk_x509_governance_record_counts_v1,
+        proof_managed_pool_root_role_v1, resolve_qualified_privacy_activation_v1,
         validate_privacy_exact12_qualification_registration_v1,
         validate_privacy_zk_x509_policy_revocation_dependencies_v1,
         validate_privacy_zk_x509_trust_anchor_revocation_dependencies_v1,
@@ -60,6 +60,7 @@ use crate::{
     state::{StateTransaction, WorldReadOnly},
 };
 use iroha_data_model::{
+    asset::AssetId,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
@@ -111,6 +112,29 @@ use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use mv::storage::StorageReadOnly;
 use std::collections::BTreeSet;
 include!("privacy/governance_authorization.rs");
+fn prepare_privacy_public_reserve_custody_v1(
+    state_transaction: &StateTransaction<'_, '_>,
+    reserve_asset_id: AssetId,
+    owner: PrivacyPublicReserveOwnerV1,
+) -> Result<(PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1), Error> {
+    if privacy_public_reserve_owner_v1(
+        &state_transaction.world.privacy_commitments,
+        &reserve_asset_id,
+    )
+    .map_err(|message| Error::InvariantViolation(message.into()))?
+    .is_some()
+    {
+        return Err(invalid_privacy_parameter(format!(
+            "public-reserve asset {reserve_asset_id} already backs a governed privacy pool"
+        )));
+    }
+    let key =
+        PrivacyCommitmentKeyV1::public_reserve_custody(owner.protocol_id(), &reserve_asset_id)
+            .map_err(|message| Error::InvariantViolation(message.into()))?;
+    let record = PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset_id, owner)
+        .map_err(invalid_privacy_parameter)?;
+    Ok((key, record))
+}
 fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
     let message = format!("privacy proof admission rejected: {error}");
     let invariant = match &error {
@@ -865,6 +889,18 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             .map_err(invalid_privacy_parameter)?;
         let state_record = PrivacyStateItemRecordV1::orchard_pool_state(pool_state.clone())
             .map_err(invalid_privacy_parameter)?;
+        let reserve_custody = prepare_privacy_public_reserve_custody_v1(
+            state_transaction,
+            AssetId::with_scope(
+                self.bootstrap.asset_definition_id.clone(),
+                self.bootstrap.reserve_account.clone(),
+                self.bootstrap.public_balance_scope,
+            ),
+            PrivacyPublicReserveOwnerV1::Orchard {
+                namespace,
+                bootstrap_digest,
+            },
+        )?;
         let root_provenance =
             PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, current_height)
                 .map_err(invalid_privacy_parameter)?;
@@ -904,6 +940,10 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             .world
             .privacy_commitments
             .insert(state_key, state_record);
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(reserve_custody.0, reserve_custody.1);
         state_transaction
             .world
             .privacy_roots
@@ -1066,6 +1106,31 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
                 format!("proof-managed pool bootstrap canonical encoding failed: {error}").into(),
             )
         })?;
+        let reserve_custody = match (
+            self.bootstrap.reserve_account(),
+            self.bootstrap.public_balance_scope(),
+        ) {
+            (Some(reserve_account), Some(scope)) => {
+                Some(prepare_privacy_public_reserve_custody_v1(
+                    state_transaction,
+                    AssetId::with_scope(
+                        self.bootstrap.asset_definition_id().clone(),
+                        reserve_account.clone(),
+                        scope,
+                    ),
+                    PrivacyPublicReserveOwnerV1::PrivateIvm {
+                        namespace,
+                        bootstrap_digest,
+                    },
+                )?)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(Error::InvariantViolation(
+                    "proof-managed reserve account and scope must be present together".into(),
+                ));
+            }
+        };
         let initial_root =
             proof_managed_pool_initial_root_v1(&self.bootstrap).map_err(|error| {
                 Error::InvariantViolation(
@@ -1190,6 +1255,12 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             .world
             .privacy_commitments
             .insert(config_key, config_record);
+        if let Some((key, record)) = reserve_custody {
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(key, record);
+        }
         for (key, record) in output_records {
             state_transaction
                 .world
@@ -4852,36 +4923,20 @@ impl PreparedPrivacySubmissionV1 {
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
                 let balance = effect.value_balance();
                 if balance.direction != PrivacyValueBalanceDirectionV1::Balanced {
-                    let amount = Quantity::from(balance.amount);
-                    match balance.direction {
-                        PrivacyValueBalanceDirectionV1::IntoPool => {
-                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
-                                state_transaction,
-                                authority,
-                                self.envelope.statement_digest,
-                                effect.asset_definition_id(),
-                                effect.public_balance_scope(),
-                                authority,
-                                effect.reserve_account(),
-                                amount,
-                            )?;
-                        }
-                        PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
-                                state_transaction,
-                                authority,
-                                self.envelope.statement_digest,
-                                effect.asset_definition_id(),
-                                effect.public_balance_scope(),
-                                effect.reserve_account(),
-                                authority,
-                                amount,
-                            )?;
-                        }
-                        PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
-                            "directional Orchard bridge checked before transfer dispatch"
-                        ),
-                    }
+                    super::asset::isi::execute_verified_privacy_pool_public_balance_transfer(
+                        state_transaction,
+                        authority,
+                        self.envelope.statement_digest,
+                        PrivacyPublicReserveOwnerV1::Orchard {
+                            namespace: snapshot.namespace(),
+                            bootstrap_digest: snapshot.bootstrap_digest(),
+                        },
+                        effect.asset_definition_id(),
+                        effect.public_balance_scope(),
+                        effect.reserve_account(),
+                        balance.direction,
+                        Quantity::from(balance.amount),
+                    )?;
                 }
                 for key in removals {
                     state_transaction.world.privacy_roots.remove(key);
@@ -5284,42 +5339,26 @@ impl PreparedPrivacySubmissionV1 {
                     (effect.value_balance(), reserve_account)
                     && balance.direction != PrivacyValueBalanceDirectionV1::Balanced
                 {
-                    let amount = Quantity::from(balance.amount);
                     let public_balance_scope = effect.public_balance_scope().ok_or_else(|| {
                         Error::InvariantViolation(
                             "directional proof-managed bridge has no committed public balance scope"
                                 .into(),
                         )
                     })?;
-                    match balance.direction {
-                        PrivacyValueBalanceDirectionV1::IntoPool => {
-                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
-                                state_transaction,
-                                authority,
-                                self.envelope.statement_digest,
-                                effect.asset_definition_id(),
-                                public_balance_scope,
-                                authority,
-                                reserve_account,
-                                amount,
-                            )?;
-                        }
-                        PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
-                                state_transaction,
-                                authority,
-                                self.envelope.statement_digest,
-                                effect.asset_definition_id(),
-                                public_balance_scope,
-                                reserve_account,
-                                authority,
-                                amount,
-                            )?;
-                        }
-                        PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
-                            "directional proof-managed bridge checked before transfer dispatch"
-                        ),
-                    }
+                    super::asset::isi::execute_verified_privacy_pool_public_balance_transfer(
+                        state_transaction,
+                        authority,
+                        self.envelope.statement_digest,
+                        PrivacyPublicReserveOwnerV1::PrivateIvm {
+                            namespace: snapshot.namespace(),
+                            bootstrap_digest: snapshot.bootstrap_digest(),
+                        },
+                        effect.asset_definition_id(),
+                        public_balance_scope,
+                        reserve_account,
+                        balance.direction,
+                        Quantity::from(balance.amount),
+                    )?;
                 }
                 for key in removals {
                     state_transaction.world.privacy_roots.remove(key);
@@ -7104,6 +7143,24 @@ mod tests {
             .world
             .privacy_commitments
             .insert(config_key, config_record);
+        let reserve_asset_id = AssetId::with_scope(
+            statement.asset_definition_id.clone(),
+            ALICE_ID.clone(),
+            statement.public_balance_scope,
+        );
+        let custody_owner = PrivacyPublicReserveOwnerV1::PrivateIvm {
+            namespace: snapshot.namespace(),
+            bootstrap_digest: snapshot.bootstrap_digest(),
+        };
+        transaction.world.privacy_commitments.insert(
+            PrivacyCommitmentKeyV1::public_reserve_custody(
+                custody_owner.protocol_id(),
+                &reserve_asset_id,
+            )
+            .expect("private-IVM reserve key"),
+            PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset_id, custody_owner)
+                .expect("private-IVM reserve row"),
+        );
         let genesis_key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
             snapshot.namespace(),
             input_commitment,

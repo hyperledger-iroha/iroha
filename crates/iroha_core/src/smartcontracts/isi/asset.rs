@@ -19,7 +19,9 @@ use iroha_telemetry::metrics;
 pub mod isi {
     use super::*;
     use crate::{
-        smartcontracts::isi::account_admission::ensure_receiving_account, state::WorldTransaction,
+        privacy_state::{PrivacyPublicReserveOwnerV1, privacy_public_reserve_owner_v1},
+        smartcontracts::isi::account_admission::ensure_receiving_account,
+        state::WorldTransaction,
     };
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -41,7 +43,7 @@ pub mod isi {
             error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, ManifestVerdict},
-        privacy::PrivacyStatementDigestV1,
+        privacy::{PrivacyStatementDigestV1, PrivacyValueBalanceDirectionV1},
     };
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::topology::DataSpaceId;
@@ -66,6 +68,14 @@ pub mod isi {
             amount: &Quantity,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            if privacy_public_reserve_owner_v1(&self.privacy_commitments, &resolved_id)
+                .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governed privacy public reserve cannot be burned".into(),
+                ));
+            }
             if self
                 .game_custody_by_account
                 .get(resolved_id.account())
@@ -1429,6 +1439,7 @@ pub mod isi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferSourcePolicy {
         User,
+        PrivacyPoolBridge(PrivacyPublicReserveOwnerV1),
         GameSessionFunding,
         SccpEscrowDeposit,
         FxEscrowDeposit,
@@ -1895,6 +1906,10 @@ pub mod isi {
         FxCorridorEscrowRefund(Vec<u8>),
         /// Move one exact transparent balance effect authorized by a native privacy proof.
         PrivacyPublicBridge(Vec<u8>),
+        /// Deposit an exact native pool effect into its public reserve.
+        PrivacyPoolDeposit(Vec<u8>),
+        /// Release an exact native pool effect from its governed public reserve.
+        PrivacyPoolBridge(PrivacyPublicReserveOwnerV1, Vec<u8>),
     }
     /// One-shot authorization and deterministic execution context for a numeric movement.
     ///
@@ -2194,6 +2209,18 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::User,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::PrivacyPoolDeposit(binding) => (
+                    "privacy-pool-deposit",
+                    binding,
+                    NumericAssetTransferSourcePolicy::User,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::PrivacyPoolBridge(owner, binding) => (
+                    "privacy-pool-bridge",
+                    binding,
+                    NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
             };
             Self {
                 debit: NumericMovementDebitAuthorization::Protocol,
@@ -2452,8 +2479,13 @@ pub mod isi {
         )?
         .apply(state_transaction)
     }
+    enum VerifiedPrivacyPublicBalancePurpose {
+        General,
+        PoolDeposit(PrivacyPublicReserveOwnerV1),
+        PoolWithdrawal(PrivacyPublicReserveOwnerV1),
+    }
     /// Apply one exact transparent balance mutation authorized by a verified
-    /// native privacy statement.
+    /// ZK-ACE public statement.
     pub(crate) fn execute_verified_privacy_public_balance_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
@@ -2463,6 +2495,88 @@ pub mod isi {
         source_account: &AccountId,
         destination_account: &AccountId,
         amount: Quantity,
+    ) -> Result<(), Error> {
+        execute_verified_privacy_public_balance_transfer_with_purpose(
+            state_transaction,
+            submitting_authority,
+            statement_digest,
+            definition_id,
+            public_balance_scope,
+            source_account,
+            destination_account,
+            amount,
+            VerifiedPrivacyPublicBalancePurpose::General,
+        )
+    }
+    /// Apply one direction of an exact Orchard/private-IVM verified pool bridge.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_verified_privacy_pool_public_balance_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        statement_digest: PrivacyStatementDigestV1,
+        owner: PrivacyPublicReserveOwnerV1,
+        definition_id: &AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        reserve_account: &AccountId,
+        direction: PrivacyValueBalanceDirectionV1,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let reserve_asset_id = AssetId::with_scope(
+            definition_id.clone(),
+            reserve_account.clone(),
+            public_balance_scope,
+        );
+        if privacy_public_reserve_owner_v1(
+            &state_transaction.world.privacy_commitments,
+            &reserve_asset_id,
+        )
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?
+            != Some(owner)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verified privacy pool bridge does not match governed reserve custody".into(),
+            ));
+        }
+        let (source_account, destination_account, purpose) = match direction {
+            PrivacyValueBalanceDirectionV1::IntoPool => (
+                submitting_authority,
+                reserve_account,
+                VerifiedPrivacyPublicBalancePurpose::PoolDeposit(owner),
+            ),
+            PrivacyValueBalanceDirectionV1::OutOfPool => (
+                reserve_account,
+                submitting_authority,
+                VerifiedPrivacyPublicBalancePurpose::PoolWithdrawal(owner),
+            ),
+            PrivacyValueBalanceDirectionV1::Balanced => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "balanced privacy effect has no public-reserve transfer".into(),
+                ));
+            }
+        };
+        execute_verified_privacy_public_balance_transfer_with_purpose(
+            state_transaction,
+            submitting_authority,
+            statement_digest,
+            definition_id,
+            public_balance_scope,
+            source_account,
+            destination_account,
+            amount,
+            purpose,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn execute_verified_privacy_public_balance_transfer_with_purpose(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        statement_digest: PrivacyStatementDigestV1,
+        definition_id: &AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        source_account: &AccountId,
+        destination_account: &AccountId,
+        amount: Quantity,
+        purpose: VerifiedPrivacyPublicBalancePurpose,
     ) -> Result<(), Error> {
         validate_committed_public_balance_scope(
             state_transaction,
@@ -2485,23 +2599,38 @@ pub mod isi {
             destination_account.clone(),
             public_balance_scope,
         );
-        let binding = canonical_numeric_movement_binding(&(
+        let exact_movement = (
             statement_digest,
             definition_id.clone(),
             public_balance_scope,
             source_account.clone(),
             destination_account.clone(),
             amount.clone(),
-        ))?;
+        );
+        let retained_purpose = match purpose {
+            VerifiedPrivacyPublicBalancePurpose::General => {
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(
+                    canonical_numeric_movement_binding(&exact_movement)?,
+                )
+            }
+            VerifiedPrivacyPublicBalancePurpose::PoolDeposit(owner) => {
+                RetainedNumericAssetMovementPurpose::PrivacyPoolDeposit(
+                    canonical_numeric_movement_binding(&(owner, exact_movement))?,
+                )
+            }
+            VerifiedPrivacyPublicBalancePurpose::PoolWithdrawal(owner) => {
+                RetainedNumericAssetMovementPurpose::PrivacyPoolBridge(
+                    owner,
+                    canonical_numeric_movement_binding(&(owner, exact_movement))?,
+                )
+            }
+        };
         PreparedNumericAssetMovement::prepare_with_scope(
             state_transaction,
             source_id,
             destination_id,
             amount,
-            NumericAssetMovementAuthorization::retained(
-                submitting_authority,
-                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding),
-            ),
+            NumericAssetMovementAuthorization::retained(submitting_authority, retained_purpose),
             NumericAssetTransferScopePolicy::ExplicitBilateral,
         )?
         .apply(state_transaction)
@@ -4672,6 +4801,28 @@ pub mod isi {
                     &resolved_source_id,
                 )?;
             }
+            // A batch leg can be rejected without rolling back successful sibling legs.
+            // Refuse protected sources before implicit destination admission can create an
+            // account for a leg that will never move value.
+            let source_dataspace = match scope_policy {
+                NumericAssetTransferScopePolicy::Ambient => {
+                    transfer_source_dataspace_hint(state_transaction, &event_source_id)?
+                }
+                NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                    match event_source_id.scope() {
+                        AssetBalanceScope::Global => None,
+                        AssetBalanceScope::Dataspace(dataspace) => Some(*dataspace),
+                    }
+                }
+            };
+            let resolved_source_id = state_transaction
+                .world
+                .resolve_asset_id_for_scope_hint(&event_source_id, source_dataspace)?;
+            ensure_privacy_public_reserve_source_policy(
+                state_transaction,
+                &resolved_source_id,
+                source_policy,
+            )?;
             let (control_before, control_update) = match control_policy {
                 NumericAssetTransferControlPolicy::Enforce => (
                     Some(active_control_record(
@@ -5689,6 +5840,33 @@ pub mod isi {
             NumericAssetTransferScopePolicy::Ambient,
         )
     }
+    fn ensure_privacy_public_reserve_source_policy(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(), Error> {
+        let reserve_owner = privacy_public_reserve_owner_v1(
+            &state_transaction.world.privacy_commitments,
+            source_id,
+        )
+        .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        match (reserve_owner, source_policy) {
+            (Some(actual), NumericAssetTransferSourcePolicy::PrivacyPoolBridge(expected))
+                if actual == expected =>
+            {
+                Ok(())
+            }
+            (Some(_), _) => Err(InstructionExecutionError::InvariantViolation(
+                "governed privacy public reserve requires its exact verified pool bridge".into(),
+            )),
+            (None, NumericAssetTransferSourcePolicy::PrivacyPoolBridge(_)) => {
+                Err(InstructionExecutionError::InvariantViolation(
+                    "verified privacy pool bridge source is not governed reserve custody".into(),
+                ))
+            }
+            (None, _) => Ok(()),
+        }
+    }
     fn ensure_numeric_asset_transfer_policies_with_scope(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -5792,6 +5970,7 @@ pub mod isi {
                 .into(),
             ));
         }
+        ensure_privacy_public_reserve_source_policy(state_transaction, &source_id, source_policy)?;
         if state_transaction
             .world
             .game_custody_by_account
@@ -5850,6 +6029,7 @@ pub mod isi {
         }
         match source_policy {
             NumericAssetTransferSourcePolicy::User
+            | NumericAssetTransferSourcePolicy::PrivacyPoolBridge(_)
             | NumericAssetTransferSourcePolicy::GameSessionFunding => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
@@ -8745,6 +8925,7 @@ pub mod query {
             }
         }
         include!("asset/core_numeric_mutation_tests.rs");
+        include!("asset/privacy_public_reserve_tests.rs");
         mod prepared_independent_occurrence_tests {
             include!("asset/prepared_independent_occurrence_tests.rs");
         }

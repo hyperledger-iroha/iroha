@@ -763,7 +763,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("if drained_terminal_ingress || drained_terminal_relay")
         .expect("both admitted ingress prefixes must empty before rollover");
     let authenticate = finite_drain
-        .find("ensure_closed_drained_cut()")
+        .find("ensure_closed_global_drained_cut()")
         .expect("the finite prefix is authenticated empty");
     assert!(
         close < drain
