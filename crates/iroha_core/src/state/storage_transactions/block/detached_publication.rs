@@ -145,6 +145,7 @@ impl<'storage, Installation> DetachedTransactionsPublicationSlot<'storage, Insta
         self.phase = Some(Phase::Prepared(PreparedTransactionsBlock::new(
             TransactionsBlock {
                 latest_block_ref: &target.latest_block,
+                budget_ref: &target.budget,
                 blocks_ref: &target.blocks,
                 baseline,
                 publication_sequence: &target.publication_sequence,

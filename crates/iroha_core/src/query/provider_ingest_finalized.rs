@@ -2158,7 +2158,6 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// This probe never waits on an archive reader. The logical owner excludes
     /// every insertion and retention writer while State capture and bounded plan
     /// admission happen later. It grants no finality or State publication right.
-    #[cfg(test)]
     pub(crate) fn try_reserve_candidate(
         self: &Arc<Self>,
         key: ProviderIngestFinalizedArchiveKeyV1,

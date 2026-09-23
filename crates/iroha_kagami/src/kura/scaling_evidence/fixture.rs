@@ -32,7 +32,7 @@ use iroha_data_model::{
     },
     bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     transaction::{
@@ -93,10 +93,10 @@ pub(super) fn context(keys: &[KeyPair]) -> HeightContext {
             power: 1,
         })
         .collect();
-    let mint = KagemushaMintFinalityEpochRosterV1 {
+    let mint = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: network(),
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -112,8 +112,12 @@ pub(super) fn context(keys: &[KeyPair]) -> HeightContext {
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        kagemusha_mint_finality_epoch_id: mint.finality_epoch_id().unwrap(),
-        kagemusha_mint_finality_epoch_roster: mint,
+        kagemusha_mint_finality_authorization:
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &mint, 2048,
+            )
+            .unwrap(),
+        kagemusha_mint_finality_authority: mint,
         epoch_end_height: 2048,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

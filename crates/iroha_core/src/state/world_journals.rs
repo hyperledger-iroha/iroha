@@ -15,14 +15,20 @@ use super::{
 use crate::smartcontracts::isi::triggers::set::{DetachError, DetachedSet, SetBlockCapture};
 use iroha_data_model::{events::EventBox, nexus::DataSpaceCatalog};
 use mv::{
-    BlockCapture, BlockMode, Key, Value, cell::BlockCaptureSlot as CellCaptureSlot,
-    storage::BlockCaptureSlot as StorageCaptureSlot,
+    BlockCapture, BlockMode, Key, Value,
+    allocation::AllocationScope,
+    cell::BlockCaptureSlot as CellCaptureSlot,
+    storage::{BlockCaptureSlot as StorageCaptureSlot, StorageMode},
 };
 
 #[path = "world_publication.rs"]
 pub(in crate::state) mod publication;
 #[path = "world_journal_resources.rs"]
 pub(in crate::state) mod resources;
+
+#[path = "world_storage_mode.rs"]
+mod storage_mode;
+use storage_mode::WorldStorageMode;
 
 /// Refusal drops the entire original overlay without publishing any component.
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +167,7 @@ trait RetainedWorldField: Send + Sync {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn publication::PreparedWorldField + 'target>;
 }
 
@@ -197,14 +204,17 @@ trait WorldCaptureSlot: Sized {
     fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained;
 }
 
-struct RetainedStorage<K: Key, V: Value> {
+struct RetainedStorage<K: Key, V: Value, M: StorageMode<K, V> = concread::bptree::Untracked> {
     name: &'static str,
     // Empty only while the same box is held by its private prepared owner.
-    journal: Option<mv::storage::Detached<K, V, ()>>,
-    target: fn(&World) -> &Storage<K, V>,
+    journal: Option<mv::storage::Detached<K, V, (), M>>,
+    target: fn(&World) -> &Storage<K, V, M>,
 }
 
-impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
+impl<K: Key, V: Value, M: WorldStorageMode<K, V>> RetainedWorldField for RetainedStorage<K, V, M>
+where
+    M::Charge: Send + Sync + 'static,
+{
     fn summary(&self) -> FieldSummary {
         let journal = self.journal.as_ref().expect("retained original journal");
         FieldSummary {
@@ -222,15 +232,20 @@ impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
-        publication::storage_slot(self, target)
+        publication::storage_slot(self, target, scope)
     }
 }
 
-impl<'a, K: Key, V: Value> CaptureWorldField for StorageBlock<'a, K, V> {
-    type Target = Storage<K, V>;
-    type Retained = RetainedStorage<K, V>;
-    type Capture = StorageCaptureSlot<'a, K, V, ()>;
+impl<'a, K: Key, V: Value, M: WorldStorageMode<K, V>> CaptureWorldField
+    for StorageBlock<'a, K, V, M>
+where
+    M::Charge: Send + Sync + 'static,
+{
+    type Target = Storage<K, V, M>;
+    type Retained = RetainedStorage<K, V, M>;
+    type Capture = StorageCaptureSlot<'a, K, V, (), M>;
     fn capture_mode(&self) -> Result<BlockMode, CaptureError<Infallible>> {
         Ok(self.mode())
     }
@@ -239,9 +254,13 @@ impl<'a, K: Key, V: Value> CaptureWorldField for StorageBlock<'a, K, V> {
     }
 }
 
-impl<K: Key, V: Value> WorldCaptureSlot for StorageCaptureSlot<'_, K, V, ()> {
-    type Target = Storage<K, V>;
-    type Retained = RetainedStorage<K, V>;
+impl<K: Key, V: Value, M: WorldStorageMode<K, V>> WorldCaptureSlot
+    for StorageCaptureSlot<'_, K, V, (), M>
+where
+    M::Charge: Send + Sync + 'static,
+{
+    type Target = Storage<K, V, M>;
+    type Retained = RetainedStorage<K, V, M>;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {
         match self.try_capture(|_| Ok::<(), Infallible>(())) {
             Ok(()) => Ok(()),
@@ -288,7 +307,9 @@ impl<V: Value> RetainedWorldField for RetainedCell<V> {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
+        let _ = scope;
         publication::cell_slot(self, target)
     }
 }
@@ -369,7 +390,9 @@ impl RetainedWorldField for RetainedTriggers {
     fn publication_slot<'target>(
         self: Box<Self>,
         target: &'target World,
+        scope: Option<&'target AllocationScope<'target>>,
     ) -> Box<dyn publication::PreparedWorldField + 'target> {
+        let _ = scope;
         publication::triggers_slot(self, target)
     }
 }

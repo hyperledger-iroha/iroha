@@ -4,6 +4,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_runner.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+    "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
     "crates/iroha_core/src/sumeragi/mod.rs",
@@ -15,6 +16,10 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_context.rs",
+    "crates/iroha_core/src/sumeragi/v2_complete_tip_activation.rs",
+    "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs",
+    "crates/iroha_core/src/sumeragi/v2_chunks.rs",
+    "crates/iroha_data_model/src/block/consensus_v2.rs",
     "crates/iroha_core/src/sumeragi/v2_apply.rs",
     "crates/iroha_core/src/sumeragi/v2_body_store.rs",
     "crates/iroha_core/src/sumeragi/safety_wal.rs",
@@ -80,7 +85,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 76
+) == 81
 
 
 LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
@@ -194,7 +199,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+        "let successor_outputs = live_apply_successor_outputs.remove(&ordinal);",
         ".map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;",
         ".map_err(ProductionCompletionDispatchErrorV1::Service)?;",
         "neutral Apply reservation must join executor evidence before one-shot queue publication",
@@ -225,7 +230,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "fn settle_lifecycle_decision_apply_completion_owner(",
         "persist_exact_staged_successor(&staged)",
         "persist_inexact_staged_successor(&staged)",
-        "neutral lifecycle Apply durable terminal settlement",
+        "lifecycle Apply durable terminal settlement",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -237,30 +242,30 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "pub(in crate::sumeragi) fn drive_lifecycle_decision_apply_deferred(",
-        "dispatch_next_lifecycle_decision_apply_sidecar_request",
-        "dispatch_next_recovered_apply_sidecar_request",
-        "deferred lifecycle Apply must use the lifecycle-neutral sidecar dispatcher",
+        "deferred.retry_after_local_release()",
+        "replacement.retry_after_local_release()",
+        "deferred lifecycle Apply must retry its retained original dependency",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "fn new_with_output_guard_and_transport_inner(",
-        "lifecycle_decision_apply_sidecar_waits",
-        "recovered_apply_sidecar_waits",
-        "distinct neutral lifecycle Apply wait and rejection owners",
+        "crates/iroha_core/src/sumeragi/v2_worker/retained_apply.rs",
+        "impl RetainedApplyDependency {",
+        "busy.wait.clone().wait_for_release()",
+        "foreign.wait_for_release()",
+        "Apply wait must preserve physical identity",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "pub(crate) struct V2LaneWorkAdapter {",
-        "rejected_lifecycle_decision_apply_sidecars",
-        "rejected_recovered_apply_sidecars",
-        "lifecycle-neutral Apply sidecar rejection owner",
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        "pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyCompletionV1 {",
+        "dependency: Option<RetainedApplyDependency>",
+        "replacement: Option<RetainedApplyDependency>",
+        "Apply must retain its original private guarded owner",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "pub(in crate::sumeragi) fn dispatch_next_lifecycle_decision_apply_sidecar_request(",
-        "dispatch_next_lifecycle_decision_apply_sidecar_request",
-        "dispatch_next_recovered_apply_sidecar_request",
-        "lifecycle-neutral Apply sidecar dispatcher",
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        "pub(in crate::sumeragi) fn retry_deferred(mut self)",
+        "match work_ack.queue.retry_lifecycle_decision_apply(task)",
+        "match replacement.queue.retry_lifecycle_decision_apply(task)",
+        "Apply must enqueue the original task",
     ),
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
@@ -2873,28 +2878,28 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
-        "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+        "fn open_production_lifecycle_owner_with_pending_kura_v1(",
         "self.adapter.wal.matches_path(&storage.wal_path)",
         "true",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
-        "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+        "fn open_production_lifecycle_owner_with_pending_kura_v1(",
         "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
         "true",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
-        "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+        "fn open_production_lifecycle_owner_with_pending_kura_v1(",
         "body_store: super::v2_body_store::QuarantinedV2BodyStore",
         "body_store: super::v2_body_store::V2BodyStore",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
-        "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
+        "fn open_production_lifecycle_owner_with_pending_kura_v1(",
         ".into_revalidated_lifecycle_startup(",
         ".into_revalidated_startup(",
         "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
@@ -2909,7 +2914,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_body_store.rs",
         "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
-        "apply_service.recovered_finality_subject(context)",
+        "apply_service.recovered_finality_subject(context.context())",
         "None::<VerifiedRecoveredFinalitySubject>.ok_or(())?",
         "fixed quarantined recovered marker replay must preserve exact production order",
     ),
@@ -2923,8 +2928,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_body_store.rs",
         "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
-        ".revalidate_recovered_markers(|body|",
-        ".retain_recovered_markers_for_mutation(|body|",
+        "service.revalidate_recovered_markers(&mut self.0)",
+        "service.retain_recovered_markers_for_mutation(&mut self.0)",
         "fixed quarantined recovered marker replay must preserve exact production order",
     ),
     (
@@ -4033,7 +4038,7 @@ _CERTIFIED_SERVE_DIRECTORY_MUTATIONS = (
     ("factory_entry", "body_store,\n            None,", "body_store,\n            substituted_pending,"),
     ("factory_inner", "pending_kura.is_some() && !matches!(self.authority, RecoveredWalStartupAuthorityV1::None)", "false"),
     ("factory_inner", "!Arc::ptr_eq(&adapter_owner, &self.factory_owner)", "false"),
-    ("factory_inner", "into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)", "into_unchecked_lifecycle_startup(&apply_service, &context, validation_authority)"),
+    ("factory_inner", "into_revalidated_lifecycle_startup(apply_service, replay_context, validation_authority)", "into_unchecked_lifecycle_startup(apply_service, replay_context, validation_authority)"),
     ("factory_inner", "authority: serve_payload_directory_authority,", "authority: None,"),
 )
 

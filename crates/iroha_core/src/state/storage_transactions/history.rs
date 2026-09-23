@@ -148,7 +148,7 @@ pub(super) fn new_identity(
 /// it cannot rebuild already completed work against a newly sampled cut.
 pub(crate) struct Pending {
     pub(super) predecessor: Identity,
-    pub(super) latest: Option<Arc<BlockInfo>>,
+    pub(super) latest: Option<Tip>,
     pub(super) replacement: bool,
     pub(super) next_sequence: u64,
     batch: Option<ChargedBuffer<Key>>,
@@ -164,7 +164,7 @@ pub(crate) struct Pending {
 impl Pending {
     fn new(
         predecessor: Identity,
-        latest: Option<Arc<BlockInfo>>,
+        latest: Option<Tip>,
         replacement: bool,
         next_sequence: u64,
         attachment_releases: concread::release::DeferredReleaseBatch,
@@ -388,7 +388,7 @@ impl TransactionsStorage {
                 identity_charge.expect("initial identity admitted with native root"),
             );
             Ok(Self {
-                latest_block: ArcSwapOption::empty(),
+                latest_block: TipStore::default(),
                 blocks,
                 write_lock: Mutex::new(identity),
                 released: Default::default(),

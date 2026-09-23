@@ -393,3 +393,61 @@ def test_rejects_implicit_defaults_in_non_default_member_with_local_features(
         and "[dependencies] `norito` must set `default-features = false`" in error
         for error in errors
     )
+
+
+def test_model_storage_boundary_rejects_direct_and_transitive_engines() -> None:
+    for engine in ("mv", "concread"):
+        direct = {"iroha_model_base": {"dependencies": {engine: "1"}}}
+        assert FEATURE_HYGIENE._check_model_storage_boundary(direct, {})
+        indirect = {
+            "iroha_data_model": {"dependencies": {"iroha_crypto": {"path": "../iroha_crypto"}}},
+            "iroha_crypto": {"dependencies": {"engine": {"package": engine, "optional": True}}},
+        }
+        errors = FEATURE_HYGIENE._check_model_storage_boundary(indirect, {})
+        assert errors == [
+            f"model storage dependency boundary: iroha_data_model -> iroha_crypto -> {engine}; "
+            "model codecs must not depend on runtime storage"
+        ]
+
+
+def test_model_storage_boundary_resolves_workspace_aliases_and_targets() -> None:
+    documents = {"iroha_model_base": {"target": {"cfg(unix)": {
+        "dependencies": {"storage": {"workspace": True, "optional": True}}
+    }}}}
+    errors = FEATURE_HYGIENE._check_model_storage_boundary(
+        documents, {"storage": {"package": "mv", "path": "crates/mv"}}
+    )
+    assert any("iroha_model_base -> mv" in error for error in errors)
+
+
+def test_model_storage_boundary_allows_real_dev_storage_tests() -> None:
+    documents = {
+        "iroha_data_model": {"dependencies": {"iroha_model_base": "1", "norito": "1"},
+                             "dev-dependencies": {"mv": "1"}},
+        "iroha_model_base": {"dependencies": {"norito": "1"},
+                             "target": {"cfg(unix)": {"dev-dependencies": {"concread": "1"}}}},
+        "norito": {},
+    }
+    assert FEATURE_HYGIENE._check_model_storage_boundary(documents, {}) == []
+
+
+def test_model_storage_boundary_includes_build_dependencies_and_terminates_cycles() -> None:
+    documents = {
+        "iroha_model_base": {"dependencies": {"codec": "1"}},
+        "codec": {"dependencies": {"iroha_model_base": "1"},
+                  "build-dependencies": {"mv": "1"}},
+    }
+    errors = FEATURE_HYGIENE._check_model_storage_boundary(documents, {})
+    assert len(errors) == 1
+    assert "iroha_model_base -> codec -> mv" in errors[0]
+
+
+def test_repository_model_dependency_closure_excludes_storage() -> None:
+    workspace = FEATURE_HYGIENE._load_toml(ROOT / "Cargo.toml")["workspace"]
+    documents = {}
+    for manifest in FEATURE_HYGIENE.workspace_member_manifests(ROOT, workspace):
+        document = FEATURE_HYGIENE._load_toml(manifest)
+        documents[document["package"]["name"]] = document
+    assert FEATURE_HYGIENE._check_model_storage_boundary(
+        documents, workspace.get("dependencies", {})
+    ) == []

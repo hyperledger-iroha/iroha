@@ -23,12 +23,16 @@ use crate::backend::{
 #[path = "shared_openings/codec.rs"]
 pub(in crate::backend) mod codec;
 
+#[path = "shared_openings/row_values.rs"]
+mod row_values;
+use row_values::RowValues;
+
 /// Internal complete-opening payload shared by candidate verification and test codecs.
 /// Canonical serialization advertises the final fixed layout and full six-lane roots.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_protocol::shared_openings::SharedProof",
-    frame = "fastpq_prover::compact_v1::SharedProofV1"
+    frame = "fastpq_prover::compact_v1::FixedRowSharedProofV1"
 )]
 pub(in crate::backend) struct SharedProof {
     row_root: WireDigest,
@@ -47,7 +51,7 @@ pub(in crate::backend) struct SharedProof {
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct SharedRow {
     index: u32,
-    values: Vec<u64>,
+    values: RowValues,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -351,11 +355,13 @@ pub(in crate::backend) fn from_compact(
     }
     let rows = row_values
         .into_iter()
-        .map(|(index, values)| SharedRow {
-            index: index as u32,
-            values,
+        .map(|(index, values)| {
+            Ok(SharedRow {
+                index: index as u32,
+                values: RowValues::from_vec(values)?,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     exact_indices(rows.iter().map(|row| row.index), &plans.rows.indices)?;
     let row_leaves = rows
         .iter()
@@ -774,7 +780,7 @@ fn shared_prover_wire_bound(geometry: &Geometry) -> Result<usize> {
         .checked_mul(2)
         .ok_or_else(|| shape("compact shared row count overflow"))?
         .min(geometry.lde_rows);
-    let row_size = wire_struct(&[4, wire_vector(geometry.schema.width, 8)?])?;
+    let row_size = wire_struct(&[4, RowValues::BYTES])?;
     let query_size = wire_struct(&[4, 32, 32])?;
     let group_size = wire_struct(&[4, wire_struct(&[32, 32])?])?;
     let layers = geometry.fri_lengths.len();
@@ -1150,7 +1156,7 @@ mod tests {
     fn candidate_prover_limits() -> VerifyLimits {
         VerifyLimits {
             max_batch_bytes: 1,
-            max_proof_bytes: 4_279_877,
+            max_proof_bytes: 4_017_376,
             max_fri_layers: 18,
             max_queries: 375,
             max_query_path_len: 19,
@@ -1218,11 +1224,11 @@ mod tests {
             ),
             (
                 VerifyLimits {
-                    max_proof_bytes: 4_279_876,
+                    max_proof_bytes: limits.max_proof_bytes - 1,
                     ..limits
                 },
                 "max_proof_bytes",
-                4_279_877,
+                4_017_376,
             ),
         ];
         for (restricted, expected_limit, expected_actual) in cases {
@@ -1352,7 +1358,7 @@ mod tests {
         let air = candidate_prover_air();
         let geometry = Geometry::new(&air).unwrap();
         let bound = shared_prover_wire_bound(&geometry).unwrap();
-        assert_eq!(bound, 4_279_877);
+        assert_eq!(bound, 4_017_376);
         assert_eq!(repeated_wire_bytes(&geometry).unwrap(), 7_791_716);
         assert!(bound < repeated_wire_bytes(&geometry).unwrap());
         let digest = WireDigest::new([0; 6]).unwrap();
@@ -1368,7 +1374,7 @@ mod tests {
             rows: (0..rows)
                 .map(|index| SharedRow {
                     index: index as u32,
-                    values: vec![0; 342],
+                    values: RowValues::zero(),
                 })
                 .collect(),
             queries: (0..queries)
@@ -1657,9 +1663,6 @@ mod tests {
                 assert_preflight_rejection(&proof, diagnostic_limits());
             }
         }
-        let mut wrong_width = baseline.clone();
-        wrong_width.rows[0].values.push(0);
-        assert_preflight_rejection(&wrong_width, diagnostic_limits());
         let mut wrong_terminal = baseline.clone();
         wrong_terminal.terminal_values.pop();
         assert_preflight_rejection(&wrong_terminal, diagnostic_limits());
@@ -1704,7 +1707,7 @@ mod tests {
             .unwrap();
         extra.rows.push(SharedRow {
             index: absent,
-            values: air().row(),
+            values: RowValues::from_vec(air().row()).unwrap(),
         });
         extra.rows.sort_by_key(|row| row.index);
         let mut other_query = baseline.clone();

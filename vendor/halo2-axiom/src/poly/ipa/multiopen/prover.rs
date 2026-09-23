@@ -205,3 +205,6 @@ fn kate_division_in_place<F: Field>(values: &mut Vec<F>, point: F) {
 
 #[cfg(test)]
 mod bounded_tests;
+
+#[cfg(test)]
+pub(crate) mod stored_oracle;

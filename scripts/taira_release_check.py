@@ -49,9 +49,11 @@ Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
 accept no live configuration, credentials, SSH, deployment or signing inputs.
 Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
-and compile only explicitly selected harnesses. Selected portable MV/Concread
-controls run first in a separate diagnostic Cargo graph. Configuration and the
-remaining targets build afterward in the same warm lane; configuration must pass
+and compile selected harnesses. Core focus also compiles data-model to retain the
+shared Core/data-model Cargo feature graph across focused reruns; it executes no
+unrequested data-model tests. Selected portable MV/Concread controls run first in
+a separate diagnostic Cargo graph. Configuration and the remaining targets build
+afterward in the same warm lane; configuration must pass
 before nonportable tests and overall success. Unselected harnesses wait for
 immutable preparation, whose complete compile graph is unchanged. Selected Pending
 Kura recovery runs immediately after configuration and must pass before the
@@ -200,9 +202,7 @@ STAGES = (
     )),
     ("occupied runtime and service unit recovery", (
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_preserves_independent_authenticated_tool_roots",
-        "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_rejects_malformed_state_or_plan",
-        "taira_public_reset::host::tests::cleanup_preserves_prior_supervisor_release_across_hosts_and_replay",
+        "taira_public_reset::host::tests::cleanup_preserves_prior_release_during_discovery_and_replay",
         "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_split_source_and_configuration_binding",
         "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_incomplete_or_foreign_artifact_custody",
         "taira_public_reset::host::occupied::tests::occupied_runtime_wire_requires_explicit_artifacts_and_argv",
@@ -472,7 +472,6 @@ P2P_STAGES += (("immutable reply identity and exact dynamic history", (
 
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_runner::tests::runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once",
-    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::registered_deferred_validate_passes_ordinary_completion_without_releasing_wait",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
     "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
@@ -487,19 +486,6 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
-    "sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes",
-    "sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently",
-    "sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination",
-    "sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup",
     "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
     "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
@@ -1096,6 +1082,35 @@ CORE_ADMISSION_STARTUP_STAGES += (("typed State status contention and integrity 
 )), )
 
 
+CORE_REWARD_ACCOUNTING_STAGES = (("retained reward cursors, unpaid custody and reserve accounting", (
+    'smartcontracts::isi::domain::tests::unregister_account_rejects_retained_reward_processing_cursor',
+    'smartcontracts::isi::domain::tests::unregister_account_rejects_when_account_is_reward_claim_asset_owner',
+    'smartcontracts::isi::domain::tests::unregister_asset_definition_ignores_mismatched_public_lane_reward_record',
+    'smartcontracts::isi::multisig::tests::rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity',
+    'smartcontracts::isi::staking::rewards::tests::outstanding_rewards_retains_processed_dust_in_its_exact_source',
+    'smartcontracts::isi::staking::tests::reward_epoch_zero_is_claimable_once',
+    'smartcontracts::isi::staking::tests::reward_dust_accumulates_until_paid',
+    'smartcontracts::isi::staking::tests::reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards',
+    'smartcontracts::isi::staking::tests::reward_failed_payment_restores_claim_and_reserve',
+    'smartcontracts::isi::staking::tests::reward_obligation_audit_rejects_corrupt_record_keys',
+    'smartcontracts::isi::staking::tests::reward_claim_uses_recorded_custody_after_fee_policy_changes',
+    'smartcontracts::isi::staking::tests::reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
+    'smartcontracts::isi::staking::tests::reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    'smartcontracts::isi::staking::tests::claim_rewards_transfers_and_marks_epoch',
+    'smartcontracts::isi::staking::tests::claim_rewards_defers_dust_without_marking_paid',
+    'smartcontracts::isi::staking::tests::claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
+    'smartcontracts::isi::staking::tests::claim_rewards_accepts_i105_fee_sink',
+    'smartcontracts::isi::staking::tests::staking_custody_and_rewards_share_one_additive_reserve_floor',
+)), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_REWARD_ACCOUNTING_STAGES
+
+CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary authority", (
+    'smartcontracts::isi::staking::tests::registration_rejects_changed_signed_monetary_fields_without_custody_writes',
+    'smartcontracts::isi::staking::tests::reward_claim_rejects_changed_record_source_and_entitlement_without_payment',
+)), )
+CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
+
+
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
@@ -1221,6 +1236,15 @@ DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
     "query::canonical_output_inclusion_tests::committed_query_rejects_retired_parallel_result_and_merge_wire",
 )),)
 
+MODEL_MONETARY_CODEC_STAGES = (('canonical monetary authority payload schemas and codecs', (
+    'isi::kagemusha_v1::epoch_binding_codec_tests::beacon_epoch_binding_roundtrips_both_variants_and_registers_payload_schema',
+    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_decisions_roundtrip_all_discriminants_and_reject_untagged_json',
+    'isi::kagemusha_v1::epoch_binding_codec_tests::epoch_authorization_binding_keeps_fixed_width_identity',
+    'nexus::staking::monetary_codec_tests::monetary_variants_roundtrip_canonical_binary_and_tagged_json',
+    'nexus::staking::monetary_codec_tests::monetary_schema_names_every_variant_and_distinct_named_payload',
+)),)
+DATA_MODEL_STAGES += MODEL_MONETARY_CODEC_STAGES
+
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "config::tests::base_config_applies_bounded_storage_caps",
     "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
@@ -1251,22 +1275,19 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
 )), ("exact retained-height replay observation", (
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
 )),)
-# Linux qualification exercises the supervised renewal/restart owner within the
-# same full application workload. macOS retains the finite-maintenance case.
+# Every platform qualifies retained authority generations against the same four
+# independent genesis-anchored chains and full application workload.
 BEACON_NETWORK_TEST = (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
-    if sys.platform == "linux" else
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
-BEACON_NETWORK_STAGES = (("fresh beacon custody, paid deployment, catalog replay and both route snapshot sequences"
-                          + (", supervised renewal and restart" if sys.platform == "linux" else ""), (
+BEACON_NETWORK_STAGES = (("fresh beacon custody, retained authority, paid deployment, catalog replay and both route snapshot sequences", (
     BEACON_NETWORK_TEST,
 )),)
 
-NETWORK_OBSERVATION_STAGES += (('public epoch maintenance fixture admission', (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+NETWORK_OBSERVATION_STAGES += (('authenticated epoch retention fixture admission', (
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
+    'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
 )),)
 
 NETWORK_OBSERVATION_STAGES += (('retained native canary failure evidence', (
@@ -1424,7 +1445,7 @@ TORII_SHARED_STAGES += (("strict finality attestation tip progress details", (
 TORII_STAGES += (("public faucet policy discovery", (
     "accounts_faucet::accounts_faucet_policy_exposes_exact_public_configuration",
     "accounts_faucet::accounts_faucet_policy_resolves_configured_asset_alias",
-    "accounts_faucet::accounts_faucet_policy_preserves_disabled_forbidden_response",
+    "accounts_faucet::accounts_faucet_discovery_reports_disabled_service",
 )), )
 
 TORII_UNIT_STAGES += (("public faucet policy discovery", (
@@ -1512,18 +1533,8 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 )),)
 
 
-KAGAMI_STAGES += (("native epoch derivation and bounded public maintenance schedule", (
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::derived_parameter_matches_core_and_binds_network_epoch_and_order',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::public_context_rejects_malformed_network_epoch_count_order_and_duplicates',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::parser_exposes_only_public_arguments_and_numeric_pipe_descriptor',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::seed_reader_enforces_exact_bound_and_wipes_success_rejections_and_unwind',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::read_errors_are_redacted_and_partial_seeds_are_wiped',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::buffered_output_failures_are_returned',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::inherited_descriptor_ownership_is_closed',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json',
-    'kagemusha::derive_mint_finality_next_epoch_v1::tests::epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap',
+KAGAMI_STAGES += (("retired epoch key derivation commands are rejected", (
+    'kagemusha::tests::parser_rejects_epoch_key_derivation_commands',
 )),)
 
 
@@ -1737,42 +1748,16 @@ STAGES += (("native beacon reset authority, bounded recovery and public input as
     'taira_public_reset::inputs::tests::assembler_rejects_incomplete_topology_before_reading_runtime_inputs',
 )), )
 
-STAGES += (('native epoch maintenance and authenticated current height', (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_schedule_rejects_wrong_epoch_network_and_membership',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_waits_for_actual_epoch_and_preserves_carrier_deadline',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_preparation_binds_single_parameter_fee_and_original_lifetime',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_journal_preserves_one_dispatch_across_schedule_renewal',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_staking_preflight_rejects_fallback_and_changed_tenure',
+STAGES += (('authenticated current height', (
+    'taira::tests::retired_epoch_maintenance_commands_are_rejected',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
 )),)
 
-STAGES += (("native epoch supervisor custody and restart continuity", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_partial_initialization_never_replaces_retained_dispatch',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_readiness_rechecks_transition_after_completion_wait',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_retains_original_trust_across_explicit_release_observation',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_status_parser_has_no_seed_or_mutation_inputs',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_policy_schedule_and_custody_reject_wrong_public_authority',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_readiness_names_bind_policy_and_process_incarnation',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_rolling_batches_retain_one_epoch_overlap_and_checked_bounds',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_custody_rejects_changed_shared_and_wrong_length_seed_files',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_worker_lock_and_cursor_preserve_exclusive_restart_state',
-)),)
 
 
-STAGES += (("native epoch supervisor journal quiescence", (
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_excludes_active_worker_until_drop',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_never_repairs_missing_lock',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_symlink_parent_and_child',
-    'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_rejects_parent_and_child_rebinding',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (("native epoch supervisor process incarnation", (
-        'taira_public_reset::host::epoch_worker_process_identity_binds_current_kernel_incarnation',
-    )),)
 
 
 KAGAMI_STAGES += (('native beacon history physical input and execution root distinction', (
@@ -1780,77 +1765,36 @@ KAGAMI_STAGES += (('native beacon history physical input and execution root dist
 )), )
 
 
-STAGES += (('native epoch supervisor pure generation admission', (
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_and_missing_genesis_grant',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_shared_operator_key',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_trust_and_network',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_custody',
-    'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_requires_bounded_closed_schemas',
+
+
+STAGES += (("shared deployment exclusion and durable reset ownership", (
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_rejects_foreign_missing_and_expired_recovery',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_cannot_restart_from_existing_host_progress',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_terminal_replay_requires_exact_action_and_retained_intent',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_owner_waits_for_all_local_seals_and_rollbacks',
+    'taira_public_reset::host::deployment_lifecycle::tests::deployment_lock_excludes_other_descriptors_and_rejects_rebinding',
+)),)
+
+STAGES += (('native reset schema and ordered service barriers', (
+    'taira_public_reset::executor_model::tests::reset_execution_preserves_beacon_and_service_order_without_epoch_writer',
+    'taira_public_reset::executor_model::tests::retired_inventory_fields_and_seven_artifact_closure_are_rejected',
+    'taira_public_reset::executor_model::tests::retired_epoch_supervisor_commands_and_inputs_are_rejected',
+    'taira_public_reset::inputs::tests::authorization_rejects_retired_supervisor_fields',
+    'taira_public_reset::host::tests::host_frontier_preserves_four_beacon_activations_before_restart',
 )), )
 
 
-STAGES += (('native reset epoch authority custody and ordered service barriers', (
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_and_start_are_explicit_ordered_barriers',
-    'taira_public_reset::executor_model::tests::epoch_supervisor_pause_failure_prevents_validator_stop',
-    'taira_public_reset::executor_model::tests::maintenance_admin_admission_rejects_canary_operator_and_network_substitution',
-    'taira_public_reset::executor_model::tests::old_inventory_shape_and_seven_artifact_closure_are_rejected',
-    'taira_public_reset::inputs::tests::maintenance_grant_requires_registration_and_survives_no_revocation',
-    'taira_public_reset::inputs::tests::ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry',
-    'taira_public_reset::host::epoch_supervisor::tests::unit_matches_independent_python_golden_and_exact_native_argv',
-    'taira_public_reset::host::epoch_supervisor::tests::first_install_pause_requires_genuine_manager_absence',
-    'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_seed_role_mapping',
-    'taira_public_reset::host::epoch_supervisor::tests::status_argv_contains_only_readonly_native_operation_and_exact_worker',
-    'taira_public_reset::host::epoch_supervisor::tests::paths_reject_expansion_and_finite_reset_aliases',
-    'taira_public_reset::host::epoch_supervisor::tests::native_status_rejects_previous_worker_or_changed_manager_incarnation',
-    'taira_public_reset::host::tests::epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_rejects_shared_wrong_mode_length_and_symlink',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_held_descriptor_rejects_rebinding_and_changed_content',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_retention_is_exact_idempotent_and_never_overwrites',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_invalid_body_does_not_create_retained_paths',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_fifo_is_rejected_without_waiting_for_a_writer',
-    'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_partial_staging_never_becomes_or_blocks_final',
-)), )
 
 
-if sys.platform == "linux":
-    STAGES += (('native Linux epoch generation activation intent', (
-        'taira_public_reset::host::epoch_generation::linux::tests::preparation_requires_explicit_installed_and_successor_intent',
-        'taira_public_reset::host::epoch_generation::linux::tests::generation_binding_rejects_alternate_cli_and_private_path',
-        'taira_public_reset::host::epoch_generation::linux::tests::service_intent_never_infers_activation_from_original_absence',
-    )), )
 
 
-STAGES += (("native epoch public admission restores caller profile", (
-    'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
-)), )
-
-
-STAGES += (("native public reset and epoch input producer closure", (
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
-    'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
-    'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_incomplete_or_changed_build_and_operation',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_preserves_original_intent_separately_from_installed_state',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_closed_preparation_has_no_implicit_state_or_receipt',
-    'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_output_is_atomic_private_and_never_replaced',
+STAGES += (("native public reset input producer closure", (
     'taira_public_reset::inputs::tests::topology_context_checks_scope_and_budget_before_custody',
     'taira_public_reset::inputs::tests::native_context_rejects_scope_before_opening_actual_inputs',
-    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_supervisor_plan_without_weakening_export',
+    'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_precedes_artifact_closure_without_weakening_export',
     'taira_public_reset::deployment_profile::tests::deployment_profile_public_context_rejects_truncated_or_extra_slot_vectors',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_derives_real_bytes_and_retains_drift_custody',
     'taira_public_reset::inputs::context_release::tests::reset_context_artifact_rejects_wrong_mode_and_symlink_before_projection',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::materialization_output_is_complete_closed_update_input',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_keeps_original_intent_and_actual_installed_state_distinct',
-    'taira_public_reset::host::epoch_generation::completed_wrapper_tests::completed_update_rejects_foreign_receipt_and_network',
 )), )
 
 
@@ -2045,6 +1989,14 @@ MV_OWNERSHIP_STAGES = (
         'storage::admitted_tests::fresh_pair_acquisition::admitted_undo_poison_precedes_busy_current_without_policy',
         'storage::admitted_tests::fresh_pair_acquisition::ordinary_undo_poison_does_not_wait_for_current',
     )),
+    ('scoped admitted Storage acquisition retains caller custody', (
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_acquisition_rejects_foreign_scope_before_locks_or_policy',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_start_and_reset_refusals_retain_original_owners_for_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_second_provider_failure_defers_all_aggregate_native_wakes',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::admitted_scoped_busy_current_retains_undo_until_caller_release',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::scoped_original_block_capture_releases_scope_and_keeps_replacement_custody',
+        'storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::ordinary_acquisition_retains_zero_sized_scope_and_original_protocol',
+    )),
     ('original Storage successor publication', (
         'storage::publication_tests::acquired_map_refusal_never_fabricates_foreign_or_busy_release',
         'storage::publication_tests::stale_map_pair_refusal_defers_actual_releases_through_enclosing_fence',
@@ -2139,6 +2091,75 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
 # Native cutover owners run before process/network qualification. These checks
 # retain exact sources and resource obligations; they do not open live ingress.
 CORE_NATIVE_CONNECTION_STAGES = (
+    ('native producer assembly retains exact decisions and independent work', (
+        'state::tests::native_candidate_uses_exact_decisions_and_canonical_recorded_execution',
+        'state::tests::native_candidate_fits_whole_priority_prefix_before_signing',
+        'state::tests::native_candidate_stale_observation_waits_without_signing_or_custody_loss',
+        'state::tests::native_candidate_controls_fit_without_displacing_or_duplicating_economic_input',
+        'state::tests::native_candidate_refuses_unsupported_carrier_controls_before_signing',
+        'state::tests::native_candidate_proof_rejects_foreign_state_and_network',
+        'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
+        'state::tests::native_candidate_handoff_rejects_foreign_original_state',
+        'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
+        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'state::tests::native_preparation_preserves_local_recorder_conflict',
+    )),
+    ('native preparation and recorded controls preserve original validation', (
+        'state::tests::native_preparation_single_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_atomic_retains_real_suffix_controls_and_unpublished_outputs',
+        'state::tests::native_preparation_single_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_atomic_authenticates_original_durable_sources_under_lease',
+        'state::tests::native_preparation_rejects_signed_noncanonical_time',
+        'state::tests::native_preparation_rejects_signed_confidential_policy_substitution',
+        'state::tests::native_preparation_rejects_wrong_and_multiple_origin_signatures',
+        'state::tests::native_preparation_rejects_stale_source_without_execution_or_publication',
+        'state::tests::native_preparation_retained_prefix_does_not_authorize_raw_state_commit',
+        'state::tests::native_preparation_refreshes_source_after_actual_finalized_height_advance',
+        'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
+        'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
+    )),
+    ('native service preparation retains original source and archive owners', (
+        'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
+        'state::tests::native_service_preparation_index_busy_precedes_execution',
+        'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
+        'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
+        'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
+        'state::tests::native_service_preparation_recorder_conflict_releases_archives',
+        'state::tests::native_service_single_body_store_retries_reuse_original_execution',
+        'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
+    )),
+    ('native failure provenance retains local dependencies', (
+        'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
+        'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
+        'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
+    )),
+    ('preexecution archive reservation preserves original service and release', (
+        'sumeragi::v2_apply::tests::archive_reservations::acquires_original_pair_without_execution',
+        'sumeragi::v2_apply::tests::archive_reservations::index_busy_wakes_original_runner',
+        'sumeragi::v2_apply::tests::archive_reservations::second_capture_refusal_releases_first',
+        'sumeragi::v2_apply::tests::archive_reservations::original_capture_drop_wakes_runner_and_preserves_old_wait',
+        'sumeragi::v2_apply::tests::archive_reservations::rejects_mismatch_before_acquisition',
+        'sumeragi::v2_apply::tests::archive_reservations::handoff_retains_owner_on_context_wire_and_service_mismatch',
+        'sumeragi::v2_apply::tests::archive_reservations::local_archive_failure_requires_recovery',
+    )),
+    ('archive capture reservations retain exact release identity', (
+        'query::archive_capture::tests::only_the_exact_original_gate_accepts_its_retained_owner',
+        'query::archive_capture::tests::observers_neither_own_nor_cancel_the_reservation',
+        'query::archive_capture::tests::release_before_wait_registration_cannot_be_missed',
+        'query::archive_capture::tests::active_wait_is_woken_by_the_actual_owner_drop',
+        'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
+        'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
+        'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
+    )),
+    ('retained validation dispatch preserves original request and carrier', (
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cache_and_reproposal_reuse_original_owner',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_foreign_store_returns_request_before_execution',
+        'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_cached_scalar_receipt_cannot_replace_missing_owner',
+    )),
     ('original successor admission and reader readiness', (
         'state::block_hashes_admission::tests::successor_reader_contention_wakes_from_original_reader_release',
         'state::block_hashes_admission::tests::successor_admission_signals_only_actual_writer_after_unlock',
@@ -2173,6 +2194,11 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::world_journals::resources::tests::world_shell_planning_never_reads_targets_or_acquires_held_writers',
         'state::world_journals::resources::tests::world_shell_planning_checks_each_sum_count_and_vector_layout_overflow',
         'state::carrier_preparation::journals::tests::carrier_journal_shell_plan_precedes_execution_and_survives_capture',
+    )),
+    ('scoped original World storage publication', (
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_refuses_missing_and_foreign_scope_before_writers',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_preserves_original_pair_through_abort_and_publish',
+        'state::world_journals::storage_mode::tests::prepaid_world_storage_adapter_busy_retry_keeps_exact_original_values',
     )),
     ('retained candidate descriptors and exact marker custody', (
         'sumeragi::v2_body_store::tests::retained_validation_tests::incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success',
@@ -2210,11 +2236,11 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_refusal_returns_original_decision_and_releases_every_physical_writer',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::installation_refusal_precedes_all_fences_and_returns_the_decided_carrier',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_capture_reservation_survives_physical_refusal_and_exact_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::changed_world_predecessor_releases_all_earlier_families_without_rebinding',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_defers_at_hash_before_taking_its_world_writers',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::actual_validation_overlay_releases_hash_before_retaining_membership_writers',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::identical_foreign_state_cannot_replace_the_original_physical_owners',
-        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort',
+        'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_reservation_outlives_component_writers_and_state_fences_on_drop_and_abort',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_contention_returns_exact_decided_carrier_and_release_driven_retry',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owners',
         'state::carrier_preparation::journals::decision_binding::physical_publication::tests::checkpoint_storage_refusal_precedes_state_and_retains_exact_originals',
@@ -2255,6 +2281,70 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_published_terminal_refuses_conflicting_unlaunched_decision',
     )),
 )
+CORE_QUEUE_PLAN_CONNECTION_STAGES = (('original global QueuePlan admission across actual runner callers', (
+    'sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
+    'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
+    'sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers',
+    'sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_retains_exact_outbound_until_original_acknowledgement',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_capacity_retry_preserves_transferred_inventory',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_view_change_rejects_old_occurrence_acknowledgement',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_leader_uses_original_persistence_and_selection',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_rejects_foreign_kura_without_replacing_original_sources',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_shared_fail_stop_guard_fences_output_and_ingress',
+    'sumeragi::v2_lane_work::tests::queue_plan_owner_same_context_rollover_preserves_original_occurrence',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_preserves_original_certificate_allocation',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_refusal_keeps_original_source',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_relay_uses_global_owner_without_old_lane_admission',
+    'sumeragi::v2_lane_work::tests::queue_plan_runner_dispatch_rejects_foreign_service_before_source_transfer',
+    'sumeragi::v2_queue_plan_admission::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination',
+    'sumeragi::v2_runner::tests::queue_plan_batch_scans_once_and_reuses_exact_sources',
+    'sumeragi::v2_lane_work::tests::queued_successor_generation_hint_cancels_ranked_older_close_before_retry',
+)),)
+
+CORE_KEY_ROLE_STAGES = (('authenticated indexed polynomial key ownership', (
+    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_roles_roundtrip_both_fields_bases_and_chunk_boundaries_with_shared_ordinals',
+    'zk::kagemusha_polynomial_store_v1::tests::key_roles::key_role_descriptor_substitution_is_retryable_but_authenticated_metadata_forgery_poisons',
+)),)
+
+CORE_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+CORE_STAGES += CORE_QUEUE_PLAN_CONNECTION_STAGES + CORE_KEY_ROLE_STAGES
+
+CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap isolation', (
+    'state::tests::native_driver_observer_role_cannot_open_or_admit_voting_control',
+    'state::tests::native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence',
+    'state::tests::native_driver_owned_rejection_returns_original_payload_without_poisoning_output',
+    'state::tests::native_driver_owned_ingress_without_original_fair_evidence_fails_closed',
+    'state::tests::native_service_production_shell_pool_refuses_before_execution_and_retries',
+    'state::carrier_preparation::journals::decision_binding::tests::original_capture_pool_remains_reserved_through_decision_binding_and_handoff',
+    'state::carrier_preparation::journals::decision_binding::tests::other_signed_context_retains_original_capture_owner_for_retry',
+    'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint',
+    'state::carrier_preparation::journals::decision_binding::physical_publication::publication::native_tests::native_driver_settles_complete_published_carrier_after_owned_worker_handoff',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_accept_zero_count_initial_height_and_no_successor_in_both_fields',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_reject_each_forbidden_witness_in_both_fields',
+    'zk::kagemusha_v1_recursion::mint_helper::bootstrap_gates_tests::bootstrap_gates_are_conditional_in_both_fields',
+)), )
+
+CORE_NATIVE_CONNECTION_STAGES += (('Native retained local-source completion and original publication', (
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_passes_ordinary_completion_without_releasing_wait',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_prefix_without_releasing_wait',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_batch_without_releasing_wait',
+    'sumeragi::v2_runner::tests::native_source_barrier_preserves_progress_physical_completion_and_dependency_service',
+    'sumeragi::v2_lifecycle_coordinator::work_registry::tests::obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original',
+    'state::tests::native_service_postpublication_refusal_retains_original_owner_and_notifies_once',
+    'state::tests::native_service_control_only_admission_retains_one_execution_and_publishes',
+    'sumeragi::v2_apply::tests::retained_current_genesis_executes_once_and_publishes_original_owner',
+)), )
+
 CORE_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_NATIVE_CONNECTION_STAGES
 CORE_STAGES += CORE_NATIVE_CONNECTION_STAGES
@@ -2641,9 +2731,15 @@ def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...
 
 def compile_test_harnesses(root: Path, env: dict[str, str], *,
                           harnesses: tuple[str, ...],
-                          lock_fds: tuple[int, ...] = ()) -> NativeArtifactCopies:
+                          lock_fds: tuple[int, ...] = (),
+                          normal_core_library_probe: bool = False) -> NativeArtifactCopies:
     """Build selected library, integration and binary tests with one feature graph."""
-    command = _compile_command(root, env, native_harness_selection(harnesses))
+    selection = native_harness_selection(harnesses)
+    if normal_core_library_probe and "core" not in harnesses:
+        raise CheckError("normal Core library metadata probe requires the Core harness")
+    feature_selection = (["--features", CORE_NORMAL_LIBRARY_PROBE_FEATURE]
+                         if normal_core_library_probe else [])
+    command = _compile_command(root, env, [*selection, *feature_selection])
     return _build_harnesses(root, command, env, harnesses, lock_fds)
 
 
@@ -2765,24 +2861,44 @@ def native_harness_selection(harnesses: tuple[str, ...]) -> list[str]:
     return [*selection, *targets]
 
 
+CORE_NORMAL_LIBRARY_PROBE_EXAMPLE = "race_prover"
+CORE_NORMAL_LIBRARY_PROBE_FEATURE = "iroha_core/iroha-core-tests"
+CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME = "iroha-core-tests"
+
+
 def check_test_harnesses(root: Path, env: dict[str, str], *,
-                        harnesses: tuple[str, ...], lock_fds: tuple[int, ...] = ()) -> None:
-    """Check the selected test graph before codegen; never produce qualification.
+                        harnesses: tuple[str, ...], lock_fds: tuple[int, ...] = (),
+                        normal_core_library_probe: bool = False) -> None:
+    """Check selected test targets, optionally including the normal Core library.
 
     Stable Cargo's --profile test enables cfg(test) for the explicit lib/bin/test
-    targets. --tests would broaden the selection to unrelated integration tests.
-    Reuse the caller's coordinated target, toolchain, features and jobserver.
+    targets. A Core-only --lib check does not compile the non-test Core library;
+    the existing featureless Core example imports it in this same Cargo graph.
+    Match the CLI test graph's Core fixture feature in both metadata and codegen
+    so production code guarded by that feature cannot escape Core-only focus.
+    --tests would broaden the selection to unrelated integration tests. Reuse
+    the caller's coordinated target, toolchain, features and jobserver.
     Build scripts and procedural macros can still require host code generation.
     """
     selection = native_harness_selection(harnesses)
+    if normal_core_library_probe and "core" not in harnesses:
+        raise CheckError("normal Core library metadata probe requires the Core harness")
+    probe_selection = (["--example", CORE_NORMAL_LIBRARY_PROBE_EXAMPLE]
+                       if normal_core_library_probe else [])
+    feature_selection = (["--features", CORE_NORMAL_LIBRARY_PROBE_FEATURE]
+                         if normal_core_library_probe else [])
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-               *selection, "--profile", "test", "--message-format=json-render-diagnostics"]
+               *selection, *probe_selection, *feature_selection,
+               "--profile", "test", "--message-format=json-render-diagnostics"]
     progress = CargoBuildProgress("test metadata", {
         (HARNESS_TARGETS[harness][2], HARNESS_TARGETS[harness][1]) for harness in harnesses
     }, test_profile=True)
     started = time.monotonic()
     observed = set()
+    observed_normal_core_library = False
+    observed_featured_normal_core_library = False
+    observed_probe_example = False
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
                           umask=0o077) as child, progress.heartbeat():
@@ -2794,13 +2910,28 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if (not isinstance(event, dict) or event.get("reason") != "compiler-artifact"
-                    or event.get("profile", {}).get("test") is not True):
+            if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
                 continue
-            target = event.get("target", {})
+            target, profile = event.get("target"), event.get("profile")
+            if not isinstance(target, dict) or not isinstance(profile, dict):
+                continue
+            kinds = target.get("kind")
+            if not isinstance(kinds, list):
+                continue
+            if normal_core_library_probe and profile.get("test") is False:
+                if target.get("name") == "iroha_core" and "lib" in kinds:
+                    observed_normal_core_library = True
+                    features = event.get("features")
+                    if (isinstance(features, list)
+                            and CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME in features):
+                        observed_featured_normal_core_library = True
+                if target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE and "example" in kinds:
+                    observed_probe_example = True
+            if profile.get("test") is not True:
+                continue
             for harness in harnesses:
                 _, name, kind, _ = HARNESS_TARGETS[harness]
-                if target.get("name") == name and kind in target.get("kind", []):
+                if target.get("name") == name and kind in kinds:
                     observed.add(harness)
         code = child.wait()
     elapsed = time.monotonic() - started
@@ -2810,8 +2941,16 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     missing = [harness for harness in harnesses if harness not in observed]
     if missing:
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
+    if normal_core_library_probe:
+        if not observed_normal_core_library:
+            raise CheckError("native test metadata check omitted normal Core library")
+        if not observed_featured_normal_core_library:
+            raise CheckError("normal Core library omitted fixture feature")
+        if not observed_probe_example:
+            raise CheckError("native test metadata check omitted Core library probe example")
     print(f"[taira-check] native test metadata check passed in {elapsed:.1f}s; "
-          "full harness compilation remains required", flush=True)
+          + ("normal Core library checked; " if normal_core_library_probe else "")
+          + "full harness compilation remains required", flush=True)
 
 
 def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
@@ -3891,7 +4030,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for fourteen explicit, flat test modules, not a
+    This is a bounded lexical guard for explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3909,6 +4048,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
         ("storage::admitted_tests::fresh_pair_acquisition::", "storage/admitted_tests.rs", "storage/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition"),
+        ("storage::admitted_tests::fresh_pair_acquisition::scoped_acquisition::", "storage/fresh_pair_acquisition_tests.rs", "storage/scoped_acquisition_tests.rs", "scoped_acquisition"),
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:
@@ -4165,6 +4305,32 @@ def focused_regression_stages(qualification_scope: str, requested):
             if any(key == harness for key, _ in selected)}
 
 
+def mutable_source_observation(root: Path, environment: dict[str, str]) -> dict[str, str]:
+    """Reuse the nonignored-worktree race detector; this grants no source custody."""
+    from taira_source_observation import SourceObservationError, current_source_observation
+
+    def run(command, **kwargs):
+        return subprocess.run(
+            [command[0], "--no-replace-objects", *command[1:]],
+            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="surrogateescape",
+            check=True, **kwargs)
+
+    try:
+        return current_source_observation(root, run)
+    except (SourceObservationError, OSError, subprocess.SubprocessError) as error:
+        raise CheckError(f"cannot observe mutable diagnostic source: {error}") from error
+
+
+def require_mutable_source_unchanged(root: Path, environment: dict[str, str],
+                                     expected: dict[str, str], phase: str) -> None:
+    """Stop at a completed phase boundary; never interrupt or restart a child."""
+    if mutable_source_observation(root, environment) != expected:
+        raise CheckError(
+            f"mutable source changed before {phase}; diagnostic stopped at the phase boundary; "
+            "start a new explicit check against the intended source")
+
+
 def run_prequalification(root: Path, *, focused_regressions, qualification_scope: str = "basic",
                          environment: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     """Run exact portable controls before configuration and heavier diagnostics.
@@ -4185,23 +4351,28 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     fixture_root = Path(environment["CARGO_TARGET_DIR"])
     require_network_fixture_prerequisites(fixture_root, focused.get("network", ()))
     env = dict(environment)
-    head = subprocess.check_output(
-        ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
-        stdin=subprocess.DEVNULL, text=True).strip()
+    source = mutable_source_observation(root, env)
+    head = source["git_head"]
+    def source_unchanged(phase: str) -> None:
+        require_mutable_source_unchanged(root, env, source, phase)
     env.pop("CARGO_BUILD_TARGET", None)
     env.update(VERGEN_GIT_SHA=head, IROHA_GIT_COMMIT_HASH=head)
     print(f"[taira-prequalify] mutable source {head}; {root}; diagnostic only", flush=True)
     run_pure_fsm_checks(root, env, lock_fds)
+    source_unchanged("lifecycle source checks")
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
     if not set(focused).issubset(complete_selections):
         raise CheckError("focused regression lacks its selected native compile target")
-    # This mutable diagnostic cannot publish qualification evidence. Request only
-    # configuration and focused harnesses; Cargo can add implicit targets within
-    # their shared package graph. Prepare owns the complete qualification graph.
+    # This mutable diagnostic cannot publish qualification evidence. Keep the
+    # data-model package in Core's compile graph even when its tests are not
+    # requested: its default/test features otherwise change the shared Cargo
+    # feature union and rebuild Core's dependencies on every focus transition.
+    # Only focused tests execute. Prepare owns the complete qualification graph.
+    compile_only = {"data-model"} if "core" in focused else set()
     selections = tuple(name for name in complete_selections
-                       if name == "config" or name in focused)
+                       if name == "config" or name in focused or name in compile_only)
     selected_harness_count = len(selections)
     portable = tuple(name for name in selections if name in MV_OWNERSHIP_HARNESSES)
     selections = tuple(name for name in selections if name not in portable)
@@ -4209,10 +4380,13 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         print("[taira-prequalify] portable diagnostic Cargo graph: " + ", ".join(portable)
               + "; mandatory configuration and remaining targets follow; NOT qualification", flush=True)
         started = time.monotonic()
+        source_unchanged("portable test metadata")
         check_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds)
+        source_unchanged("portable test codegen")
         with compile_test_harnesses(root, env, harnesses=portable, lock_fds=lock_fds) as copies:
             failures = []
             for name in portable:
+                source_unchanged(f"{name} portable regressions")
                 try:
                     run_stages(copies[name], fixture_root, env, focused[name], lock_fds)
                 except SelectedRegressionFailures as error:
@@ -4228,10 +4402,19 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
               "remaining diagnostics pending", flush=True)
     print("[taira-prequalify] remaining diagnostic Cargo graph: " + ", ".join(selections)
           + "; execute mandatory configuration before nonportable regressions", flush=True)
-    check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
-    with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds) as harnesses:
+    source_unchanged("remaining test metadata")
+    # CLI and network already depend on the normal Core library. A Core-only
+    # focus otherwise checks only cfg(test), which can hide production errors
+    # until a later combined graph. Probe it in this same metadata invocation.
+    normal_core_probe = "core" in focused and "cli" not in focused and "network" not in focused
+    probe_options = {"normal_core_library_probe": True} if normal_core_probe else {}
+    check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds, **probe_options)
+    source_unchanged("remaining test codegen")
+    with compile_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds,
+                                **probe_options) as harnesses:
         # Configuration remains mandatory for final success and gates the
         # nonportable phase. Explicit focused config tests must not run twice.
+        source_unchanged("mandatory configuration regressions")
         run_config_checks(harnesses, fixture_root, env, lock_fds)
         for name in selections:
             if name != "config" and name not in focused:
@@ -4248,12 +4431,15 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         # Retain the same Core copy for its remaining tests. A partial focus must
         # neither expand to all recovery tests nor bury their failures in later work.
         if pending_kura:
+            source_unchanged("pending Kura recovery regressions")
             run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
         failures = []
         for name in selections:
             if name in {"config", "network"} or name not in focused:
                 continue
             stages = remaining_core if name == "core" else focused[name]
+            if stages:
+                source_unchanged(f"{name} focused regressions")
             try:
                 if name == "cli":
                     run_stages(harnesses[name], fixture_root, env, stages, lock_fds, batch=True)
@@ -4265,12 +4451,11 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         if failures:
             raise SelectedRegressionFailures(failures)
         if "network" in focused:
+            source_unchanged("network regressions")
             run_network_checks(root, fixture_root, env, lock_fds,
                                harness=harnesses["network"], stages=focused["network"])
             harnesses.release("network")
-    if subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"],
-                               cwd=root, env=env, stdin=subprocess.DEVNULL, text=True).strip() != head:
-        raise CheckError("HEAD changed during prequalification; rerun the focused diagnostic")
+    source_unchanged("final diagnostic success")
     requested_count = sum(len(names) for stages in focused.values() for _, names in stages)
     print(f"[taira-prequalify] diagnostic passed: {selected_harness_count} selected harnesses compiled; "
           f"{requested_count} focused regressions and mandatory configuration passed. "

@@ -95,7 +95,7 @@ pub(crate) fn publish_governance_fixture(
         .unwrap_or_else(|error| panic!("capture original governance journals: {error}"));
     let checkpoint_hash = journals.checkpoint;
     let decision = journals
-        .bind_decision(verified, |_| Ok::<_, Infallible>(()))
+        .bind_decision(verified)
         .unwrap_or_else(|refusal| panic!("bind exact governance decision: {:?}", refusal.error));
     let finality = decision.finality().clone();
     state
@@ -113,7 +113,7 @@ pub(crate) fn publish_governance_fixture(
     let decision = decision.attach_checkpoint(checkpoint);
     let generation = state.state_view_generation();
     let physical = decision
-        .try_prepare_physical(state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(state, None)
         .unwrap_or_else(|(_, error)| panic!("acquire original governance publication: {error:?}"));
     let published = physical
         .publish()

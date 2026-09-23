@@ -11,7 +11,10 @@ use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
     v2::VerifiedHeightContext,
-    v2_body_store::{BodyValidationBusy, BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
+    v2_body_store::{
+        BodyValidationBusy, BodyValidationError, LocalValidationRefusal, V2BodyStore,
+        ValidatedBodyReceipt,
+    },
     v2_core::{
         CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
         IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
@@ -3520,9 +3523,31 @@ pub(crate) mod validation_custody;
 
 pub(crate) mod carrier_queue_retirement;
 
+/// Exact archive predecessor custody before the retained validator executes.
+// TODO: consume through the production CarrierValidator with full resource admission.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod archive_reservations;
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect resource-admitted Native preparation to retained validation"
+    )
+)]
+mod native_preparation;
+
+/// Production retained Native validation and its finite shell policy.
+pub(crate) mod native_validation;
+pub(crate) use native_validation::{
+    CarrierShellAdmission, NativeApplyService, OwnedNativeCarrierValidator, PublishedNativeCarrier,
+};
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
+    // One original finite pool survives every height-local retained validation owner.
+    carrier_shell_budget: mv::allocation::AllocationBudget,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
     provider_ingest_finalized_archive:
@@ -3665,7 +3690,14 @@ impl LifecycleDecisionApplyTaskV1 {
 }
 /// Durable lifecycle Decision Apply result routed only to the lifecycle owner.
 #[must_use = "a lifecycle Decision Apply completion must be settled by its lifecycle owner"]
+/// Production stores only the actual publication. Synthetic fixtures are test-only.
+enum LifecycleCarrierPublication {
+    Actual(PublishedNativeCarrier),
+    #[cfg(test)]
+    Fixture,
+}
 pub(in crate::sumeragi) struct LifecycleDecisionApplyCompletionV1 {
+    publication: LifecycleCarrierPublication,
     dispatch_identity: LifecycleDecisionApplyDispatchIdentityV1,
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
@@ -3674,6 +3706,15 @@ pub(in crate::sumeragi) struct LifecycleDecisionApplyCompletionV1 {
     artifact: wire::finality::V2FinalityArtifact,
 }
 impl LifecycleDecisionApplyCompletionV1 {
+    /// Consume actual publication after all original lifecycle owners have settled.
+    /// Only synthetic test fixtures can produce `None`.
+    pub(in crate::sumeragi) fn into_published(self) -> Option<PublishedNativeCarrier> {
+        match self.publication {
+            LifecycleCarrierPublication::Actual(published) => Some(published),
+            #[cfg(test)]
+            LifecycleCarrierPublication::Fixture => None,
+        }
+    }
     /// Return the immutable queue key retained from dispatch.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.dispatch_identity.key()
@@ -3707,12 +3748,12 @@ impl LifecycleDecisionApplyCompletionV1 {
 pub(in crate::sumeragi) enum LifecycleDecisionApplyWorkerResultV1 {
     /// The exact decided block and finality artifact crossed every durable boundary.
     Applied(LifecycleDecisionApplyCompletionV1),
-    /// The exact task remains owned while its authenticated merge sidecar is unavailable.
+    /// The exact task and original journals survive a local publication refusal.
     Deferred {
         /// Unchanged move-only task to be retained by the lifecycle owner.
         task: LifecycleDecisionApplyTaskV1,
-        /// Exact missing merge-ledger reference.
-        reference: CertifiedMergeLedgerReference,
+        /// Original local publication dependency; the retained service still owns all journals.
+        refusal: LocalValidationRefusal,
     },
 }
 impl LifecycleDecisionApplyWorkerResultV1 {
@@ -3727,7 +3768,7 @@ impl LifecycleDecisionApplyWorkerResultV1 {
     /// and lifecycle-transaction tests without running State/Kura.
     ///
     /// Production has no access to this constructor; its only result path is
-    /// [`V2ApplyService::execute_lifecycle_decision_apply`].
+    /// [`V2ApplyService::execute_retained_lifecycle_apply`].
     #[cfg(test)]
     pub(in crate::sumeragi) fn applied_fixture(
         context: &wire::HeightContext,
@@ -3750,6 +3791,7 @@ impl LifecycleDecisionApplyWorkerResultV1 {
         artifact.validate().ok()?;
         let receipt = KuraV2CommitReceipt::for_test(&artifact);
         Some(Self::Applied(LifecycleDecisionApplyCompletionV1 {
+            publication: LifecycleCarrierPublication::Fixture,
             dispatch_identity: task.dispatch_identity,
             subject: task.subject,
             certificate: task.certificate,
@@ -4234,8 +4276,12 @@ impl V2ApplyService {
         validator_set_pops: Vec<Vec<u8>>,
     ) -> Self {
         let network_id = state.network_id;
+        let carrier_shell_budget = mv::allocation::AllocationBudget::new(
+            state.nexus.read().storage.retained_carrier_shell_bytes,
+        );
         Self {
             state,
+            carrier_shell_budget,
             queue,
             kura,
             provider_ingest_finalized_archive,
@@ -4308,48 +4354,6 @@ impl V2ApplyService {
     /// The task and its dispatch identity are consumed together. A retryable
     /// merge-sidecar miss returns the unchanged task to the lifecycle owner;
     /// every successful result retains the same opaque dispatch identity.
-    pub(in crate::sumeragi) fn execute_lifecycle_decision_apply(
-        &self,
-        context: &wire::HeightContext,
-        body_store: &mut V2BodyStore,
-        task: LifecycleDecisionApplyTaskV1,
-    ) -> Result<LifecycleDecisionApplyWorkerResultV1, V2ApplyError> {
-        if !task.dispatch_identity.matches_height_context(context) {
-            return Err(V2ApplyError::TaskMismatch);
-        }
-        let exact_task = match task.exact_lineage() {
-            Some(LifecycleDecisionApplyLineageV1::Live) => ExactApplyTaskRef::LifecycleLive(&task),
-            Some(LifecycleDecisionApplyLineageV1::Recovered) => {
-                ExactApplyTaskRef::LifecycleRecovered(&task)
-            }
-            None => return Err(V2ApplyError::TaskMismatch),
-        };
-        let material = match self.execute_exact_apply(context, body_store, exact_task) {
-            Ok(material) => material,
-            Err(V2ApplyError::MissingCertifiedMergeSidecar { reference }) => {
-                return Ok(LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference });
-            }
-            Err(error) => return Err(error),
-        };
-        debug_assert!(material.ordinary_projection.is_none());
-        if !material.exactly_matches_lifecycle_task(&task) {
-            return Err(V2ApplyError::committed_recovery_required(
-                "lifecycle Decision Apply evidence",
-                &"native lifecycle application identity changed after durable application",
-            ));
-        }
-        Ok(LifecycleDecisionApplyWorkerResultV1::Applied(
-            LifecycleDecisionApplyCompletionV1 {
-                dispatch_identity: task.dispatch_identity,
-                subject: task.subject,
-                certificate: task.certificate,
-                validated_receipt: task.validated_receipt,
-                receipt: material.kura_receipt,
-                artifact: material.artifact,
-            },
-        ))
-    }
-
     /// Prove every finalized top-up and advance every installed release across a roster boundary.
     ///
     /// This runs only after both the finality artifact and receipt sidecar are durable. Every
@@ -4412,7 +4416,15 @@ impl V2ApplyService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let runtime = Arc::clone(&self.state.kagemusha_v1_runtime_verifier);
-        let current_head = artifact.height_context.kagemusha_mint_finality_epoch_id;
+        let current_authorization = &artifact
+            .height_context
+            .kagemusha_mint_finality_authorization;
+        let current_head = current_authorization.authorization_id().map_err(|error| {
+            V2ApplyError::committed_recovery_required(
+                "Kagemusha V1 current epoch authorization",
+                &error,
+            )
+        })?;
         let load_checkpoint = |release_id| {
             if let Some(checkpoint) = self
                 .kura
@@ -4429,7 +4441,8 @@ impl V2ApplyService {
             let checkpoint = runtime
                 .prove_mint_authority_bootstrap(
                     release_id,
-                    &artifact.height_context.kagemusha_mint_finality_epoch_roster,
+                    &artifact.height_context.kagemusha_mint_finality_authority,
+                    current_authorization,
                 )
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
@@ -4440,7 +4453,7 @@ impl V2ApplyService {
             if checkpoint.authority_head != current_head {
                 return Err(V2ApplyError::committed_recovery_required(
                     "Kagemusha V1 mint-authority continuity",
-                    &"no recursively authenticated checkpoint exists for the current roster",
+                    &"no recursively authenticated checkpoint exists for the current epoch authorization",
                 ));
             }
             self.kura
@@ -4487,7 +4500,7 @@ impl V2ApplyService {
                 })?;
         }
 
-        let next_head = artifact
+        let next_authorization = artifact
             .commit_qc
             .kagemusha_finality_seal_payload()
             .map_err(|error| {
@@ -4504,14 +4517,25 @@ impl V2ApplyService {
                     &error,
                 )
             })?
-            .and_then(|bundle| bundle.message.next_finality_epoch_id);
-        if artifact.height_context.next_epoch_snapshot.is_some() && next_head.is_none() {
+            .and_then(|bundle| bundle.message.next_epoch_authorization);
+        let expected_next_authorization = artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kagemusha_mint_finality_authorization);
+        if next_authorization != expected_next_authorization {
             return Err(V2ApplyError::committed_recovery_required(
-                "Kagemusha V1 mint-authority rotation",
-                &"epoch boundary finality does not carry a next-roster certificate",
+                "Kagemusha V1 mint-authority transition",
+                &"boundary seal does not carry the exact authenticated next epoch authorization",
             ));
         }
-        if let Some(next_head) = next_head {
+        if let Some(next_authorization) = next_authorization {
+            let next_head = next_authorization.authorization_id().map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha V1 successor epoch authorization",
+                    &error,
+                )
+            })?;
             let membership = finalities
                 .first()
                 .and_then(|finality| finality.top_up_membership_witness.clone());
@@ -4546,7 +4570,7 @@ impl V2ApplyService {
                 if successor.authority_head != next_head {
                     return Err(V2ApplyError::committed_recovery_required(
                         "Kagemusha V1 recursive mint-authority rotation",
-                        &"rotation proof exposed a different successor roster",
+                        &"transition proof exposed a different successor epoch authorization",
                     ));
                 }
                 self.kura
@@ -5884,7 +5908,11 @@ impl V2ApplyService {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<(), V2ApplyError> {
         let block_hash = subject.block_hash;
-        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref())?;
+        // Publication released its commit guard before this repair. Join the
+        // actual immutable capture to the decided boundary before writing any
+        // metadata; a later live State must not supply an earlier height's hash.
+        let checkpoint = crate::snapshot::CapturedStateSnapshot::capture(self.state.as_ref())?
+            .canonical_hash_for_block(context.network_id, context.height, block_hash)?;
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
         let manifest =

@@ -2463,8 +2463,8 @@ pub struct KagemushaMintAuthorityGenerationWitnessV1<'a> {
     pub step: KagemushaMintAuthorityStepV1,
     /// Authenticated Kagemusha release identifier.
     pub release_id: [u8; 32],
-    /// Release-pinned initial finality-roster identifier.
-    pub genesis_roster_id: [u8; 32],
+    /// Release-pinned initial finality-authorization identifier.
+    pub genesis_authorization_id: [u8; 32],
     /// Actual compiled Eq carrier protocol identity.
     pub eq_protocol_digest: [u8; 32],
     /// Actual compiled Ep carrier protocol identity.
@@ -2544,8 +2544,8 @@ pub struct KagemushaGeneratedMintAuthorityArtifactsV1 {
     pub eq_protocol_digest: [u8; 32],
     /// Actual compiled Ep carrier protocol identity.
     pub ep_protocol_digest: [u8; 32],
-    /// Release-pinned genesis roster identifier used by the generated release.
-    pub genesis_roster_id: [u8; 32],
+    /// Release-pinned genesis authorization identifier used by the generated release.
+    pub genesis_authorization_id: [u8; 32],
 }
 
 /// Loaded Eq parameters and keys for production mint-authority proving.
@@ -2595,7 +2595,7 @@ pub struct KagemushaLoadedEqMintAuthorityArtifactsV1 {
     /// Authenticated artifact manifest identity.
     pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-pinned initial roster identity.
-    pub(super) genesis_roster_id: [u8; 32],
+    pub(super) genesis_authorization_id: [u8; 32],
 }
 
 /// Loaded Ep parameters and keys for production mint-authority proving.
@@ -2645,7 +2645,7 @@ pub struct KagemushaLoadedEpMintAuthorityArtifactsV1 {
     /// Authenticated artifact manifest identity.
     pub(super) artifact_manifest_digest: [u8; 32],
     /// Release-pinned initial roster identity.
-    pub(super) genesis_roster_id: [u8; 32],
+    pub(super) genesis_authorization_id: [u8; 32],
 }
 
 /// One generated stable carrier proof with the exact fields required to construct a mint credit.
@@ -2668,8 +2668,8 @@ pub struct KagemushaGeneratedMintAuthorityProofV1 {
     pub authority_head: [u8; 32],
     /// Authenticated proof-release identifier constrained by the carrier.
     pub release_id: [u8; 32],
-    /// Release-pinned genesis roster identifier.
-    pub genesis_roster_id: [u8; 32],
+    /// Release-pinned genesis authorization identifier.
+    pub genesis_authorization_id: [u8; 32],
     /// Eq deferred audit, which binds the shared pair transcript and the exact Ep audit.
     pub proof_binding_digest: [u8; 32],
 }
@@ -2688,7 +2688,7 @@ impl KagemushaGeneratedMintAuthorityProofV1 {
             certificate_binding: self.certificate_binding,
             authority_head: self.authority_head,
             release_id: self.release_id,
-            genesis_roster_id: self.genesis_roster_id,
+            genesis_authorization_id: self.genesis_authorization_id,
             proof_binding_digest: self.proof_binding_digest,
             proof: self.proof,
         };
@@ -4234,7 +4234,7 @@ where
         release_id: release.release_id,
         profile_digest: release.profile_digest,
         artifact_manifest_digest: release.artifact_manifest_digest,
-        genesis_roster_id: profile.mint_genesis_roster_id,
+        genesis_authorization_id: profile.mint_genesis_authorization_id,
     })
 }
 
@@ -4319,7 +4319,7 @@ where
         release_id: release.release_id,
         profile_digest: release.profile_digest,
         artifact_manifest_digest: release.artifact_manifest_digest,
-        genesis_roster_id: profile.mint_genesis_roster_id,
+        genesis_authorization_id: profile.mint_genesis_authorization_id,
     })
 }
 
@@ -4352,30 +4352,14 @@ fn prepare_mint_authority_transport_v1(
         .certificate
         .certificate_binding_digest(witness.step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = witness
+    let authority_head = witness
         .certificate
-        .epoch_roster
-        .finality_epoch_id()
-        .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    let authority_head = match witness.step {
-        KagemushaMintAuthorityStepV1::Rotate => witness
-            .certificate
-            .seal_bundle
-            .message
-            .next_finality_epoch_id
-            .ok_or_else(|| {
-                KagemushaArtifactGenerationErrorV1::CircuitBuild(
-                    "mint-authority rotation lacks its next roster identifier".to_owned(),
-                )
-            })?,
-        KagemushaMintAuthorityStepV1::Bootstrap | KagemushaMintAuthorityStepV1::FinalizedMint => {
-            roster_id
-        }
-    };
+        .authorization_head_for_step(witness.step)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     let eq_protocol_digest = witness.eq_protocol_digest;
     let ep_protocol_digest = witness.ep_protocol_digest;
     let release_id = witness.release_id;
-    let genesis_roster_id = witness.genesis_roster_id;
+    let genesis_authorization_id = witness.genesis_authorization_id;
     // Deferred audit values are circuit outputs. Discovery builds Ep then Eq and drops each Base
     // graph immediately, retaining only the compact native reciprocal plans needed by the exact
     // builders. Caller-supplied guesses never gain authority.
@@ -4412,7 +4396,7 @@ fn prepare_mint_authority_transport_v1(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         eq_protocol_digest,
         ep_protocol_digest,
         eq_deferred_audit,
@@ -4427,7 +4411,7 @@ fn prepare_mint_authority_transport_v1(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         eq_protocol_digest,
         ep_protocol_digest,
         eq_deferred_audit,
@@ -4503,7 +4487,7 @@ fn prepare_mint_authority_transport_v1(
                 certificate_binding,
                 authority_head,
                 release_id,
-                genesis_roster_id,
+                genesis_authorization_id,
                 eq_protocol_digest,
                 ep_protocol_digest,
                 eq_audit,
@@ -4518,7 +4502,7 @@ fn prepare_mint_authority_transport_v1(
                 certificate_binding,
                 authority_head,
                 release_id,
-                genesis_roster_id,
+                genesis_authorization_id,
                 eq_protocol_digest,
                 ep_protocol_digest,
                 eq_audit,
@@ -4583,12 +4567,12 @@ fn prepare_mint_authority_transport_v1(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         proof_binding_digest,
     })
 }
 
-/// Create the release-pinned zero-authority checkpoint from the genesis roster.
+/// Create the release-pinned zero-authority checkpoint from the genesis authorization.
 ///
 /// Bootstrap is generated only after the surrounding release manifest has been authenticated.
 /// Its parent and fold transcripts are fixed-shape parser witnesses whose equations are disabled
@@ -4600,7 +4584,7 @@ fn prepare_mint_authority_transport_v1(
 ///
 /// # Errors
 ///
-/// Rejects a certificate not bound to the pinned genesis roster and release, invalid proving
+/// Rejects a certificate not bound to the pinned genesis authorization and release, invalid proving
 /// artifacts, malformed fixed-shape parser material, proof generation failure, or an undecided
 /// bootstrap history.
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4610,24 +4594,22 @@ pub fn prove_kagemusha_mint_authority_bootstrap_v1(
     hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
     hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
     release_id: [u8; 32],
-    genesis_roster_id: [u8; 32],
+    genesis_authorization_id: [u8; 32],
     certificate: KagemushaMintCertificateWitnessV1,
 ) -> Result<KagemushaMintAuthorityCheckpointV1, KagemushaArtifactGenerationErrorV1> {
     certificate
         .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = certificate
-        .epoch_roster
-        .finality_epoch_id()
-        .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
+    let authorization_id = certificate
+        .authorization_head_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     if release_id == [0; 32]
-        || genesis_roster_id == [0; 32]
+        || genesis_authorization_id == [0; 32]
         || certificate.statement.lifecycle.release_id != release_id
-        || roster_id != genesis_roster_id
-        || certificate.seal_bundle.message.finality_epoch_id != genesis_roster_id
+        || authorization_id != genesis_authorization_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
-            "mint-authority bootstrap differs from its authenticated release or genesis roster"
+            "mint-authority bootstrap differs from its authenticated release or genesis authorization"
                 .to_owned(),
         ));
     }
@@ -4706,7 +4688,7 @@ pub fn prove_kagemusha_mint_authority_bootstrap_v1(
         KagemushaMintAuthorityGenerationWitnessV1 {
             step: KagemushaMintAuthorityStepV1::Bootstrap,
             release_id,
-            genesis_roster_id,
+            genesis_authorization_id,
             eq_protocol_digest,
             ep_protocol_digest,
             eq_deferred_audit: [1; 32],
@@ -4966,15 +4948,21 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
     let (eq_current, ep_current) = verifier
         .verify_mint_authority_checkpoint(checkpoint)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
-    let roster_id = certificate
-        .epoch_roster
-        .finality_epoch_id()
+    certificate
+        .validate_for_step(step)
+        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let authorization_id = certificate
+        .seal_bundle
+        .message
+        .epoch_authorization
+        .authorization_id()
         .map_err(|error| KagemushaArtifactGenerationErrorV1::CircuitBuild(error.to_string()))?;
-    if roster_id != checkpoint.authority_head
+    if authorization_id != checkpoint.authority_head
         || checkpoint.release_id != certificate.statement.lifecycle.release_id
     {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(
-            "finalized mint roster or release differs from its authority checkpoint".to_owned(),
+            "finalized mint authorization or release differs from its authority checkpoint"
+                .to_owned(),
         ));
     }
     let eq_parent_history = KagemushaEqAccumulatorV1::try_from_bytes(&checkpoint.proof.eq_history)
@@ -5008,7 +4996,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
         checkpoint.certificate_binding,
         checkpoint.authority_head,
         checkpoint.release_id,
-        checkpoint.genesis_roster_id,
+        checkpoint.genesis_authorization_id,
         checkpoint.proof.eq_protocol_digest,
         checkpoint.proof.ep_protocol_digest,
         checkpoint.proof.eq_deferred_audit,
@@ -5023,7 +5011,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
         checkpoint.certificate_binding,
         checkpoint.authority_head,
         checkpoint.release_id,
-        checkpoint.genesis_roster_id,
+        checkpoint.genesis_authorization_id,
         checkpoint.proof.eq_protocol_digest,
         checkpoint.proof.ep_protocol_digest,
         checkpoint.proof.eq_deferred_audit,
@@ -5072,7 +5060,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
         KagemushaMintAuthorityGenerationWitnessV1 {
             step,
             release_id: checkpoint.release_id,
-            genesis_roster_id: checkpoint.genesis_roster_id,
+            genesis_authorization_id: checkpoint.genesis_authorization_id,
             eq_protocol_digest: checkpoint.proof.eq_protocol_digest,
             ep_protocol_digest: checkpoint.proof.ep_protocol_digest,
             eq_deferred_audit: [1; 32],
@@ -8936,7 +8924,7 @@ fn with_mint_authority_generation_witness<R>(
     build(KagemushaMintAuthorityPairWitnessV1 {
         step: witness.step,
         release_id: witness.release_id,
-        genesis_roster_id: witness.genesis_roster_id,
+        genesis_authorization_id: witness.genesis_authorization_id,
         eq_protocol_digest: witness.eq_protocol_digest,
         ep_protocol_digest: witness.ep_protocol_digest,
         eq_hash_claim_protocol_digest: hash_claim.eq_claim_protocol_digest,
@@ -9020,7 +9008,7 @@ fn mint_authority_public_instances<F: KagemushaPoseidonFieldV1>(
     certificate_binding: [u8; 32],
     authority_head: [u8; 32],
     release_id: [u8; 32],
-    genesis_roster_id: [u8; 32],
+    genesis_authorization_id: [u8; 32],
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],
     eq_deferred_audit: [u8; 32],
@@ -9037,7 +9025,7 @@ fn mint_authority_public_instances<F: KagemushaPoseidonFieldV1>(
         certificate_binding,
         authority_head,
         release_id,
-        genesis_roster_id,
+        genesis_authorization_id,
         eq_protocol_digest,
         ep_protocol_digest,
         eq_deferred_audit,

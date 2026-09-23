@@ -294,7 +294,7 @@ impl<'state> PrefixPreparation<'state> {
             exec::NativeAmxApplicationManifestV1,
             iroha_data_model::block::consensus_v2::ExecutionCommitment,
         ),
-        String,
+        MergeLedgerCommitError,
     > {
         let block = valid.as_ref();
         // Certified merge retains its separate, unfinished source consumer.
@@ -317,7 +317,11 @@ impl<'state> PrefixPreparation<'state> {
             {
                 PrefixSourceAuthority::Ordinary
             }
-            _ => return Err("carrier prefix has no exact Native or ordinary source owner".into()),
+            _ => {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "carrier prefix has no exact Native or ordinary source owner".to_owned(),
+                ));
+            }
         };
         if state.staged_merge_entry.is_some()
             || state.canonical_wsv_merge_commit_authorization.is_some()
@@ -325,47 +329,70 @@ impl<'state> PrefixPreparation<'state> {
                 .canonical_carrier_commit_metadata_authorization
                 .is_some()
         {
-            return Err("carrier prefix has no active certified-merge source owner".into());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix has no active certified-merge source owner".to_owned(),
+            ));
         }
         // These checks must precede the permitted metadata/World tail: that tail
         // intentionally changes the World delta authenticated by the attachment.
-        state.verify_execution_output_seal(block)?;
-        let verified_inventory = state.verified_fastpq_source_inventory_for_capture()?;
-        state.verify_cached_ordinary_witness_content(&verified_inventory)?;
-        let witness = state
-            .exec_witness
-            .as_ref()
-            .ok_or("carrier preparation requires its retained execution witness")?;
+        state
+            .verify_execution_output_seal(block)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        let verified_inventory = state
+            .verified_fastpq_source_inventory_for_capture()
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        state
+            .verify_cached_ordinary_witness_content(&verified_inventory)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        let witness = state.exec_witness.as_ref().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier preparation requires its retained execution witness".to_owned(),
+            )
+        })?;
         let manifest =
             exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
                 block, None,
-            )?;
-        let lanes = exec::LaneFinalityManifestV1::from_result_bearing_block(block)?;
+            )
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        let lanes = exec::LaneFinalityManifestV1::from_result_bearing_block(block)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         let commitment =
             exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block)
-                .map_err(str::to_owned)?;
+                .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_owned()))?;
         let Some(output_capacity::ExecutionOutputPlanState::Sealed(sealed)) = state
             .execution_output_plan
             .replace(output_capacity::ExecutionOutputPlanState::Captured)
         else {
-            return Err("carrier prefix lost its sealed output owner".into());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix lost its sealed output owner".to_owned(),
+            ));
         };
         if sealed.sources().is_native() != matches!(&authority, PrefixSourceAuthority::Native(_))
             || sealed.sources().proposal() != block.hash()
         {
-            return Err("carrier prefix differs from its actual source owner".into());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix differs from its actual source owner".to_owned(),
+            ));
         }
         let inventory = state
             .fastpq_source_inventory
             .take()
-            .ok_or("carrier prefix lost its owned source inventory")??;
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "carrier prefix lost its owned source inventory".to_owned(),
+                )
+            })?
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         if !Arc::ptr_eq(&inventory, &verified_inventory) {
-            return Err("carrier prefix source inventory changed during capture".into());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix source inventory changed during capture".to_owned(),
+            ));
         }
-        let witness = state
-            .exec_witness
-            .take()
-            .ok_or("carrier prefix lost its original execution witness")?;
+        let witness = state.exec_witness.take().ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix lost its original execution witness".to_owned(),
+            )
+        })?;
         let prefix = ValidatedExecutionPrefix {
             sealed,
             authority,
@@ -379,7 +406,9 @@ impl<'state> PrefixPreparation<'state> {
         Ok((Self { state, prefix }, manifest, commitment))
     }
 
-    fn prepare_world_effects(&mut self) -> Result<world_commit::PreparedWorldEffects, String> {
+    fn prepare_world_effects(
+        &mut self,
+    ) -> Result<world_commit::PreparedWorldEffects, MergeLedgerCommitError> {
         let state = &mut *self.state;
         if !self.prefix.retains_closed_state(state)
             || !state
@@ -389,22 +418,24 @@ impl<'state> PrefixPreparation<'state> {
                 .copied()
                 .eq([state._curr_block.hash()])
         {
-            return Err(
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "World carrier preparation lost its original prefix or exact staged metadata"
-                    .into(),
-            );
+                    .to_owned(),
+            ));
         }
-        state.validate_canonical_runtime_projection()?;
-        state.verify_lane_consensus_contexts_publication()?;
         state
-            .validate_merge_carrier_entrypoint_binding()
-            .map_err(|error| error.to_string())?;
+            .validate_canonical_runtime_projection()
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        state
+            .verify_lane_consensus_contexts_publication()
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        state.validate_merge_carrier_entrypoint_binding()?;
         state
             .finalize_axt_asset_incarnations()
-            .map_err(|error| error.to_string())?;
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         state
             .finalize_axt_policy_transition_ratchets()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;
         state.prune_axt_replay_ledger(
             current_axt_slot_from_block(&state._curr_block, state.nexus.axt.slot_length_ms),
             state.nexus.axt.replay_retention_slots.get(),
@@ -412,20 +443,22 @@ impl<'state> PrefixPreparation<'state> {
         let height = state._curr_block.height().get();
         state
             .validate_owned_runtime_catalog_overlay()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;
         if let Some(pending) = &state.pending_autoscale_lifecycle {
             let predecessor = state
                 .canonical_runtime
                 .get_before_block()
                 .nexus_projection(&state.nexus)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string())
+                })?;
             ensure_pending_autoscale_lifecycle_staking_is_safe(
                 &state.world,
                 &predecessor,
                 pending,
                 height,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;
         }
         let fields = state.fields.as_mut().expect("original executing State");
         world_commit::PreparedWorldCommit::prepare_overlay(
@@ -436,12 +469,19 @@ impl<'state> PrefixPreparation<'state> {
             fields.pending_da_pin_intents.as_ref(),
             fields.pending_autoscale_lifecycle.as_ref(),
         )
+        .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)
     }
 }
 
 pub(super) fn prepare<'state>(
     input: ValidatedCarrierPreparationInput<'state>,
-) -> Result<PreparedCarrier<'state>, (Box<iroha_data_model::block::SignedBlock>, String)> {
+) -> Result<
+    PreparedCarrier<'state>,
+    (
+        Box<iroha_data_model::block::SignedBlock>,
+        MergeLedgerCommitError,
+    ),
+> {
     let (valid, state, context, native) = input.into_parts();
     let result = (|| {
         let (mut preparation, native_amx_manifest, execution_prefix) =
@@ -450,26 +490,24 @@ pub(super) fn prepare<'state>(
         // before moving this owner. Metadata capture must not become another
         // fallible local autoscale evaluation hidden behind a String result.
         if !preparation.state.autoscale_lifecycle_evaluated {
-            return Err("carrier prefix lost its completed autoscale evaluation".to_owned());
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "carrier prefix lost its completed autoscale evaluation".to_owned(),
+            ));
         }
         let block = valid.as_ref();
-        preparation
-            .state
-            .prepare_deterministic_carrier_metadata(
-                block,
-                context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect(),
-                ApplyTopologyAuthority::V2Finality,
-            )
-            .map_err(|error| error.to_string())?;
+        preparation.state.prepare_deterministic_carrier_metadata(
+            block,
+            context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            ApplyTopologyAuthority::V2Finality,
+        )?;
         let world_effects = preparation.prepare_world_effects()?;
         let publication_events = preparation
             .state
-            .prepare_carrier_publication_events(block.header())
-            .map_err(|error| error.to_string())?;
+            .prepare_carrier_publication_events(block.header())?;
         Ok((
             preparation,
             native_amx_manifest,

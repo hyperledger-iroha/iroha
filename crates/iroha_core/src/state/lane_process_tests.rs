@@ -203,6 +203,15 @@ fn native_process_fixture(
     }
     fixture
 }
+/// Share the actual authenticated four-validator State and keys with Native runner tests.
+/// No local lane signer, body receipt, reducer effect or transport output is fabricated.
+#[inline(never)]
+pub(crate) fn native_dispatch_state_fixture() -> (Arc<State>, Vec<KeyPair>) {
+    let NativeProcessFixture { state, keys, .. } =
+        *native_process_fixture(false, std::time::Instant::now());
+    (state, keys)
+}
+
 fn native_process_limits_for_test() -> crate::sumeragi::v2_lane_instance::LaneProcessLimits {
     crate::sumeragi::v2_lane_instance::LaneProcessLimits {
         instances: nonzero!(3_usize),
@@ -558,3 +567,12 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
 include!("lane_driver_tests.rs");
 
 include!("lane_transport_tests.rs");
+
+impl State {
+    /// Actual authenticated admission fixture shared by Native ingress/actor tests.
+    /// This transfers the original State/Kura owner and its frozen validator keys.
+    pub(crate) fn native_dispatch_source_fixture_for_test() -> (Arc<State>, Vec<KeyPair>) {
+        let fixture = native_process_three_route_source_fixture();
+        (fixture.state, fixture.keys)
+    }
+}

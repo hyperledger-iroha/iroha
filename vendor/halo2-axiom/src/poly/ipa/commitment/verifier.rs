@@ -35,6 +35,11 @@ pub fn verify_proof<'params, C: CurveAffine, E: EncodedChallenge<C>, T: Transcri
 
         let u_j_packed = transcript.squeeze_challenge();
         let u_j = *u_j_packed.as_challenge_scalar::<()>();
+        // The IPA fold requires an inverse. Batch inversion leaves zero unchanged, so
+        // reject it explicitly at the same boundary as the prover, without resampling.
+        if bool::from(u_j.is_zero()) {
+            return Err(Error::OpeningError);
+        }
 
         rounds.push((l, r, u_j, /* to be inverted */ u_j, u_j_packed));
     }
@@ -98,3 +103,7 @@ fn compute_b<F: Field>(x: F, u: &[F]) -> F {
     }
     tmp
 }
+
+#[cfg(test)]
+#[path = "verifier_tests.rs"]
+mod tests;

@@ -10063,6 +10063,66 @@ mod tests {
         }
     }
     #[test]
+    fn initial_executor_validator_lifecycle_requires_owner_without_peer_management() {
+        use iroha_data_model::isi::staking::{
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+        };
+        let authority = checked_account_id();
+        let intruder = checked_account_id();
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
+        let stx = block.transaction();
+        let lane = iroha_model_base::topology::LaneId::SINGLE;
+        let peer = iroha_model_base::peer::PeerId::new(authority.expect_single_signatory().clone());
+        let stake_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("staking", "universal").unwrap(),
+            "stake".parse().unwrap(),
+        );
+        let escrow = checked_account_id();
+        let instructions: [InstructionBox; 3] = [
+            RegisterPublicLaneValidator::new(
+                lane,
+                authority.clone(),
+                peer,
+                authority.clone(),
+                Quantity::from(1_u64),
+                Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+                    network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Network(
+                        *state.network_id_ref(),
+                    ),
+                    valid_until_height: 2,
+                    source_asset: AssetId::of(stake_asset.clone(), authority.clone()),
+                    destination_asset: AssetId::of(stake_asset, escrow),
+                    amount: Quantity::one(),
+                    precondition:
+                        iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                            iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                                activation_height: 2,
+                            },
+                        ),
+                },
+            )
+            .into(),
+            ActivatePublicLaneValidator::new(lane, authority.clone()).into(),
+            ExitPublicLaneValidator {
+                lane_id: lane,
+                validator: authority.clone(),
+                release_at_ms: 10,
+            }
+            .into(),
+        ];
+        for instruction in instructions {
+            validate_initial_native_instruction_authority(&stx, &authority, &instruction, false)
+                .expect("self-owned lifecycle reaches Core");
+            assert!(matches!(
+                validate_initial_native_instruction_authority(&stx, &intruder, &instruction, false),
+                Err(ValidationFail::NotPermitted(_))
+            ));
+        }
+    }
+    #[test]
     fn initial_executor_routes_self_authorized_public_lane_user_actions_to_core() {
         use iroha_data_model::isi::staking::{
             BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
@@ -10073,11 +10133,57 @@ mod tests {
         let staker = checked_account_id();
         let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
+        use iroha_data_model::nexus::{
+            PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryScopeV1, PublicLaneMonetaryUnbondV1, PublicLaneRewardClaimPlanV1,
+            PublicLaneUnbonding, public_lane_unbonding_commitment,
+        };
+        // This test checks dispatch and self-authority, while Core separately
+        // authenticates these exact tenure, custody and withdrawal bindings.
+        let stake_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("staking", "universal").unwrap(),
+            "stake".parse().unwrap(),
+        );
+        let escrow = checked_account_id();
+        let staker_asset = AssetId::of(stake_asset.clone(), staker.clone());
+        let escrow_asset = AssetId::of(stake_asset, escrow);
+        let network_scope = PublicLaneMonetaryScopeV1::Network(executor_test_network_id(
+            b"public lane user dispatch",
+        ));
+        let request = PublicLaneUnbonding {
+            request_id,
+            amount: Quantity::one(),
+            release_at_ms: 1,
+            slashable_through_height: 1,
+            liability_release_height: 2,
+        };
+        let bond_plan = PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 2,
+            source_asset: staker_asset.clone(),
+            destination_asset: escrow_asset.clone(),
+            amount: Quantity::one(),
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: 1,
+                peer_id: peer.clone(),
+            }),
+        };
+        let unbond_plan = PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 2,
+            source_asset: escrow_asset,
+            destination_asset: staker_asset,
+            amount: request.amount.clone(),
+            precondition: PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+                activation_height: 1,
+                request_hash: public_lane_unbonding_commitment(&request).unwrap(),
+            }),
+        };
         let instructions: [InstructionBox; 5] = [
             RebindPublicLaneValidatorPeer::new(
                 iroha_model_base::topology::LaneId::SINGLE,
                 validator.clone(),
-                peer,
+                peer.clone(),
             )
             .into(),
             BondPublicLaneStake {
@@ -10086,6 +10192,7 @@ mod tests {
                 staker: staker.clone(),
                 amount: Quantity::from(1_u32),
                 metadata: Metadata::default(),
+                monetary_plan: bond_plan,
             }
             .into(),
             SchedulePublicLaneUnbond {
@@ -10102,12 +10209,19 @@ mod tests {
                 validator,
                 staker: staker.clone(),
                 request_id,
+                monetary_plan: unbond_plan,
             }
             .into(),
             ClaimPublicLaneRewards {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 account: staker,
-                upto_epoch: None,
+                claim_plan: PublicLaneRewardClaimPlanV1 {
+                    network_scope,
+                    valid_until_height: 2,
+                    expected_state: None,
+                    records: Vec::new(),
+                    sources: Vec::new(),
+                },
             }
             .into(),
         ];
@@ -10152,8 +10266,10 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 1, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -10166,8 +10282,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
             execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
             da_layout: DataAvailabilityLayout {

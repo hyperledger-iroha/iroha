@@ -2088,16 +2088,18 @@ impl BfvRnsModulusChain {
     ) -> Result<Vec<u128>, BfvError> {
         self.validate_for_parameters(params)?;
         validate_rns_polynomial(params, self, polynomial)?;
-        (0..params.degree())
-            .map(|index| {
-                let residues = polynomial
-                    .residues_by_limb
-                    .iter()
-                    .map(|limb| limb[index])
-                    .collect::<Vec<_>>();
-                reconstruct_rns_coefficient(&residues, &self.moduli)
-            })
-            .collect()
+        let mut coefficients = Vec::with_capacity(params.degree());
+        let mut residues = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
+        for index in 0..params.degree() {
+            for (limb_index, limb) in polynomial.residues_by_limb.iter().enumerate() {
+                residues[limb_index] = limb[index];
+            }
+            coefficients.push(reconstruct_rns_coefficient(
+                &residues[..self.moduli.len()],
+                &self.moduli,
+            )?);
+        }
+        Ok(coefficients)
     }
     /// Extend an RNS polynomial from this chain into another modulus chain.
     ///
@@ -2532,8 +2534,8 @@ impl BfvRnsModulusChain {
     /// Add two centered RNS product polynomials and scale-round the sum.
     ///
     /// Both inputs are interpreted as centered negacyclic products represented in this chain's
-    /// product ring. The chain must cover the two-product signed sum exactly before the rounded BFV
-    /// `t/q` boundary.
+    /// product ring. Each input and their sum must satisfy the corresponding centered bound before
+    /// the rounded BFV `t/q` boundary.
     ///
     /// # Errors
     /// Returns [`BfvError`] when the chain is malformed, too narrow for the exact two-product sum,
@@ -2548,13 +2550,16 @@ impl BfvRnsModulusChain {
         self.validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 2)?;
         validate_rns_polynomial_pair(params, self, lhs, rhs)?;
         let sum = self.add_rns_polynomials(params, lhs, rhs)?;
+        self.validate_centered_product_sum_source_bounds(params, lhs, rhs, &sum)?;
         self.scale_round_centered_product_polynomial_sum_exact(params, &sum, 2)
     }
     /// Add centered product polynomials, target-limb basis-extend, and scale-round.
     ///
     /// This is the signed target-limb counterpart of
     /// [`Self::scale_round_add_centered_product_polynomials_exact`] and covers the rounded BFV
-    /// multiplication cross-term shape `c0_left*c1_right + c1_left*c0_right`.
+    /// multiplication cross-term shape `c0_left*c1_right + c1_left*c0_right`. Each source product
+    /// and their sum must satisfy its centered bound before conversion into a narrower target
+    /// chain; otherwise an out-of-bound source coefficient could alias to an in-bound target one.
     ///
     /// # Errors
     /// Returns [`BfvError`] when either chain is malformed or too narrow for the exact two-product
@@ -2572,9 +2577,43 @@ impl BfvRnsModulusChain {
             .validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 2)?;
         validate_rns_polynomial_pair(params, self, lhs, rhs)?;
         let sum = self.add_rns_polynomials(params, lhs, rhs)?;
+        self.validate_centered_product_sum_source_bounds(params, lhs, rhs, &sum)?;
         let target_sum =
             self.basis_extend_centered_polynomial_target_limbs(params, &sum, target_chain)?;
         target_chain.scale_round_centered_product_polynomial_sum_exact(params, &target_sum, 2)
+    }
+    fn validate_centered_product_sum_source_bounds(
+        &self,
+        params: &BfvParameters,
+        lhs: &BfvRnsPolynomial,
+        rhs: &BfvRnsPolynomial,
+        sum: &BfvRnsPolynomial,
+    ) -> Result<(), BfvError> {
+        let source_product = self.product()?;
+        let mut residues = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
+        for (label, polynomial, product_count) in [
+            ("left product", lhs, 1_u16),
+            ("right product", rhs, 1_u16),
+            ("product sum", sum, 2_u16),
+        ] {
+            let bound =
+                exact_ciphertext_modulus_negacyclic_product_sum_abs_bound(params, product_count)?;
+            for coefficient_index in 0..params.degree() {
+                for (limb_index, limb) in polynomial.residues_by_limb.iter().enumerate() {
+                    residues[limb_index] = limb[coefficient_index];
+                }
+                let coefficient =
+                    reconstruct_rns_coefficient(&residues[..self.moduli.len()], &self.moduli)?;
+                reduce_centered_rns_value_to_i128(coefficient, source_product, bound).map_err(
+                    |err| {
+                        invalid!(
+                            "BFV RNS scale-round {label} coefficient[{coefficient_index}] exceeds source-chain centered bound: {err}"
+                        )
+                    },
+                )?;
+            }
+        }
+        Ok(())
     }
     fn scale_round_centered_product_polynomial_sum_exact(
         &self,
@@ -37569,7 +37608,11 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
             residues.len()
         )));
     }
-    let mut mixed = vec![0_u64; residues.len()];
+    invalid_if!(
+        residues.len() > BFV_RNS_MODULUS_CHAIN_MAX_LIMBS,
+        "RNS coefficient exceeds supported limb count {BFV_RNS_MODULUS_CHAIN_MAX_LIMBS}"
+    );
+    let mut mixed = [0_u64; BFV_RNS_MODULUS_CHAIN_MAX_LIMBS];
     for (index, (&residue, &modulus)) in residues.iter().zip(moduli).enumerate() {
         let mut coefficient = residue;
         for (&prior, &prior_modulus) in mixed[..index].iter().zip(moduli.iter()) {
@@ -37583,14 +37626,14 @@ fn reconstruct_rns_coefficient(residues: &[u64], moduli: &[u64]) -> Result<u128,
     }
     let mut value = 0_u128;
     let mut weight = 1_u128;
-    for (index, &coefficient) in mixed.iter().enumerate() {
+    for (index, &coefficient) in mixed[..residues.len()].iter().enumerate() {
         let term = u128::from(coefficient)
             .checked_mul(weight)
             .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
         value = value
             .checked_add(term)
             .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;
-        if index + 1 != mixed.len() {
+        if index + 1 != residues.len() {
             weight = weight
                 .checked_mul(u128::from(moduli[index]))
                 .ok_or_else(|| invalid!("RNS coefficient reconstruction exceeds u128"))?;

@@ -505,13 +505,12 @@ fn complete_test_genesis_builder_for_topology(
         .collect();
     let parameters =
         iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster:
-                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                     version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
-                    epoch: 0,
+                    generation: 0,
                     validators,
                 },
-            next_epoch_roster: None,
         };
     parameters
         .validate()

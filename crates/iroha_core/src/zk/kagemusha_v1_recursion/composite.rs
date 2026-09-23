@@ -3242,7 +3242,7 @@ where
         ),
         (
             mint_public(mint_public_instance::GENESIS_LO)?,
-            "genesis roster",
+            "genesis authorization",
             2,
         ),
         (
@@ -3266,7 +3266,7 @@ where
                 let target = match selector {
                     0 => &mut mutated.finality_certificate_binding,
                     1 => &mut mutated.finality_authority_head,
-                    2 => &mut mutated.finality_genesis_roster_id,
+                    2 => &mut mutated.finality_genesis_authorization_id,
                     3 => &mut mutated.finality_proof_binding_digest,
                     4 => &mut mutated.artifact_manifest_digest,
                     _ => unreachable!(),

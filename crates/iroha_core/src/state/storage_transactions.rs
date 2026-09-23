@@ -1,22 +1,25 @@
 //! Multi-version append-only storage for canonical carrier and replay identities.
 #![allow(clippy::disallowed_types)]
-use arc_swap::ArcSwapOption;
+use concread::shared::{Reserved, Shared};
 use iroha_crypto::HashOf;
 use iroha_data_model::prelude::TransactionEntrypoint;
-use mv::json::JsonKeyCodec;
+use mv::allocation::{
+    AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferFromChargeError,
+};
 #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 use norito::json::JsonDeserialize as JsonDeserializeTrait;
+use norito::json::JsonKeyCodec;
 use norito::json::{self, FastJsonWrite, JsonSerialize as JsonSerializeTrait};
-use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
+use parking_lot::{Mutex, RawMutex, RwLock, lock_api::MutexGuard};
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
+    alloc::Layout,
     borrow::Borrow,
     collections::{BTreeMap, HashSet},
     hash::Hash,
     num::NonZeroUsize,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 type Key = HashOf<TransactionEntrypoint>;
 type Value = NonZeroUsize;
@@ -39,17 +42,17 @@ pub enum MembershipRestoreError {
     Admission(#[from] MembershipAdmissionError),
 }
 /// Multi-version membership for canonical carriers and sealed-reveal execution aliases.
-/// The original configured pool funds the immutable historical B+tree generations,
-/// their publication identities and the retained prior-tip preparation. A separate
-/// latest-block set preserves replacement and rollback semantics; old readers retain
-/// their exact historical generation and original latest tip.
+/// The original configured pool funds historical generations, publication
+/// identities, prior-tip preparation, and the latest block's immutable keys and
+/// shared shell. Old readers retain their exact historical generation and tip.
 ///
-/// TODO: admit the hot-tip HashSet and snapshot decoding/comparison scratch through
-/// their original owners before claiming complete membership memory admission.
+/// TODO: prepay the upstream ordinary carrier Vec and merge-carrier HashSet
+/// before their construction, and admit snapshot decoding/comparison scratch
+/// through its original snapshot owner before claiming complete admission.
 pub struct TransactionsStorage {
     /// Latest block. Stored separately because of reverts.
     /// `None` when there are no blocks yet, otherwise must be not `None`.
-    latest_block: ArcSwapOption<BlockInfo>,
+    latest_block: TipStore,
     /// Map with aggregated entrypoints of multiple blocks, EXCEPT for the latest block. Entries
     /// are retained only for finalised blocks (with heights strictly lower than the current latest
     /// block) so that stale transactions are discarded after rollbacks.
@@ -62,12 +65,285 @@ pub struct TransactionsStorage {
     publication_sequence: AtomicU64,
     released: concread::release::ReleaseNotification,
 }
-#[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+type Tip = Shared<BlockInfo, AllocationCharge>;
+
+/// Short lock protecting the shared committed tip pointer. The payload and its
+/// charged backing stay alive independently through cloned readers.
+#[derive(Default)]
+struct TipStore(RwLock<Option<Tip>>);
+
+impl TipStore {
+    fn load_full(&self) -> Option<Tip> {
+        self.0.read().clone()
+    }
+
+    fn load(&self) -> Option<Tip> {
+        self.load_full()
+    }
+
+    fn swap(&self, next: Option<Tip>) -> Option<Tip> {
+        std::mem::replace(&mut *self.0.write(), next)
+    }
+
+    fn store(&self, next: Option<Tip>) {
+        drop(self.swap(next));
+    }
+}
+
+/// Canonically sorted immutable keys in one exact charged backing allocation.
+pub(crate) struct TipKeys(ChargedBuffer<Key>);
+
+impl TipKeys {
+    fn len(&self) -> usize {
+        self.0.as_slice().len()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Key> {
+        self.0.as_slice().iter()
+    }
+
+    fn contains<Q>(&self, key: &Q) -> bool
+    where
+        Key: Borrow<Q>,
+        Q: Hash + Eq + Ord + ?Sized,
+    {
+        self.0
+            .as_slice()
+            .binary_search_by(|candidate| candidate.borrow().cmp(key))
+            .is_ok()
+    }
+}
+
+impl<'a> IntoIterator for &'a TipKeys {
+    type Item = &'a Key;
+    type IntoIter = std::slice::Iter<'a, Key>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl PartialEq for TipKeys {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_slice() == other.0.as_slice()
+    }
+}
+impl Eq for TipKeys {}
+
+impl PartialEq<HashSet<Key>> for TipKeys {
+    fn eq(&self, other: &HashSet<Key>) -> bool {
+        self.len() == other.len() && self.iter().all(|key| other.contains(key))
+    }
+}
+
+impl std::fmt::Debug for TipKeys {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl JsonSerializeTrait for TipKeys {
+    fn json_serialize(&self, out: &mut String) {
+        out.push('[');
+        for (index, key) in self.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            key.json_serialize(out);
+        }
+        out.push(']');
+    }
+}
+
 struct BlockInfo {
     /// Transactions added in the block
-    transactions: HashSet<Key>,
+    transactions: TipKeys,
     /// Height of the block.
     height: NonZeroUsize,
+    #[cfg(test)]
+    retirement_observer: std::sync::OnceLock<Arc<()>>,
+}
+
+#[cfg(test)]
+struct TipWeak {
+    pointer: *const BlockInfo,
+    marker: std::sync::Weak<()>,
+}
+
+#[cfg(test)]
+impl TipWeak {
+    fn as_ptr(&self) -> *const BlockInfo {
+        self.pointer
+    }
+
+    fn upgrade(&self) -> Option<Arc<()>> {
+        self.marker.upgrade()
+    }
+}
+
+#[cfg(test)]
+fn tip_ptr(tip: &Tip) -> *const BlockInfo {
+    std::ptr::from_ref(&**tip)
+}
+
+#[cfg(test)]
+fn tip_weak_for_tests(tip: &Tip) -> TipWeak {
+    TipWeak {
+        pointer: tip_ptr(tip),
+        marker: Arc::downgrade(tip.retirement_observer.get_or_init(|| Arc::new(()))),
+    }
+}
+
+impl JsonSerializeTrait for BlockInfo {
+    fn json_serialize(&self, out: &mut String) {
+        out.push('{');
+        json::write_json_string("transactions", out);
+        out.push(':');
+        self.transactions.json_serialize(out);
+        out.push(',');
+        json::write_json_string("height", out);
+        out.push(':');
+        self.height.json_serialize(out);
+        out.push('}');
+    }
+}
+
+#[derive(crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+struct BlockInfoInput {
+    transactions: HashSet<Key>,
+    height: NonZeroUsize,
+}
+
+fn admit_tip(
+    budget: &AllocationBudget,
+    transactions: &HashSet<Key>,
+    height: Value,
+) -> Result<Tip, MembershipAdmissionError> {
+    let backing = Layout::array::<Key>(transactions.len()).map_err(|_| {
+        MembershipAdmissionError::Capacity(mv::allocation::AllocationRefusal::DemandOverflow)
+    })?;
+    let shell = Tip::layout();
+    let mut reservation = budget
+        .try_reserve_layouts([shell, backing])
+        .map_err(MembershipAdmissionError::Capacity)?;
+    let shell_charge = reservation.try_split(shell).expect("admitted tip shell");
+    let backing_charge = reservation
+        .try_split(backing)
+        .expect("admitted tip backing");
+    let shell = Reserved::<BlockInfo, AllocationCharge>::try_new(shell_charge).map_err(
+        |(_charge, error)| MembershipAdmissionError::Allocator {
+            requested_bytes: error.layout().size(),
+        },
+    )?;
+    let mut keys = ChargedBuffer::try_from_charge(transactions.len(), backing_charge).map_err(
+        |(_charge, error)| match error {
+            ChargedBufferFromChargeError::Allocator { layout } => {
+                MembershipAdmissionError::Allocator {
+                    requested_bytes: layout.size(),
+                }
+            }
+            ChargedBufferFromChargeError::DemandOverflow
+            | ChargedBufferFromChargeError::LayoutMismatch { .. } => {
+                unreachable!("checked tip backing layout and charge")
+            }
+        },
+    )?;
+    for key in transactions {
+        keys.append(std::slice::from_ref(key))
+            .expect("admitted exact tip key count");
+    }
+    keys.as_mut_slice().sort_unstable();
+    Ok(shell.initialize(BlockInfo {
+        transactions: TipKeys(keys),
+        height,
+        #[cfg(test)]
+        retirement_observer: Default::default(),
+    }))
+}
+
+/// Staging refusal without converting local capacity into an invalid carrier.
+#[derive(Debug)]
+pub(crate) enum TipStageError {
+    /// The original transaction-history pool or allocator refused this tip.
+    Admission(MembershipAdmissionError),
+    /// One ordinary input repeats a certified merge input.
+    Overlap,
+    /// The already staged height or canonical set differs from this attempt.
+    ChangedPayload,
+}
+
+fn admit_tip_from_sources<I: ExactSizeIterator<Item = Key>>(
+    budget: &AllocationBudget,
+    ordinary: I,
+    merge: &HashSet<Key>,
+    height: Value,
+) -> Result<Tip, TipStageError> {
+    let capacity = ordinary.len().checked_add(merge.len()).ok_or_else(|| {
+        TipStageError::Admission(MembershipAdmissionError::Capacity(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ))
+    })?;
+    let backing = Layout::array::<Key>(capacity).map_err(|_| {
+        TipStageError::Admission(MembershipAdmissionError::Capacity(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ))
+    })?;
+    let shell = Tip::layout();
+    let mut reservation = budget
+        .try_reserve_layouts([shell, backing])
+        .map_err(|error| TipStageError::Admission(MembershipAdmissionError::Capacity(error)))?;
+    let shell_charge = reservation.try_split(shell).expect("admitted tip shell");
+    let backing_charge = reservation
+        .try_split(backing)
+        .expect("admitted tip backing");
+    let shell = Reserved::<BlockInfo, AllocationCharge>::try_new(shell_charge).map_err(
+        |(_charge, error)| {
+            TipStageError::Admission(MembershipAdmissionError::Allocator {
+                requested_bytes: error.layout().size(),
+            })
+        },
+    )?;
+    let mut keys =
+        ChargedBuffer::try_from_charge(capacity, backing_charge).map_err(|(_charge, error)| {
+            match error {
+                ChargedBufferFromChargeError::Allocator { layout } => {
+                    TipStageError::Admission(MembershipAdmissionError::Allocator {
+                        requested_bytes: layout.size(),
+                    })
+                }
+                ChargedBufferFromChargeError::DemandOverflow
+                | ChargedBufferFromChargeError::LayoutMismatch { .. } => {
+                    unreachable!("checked tip backing layout and charge")
+                }
+            }
+        })?;
+    for key in ordinary {
+        if merge.contains(&key) {
+            return Err(TipStageError::Overlap);
+        }
+        keys.append(std::slice::from_ref(&key))
+            .expect("admitted ordinary key capacity");
+    }
+    for key in merge {
+        keys.append(std::slice::from_ref(key))
+            .expect("admitted merge key capacity");
+    }
+    let sorted = keys.as_mut_slice();
+    sorted.sort_unstable();
+    let mut unique = 0;
+    for index in 0..sorted.len() {
+        if unique == 0 || sorted[index] != sorted[unique - 1] {
+            sorted[unique] = sorted[index];
+            unique += 1;
+        }
+    }
+    keys.truncate(unique);
+    Ok(shell.initialize(BlockInfo {
+        transactions: TipKeys(keys),
+        height,
+        #[cfg(test)]
+        retirement_observer: Default::default(),
+    }))
 }
 impl TransactionsStorage {
     /// Construct a finite-pool fixture; production supplies its original Kura pool.
@@ -166,9 +442,9 @@ impl TransactionsStorage {
                     latest
                 }
                 Some(block) if block.height == height => {
-                    let mut updated = block.clone();
-                    updated.transactions.extend(entrypoints);
-                    Some(Arc::new(updated))
+                    let mut updated = block.transactions.iter().copied().collect::<HashSet<_>>();
+                    updated.extend(entrypoints);
+                    Some(admit_tip(&self.budget, &updated, height).expect("fixture tip admission"))
                 }
                 Some(block) => {
                     for key in &block.transactions {
@@ -178,15 +454,14 @@ impl TransactionsStorage {
                             })
                             .expect("fixture history promotion");
                     }
-                    Some(Arc::new(BlockInfo {
-                        transactions: entrypoints,
-                        height,
-                    }))
+                    Some(
+                        admit_tip(&self.budget, &entrypoints, height)
+                            .expect("fixture tip admission"),
+                    )
                 }
-                None => Some(Arc::new(BlockInfo {
-                    transactions: entrypoints,
-                    height,
-                })),
+                None => Some(
+                    admit_tip(&self.budget, &entrypoints, height).expect("fixture tip admission"),
+                ),
             };
             let sequence = self.publication_sequence.load(Ordering::Relaxed);
             let next = sequence
@@ -225,8 +500,8 @@ impl TransactionsStorage {
                 height <= latest.height,
                 "corruption must not advance the fixture frontier"
             );
-            let mut updated = latest.as_ref().clone();
-            updated.transactions.remove(&entrypoint);
+            let mut updated = latest.transactions.iter().copied().collect::<HashSet<_>>();
+            updated.remove(&entrypoint);
             let mut writer = self
                 .blocks
                 .try_write_admitted(|d| history::admit(&self.budget, d))
@@ -234,8 +509,8 @@ impl TransactionsStorage {
             writer
                 .try_remove_admitted(&entrypoint, |d| history::admit(&self.budget, d))
                 .expect("fixture history removal");
-            if height == updated.height {
-                updated.transactions.insert(entrypoint);
+            if height == latest.height {
+                updated.insert(entrypoint);
             } else {
                 writer
                     .try_insert_admitted(entrypoint, height, |d| history::admit(&self.budget, d))
@@ -248,7 +523,9 @@ impl TransactionsStorage {
             self.publication_sequence
                 .store(sequence + 1, Ordering::Release);
             let retirement = writer.prepare_commit().publish().release();
-            let old_tip = self.latest_block.swap(Some(Arc::new(updated)));
+            let replacement = admit_tip(&self.budget, &updated, latest.height)
+                .expect("fixture replacement tip admission");
+            let old_tip = self.latest_block.swap(Some(replacement));
             let old_identity = std::mem::replace(&mut **guard, next_identity);
             self.publication_sequence.store(next, Ordering::Release);
             drop(guard);
@@ -305,6 +582,7 @@ impl TransactionsStorage {
         let revert = original.replacement;
         Ok(TransactionsBlock {
             latest_block_ref: &self.latest_block,
+            budget_ref: &self.budget,
             blocks_ref: &self.blocks,
             baseline,
             publication_sequence: &self.publication_sequence,
@@ -353,7 +631,7 @@ mod view {
     /// Consistent view of the storage at the certain version
     #[derive(Clone)]
     pub struct TransactionsView<'storage> {
-        pub(super) latest_block: Option<Arc<BlockInfo>>,
+        pub(super) latest_block: Option<Tip>,
         /// Some transactions may be added to the map after `Self` is created,
         /// but for us exists only transactions with `height < latest_block.height`
         pub(super) blocks: HistoryReader<'storage>,
@@ -445,14 +723,15 @@ mod block {
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {
         /// References to [`TransactionsStorage`] struct
-        pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
+        pub(super) latest_block_ref: &'storage TipStore,
+        pub(super) budget_ref: &'storage AllocationBudget,
         pub(super) blocks_ref: &'storage history::Map,
         pub(super) baseline: HistoryReader<'storage>,
         pub(super) publication_sequence: &'storage AtomicU64,
         pub(super) _guard: MembershipWriter<'storage>,
         /// Own fields
         pub(super) revert: bool,
-        pub(super) current_block: Option<Arc<BlockInfo>>,
+        pub(super) current_block: Option<Tip>,
     }
     /// An admitted membership transition retaining its original exclusive writer.
     ///
@@ -465,7 +744,7 @@ mod block {
         next_identity: Identity,
         // Fixed original-owner metadata. During publication the admitted action
         // stays in place, and every displaced allocation stays in this caller.
-        retired_tip: Option<Arc<BlockInfo>>,
+        retired_tip: Option<Tip>,
         publication_started: bool,
         published: bool,
     }
@@ -479,8 +758,8 @@ mod block {
     pub(crate) struct DetachedTransactionsBlock {
         predecessor_identity: Identity,
         history: history::Pending,
-        predecessor: Option<Arc<BlockInfo>>,
-        current: Arc<BlockInfo>,
+        predecessor: Option<Tip>,
+        current: Tip,
         revert: bool,
         publication: MembershipPublication,
         next_identity: Identity,
@@ -505,8 +784,8 @@ mod block {
     /// Original membership payloads and notification after its physical unlock.
     /// The enclosing publisher retires this only after all its fences release.
     pub(crate) struct TransactionsPublicationRetirement {
-        _tip: Option<Arc<BlockInfo>>,
-        _staged: Option<Arc<BlockInfo>>,
+        _tip: Option<Tip>,
+        _staged: Option<Tip>,
         _identity: Identity,
         _publication: MembershipPublication,
         _release: MembershipRelease,
@@ -568,12 +847,12 @@ mod block {
     enum MembershipPublication {
         Repeated,
         Replace {
-            current: Arc<BlockInfo>,
+            current: Tip,
         },
         Advance {
             // Keep the exact previous hot tip through publication-owner retirement.
-            _previous: Option<Arc<BlockInfo>>,
-            current: Arc<BlockInfo>,
+            _previous: Option<Tip>,
+            current: Tip,
         },
     }
 
@@ -595,13 +874,51 @@ mod block {
                 .as_ref()
                 .is_some_and(|block| block.height == height && &block.transactions == transactions)
         }
+        /// Build the canonical tip directly in prepaid storage. An overlap or
+        /// local refusal changes neither the staged nor committed membership.
+        pub(crate) fn try_stage_block(
+            &mut self,
+            ordinary: &mut Vec<Key>,
+            merge: &HashSet<Key>,
+            height: Value,
+        ) -> Result<(), TipStageError> {
+            self._guard.identity();
+            if ordinary.iter().any(|key| merge.contains(key)) {
+                return Err(TipStageError::Overlap);
+            }
+            if let Some(current) = &self.current_block {
+                ordinary.sort_unstable();
+                ordinary.dedup();
+                let expected_len = ordinary.len().checked_add(merge.len());
+                return if current.height == height
+                    && expected_len == Some(current.transactions.len())
+                    && ordinary
+                        .iter()
+                        .all(|key| current.transactions.contains(key))
+                    && merge.iter().all(|key| current.transactions.contains(key))
+                {
+                    Ok(())
+                } else {
+                    Err(TipStageError::ChangedPayload)
+                };
+            }
+            let candidate =
+                admit_tip_from_sources(self.budget_ref, ordinary.iter().copied(), merge, height)?;
+            self.current_block = Some(candidate);
+            Ok(())
+        }
         /// Register transactions belonging to the block.
         ///
         /// This method **must** be called before [`commit`]. Calling it more than once with the
         /// same block payload is a no-op, while changing the height or the transaction set triggers
         /// a panic. Attempting to commit without inserting a block results in an error (see
         /// `commit_without_insert_block_fails`).
-        pub fn insert_block(&mut self, transactions: HashSet<Key>, height: Value) {
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        pub(crate) fn try_insert_block(
+            &mut self,
+            transactions: HashSet<Key>,
+            height: Value,
+        ) -> Result<(), MembershipAdmissionError> {
             self._guard.identity();
             if let Some(current_block) = &self.current_block {
                 assert_eq!(
@@ -612,13 +929,16 @@ mod block {
                     current_block.transactions, transactions,
                     "`TransactionsBlock::insert_block()` called multiple times with different transactions"
                 );
-                return;
+                return Ok(());
             }
-            let block_info = BlockInfo {
-                transactions,
-                height,
-            };
-            self.current_block = Some(Arc::new(block_info));
+            self.current_block = Some(admit_tip(self.budget_ref, &transactions, height)?);
+            Ok(())
+        }
+        /// Infallible finite-pool fixture staging; runtime calls the typed path.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        pub fn insert_block(&mut self, transactions: HashSet<Key>, height: Value) {
+            self.try_insert_block(transactions, height)
+                .expect("fixture hot-tip admission");
         }
         #[cfg(test)]
         pub fn insert_block_with_single_tx(&mut self, tx: Key, height: Value) {
@@ -673,12 +993,12 @@ mod block {
             }
             if self.revert {
                 Ok(MembershipPublication::Replace {
-                    current: Arc::clone(current_block),
+                    current: current_block.clone(),
                 })
             } else {
                 Ok(MembershipPublication::Advance {
                     _previous: previous_block,
-                    current: Arc::clone(current_block),
+                    current: current_block.clone(),
                 })
             }
         }
@@ -751,7 +1071,11 @@ mod block {
                 history,
                 predecessor_identity: block._guard.identity().clone(),
                 predecessor: block.latest_block_ref.load_full(),
-                current: Arc::clone(block.current_block.as_ref().expect("admitted membership")),
+                current: block
+                    .current_block
+                    .as_ref()
+                    .expect("admitted membership")
+                    .clone(),
                 revert: block.revert,
                 publication,
                 next_identity,
@@ -777,7 +1101,8 @@ mod block {
         /// All semantic refusal happened during preparation. The retained mutex
         /// prevents any other membership writer from changing the admitted cut.
         /// The separate fallible physical phase must already own the native
-        /// writer/reader pair; the publication kernel never acquires a lock.
+        /// writer/reader pair; the tip-pointer swap takes only its short
+        /// in-process lock and does not perform fallible admission.
         /// The returned owner defers payload cleanup and retry callbacks until
         /// the caller has released every enclosing publication fence.
         fn publish_prepared(mut self) -> TransactionsPublicationRetirement {
@@ -855,7 +1180,7 @@ mod block {
                     | MembershipPublication::Advance { current, .. } => current,
                     MembershipPublication::Repeated => unreachable!(),
                 };
-                self.retired_tip = self.block.latest_block_ref.swap(Some(Arc::clone(current)));
+                self.retired_tip = self.block.latest_block_ref.swap(Some(current.clone()));
                 self.block
                     .publication_sequence
                     .store(next, Ordering::Release);
@@ -934,7 +1259,7 @@ mod block {
         }
 
         /// Borrow the exact admitted carrier height and immutable membership.
-        pub(crate) fn staged_membership(&self) -> (Value, &HashSet<Key>) {
+        pub(crate) fn staged_membership(&self) -> (Value, &TipKeys) {
             (self.current.height, &self.current.transactions)
         }
 
@@ -1053,7 +1378,7 @@ pub use block::{TransactionsBlock, TransactionsBlockError, TransactionsBlockFiel
 /// the exact publication without copying or sorting its membership set.
 pub(in crate::state) struct TransactionsPublicationSurface {
     predecessor: Identity,
-    current: Option<Arc<BlockInfo>>,
+    current: Option<Tip>,
     revert: bool,
 }
 
@@ -1073,7 +1398,7 @@ impl PartialEq for TransactionsPublicationSurface {
             && self.revert == other.revert
             && match (&self.current, &other.current) {
                 (None, None) => true,
-                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (Some(left), Some(right)) => Tip::ptr_eq(left, right),
                 _ => false,
             }
     }
@@ -1131,7 +1456,7 @@ mod membership_projection {
     }
 
     struct Snapshot<'block> {
-        latest: Option<Arc<BlockInfo>>,
+        latest: Option<Tip>,
         history: &'block HistoryReader<'block>,
         revert: bool,
     }
@@ -1370,7 +1695,7 @@ mod serialization {
         json::write_json_string("latest_block", out);
         out.push(':');
         match view.latest_block.as_ref() {
-            Some(block) => JsonSerializeTrait::json_serialize(block.as_ref(), out),
+            Some(block) => JsonSerializeTrait::json_serialize(&**block, out),
             None => out.push_str("null"),
         }
         out.push(',');
@@ -1389,7 +1714,7 @@ mod serialization {
         json::write_json_string("latest_block", out);
         out.push(':');
         match block.current_block.as_ref() {
-            Some(current) => JsonSerializeTrait::json_serialize(current.as_ref(), out),
+            Some(current) => JsonSerializeTrait::json_serialize(&**current, out),
             None => out.push_str("null"),
         }
         out.push(',');
@@ -1474,7 +1799,7 @@ mod serialization {
             }
             let latest = match latest {
                 json::Value::Null => None,
-                other => Some(Arc::new(json::value::from_value::<BlockInfo>(other)?)),
+                other => Some(json::value::from_value::<BlockInfoInput>(other)?),
             };
             let json::Value::Object(entries) = entries else {
                 return Err(json::Error::InvalidField {
@@ -1485,6 +1810,10 @@ mod serialization {
             };
             budget.with_deferred_refund_notifications(|_| {
                 let owner = Self::try_new(budget.clone())?;
+                let latest = latest
+                    .as_ref()
+                    .map(|input| admit_tip(&budget, &input.transactions, input.height))
+                    .transpose()?;
                 let mut writer = owner
                     .blocks
                     .try_write_admitted(|d| history::admit(&budget, d))
@@ -1541,6 +1870,146 @@ mod tests {
             i += 1;
             NonZeroUsize::new(i).unwrap()
         })
+    }
+    #[test]
+    fn charged_tip_matches_canonical_hashset_json_after_duplicate_compaction() {
+        let [ordinary, merge_key, extra] = get_keys();
+        let merge = HashSet::from([merge_key]);
+        let charged = admit_tip_from_sources(
+            &AllocationBudget::new(1024 * 1024),
+            [ordinary, extra, ordinary].into_iter(),
+            &merge,
+            NonZeroUsize::MIN,
+        )
+        .expect("prepaid tip from exact source count");
+        assert_eq!(charged.transactions.len(), 3);
+        assert!(charged.transactions.contains(&ordinary));
+        assert!(charged.transactions.contains(&merge_key));
+        let former = BlockInfoInput {
+            transactions: HashSet::from([ordinary, extra, merge_key]),
+            height: NonZeroUsize::MIN,
+        };
+        let former_tip_json = norito::json::to_json(&former).unwrap();
+        assert_eq!(norito::json::to_json(&*charged).unwrap(), former_tip_json);
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        block
+            .try_stage_block(
+                &mut vec![ordinary, extra, ordinary],
+                &merge,
+                NonZeroUsize::MIN,
+            )
+            .expect("canonical tip stages with duplicate ordinary input");
+        block.commit().expect("publish charged snapshot tip");
+        assert_eq!(
+            norito::json::to_json(&storage).unwrap(),
+            format!("{{\"latest_block\":{former_tip_json},\"blocks\":{{}}}}")
+        );
+    }
+
+    #[test]
+    fn exact_capacity_repeat_checks_original_tip_without_second_charge() {
+        let [ordinary, merge_key, changed] = get_keys();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        let merge = HashSet::from([merge_key]);
+        block
+            .try_stage_block(&mut vec![ordinary, ordinary], &merge, NonZeroUsize::MIN)
+            .expect("admit first canonical tip");
+        let remaining = storage.budget.limit_bytes() - storage.budget.reserved_bytes();
+        let filler = storage
+            .budget
+            .try_reserve_bytes(remaining)
+            .expect("fill every remaining pool byte");
+        assert_eq!(
+            storage.budget.reserved_bytes(),
+            storage.budget.limit_bytes()
+        );
+        block
+            .try_stage_block(&mut vec![ordinary, ordinary], &merge, NonZeroUsize::MIN)
+            .expect("same canonical set uses the original charged tip");
+        assert!(matches!(
+            block.try_stage_block(&mut vec![changed], &merge, NonZeroUsize::MIN),
+            Err(TipStageError::ChangedPayload)
+        ));
+        assert_eq!(
+            storage.budget.reserved_bytes(),
+            storage.budget.limit_bytes()
+        );
+        drop(filler);
+        block
+            .commit()
+            .expect("original tip publishes after capacity hold");
+        assert_eq!(storage.view().get(&ordinary), Some(NonZeroUsize::MIN));
+        assert_eq!(storage.view().get(&changed), None);
+    }
+
+    #[test]
+    fn one_byte_tip_refusal_keeps_old_view_and_retries_same_source() {
+        let [old_key, new_key] = get_keys();
+        let [first, second] = get_values();
+        let storage = TransactionsStorage::new();
+        let merge = HashSet::new();
+        let mut first_block = storage.block();
+        first_block
+            .try_stage_block(&mut vec![old_key], &merge, first)
+            .expect("first charged tip");
+        first_block.commit().expect("first committed tip");
+        let old_view = storage.view();
+        let before = norito::json::to_json(&storage).unwrap();
+        let mut next = storage.block();
+        let tip_bytes = Tip::layout().size() + Layout::array::<Key>(1).unwrap().size();
+        let remaining = storage.budget.limit_bytes() - storage.budget.reserved_bytes();
+        assert!(remaining > tip_bytes);
+        let filler = storage
+            .budget
+            .try_reserve_bytes(remaining - tip_bytes + 1)
+            .expect("leave exactly one byte less than the tip demand");
+        let mut original_source = vec![new_key];
+        assert!(matches!(
+            next.try_stage_block(&mut original_source, &merge, second),
+            Err(TipStageError::Admission(MembershipAdmissionError::Capacity(
+                mv::allocation::AllocationRefusal::Capacity { requested_bytes, .. }
+            ))) if requested_bytes == tip_bytes
+        ));
+        assert!(!next.has_staged_block());
+        assert_eq!(norito::json::to_json(&storage).unwrap(), before);
+        assert_eq!(old_view.get(&old_key), Some(first));
+        assert_eq!(old_view.get(&new_key), None);
+        drop(filler);
+        next.try_stage_block(&mut original_source, &merge, second)
+            .expect("retry with the unchanged original source");
+        next.commit().expect("publish admitted original retry");
+        assert_eq!(old_view.get(&new_key), None);
+        let new_view = storage.view();
+        assert_eq!(new_view.get(&old_key), Some(first));
+        assert_eq!(new_view.get(&new_key), Some(second));
+        let restored: TransactionsStorage =
+            norito::json::from_str(&norito::json::to_json(&storage).unwrap()).unwrap();
+        assert_eq!(restored.view().get(&old_key), Some(first));
+        assert_eq!(restored.view().get(&new_key), Some(second));
+    }
+
+    #[test]
+    fn ordinary_merge_overlap_refuses_without_staging_a_tip() {
+        let [key] = get_keys();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        let merge = HashSet::from([key]);
+        let mut ordinary = vec![key];
+        let remaining = storage.budget.limit_bytes() - storage.budget.reserved_bytes();
+        let full_pool = storage
+            .budget
+            .try_reserve_bytes(remaining)
+            .expect("hold all available tip capacity");
+        assert!(matches!(
+            block.try_stage_block(&mut ordinary, &merge, NonZeroUsize::MIN),
+            Err(TipStageError::Overlap)
+        ));
+        assert_eq!(ordinary, vec![key]);
+        assert!(!block.has_staged_block());
+        drop(full_pool);
+        assert_eq!(storage.latest_height(), 0);
     }
     fn insert_keys(block: &mut TransactionsBlock, keys: &[Key], value: Value) {
         let keys = keys.iter().copied().collect();

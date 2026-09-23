@@ -246,8 +246,15 @@ impl AuthenticatedRecoveredAdapterStartup {
                 ProductionLifecycleOwnerStartupErrorKindV1::ExecutionIdentity,
             ));
         }
-        let body_store = body_store
-            .into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)
+        // This wrapper retains the already authenticated adapter roster and parent proof;
+        // it is the same authority later consumed by the lifecycle owner.
+        let replay_context = VerifiedHeightContext {
+            context: self.adapter.wire_context.clone(),
+            proofs_of_possession: self.adapter.proofs_of_possession.clone(),
+            parent_verification: self.adapter.parent_verification.clone(),
+        };
+        let (body_store, apply_service) = body_store
+            .into_revalidated_lifecycle_startup(apply_service, replay_context, validation_authority)
             .map_err(|error| {
                 ProductionLifecycleOwnerStartupErrorV1::new(
                     ProductionLifecycleOwnerStartupErrorKindV1::MarkerReplay(error),

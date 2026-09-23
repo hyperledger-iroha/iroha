@@ -1,0 +1,13 @@
+{
+  "description": "Exact superseded pending wording before completed no-multicore opening rerun; not a runtime receipt.",
+  "original_files": {
+    "specs/kagemusha_v1_production_readiness.md": "475d97a2956a0df12b18c1833df14a6d4e9d89426a8383b25e8d7986a376bf73",
+    "status.md": "6fdf9580c7086a6320c225e07d3f8d696833bfc5e0c51cfb0eda120dce025cce",
+    "docs/history/2026-09-22/kagemusha-readiness/opening-validation.md": "10e2720d58c49535b221696ed88ba46b5932944769a9070165ad4c7c38831429"
+  },
+  "sections": {
+    "opening-no-multicore-predecessor-readiness.md": "73ccf0835c3d1a5a264f005d064c5139ea0e97950b553aa8b22b0b7c3baab6f1",
+    "opening-no-multicore-predecessor-status.md": "75b0cca215dcaab17b38bb551808c5f5432393edbca706322b804c956ac2a869",
+    "opening-no-multicore-predecessor-note.md": "aec786d817f747c034c232bfb31ee27def3f4d6714f9105271ed554f70fd24b3"
+  }
+}

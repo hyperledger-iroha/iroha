@@ -166,6 +166,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_compare_and_set_primary_account_alias(operation: &::iroha_executor::data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias)",
         "fn visit_log(operation: &Log)",
         "fn visit_custom_instruction(operation: &CustomInstruction)",
+        "fn visit_register_public_lane_candidate(operation: &::iroha_executor::data_model::isi::staking::RegisterPublicLaneCandidate)",
         "fn visit_register_public_lane_validator(operation: &RegisterPublicLaneValidator)",
         "fn visit_set_lane_relay_emergency_validators(operation: &SetLaneRelayEmergencyValidators)",
         "fn visit_find_sorafs_repair_task(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairTask)",

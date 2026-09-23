@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 from pathlib import PurePosixPath
 import re
 import struct
@@ -15,7 +16,7 @@ import struct
 from sorafs_evidence_json import decode_evidence_json
 from sorafs_python_consumer_artifact import canonical_json
 from sorafs_javascript_runtime_graph import (
-    MAX_IMAGE_BYTES, MAX_IMAGE_LOADS, MAX_INHERITED_RPATHS, MAX_RPATHS, RuntimeInputError,
+    MAX_IMAGE_BYTES, MAX_IMAGE_LOADS, MAX_INHERITED_RPATHS, MAX_RPATHS, ImageProjection, RuntimeInputError,
     absolute_path, normal_os_path,
     inherited_rpath_states, project_node_image, require, text_path,
 )
@@ -262,6 +263,193 @@ class NodeRuntimeBundle:
         raise RuntimeInputError("runtime bundle member is absent")
 
 
+def _derive_runtime_edges(manifest: NodeRuntimeManifest,
+                          projections: list[ImageProjection]) -> tuple[tuple[RuntimeEdge, ...], _Namespace]:
+    """Derive the one bounded graph used by both the producer and verifier."""
+    direct = []
+    deferred = []
+    for projection in projections:
+        for load in projection.loads:
+            if projection.path != manifest.executable and load.name.startswith("@rpath/"):
+                deferred.append((projection, load))
+            else:
+                direct.append((projection, load))
+    direct_paths = tuple(path for _, load in direct for path in load.candidates)
+    initial = _Namespace(manifest, candidate_paths=direct_paths)
+
+    def derive_edge(namespace: _Namespace, projection, load, paths: tuple[str, ...]) -> RuntimeEdge:
+        candidates = tuple(RuntimeCandidate(path, namespace.resolve(path, absent_leaf=True))
+                           for path in paths)
+        present = {slot.resolved for slot in candidates if slot.resolved is not None}
+        if load.normal_os:
+            selected = None
+        else:
+            require(len(present) == 1 and present <= namespace.files,
+                    "runtime candidates must select one exact original without ambiguity")
+            selected = next(iter(present))
+        return RuntimeEdge(projection.path, load.index, load.command, load.name,
+                           "normal_os" if load.normal_os else "runtime", candidates, selected)
+
+    initial_adjacency = {row.path: set() for row in manifest.images}
+    for projection, load in direct:
+        edge = derive_edge(initial, projection, load, load.candidates)
+        if edge.selected is not None:
+            initial_adjacency[projection.path].add(edge.selected)
+
+    shared_paths = []
+    actual_candidates = len(direct_paths)
+    if deferred:
+        ancestry = inherited_rpath_states({row.path: row for row in projections},
+                                           initial_adjacency, manifest.executable)
+        for projection, load in deferred:
+            routes = ancestry[projection.path]
+            require(len(routes) == 1, "runtime shared rpath has unreachable or differing ancestry")
+            bases = next(iter(routes))
+            require(bases, "runtime shared rpath has no candidate bases")
+            tail = load.name[len("@rpath/"):]
+            require(len(bases) <= MAX_INHERITED_RPATHS
+                    and actual_candidates + len(bases) <= MAX_CANDIDATES,
+                    "runtime shared rpath candidate admission bound")
+            actual_candidates += len(bases)
+            shared_paths.append(tuple(absolute_path(base + "/" + tail) for base in bases))
+    namespace = _Namespace(manifest, candidate_paths=direct_paths + tuple(
+        path for paths in shared_paths for path in paths))
+    require(namespace.resolve(manifest.selected_executable) == manifest.executable,
+            "runtime executable relation differs")
+    ids = [projection.install_id for projection in projections if projection.install_id is not None]
+    require(len(set(ids)) == len(ids), "runtime image install IDs collide")
+    for projection in projections:
+        if projection.install_id is not None:
+            require(namespace.resolve(projection.install_id) == projection.path,
+                    "runtime install ID resolves to a different original")
+    derived = [derive_edge(namespace, projection, load, load.candidates)
+               for projection, load in direct]
+    adjacency = {row.path: set() for row in manifest.images}
+    for edge in derived:
+        if edge.selected is not None:
+            adjacency[edge.source].add(edge.selected)
+    require(adjacency == initial_adjacency,
+            "runtime direct ancestry changes after complete candidate inventory")
+    for (projection, load), paths in zip(deferred, shared_paths):
+        edge = derive_edge(namespace, projection, load, paths)
+        adjacency[projection.path].add(edge.selected)
+        derived.append(edge)
+    derived.sort(key=lambda edge: (edge.source, edge.index))
+    cached_names: dict[str, str | None] = {}
+    for edge in derived:
+        if edge.scope == "runtime" and edge.name.startswith("@rpath/"):
+            previous = cached_names.setdefault(edge.name, edge.selected)
+            require(previous == edge.selected,
+                    "runtime shared rpath cached-name target is ambiguous")
+    require(namespace.used == set(namespace.links), "runtime alias inventory contains unused originals")
+    reached, pending = set(), [manifest.executable]
+    while pending:
+        current = pending.pop()
+        if current not in reached:
+            reached.add(current)
+            pending.extend(adjacency[current] - reached)
+    require(reached == namespace.files, "runtime contains unreachable or missing original images")
+    return tuple(derived), namespace
+
+
+def _bounded_manifest_json(row: dict) -> bytes:
+    """Bound canonical serialization before constructing its complete string."""
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True, allow_nan=False)
+    payload = bytearray()
+    for part in encoder.iterencode(row):
+        chunk = part.encode("utf-8")
+        require(len(payload) + len(chunk) + 1 <= MAX_MANIFEST_BYTES,
+                "runtime manifest byte bound")
+        payload.extend(chunk)
+    payload.append(10)
+    raw = bytes(payload)
+    require(raw == canonical_json(row), "runtime canonical JSON encoder differs")
+    return raw
+
+
+def produce_node_runtime_manifest(*, version: str, selected_executable: str,
+                                  executable: str,
+                                  original_images: dict[str, tuple[bytes, int]],
+                                  aliases: dict[str, str]) -> NodeRuntimeManifest:
+    """Derive a canonical manifest solely from supplied originals and aliases.
+
+    Its computed digest is a content identifier, never an independent approval
+    pin. The caller must separately authenticate physical inputs and runtime use.
+    """
+    require(type(version) is str and re.fullmatch(
+        r"24\.(?:0|[1-9][0-9]{0,4})\.(?:0|[1-9][0-9]{0,4})", version) is not None,
+        "runtime version must be exact stable Node24")
+    executable, selected = absolute_path(executable), absolute_path(selected_executable)
+    require(type(original_images) is dict and 0 < len(original_images) <= MAX_IMAGES,
+            "runtime images count bound")
+    require(type(aliases) is dict and len(aliases) <= MAX_ALIASES,
+            "runtime aliases count bound")
+    require(all(type(path) is str for path in original_images)
+            and all(type(path) is str for path in aliases),
+            "runtime path key differs")
+    originals = []
+    total = 0
+    for path in sorted(original_images):
+        absolute_path(path)
+        require(not normal_os_path(path), "normal-OS image cannot be a captured runtime original")
+        value = original_images[path]
+        require(type(value) is tuple and len(value) == 2 and type(value[0]) is bytes,
+                "runtime original image bytes/mode differ")
+        body, mode = value
+        size = len(body)
+        _integer(size, 32, MAX_IMAGE_BYTES, "runtime image size")
+        total += size
+        require(total <= MAX_RUNTIME_BYTES, "runtime aggregate image byte bound")
+        _integer(mode, 0, 0o7777, "runtime image mode")
+        require(mode in (0o444, 0o555, 0o644, 0o755)
+                and (path != executable or mode & 0o100), "runtime image mode differs")
+        originals.append((path, body, mode))
+    require(executable in original_images, "runtime images must contain the executable")
+    claims = tuple(RuntimeAlias(absolute_path(path), text_path(aliases[path]), path)
+                   for path in sorted(aliases))
+    for claim in claims:
+        require(not normal_os_path(claim.path) and not claim.target.startswith("//")
+                and all(part not in ("", ".") for part in claim.target.lstrip("/").split("/")),
+                "runtime alias target spelling differs")
+    images = tuple(RuntimeImage(path, hashlib.sha256(body).hexdigest(), len(body), mode)
+                   for path, body, mode in originals)
+    provisional = NodeRuntimeManifest(b"", "", version, selected, executable,
+                                      images, claims, ())
+    projections = []
+    remaining_edges, remaining_candidates = MAX_EDGES, MAX_CANDIDATES
+    for path, body, _mode in originals:
+        projection = project_node_image(body, offset=0, size=len(body), path=path,
+                                        executable=executable,
+                                        load_limit=min(MAX_IMAGE_LOADS, remaining_edges),
+                                        candidate_limit=min(MAX_IMAGE_LOADS * MAX_RPATHS,
+                                                            remaining_candidates))
+        remaining_edges -= len(projection.loads)
+        remaining_candidates -= sum(len(load.candidates) for load in projection.loads)
+        projections.append(projection)
+    edges, namespace = _derive_runtime_edges(provisional, projections)
+    resolved_aliases = tuple(RuntimeAlias(claim.path, claim.target,
+                                          absolute_path(namespace.resolve(claim.path)))
+                             for claim in claims)
+    row = {
+        "schema": SCHEMA, "platform": "darwin", "architecture": "arm64",
+        "version": version, "selected_executable": selected, "executable": executable,
+        "images": [{"path": item.path, "sha256": item.sha256, "size": item.size,
+                    "mode": item.mode} for item in images],
+        "aliases": [{"path": item.path, "target": item.target,
+                     "resolved": item.resolved} for item in resolved_aliases],
+        "edges": [{"source": edge.source, "index": edge.index,
+                   "command": edge.command, "name": edge.name, "scope": edge.scope,
+                   "candidates": [{"path": candidate.path, "resolved": candidate.resolved}
+                                  for candidate in edge.candidates],
+                   "selected": edge.selected} for edge in edges],
+    }
+    raw = _bounded_manifest_json(row)
+    manifest = parse_node_runtime_manifest(raw, expected_sha256=hashlib.sha256(raw).hexdigest())
+    require(manifest.edges == edges, "runtime produced command/candidate relation differs")
+    return manifest
+
+
 def parse_node_runtime_bundle(raw: bytes, *, expected_manifest_sha256: str) -> NodeRuntimeBundle:
     """Join exact framed originals, command graph, aliases, candidates and EOF."""
     header = len(MAGIC) + 8
@@ -285,72 +473,6 @@ def parse_node_runtime_bundle(raw: bytes, *, expected_manifest_sha256: str) -> N
         projections.append(projection)
         offsets.append((row.path, offset, row.size))
         offset += row.size
-    namespace = _Namespace(manifest)
-    require(namespace.resolve(manifest.selected_executable) == manifest.executable, "runtime executable relation differs")
-    derived = []
-    adjacency = {row.path: set() for row in manifest.images}
-    ids = [projection.install_id for projection in projections if projection.install_id is not None]
-    require(len(set(ids)) == len(ids), "runtime image install IDs collide")
-    deferred = []
-    for projection in projections:
-        if projection.install_id is not None:
-            require(namespace.resolve(projection.install_id) == projection.path,
-                    "runtime install ID resolves to a different original")
-        for load in projection.loads:
-            if projection.path != manifest.executable and load.name.startswith("@rpath/"):
-                deferred.append((projection, load))
-                continue
-            candidates = tuple(RuntimeCandidate(path, namespace.resolve(path, absent_leaf=True))
-                               for path in load.candidates)
-            present = {slot.resolved for slot in candidates if slot.resolved is not None}
-            if load.normal_os:
-                selected = None
-            else:
-                require(len(present) == 1 and present <= namespace.files,
-                        "runtime candidates must select one exact original without ambiguity")
-                selected = next(iter(present))
-                adjacency[projection.path].add(selected)
-            derived.append(RuntimeEdge(projection.path, load.index, load.command, load.name,
-                                       "normal_os" if load.normal_os else "runtime", candidates, selected))
-    actual_candidates = sum(len(edge.candidates) for edge in derived)
-    if deferred:
-        ancestry = inherited_rpath_states({row.path: row for row in projections}, adjacency,
-                                           manifest.executable)
-        for projection, load in deferred:
-            routes = ancestry[projection.path]
-            require(len(routes) == 1, "runtime shared rpath has unreachable or differing ancestry")
-            bases = next(iter(routes))
-            require(bases, "runtime shared rpath has no candidate bases")
-            tail = load.name[len("@rpath/"):]
-            require(len(bases) <= MAX_INHERITED_RPATHS
-                    and actual_candidates + len(bases) <= MAX_CANDIDATES,
-                    "runtime shared rpath candidate admission bound")
-            actual_candidates += len(bases)
-            candidates = tuple(RuntimeCandidate(absolute_path(base + "/" + tail),
-                                                namespace.resolve(absolute_path(base + "/" + tail),
-                                                                  absent_leaf=True))
-                               for base in bases)
-            present = {slot.resolved for slot in candidates if slot.resolved is not None}
-            require(len(present) == 1 and present <= namespace.files,
-                    "runtime inherited candidates must select one exact original without ambiguity")
-            selected = next(iter(present))
-            adjacency[projection.path].add(selected)
-            derived.append(RuntimeEdge(projection.path, load.index, load.command, load.name,
-                                       "runtime", candidates, selected))
-    derived.sort(key=lambda edge: (edge.source, edge.index))
-    cached_names: dict[str, str | None] = {}
-    for edge in derived:
-        if edge.scope == "runtime" and edge.name.startswith("@rpath/"):
-            previous = cached_names.setdefault(edge.name, edge.selected)
-            require(previous == edge.selected,
-                    "runtime shared rpath cached-name target is ambiguous")
-    require(tuple(derived) == manifest.edges, "runtime original command/candidate relation differs")
-    require(namespace.used == set(namespace.links), "runtime alias inventory contains unused originals")
-    reached, pending = set(), [manifest.executable]
-    while pending:
-        current = pending.pop()
-        if current not in reached:
-            reached.add(current)
-            pending.extend(adjacency[current] - reached)
-    require(reached == namespace.files, "runtime contains unreachable or missing original images")
+    derived, _namespace = _derive_runtime_edges(manifest, projections)
+    require(derived == manifest.edges, "runtime original command/candidate relation differs")
     return NodeRuntimeBundle(raw, manifest, tuple(offsets))

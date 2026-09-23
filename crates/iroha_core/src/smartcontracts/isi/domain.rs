@@ -1453,26 +1453,26 @@ pub mod isi {
                 )
                 .into());
             }
-            let orchard_pool_references =
-                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+            let privacy_reserve_custody =
+                crate::privacy_state::load_privacy_public_reserve_custody_v1(
                     &state_transaction.world.privacy_commitments,
                 )
                 .map_err(|message| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister account {account_id}: persisted Orchard pool state is invalid: {message}"
+                            "cannot unregister account {account_id}: privacy reserve custody is invalid: {message}"
                         )
                         .into(),
                     )
                 })?;
-            if let Some(reference) = orchard_pool_references
+            if let Some((_, owner)) = privacy_reserve_custody
                 .iter()
-                .find(|reference| reference.reserve_account() == &account_id)
+                .find(|(asset_id, _)| asset_id.account() == &account_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the reserve account for governed Orchard pool {:?}",
-                        reference.namespace()
+                        "cannot unregister account {account_id}: it is the reserve account for governed privacy pool {:?}",
+                        owner.namespace()
                     )
                     .into(),
                 )
@@ -1764,6 +1764,27 @@ pub mod isi {
                 )
                 .into());
             }
+            if state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .any(|((_, validator), (asset, _))| {
+                    validator == &account_id || asset.account() == &account_id
+                })
+                || state_transaction
+                    .world
+                    .public_lane_stake_reserves
+                    .iter()
+                    .any(|(asset, _)| asset.account() == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(((lane_id, validator), _)) = state_transaction
                 .world
                 .public_lane_validators
@@ -1822,9 +1843,23 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+            if let Some(((lane_id, claimant), _)) = state_transaction
                 .world
                 .public_lane_reward_claims
+                .iter()
+                .find(|((_, claimant), _)| claimant == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}); clear the retained processing cursor first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
+                .world
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, claimant, asset_id), _)| {
                     claimant == &account_id || asset_id.account() == &account_id
@@ -1832,7 +1867,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has pending public-lane reward claim state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister account {account_id}: it has unpaid public-lane reward accrual state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -2518,26 +2553,26 @@ pub mod isi {
                 )
                     .into());
             }
-            let orchard_pool_references =
-                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+            let privacy_reserve_custody =
+                crate::privacy_state::load_privacy_public_reserve_custody_v1(
                     &state_transaction.world.privacy_commitments,
                 )
                 .map_err(|message| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: persisted Orchard pool state is invalid: {message}"
+                            "cannot unregister asset definition {asset_definition_id}: privacy reserve custody is invalid: {message}"
                         )
                         .into(),
                     )
                 })?;
-            if let Some(reference) = orchard_pool_references
+            if let Some((_, owner)) = privacy_reserve_custody
                 .iter()
-                .find(|reference| reference.asset_definition_id() == &asset_definition_id)
+                .find(|(asset_id, _)| asset_id.definition() == &asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it backs governed Orchard pool {:?}",
-                        reference.namespace()
+                        "cannot unregister asset definition {asset_definition_id}: it backs governed privacy pool {:?}",
+                        owner.namespace()
                     )
                     .into(),
                 )
@@ -2698,6 +2733,25 @@ pub mod isi {
                 )
                 .into());
             }
+            if state_transaction
+                .world
+                .public_lane_stake_custody
+                .iter()
+                .any(|(_, (asset, _))| asset.definition() == &asset_definition_id)
+                || state_transaction
+                    .world
+                    .public_lane_stake_reserves
+                    .iter()
+                    .any(|(asset, _)| asset.definition() == &asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is referenced by pinned public-lane staking custody; release all held stake first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(((lane_id, epoch), _)) = state_transaction
                 .world
                 .public_lane_rewards
@@ -2717,13 +2771,13 @@ pub mod isi {
             }
             if let Some(((lane_id, claimant, asset_id), _)) = state_transaction
                 .world
-                .public_lane_reward_claims
+                .public_lane_reward_accruals
                 .iter()
                 .find(|((_, _, asset_id), _)| asset_id.definition() == &asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister asset definition {asset_definition_id}: it has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -3836,6 +3890,26 @@ mod tests {
         .expect("canonical Orchard dependency-guard bootstrap");
         let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
             .expect("canonical Orchard dependency-guard state");
+        let reserve_asset_id = iroha_data_model::asset::AssetId::with_scope(
+            pool_state.asset_definition_id().clone(),
+            pool_state.reserve_account().clone(),
+            pool_state.public_balance_scope(),
+        );
+        let owner = crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
+            namespace,
+            bootstrap_digest: pool_state.bootstrap_digest(),
+        };
+        let custody_key = crate::privacy_state::PrivacyCommitmentKeyV1::public_reserve_custody(
+            owner.protocol_id(),
+            &reserve_asset_id,
+        )
+        .expect("canonical Orchard reserve key");
+        let custody_record =
+            crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(
+                reserve_asset_id,
+                owner,
+            )
+            .expect("canonical Orchard reserve record");
         let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
             .expect("canonical Orchard dependency-guard key");
         let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -3845,6 +3919,13 @@ mod tests {
                 .world
                 .privacy_commitments
                 .insert(key, record)
+                .is_none()
+        );
+        assert!(
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(custody_key, custody_record)
                 .is_none()
         );
         key
@@ -4167,7 +4248,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("reserve account for governed Orchard pool"),
+                .contains("reserve account for governed privacy pool"),
             "{error}"
         );
         assert!(transaction.world.accounts.get(&reserve_account).is_some());
@@ -4213,7 +4294,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("governed Orchard backing definition must remain registered");
         assert!(
-            error.to_string().contains("backs governed Orchard pool"),
+            error.to_string().contains("backs governed privacy pool"),
             "{error}"
         );
         assert!(
@@ -4266,7 +4347,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("domain cascade must retain governed Orchard backing definition");
         assert!(
-            error.to_string().contains("backs governed Orchard pool"),
+            error.to_string().contains("backs governed privacy pool"),
             "{error}"
         );
         assert!(transaction.world.domains.get(&domain_id).is_some());
@@ -8521,6 +8602,48 @@ mod tests {
         );
     }
     #[test]
+    fn unregister_account_preserves_pinned_staking_custody_after_config_change() {
+        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
+            tx.nexus.staking.stake_escrow_account_id = authority.to_string();
+            let asset = AssetId::new(
+                AssetDefinitionId::derive_from_components(domain_id, "stake".parse().unwrap()),
+                account_id.clone(),
+            );
+            let key = (LaneId::SINGLE, authority.clone());
+            tx.world
+                .public_lane_stake_custody
+                .insert(key.clone(), (asset.clone(), Quantity::one()));
+            for has_custody_row in [true, false] {
+                let reserves_before = tx.world.public_lane_stake_reserves.get(&asset).cloned();
+                let error = Unregister::account(account_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("pinned escrow owner must remain registered");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("pinned public-lane staking custody"),
+                    "{error}"
+                );
+                assert!(tx.world.accounts.get(&account_id).is_some());
+                assert_eq!(
+                    tx.world.public_lane_stake_reserves.get(&asset),
+                    reserves_before.as_ref()
+                );
+                if has_custody_row {
+                    tx.world.public_lane_stake_custody.remove(key.clone());
+                    tx.world
+                        .public_lane_stake_reserves
+                        .insert(asset.clone(), Quantity::one());
+                }
+            }
+            tx.world.public_lane_stake_reserves.remove(asset);
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("former escrow owner can be removed after liability release");
+            assert!(tx.world.accounts.get(&account_id).is_none());
+        });
+    }
+    #[test]
     fn unregister_account_rejects_when_account_has_public_lane_validator_state() {
         assert_account_unregister_guard(
             |tx, _domain_id, _authority, account_id| {
@@ -8618,28 +8741,98 @@ mod tests {
         );
     }
     #[test]
+    fn unregister_account_rejects_retained_reward_processing_cursor() {
+        with_registered_account_unregistration_candidate(|authority, _, account_id, tx| {
+            let key = (LaneId::SINGLE, account_id.clone());
+            let cursor = iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(1),
+            };
+            tx.world
+                .public_lane_reward_claims
+                .insert(key.clone(), cursor);
+            assert!(tx.world.public_lane_reward_accruals.iter().next().is_none());
+            let error = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("retained processing cursor keeps its recipient registered");
+            assert!(
+                error.to_string().contains("retained processing cursor"),
+                "{error}"
+            );
+            assert_eq!(tx.world.public_lane_reward_claims.get(&key), Some(&cursor));
+            assert!(tx.world.accounts.get(&account_id).is_some());
+            tx.world.public_lane_reward_claims.remove(key);
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("clearing the only retained cursor releases the account");
+            assert!(tx.world.accounts.get(&account_id).is_none());
+        });
+    }
+    #[test]
     fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
         assert_account_unregister_guard(
             |tx, domain_id, authority, account_id| {
-                tx.world.public_lane_reward_claims.insert(
-                    (
-                        LaneId::SINGLE,
-                        authority.clone(),
-                        AssetId::new(
-                            AssetDefinitionId::derive_from_components(
-                                domain_id.clone(),
-                                "fee".parse().unwrap(),
-                            ),
-                            account_id.clone(),
-                        ),
+                let source = AssetId::new(
+                    AssetDefinitionId::derive_from_components(
+                        domain_id.clone(),
+                        "fee".parse().unwrap(),
                     ),
-                    1,
+                    account_id.clone(),
                 );
+                tx.world.public_lane_reward_claims.insert(
+                    (LaneId::SINGLE, authority.clone()),
+                    iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                        through_epoch: Some(1),
+                    },
+                );
+                tx.world.public_lane_reward_accruals.insert(
+                    (LaneId::SINGLE, authority.clone(), source.clone()),
+                    Quantity::one(),
+                );
+                tx.world
+                    .public_lane_reward_reserves
+                    .insert(source, Quantity::one());
             },
-            "account referenced by reward-claim asset owner must not be unregistered",
-            "public-lane reward claim state",
-            "error should explain reward-claim conflict",
+            "account referenced by reward-accrual source owner must not be unregistered",
+            "public-lane reward accrual state",
+            "error should explain reward-accrual conflict",
         );
+    }
+    #[test]
+    fn unregister_asset_definition_preserves_exact_reward_accrual_source() {
+        with_registered_asset_definition_unregistration_candidate(|authority, definition, tx| {
+            let source = AssetId::new(definition.clone(), authority.clone());
+            let key = (LaneId::SINGLE, authority.clone(), source.clone());
+            tx.world
+                .public_lane_reward_accruals
+                .insert(key.clone(), Quantity::one());
+            tx.world
+                .public_lane_reward_reserves
+                .insert(source.clone(), Quantity::one());
+            let error = Unregister::asset_definition(definition.clone())
+                .execute(&authority, tx)
+                .expect_err("positive accrual keeps its exact source definition registered");
+            assert!(
+                error
+                    .to_string()
+                    .contains("public-lane reward accrual state"),
+                "{error}"
+            );
+            assert!(tx.world.asset_definitions.get(&definition).is_some());
+            assert_eq!(
+                tx.world.public_lane_reward_accruals.get(&key),
+                Some(&Quantity::one())
+            );
+            assert_eq!(
+                tx.world.public_lane_reward_reserves.get(&source),
+                Some(&Quantity::one())
+            );
+            tx.world.public_lane_reward_accruals.remove(key);
+            tx.world.public_lane_reward_reserves.remove(source);
+            Unregister::asset_definition(definition.clone())
+                .execute(&authority, tx)
+                .expect("settled accrual releases the source definition");
+            assert!(tx.world.asset_definitions.get(&definition).is_none());
+        });
     }
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
@@ -11148,6 +11341,61 @@ mod tests {
         );
     }
     #[test]
+    fn unregister_asset_definition_preserves_pinned_staking_custody_after_config_change() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.nexus.staking.stake_asset_id = AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("replacement", "universal").unwrap(),
+                    "stake".parse().unwrap(),
+                )
+                .to_string();
+                let asset = AssetId::new(asset_definition_id.clone(), authority.clone());
+                let key = (LaneId::SINGLE, authority.clone());
+                tx.world
+                    .public_lane_stake_custody
+                    .insert(key.clone(), (asset.clone(), Quantity::one()));
+                for has_custody_row in [true, false] {
+                    let reserves_before = tx.world.public_lane_stake_reserves.get(&asset).cloned();
+                    let error = Unregister::asset_definition(asset_definition_id.clone())
+                        .execute(&authority, tx)
+                        .expect_err("pinned stake definition must remain registered");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("pinned public-lane staking custody"),
+                        "{error}"
+                    );
+                    assert!(
+                        tx.world
+                            .asset_definitions
+                            .get(&asset_definition_id)
+                            .is_some()
+                    );
+                    assert_eq!(
+                        tx.world.public_lane_stake_reserves.get(&asset),
+                        reserves_before.as_ref()
+                    );
+                    if has_custody_row {
+                        tx.world.public_lane_stake_custody.remove(key.clone());
+                        tx.world
+                            .public_lane_stake_reserves
+                            .insert(asset.clone(), Quantity::one());
+                    }
+                }
+                tx.world.public_lane_stake_reserves.remove(asset);
+                Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect("former stake definition can be removed after liability release");
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_none()
+                );
+            },
+        );
+    }
+    #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
@@ -11649,6 +11897,29 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
+        let accrual_key = (
+            LaneId::SINGLE,
+            authority.clone(),
+            AssetId::new(asset_definition_id.clone(), authority.clone()),
+        );
+        tx.world
+            .public_lane_reward_accruals
+            .insert(accrual_key.clone(), Quantity::one());
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("unpaid source must pin its asset definition");
+        assert!(
+            error
+                .to_string()
+                .contains("public-lane reward accrual state")
+        );
+        assert!(
+            tx.world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        tx.world.public_lane_reward_accruals.remove(accrual_key);
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched public-lane reward row must not block asset definition unregister");

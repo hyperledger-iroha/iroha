@@ -21,11 +21,14 @@ use std::{
     },
 };
 
-struct Reservation(Arc<AtomicUsize>);
+struct Reservation {
+    released: Arc<AtomicUsize>,
+    _allocation: mv::allocation::AllocationReservation,
+}
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.released.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -105,8 +108,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     let height = header.height().get();
     assert_eq!(usize::try_from(height).unwrap(), before_height + 1);
     let capture_released = Arc::new(AtomicUsize::new(0));
-    let binding_released = Arc::new(AtomicUsize::new(0));
-    let installation_released = Arc::new(AtomicUsize::new(0));
+    let capture_budget = mv::allocation::AllocationBudget::new(64 << 20);
     let mut unready = fixture.local_unready_owner();
     assert!(unready.native_records().is_empty());
     assert!(unready.held_effects().next().is_none());
@@ -156,10 +158,19 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     let execution = prepared.execution_prefix_commitment();
     let finality = fixture.finality(prepared.block(), execution);
     let journals = prepared
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&capture_released)))
+        .prepare_journals(None, None, |inputs| {
+            let bytes = inputs
+                .world_journal_shell_bytes()?
+                .checked_add(inputs.retained_effects_layout.size())
+                .ok_or(mv::allocation::AllocationRefusal::DemandOverflow)?;
+            Ok::<_, mv::allocation::AllocationRefusal>(Reservation {
+                released: Arc::clone(&capture_released),
+                _allocation: capture_budget.try_reserve_bytes(bytes)?,
+            })
         })
         .unwrap();
+    let retained_shell_bytes = capture_budget.reserved_bytes();
+    assert!(retained_shell_bytes > 0);
     let original_effects = std::ptr::from_ref(journals.effects.as_ref());
     original.assert_retained(journals.native_source_for_test().unwrap());
     assert!(
@@ -174,9 +185,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     assert!(!journals.geometry.has_pending_lifecycle());
     let checkpoint = journals.checkpoint;
     let decision = journals
-        .bind_decision(finality, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&binding_released)))
-        })
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("real Native decision binding: {:?}", refusal.error));
     assert_eq!(
         std::ptr::from_ref(decision.journals.effects.as_ref()),
@@ -201,7 +210,6 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
 
     let acquire = |decision: DecisionBoundCarrierJournals<
         Reservation,
-        Reservation,
         DetachedCarrierComponents,
         KuraWsvCheckpointReceipt,
     >| {
@@ -210,9 +218,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
             original_effects
         );
         decision
-            .try_prepare_physical(state, None, |_, _| {
-                Ok::<_, Infallible>(Reservation(Arc::clone(&installation_released)))
-            })
+            .try_prepare_physical(state, None)
             .unwrap_or_else(|(_, error)| panic!("actual Native physical acquisition: {error:?}"))
     };
     // A real abort releases every acquired writer, preserving exact source and
@@ -222,9 +228,8 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         std::ptr::from_ref(decision.journals.effects.as_ref()),
         original_effects
     );
-    assert_eq!(installation_released.load(Ordering::SeqCst), 1);
     assert_eq!(capture_released.load(Ordering::SeqCst), 0);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_budget.reserved_bytes(), retained_shell_bytes);
     assert_eq!(decision.block().encode_wire().unwrap(), wire);
     original.assert_retained(decision.journals.source_prefix.native_for_test().unwrap());
     assert!(
@@ -250,6 +255,28 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         .publish()
         .unwrap_or_else(|(_, error)| panic!("complete genuine Native publication: {error:?}"));
     assert_eq!(state.state_view_generation(), generation + 2);
+    // The production completion boundary moves the whole published owner. Only
+    // after the worker handoff may the original driver borrow Apply authority.
+    let source_allocation = std::ptr::from_ref(published.source.native_for_test().unwrap()).addr();
+    let events_allocation = published.events().as_ptr().addr();
+    let published = handoff_published_carrier(published);
+    assert_eq!(
+        std::ptr::from_ref(published.source.native_for_test().unwrap()).addr(),
+        source_allocation
+    );
+    assert_eq!(published.events().as_ptr().addr(), events_allocation);
+    assert!(published.matches_state(state));
+    assert_eq!(published.artifact(), &finality);
+    assert_eq!(published.receipt().artifact_hash(), receipt.artifact_hash());
+    assert_eq!(published.receipt().context_id(), receipt.context_id());
+    assert_eq!(published.receipt().certificate(), receipt.certificate());
+    assert_eq!(published.receipt().subject(), receipt.subject());
+    assert_eq!(published.receipt().block_hash(), receipt.block_hash());
+    assert_eq!(published.receipt().height(), receipt.height());
+    assert_eq!(published.committed_event().header, header);
+    assert_eq!(published.committed_event().status, BlockStatus::Committed);
+    assert_eq!(capture_released.load(Ordering::SeqCst), 0);
+    assert_eq!(capture_budget.reserved_bytes(), retained_shell_bytes);
     assert_eq!(published.block().encode_wire().unwrap(), wire);
     assert_eq!(published.block().header(), header);
     assert_eq!(published.committed_event.header, header);
@@ -392,12 +419,10 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         checkpoint
     );
     assert_eq!(capture_released.load(Ordering::SeqCst), 0);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 0);
-    assert_eq!(installation_released.load(Ordering::SeqCst), 1);
+    assert_eq!(capture_budget.reserved_bytes(), retained_shell_bytes);
     drop(published);
     assert_eq!(capture_released.load(Ordering::SeqCst), 1);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 1);
-    assert_eq!(installation_released.load(Ordering::SeqCst), 2);
+    assert_eq!(capture_budget.reserved_bytes(), 0);
     assert_eq!(state.state_view_generation(), generation + 2);
     assert_native_effects(&fixture, fixture.carrier(), atomic);
 }
@@ -474,11 +499,17 @@ fn assert_native_effects(fixture: &NativePublicationFixture, block: &SignedBlock
 #[test]
 fn native_driver_settles_original_closed_apply_only_after_real_publication() {
     let fixture = native_publication_fixture(true);
-    assert_native_driver_publication(fixture);
+    assert_native_driver_publication(fixture, false);
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+#[test]
+fn native_driver_settles_complete_published_carrier_after_owned_worker_handoff() {
+    assert_native_driver_publication(native_publication_fixture(true), true);
 }
 
 #[inline(never)]
-fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
+fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>, whole_carrier: bool) {
     use crate::sumeragi::{
         v2_core as core,
         v2_lane_driver::{NativeLaneAdmission, NativeLaneInput},
@@ -511,7 +542,7 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
-        .bind_decision(finality, |_| Ok::<_, Infallible>(()))
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("exact global binding: {:?}", refusal.error));
     // The State moves once after detachment; every original storage identity is
     // retained. No replacement State or synthetic publication acknowledgement.
@@ -568,11 +599,12 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
         before
     );
     let physical = decided
-        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None)
         .unwrap_or_else(|(_, error)| panic!("exact physical acquisition: {error:?}"));
     let published = physical
         .publish()
         .unwrap_or_else(|(_, error)| panic!("actual global publication: {error:?}"));
+    let published = handoff_published_carrier(published);
     let application = published.native_apply().unwrap();
     let current = state.verified_lane_consensus_contexts().unwrap().unwrap();
     assert!(original.iter().all(|(id, _)| {
@@ -581,6 +613,57 @@ fn assert_native_driver_publication(fixture: Box<NativePublicationFixture>) {
             .iter()
             .all(|lane| lane.instance_id() != *id)
     }));
+    if whole_carrier {
+        assert!(
+            !driver.settle_published_carrier(&application).unwrap(),
+            "actual Apply settles while original physical custody still needs drain"
+        );
+        for ((id, decision), (owner_ptr, records, effects)) in original.iter().zip(&custody) {
+            let owner = driver.process().instance(*id).unwrap();
+            assert_eq!(std::ptr::from_ref(owner), *owner_ptr);
+            assert_eq!(owner.native_decision().unwrap().as_ref(), Some(decision));
+            assert_eq!(owner.native_records(), records);
+            let expected = effects
+                .iter()
+                .filter(|effect| !matches!(effect, core::Effect::Apply { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(owner.held_effects().cloned().collect::<Vec<_>>(), expected);
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            driver
+                .poll(&current, now)
+                .expect("publication completion must not fault the original driver guard");
+            if driver.settle_published_carrier(&application).unwrap() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "original publication custody must complete physical drain"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            original
+                .iter()
+                .all(|(id, _)| driver.process().instance(*id).is_none()),
+            "every original published instance has retired; successor openings remain independent"
+        );
+        driver
+            .poll(&current, now)
+            .expect("no output guard fault after actual original retirement");
+        assert!(
+            driver.settle_published_carrier(&application).unwrap(),
+            "complete original retirement is idempotent"
+        );
+        assert_eq!(
+            state.committed_height(),
+            usize::try_from(published.block().header().height().get()).unwrap()
+        );
+        driver.shutdown().join().unwrap();
+        return;
+    }
     let close_deadline = Instant::now() + Duration::from_secs(30);
     while driver.process().occupancy().closed < original.len() {
         driver.poll(&current, now).unwrap();
@@ -743,7 +826,7 @@ fn receive_native_terminal_work(
 }
 
 #[inline(never)]
-fn unrelated_native_terminal_publication() -> Box<PublishedCarrier<(), (), ()>> {
+fn unrelated_native_terminal_publication() -> Box<PublishedCarrier<()>> {
     let fixture = native_publication_fixture(false);
     publish_unrelated_native_terminal_fixture(fixture)
 }
@@ -751,7 +834,7 @@ fn unrelated_native_terminal_publication() -> Box<PublishedCarrier<(), (), ()>> 
 #[inline(never)]
 fn publish_unrelated_native_terminal_fixture(
     fixture: Box<NativePublicationFixture>,
-) -> Box<PublishedCarrier<(), (), ()>> {
+) -> Box<PublishedCarrier<()>> {
     let prepared = fixture.prepare();
     let finality = fixture.finality(prepared.block(), prepared.execution_prefix_commitment());
     let journals = prepared
@@ -759,7 +842,7 @@ fn publish_unrelated_native_terminal_fixture(
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
-        .bind_decision(finality, |_| Ok::<_, Infallible>(()))
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("actual unrelated decision: {:?}", refusal.error));
     let state = fixture.into_shared_state();
     let finality = decided.finality().clone();
@@ -771,7 +854,7 @@ fn publish_unrelated_native_terminal_fixture(
         .unwrap();
     let physical = decided
         .attach_checkpoint(checkpoint)
-        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None)
         .unwrap_or_else(|(_, error)| panic!("actual unrelated physical owner: {error:?}"));
     Box::new(
         physical
@@ -784,7 +867,7 @@ fn publish_unrelated_native_terminal_fixture(
 fn assert_native_terminal_publication(
     fixture: Box<NativePublicationFixture>,
     case: TerminalDecisionCase,
-    foreign: Option<Box<PublishedCarrier<(), (), ()>>>,
+    foreign: Option<Box<PublishedCarrier<()>>>,
 ) {
     use crate::sumeragi::{
         output_guard::ConsensusOutputGuard,
@@ -848,7 +931,7 @@ fn assert_native_terminal_publication(
         .unwrap();
     let checkpoint = journals.checkpoint;
     let decided = journals
-        .bind_decision(finality, |_| Ok::<_, Infallible>(()))
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("actual original decision binding: {:?}", refusal.error));
     let state = fixture.into_shared_state();
     let guard = ConsensusOutputGuard::isolated();
@@ -980,7 +1063,7 @@ fn assert_native_terminal_publication(
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let physical = decided
         .attach_checkpoint(checkpoint)
-        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None)
         .unwrap_or_else(|(_, error)| panic!("actual original physical publication: {error:?}"));
     let published = physical
         .publish()
@@ -1169,4 +1252,21 @@ fn assert_native_terminal_publication(
     assert_eq!(process.occupancy().instances, 0);
     drop(process);
     pool.shutdown().join().unwrap();
+}
+
+/// Compile and exercise the crate-facing owned handoff on a different worker.
+fn handoff_published_carrier<A>(
+    published: crate::state::PublishedCarrier<A>,
+) -> crate::state::PublishedCarrier<A>
+where
+    A: Send + 'static,
+{
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        assert!(published.native_apply().is_some());
+        assert!(send.send(published).is_ok());
+    });
+    let published = receive.recv().expect("exact owned publication completion");
+    worker.join().expect("publication completion worker");
+    published
 }

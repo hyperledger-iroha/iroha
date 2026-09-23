@@ -482,3 +482,28 @@ fn kura_fastpq_artifact_policy_checks_overflow_probe_and_temporary_slot_geometry
     };
     assert!(exact_geometry.validate().is_ok());
 }
+
+#[test]
+fn membership_storage_limits_are_finite_file_configured_and_independent() {
+    let actual = load_root(base_table());
+    assert_eq!(actual.kura.membership_storage, defaults::kura::MEMBERSHIP_STORAGE_POLICY);
+    for field in ["max_bytes", "memory_bytes"] {
+        for value in [0, 4096] {
+            let mut table = base_table();
+            table.entry("kura").or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut().expect("kura table")
+                .entry("membership_storage").or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut().expect("membership policy")
+                .insert(field.into(), Value::Integer(value));
+            let loaded = actual::Root::from_toml_source(TomlSource::inline(table));
+            if value == 0 { assert!(loaded.is_err(), "zero must never select unlimited storage"); }
+            else {
+                let loaded = loaded.expect("explicit finite membership policy");
+                let actual = if field == "max_bytes" { loaded.kura.membership_storage.max_bytes.get() }
+                    else { loaded.kura.membership_storage.memory_bytes.get() as u64 };
+                assert_eq!(actual, 4096);
+                assert_eq!(loaded.kura.block_hash_history_bytes.get(), defaults::kura::BLOCK_HASH_HISTORY_BYTES.get());
+            }
+        }
+    }
+}

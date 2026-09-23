@@ -2925,10 +2925,10 @@ impl VerifiedHeightContext {
                 || context.roster != snapshot.roster
                 || context.quorum != snapshot.quorum
                 || context.leader_seed != snapshot.leader_seed
-                || context.kagemusha_mint_finality_epoch_id
-                    != snapshot.kagemusha_mint_finality_epoch_id
-                || context.kagemusha_mint_finality_epoch_roster
-                    != snapshot.kagemusha_mint_finality_epoch_roster
+                || context.kagemusha_mint_finality_authorization
+                    != snapshot.kagemusha_mint_finality_authorization
+                || context.kagemusha_mint_finality_authority
+                    != snapshot.kagemusha_mint_finality_authority
                 || proofs_of_possession.as_slice() != snapshot.validator_set_pops.as_slice()
             {
                 return Err(AdapterError::EpochTransitionMismatch);
@@ -2938,14 +2938,14 @@ impl VerifiedHeightContext {
             || context.roster != parent_artifact.height_context.roster
             || context.quorum != parent_artifact.height_context.quorum
             || context.leader_seed != parent_artifact.height_context.leader_seed
-            || context.kagemusha_mint_finality_epoch_id
+            || context.kagemusha_mint_finality_authorization
                 != parent_artifact
                     .height_context
-                    .kagemusha_mint_finality_epoch_id
-            || context.kagemusha_mint_finality_epoch_roster
+                    .kagemusha_mint_finality_authorization
+            || context.kagemusha_mint_finality_authority
                 != parent_artifact
                     .height_context
-                    .kagemusha_mint_finality_epoch_roster
+                    .kagemusha_mint_finality_authority
             || proofs_of_possession.as_slice() != parent_artifact.validator_set_pops.as_slice()
         {
             return Err(AdapterError::EpochTransitionMismatch);

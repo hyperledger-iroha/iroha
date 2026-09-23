@@ -7888,7 +7888,7 @@ fn parse_world(
                 message: error.to_string(),
             })?;
     }
-    crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+    crate::privacy_state::validate_privacy_public_reserve_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
         &asset_definitions.view(),
@@ -8375,6 +8375,10 @@ fn parse_world(
         public_lane_stake_shares: Storage::default(),
         public_lane_rewards: Storage::default(),
         public_lane_reward_claims: Storage::default(),
+        public_lane_reward_accruals: Storage::default(),
+        public_lane_reward_reserves: Storage::default(),
+        public_lane_stake_custody: Storage::default(),
+        public_lane_stake_reserves: Storage::default(),
         lane_relay_emergency_validators,
         zk_assets,
         confidential_policy_transition_index: Storage::default(),
@@ -11183,7 +11187,7 @@ mod decode_tests {
     }
     #[test]
     fn musubi_resolver_checkpoint_keys_use_canonical_nonzero_decimal() {
-        use mv::json::JsonKeyCodec;
+        use norito::json::JsonKeyCodec;
         let revision = MusubiResolverIndexRevisionV1::new(42).expect("revision forty-two");
         let mut encoded = String::new();
         revision.encode_json_key(&mut encoded);

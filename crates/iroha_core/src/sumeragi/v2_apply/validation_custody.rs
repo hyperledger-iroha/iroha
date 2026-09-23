@@ -1,9 +1,8 @@
 //! Move-only candidate custody through round-local validation-marker persistence.
 //!
-//! This is the retention boundary for the future resource-admitted validator.
-//! It does not supply an admission policy or enable the current scalar service.
-//! TODO: wire the live validator only when its concrete reservation can fund
-//! original execution, detached journals and all publication overlap.
+//! The production Native validator supplies the finite local shell reservation.
+//! This layer retains the exact source, execution and publication phase across
+//! marker retries; it grants no consensus authority from allocation credits.
 
 use crate::sumeragi::v2_body_store::{
     BodyValidationError, DurableBodyReceipt, LocalValidationRefusal, V2BodyStoreInstanceIdentity,
@@ -27,10 +26,8 @@ pub(crate) trait RetainedValidationOwner: sealed::Owner + Send + 'static {
     fn ready_commitment(&self) -> Option<wire::ExecutionCommitment>;
 }
 
-impl<A, B> sealed::Owner for crate::state::RetainedCarrier<A, B> {}
-impl<A: Send + 'static, B: Send + 'static> RetainedValidationOwner
-    for crate::state::RetainedCarrier<A, B>
-{
+impl<A> sealed::Owner for crate::state::RetainedCarrier<A> {}
+impl<A: Send + 'static> RetainedValidationOwner for crate::state::RetainedCarrier<A> {
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
         self.matches_validation_candidate(context, body)
     }
@@ -38,6 +35,8 @@ impl<A: Send + 'static, B: Send + 'static> RetainedValidationOwner
         self.ready_commitment()
     }
 }
+
+impl sealed::Owner for super::native_validation::NativeValidationCandidate {}
 
 #[cfg(test)]
 pub(in crate::sumeragi) mod test_support {
@@ -135,8 +134,9 @@ pub(crate) trait CarrierValidator {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<Self::Owner, Self::Error>;
-    /// Complete only the original capture, or return the same current phase with
-    /// its local refusal. This operation never executes or rejects the proposal.
+    /// Advance only the original retained phase, or return it with its local refusal.
+    /// Source recovery may finish the first execution; executed phases must never rerun
+    /// that execution or turn a local readiness failure into a proposal rejection.
     fn resume(
         &mut self,
         owner: Self::Owner,
@@ -511,5 +511,28 @@ impl<P: CarrierValidator> Drop for SelectedValidationCarrier<'_, P> {
             debug_assert!(self.service.candidates[self.index].owner.is_none());
             self.service.candidates[self.index].owner = Some(owner);
         }
+    }
+}
+
+impl RetainedBodyValidationService<super::native_validation::OwnedNativeCarrierValidator> {
+    /// Join a verified response to the exact original candidate waiting for that source.
+    pub(crate) fn complete_native_source(
+        &mut self,
+        subject: wire::BlockSubject,
+        request: &crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: &crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyResponse,
+    ) -> Result<super::native_validation::NativeSourceRecoveryCompletion, LocalValidationRefusal>
+    {
+        let owner = self
+            .candidates
+            .iter_mut()
+            .find(|row| row.subject == subject)
+            .and_then(|row| row.owner.as_mut())
+            .ok_or_else(|| {
+                LocalValidationRefusal::RecoveryRequired(
+                    "Native source response has no original retained candidate".into(),
+                )
+            })?;
+        owner.complete_native_source(subject, request, response)
     }
 }

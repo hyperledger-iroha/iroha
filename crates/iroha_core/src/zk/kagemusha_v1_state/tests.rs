@@ -550,7 +550,7 @@ fn snapshot_mint_credit(
         proof,
         finality_certificate_binding,
         finality_authority_head,
-        finality_genesis_roster_id: snapshot_digest(b"snapshot-finality-genesis", 11),
+        finality_genesis_authorization_id: snapshot_digest(b"snapshot-finality-genesis", 11),
         finality_proof_binding_digest: snapshot_digest(b"snapshot-finality-proof", 12),
         statement,
         encrypted_credit,

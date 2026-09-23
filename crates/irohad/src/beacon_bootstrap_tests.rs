@@ -40,7 +40,8 @@ fn request_and_genesis() -> (Request, GenesisProof, Vec<KeyPair>) {
     npos.epoch_length_blocks = std::num::NonZeroU64::new(16).unwrap();
     npos.evidence_horizon_blocks = 16;
     npos.slashing_delay_blocks = 1;
-    npos.validate().expect("valid signed short-epoch fixture parameters");
+    npos.validate()
+        .expect("valid signed short-epoch fixture parameters");
     let manifest = crate::complete_test_genesis_builder_for_topology(
         iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_model_base::chain::ChainId::from(crate::taira_runtime_signer::TAIRA_CHAIN_ID_V1),
@@ -140,6 +141,7 @@ fn fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum() {
     };
     let mut aggregator = GlobalThresholdBeaconPulseAggregatorV1::new(session.clone(), 6, anchor)
         .expect("exact test pulse");
+    let mut runtime_signers = Vec::new();
     for (i, credential) in credentials.iter().enumerate() {
         let provider = &bundle.providers[i];
         let catalog = crate::IrohaRuntimeProviderBindingsV1::qualified_for_test(
@@ -177,6 +179,7 @@ fn fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum() {
                 .accept_partial(partial)
                 .expect("proof-verified native share");
         }
+        runtime_signers.push(signer);
         let mut wrong = Zeroizing::new(credential.to_vec());
         wrong[0] ^= 1;
         assert!(
@@ -188,9 +191,66 @@ fn fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum() {
             .is_err()
         );
     }
-    aggregator
+    let pulse = aggregator
         .finalize()
         .expect("unique threshold group signature");
+    let state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        iroha_core::state::World::new(),
+        iroha_core::kura::Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+        "bootstrap-readiness".parse().expect("fixture chain"),
+        record.network_id,
+    );
+    let mut installed_record = bundle.record.clone();
+    installed_record
+        .activate(6)
+        .expect("activate verified fixture");
+    let mut block = state.block(BlockHeader::new(
+        std::num::NonZeroU64::new(6).expect("fixture height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    block
+        .world
+        .install_global_beacon_fixture_for_testing(installed_record, pulse)
+        .expect("install verified public session and pulse");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit public fixture");
+    {
+        let mut topology = state.commit_topology.block();
+        *topology.get_mut() = bundle.request.target_roster.clone();
+        topology.commit();
+        let mut hashes = state.block_hashes.block();
+        for _ in 0..6 {
+            hashes.push_for_tests(anchor.block_hash);
+        }
+        hashes.commit_for_tests();
+    }
+    for (index, signer) in runtime_signers.iter().enumerate() {
+        let runtime = crate::IrohaRuntimeDeps::default()
+            .with_sumeragi_global_beacon_partial_signer(signer.clone());
+        assert_eq!(
+            crate::validate_threshold_signer_startup_readiness_v1(
+                &state,
+                &bundle.request.target_roster[index],
+                &runtime,
+            ),
+            Ok(()),
+            "fresh native custody is ready for its exact seat"
+        );
+        assert_eq!(
+            crate::validate_threshold_signer_startup_readiness_v1(
+                &state,
+                &bundle.request.target_roster[(index + 1) % 4],
+                &runtime,
+            ),
+            Err("local global-beacon committee seat has no exact runtime custody attestation"),
+            "resolved custody for another seat cannot pass startup"
+        );
+    }
     let signatures = keys
         .iter()
         .take(3)

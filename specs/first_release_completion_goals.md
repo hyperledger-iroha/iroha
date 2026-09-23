@@ -28,15 +28,26 @@ the production qualification and full relation evidence remain open.
 The [AXT redacted-amount validation](../docs/history/2026-09-23/axt-redacted-amount-validation.md)
 records a focused host/Core/state hard refusal while confidential proof and
 durable nonce admission remain open.
+The [AXT nonce State-owner audit](../docs/history/2026-09-23/axt-anchored-spend-nonce-state-owner.md)
+pins the missing signed-spend carrier and atomic application/replay boundary;
+the production hard refusal remains in force.
 The [standalone election semantic guards](../docs/history/2026-09-23/election-semantic-guard-validation.md)
 pass three focused negative controls while the anonymous dropout-resilient
 protocol and its production circuits remain unresolved.
+The [privacy reserve custody cutover](../docs/history/2026-09-23/privacy-public-reserve-custody-cutover.md)
+records typed Orchard/private-IVM reserve custody installed atomically with
+governed bootstrap, guards on ordinary transfers, burns, rekey and removal,
+and exact verified-bridge routing with focused Core tests. Low-level apply-time
+defense, charged lookup resources, full proof relations and conservation
+qualification remain open.
 The [C# host record](../docs/history/2026-09-21/csharp-native-runtime.md) records
 native-backed tests and ordinary-stack admission without claiming release closure.
 The [Android consumer record](../docs/history/2026-09-21/android-managed-host-runtime.md)
 records managed and explicit host-JNI execution separately from device qualification.
 The [deferred-handoff record](../docs/history/2026-09-21/deferred-handoff-carrier-validation.md)
 records passing component controls and the remaining failed full liveness run.
+The [18-step Apalache diagnostic](../docs/history/2026-09-23/multilane-apalache-vc-diagnostic.md)
+identifies the timed-out verification conditions; it does not close the formal gate.
 The [retained-source and qualification record](../docs/history/2026-09-21/retained-source-and-qualification-integration.md)
 records first-mask ownership tests, fixture migration and published-schema work.
 The [SCCP Java consumer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md)
@@ -87,6 +98,10 @@ The [runtime-input checkpoint](../docs/history/2026-09-23/javascript-runtime-inp
 adds bounded Node 24 Mach-O input graphs and CI registration with 1,735 scoped
 passing controls. The actual 20-image runtime still rejects two shared `@rpath`
 loads; loader, process, native and candidate authority remain open.
+The [Node runtime canonical-producer record](../docs/history/2026-09-23/sorafs-node-runtime-canonical-producer.md)
+derives those candidate slots from supplied original bytes and records the
+20-image diagnostic pass; physical runtime use and independent release pins
+remain open.
 The [fixed child-process custody record](../docs/history/2026-09-23/sorafs-javascript-child-process.md)
 adds bounded fd3/pipe/exit ownership and release-script registration; its 14
 focused tests pass. Node image pinning, mapped-image verification, installed
@@ -102,6 +117,24 @@ their construction; its focused Core suite passes 18/18, and F02 remains open.
 The [hot-tip and snapshot admission audit](../docs/history/2026-09-23/transaction-hot-tip-snapshot-admission-gap.md)
 identifies the charged-owner and local-retry cutover still required for those
 allocations; no encoded-size proxy qualifies as full resource admission.
+The [charged hot-tip source slice](../docs/history/2026-09-23/transaction-hot-tip-charged-cutover.md)
+funds the retained shell and key backing and avoids a second set at State
+staging. The fresh `storage_transactions::tests::` Core selector passes 22/22;
+upstream carrier/merge allocations,
+aggregate retry custody and snapshot scratch keep F02 open.
+The [membership local-refusal classification](../docs/history/2026-09-23/transaction-membership-local-refusal-classification.md)
+keeps ordinary and Native carrier staging capacity errors out of deterministic
+block rejection; it does not fund upstream sources or snapshot scratch.
+The [combined-source Core type repair](../docs/history/2026-09-23/combined-source-core-type-repair.md)
+rejoins transaction append preparation identity and typed reserve restore tests
+after the concurrent source merge; focused and full qualification remain open.
+The [combined-source file-budget diagnostic](../docs/history/2026-09-23/combined-source-file-budget-gate.md)
+records 278 current findings; no budget baseline was raised and the release
+tooling gate remains open.
+The [Sumeragi relay ingress fail-close](../docs/history/2026-09-23/sumeragi-relay-ingress-fail-closed.md)
+returns unowned relay variants before enqueue while preserving QueuePlan
+transfer. Network rejection is terminal and the finalized Nexus record may be
+retried; the authoritative Native/Nexus owner and F03 cutover remain open.
 The [September 23 integrated packet checkpoint](../docs/history/2026-09-23/integrated-packet-validation.md)
 records scoped MV, MKHE, signer and Node input tests, plus the current Core
 history regression and its fixture corrections. None closes a production or
@@ -117,12 +150,31 @@ The [final-promotion state-source audit](../docs/history/2026-09-23/final-promot
 pins the native Reserve/Complete and Check authorities and the missing daemon
 submission, observer, clock, floor and private-receipt joins. Software custody
 remains fail-closed until a production source supplies them.
+The [release-manifest native operation boundary](../docs/history/2026-09-23/sorafs-release-manifest-native-operation-gap.md)
+adds a bounded internal role-13 Norito claim contract while keeping release
+signing disabled pending native custody, finalized operation state and
+purpose-aware daemon dispatch; software signing needs no HSM.
 The [software signer and Current Check validation](../docs/history/2026-09-23/sorafs-software-signer-current-check-validation.md)
 records focused 5/5 provider, 10/10 Current Check, 3/3 credential and 4/4
 provider-assignment controls; those component passes do not authorize promotion.
 The [topology native-authority prerequisite](../docs/history/2026-09-23/sorafs-topology-native-authority-prerequisite.md)
 keeps promotion blocked after signed-envelope replay until a completed
 role-16 operation is verifiable from finalized state.
+The [signed-topology type-binding control](../docs/history/2026-09-23/sorafs-topology-aggregate-type-binding.md)
+rejects numeric JSON substitutions between the signed topology and aggregate;
+native role-16 authority and promotion remain blocked.
+The [topology inner-approval claim boundary](../docs/history/2026-09-23/sorafs-topology-inner-approval-claim-boundary.md)
+also checks the exact detached binding and independently pinned signer identity;
+it cannot replace the missing role-16 receipt and finalized Check.
+The [resilience inner-approval claim boundary](../docs/history/2026-09-23/sorafs-resilience-inner-approval-claim-boundary.md)
+checks the exact signed summary projection and signer tuple; its separate
+native purpose, completion and finalized Check are still absent.
+The [lane-inventory inner-approval claim boundary](../docs/history/2026-09-23/sorafs-lane-inventory-inner-approval-claim-boundary.md)
+checks exact replay bytes, signer role and topology anchors; a native
+purpose-owned completion and finalized Check are still absent.
+The [foundational inner-approval claim boundary](../docs/history/2026-09-23/sorafs-foundational-inner-approval-claim-boundary.md)
+requires explicit software-receipt replay and exact candidate-prerequisite
+bindings; finalized custody and native completion are still absent.
 The [provider-ingest G06 authority audit](../docs/history/2026-09-23/sorafs-provider-ingest-g06-authority-audit.md)
 separates finalized assignment lookup from the still-missing finalized
 admission, advert, revocation and governed grant source.

@@ -72,8 +72,29 @@ promotion/evidence/cosign selection passes 396 tests.
 It still rejects final promotion because purpose-owned native completion and
 finalized-state verification for the inner approvals is absent; the outer
 role-14 receipt cannot replace those proofs.
+The [topology claim boundary](../../docs/history/2026-09-23/sorafs-topology-inner-approval-claim-boundary.md)
+additionally rejects foreign signer tuples and widened detached bindings;
+196 focused checker tests pass, but the role-16 native receipt and finalized
+Check remain absent.
+The [resilience claim boundary](../../docs/history/2026-09-23/sorafs-resilience-inner-approval-claim-boundary.md)
+also requires the exact purpose, replayed summary bytes and signer tuple;
+198 focused checker tests pass, but its native purpose and completed operation
+remain absent.
+The [lane-inventory claim boundary](../../docs/history/2026-09-23/sorafs-lane-inventory-inner-approval-claim-boundary.md)
+requires the exact signed inventory bytes, purpose-specific signer and topology
+anchors; 199 focused checker tests pass, but its native completion remains absent.
+The [foundational claim boundary](../../docs/history/2026-09-23/sorafs-foundational-inner-approval-claim-boundary.md)
+requires explicit receipt replay and exact signer, verifier, continuity and
+prerequisite bindings; 200 focused checker tests pass, but finalized native
+custody and completion remain absent.
 
 ## 2026-09-23 release-manifest and runtime-input checkpoint
+
+The [role-13 native-operation boundary](../../docs/history/2026-09-23/sorafs-release-manifest-native-operation-gap.md)
+now has a bounded internal Norito action and Check claim contract. The existing
+four-signature private service still lacks native custody, completed-operation
+state, finalized source and purpose-aware daemon dispatch; release signing and
+promotion remain blocked without an HSM prerequisite.
 
 The [integrated packet record](../../docs/history/2026-09-23/integrated-packet-validation.md)
 captures 20 passing release-manifest signer tests after the reviewed audit-head

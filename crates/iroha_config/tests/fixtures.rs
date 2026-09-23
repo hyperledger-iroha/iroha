@@ -2406,3 +2406,24 @@ include!("fixtures/network_frame_defaults_test.rs");
 include!("fixtures/sumeragi_v2_default_profile_test.rs");
 // type alias used through fixtures for newer error-stack API
 type Result<T, E> = core::result::Result<T, Report<E>>;
+
+#[test]
+fn nexus_carrier_shell_pool_preserves_zero_and_explicit_limit() {
+    use iroha_config::parameters::user::{Nexus, NexusStorage};
+    use iroha_config_base::util::Emitter;
+    for limit in [0, 1, 16 * 1024 * 1024] {
+        let mut emitter = Emitter::<ParseError>::new();
+        let nexus = Nexus {
+            storage: NexusStorage {
+                retained_carrier_shell_bytes: limit,
+                ..NexusStorage::default()
+            },
+            ..Nexus::default()
+        };
+        let actual = nexus
+            .parse(&mut emitter)
+            .expect("explicit finite shell pool parses");
+        emitter.into_result().expect("valid shell pool");
+        assert_eq!(actual.storage.retained_carrier_shell_bytes, limit);
+    }
+}

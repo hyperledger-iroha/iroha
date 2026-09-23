@@ -16,7 +16,9 @@ use super::{
     output_guard::ConsensusOutputGuard,
     v2::LocalProposalDirective,
     v2_chunks::{EncodedV2Payload, encode_payload},
-    v2_lane_driver::NativeLaneCandidateBatch,
+    v2_lane_driver::{
+        NativeLaneCandidateBatch, NativeLaneCandidatePreparation, NativeLaneDecisionHandoff,
+    },
 };
 use crate::{
     block::{BlockBuilder, Chained},
@@ -410,6 +412,55 @@ pub(crate) enum CandidateAssemblyOutcome {
         reason: CandidateWorkDeferral,
     },
 }
+/// Original Native preparation and the result of its one bounded assembly attempt.
+///
+/// Even an assembly refusal returns every exact source-recovery wait and the
+/// complete prepared group set. The caller services those waits independently
+/// of candidate delivery; assembly never settles the driver's original Apply.
+#[must_use = "retain Native source waits even when candidate assembly is deferred or refused"]
+pub(crate) struct NativeCandidateAssembly {
+    pub(crate) source: NativeLaneCandidatePreparation,
+    pub(crate) outcome: Result<CandidateAssemblyOutcome, CandidateError>,
+}
+
+/// Borrowed readiness of one authenticated preparation. It never supplies an
+/// ordinary execution fallback when no Native group is ready.
+struct NativeCandidateWork<'source>(&'source NativeLaneCandidatePreparation);
+
+impl CandidateWorkProvider for NativeCandidateWork<'_> {
+    fn prepare(
+        &mut self,
+        context: &wire::HeightContext,
+        view: wire::View,
+        candidates: &[CandidateDescriptor<'_>],
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
+        if self.0.waits.iter().any(|wait| {
+            matches!(
+                wait,
+                crate::state::LaneDecisionGroupPreparationV1::ObservationChanged
+            )
+        }) {
+            return Err(CandidateWorkError::Deferred(
+                CandidateWorkDeferral::NativeLaneSource,
+            ));
+        }
+        if let Some(mut ready) = self.0.work.as_ref() {
+            return ready.prepare(context, view, candidates);
+        }
+        if !candidates.is_empty() {
+            return Err(CandidateWorkUnavailable::new(
+                (0..candidates.len()).collect(),
+                "Native candidate input cannot execute ordinary queue entries",
+            )
+            .into());
+        }
+        // Admission certificates and other independently useful controls can
+        // advance while exact source waits remain with NativeCandidateAssembly.
+        // The existing work gate rejects a carrier with no such work.
+        Ok(PreparedCandidateWork::default())
+    }
+}
+
 /// A canonical successor body and its deterministic v2 dispersal plan.
 #[derive(Debug)]
 pub(crate) struct AssembledV2Candidate {
@@ -487,6 +538,63 @@ impl V2CandidateAssembler {
             time_source,
         }
     }
+    /// Prepare authenticated Native Decisions and feed the existing carrier fitter.
+    ///
+    /// Run on the candidate worker, not the control turn: source preparation
+    /// authenticates original finalized bodies and route Decisions. The caller
+    /// retains the immutable driver handoff across errors; once preparation is
+    /// complete, all its waits and evidence return beside the assembly outcome.
+    /// No State execution, validation vote, publication or Apply occurs here.
+    /// The process-lived candidate worker returns this original preparation on
+    /// every outcome; source waits never become ordinary execution or empty work.
+    pub(crate) fn assemble_native(
+        &self,
+        request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
+    ) -> Result<NativeCandidateAssembly, CandidateError> {
+        validate_request(&request)?;
+        if !request.work_provider.belongs_to(request.state) {
+            return Err(CandidateError::NativeLaneDecisionInvalid(
+                "Native handoff belongs to another State owner".into(),
+            ));
+        }
+        if request.attachments.certified_merge_entry.is_some()
+            || request.attachments.certified_merge_carrier_header.is_some()
+        {
+            return Err(CandidateError::NativeLaneDecisionInvalid(
+                "Native candidate cannot retain a retired certified merge attachment".into(),
+            ));
+        }
+        let source = request
+            .work_provider
+            .prepare_candidate()
+            .map_err(CandidateError::WorkPreparationFailed)?;
+        let CandidateRequest {
+            context,
+            directive,
+            local_validator,
+            parent,
+            state,
+            queue,
+            key_pair,
+            output_guard,
+            attachments,
+            work_provider: _,
+        } = request;
+        let outcome = self.assemble(CandidateRequest {
+            context,
+            directive,
+            local_validator,
+            parent,
+            state,
+            queue,
+            key_pair,
+            output_guard,
+            attachments,
+            work_provider: NativeCandidateWork(&source),
+        });
+        Ok(NativeCandidateAssembly { source, outcome })
+    }
+
     /// Assemble, sign, exactly encode, and deterministically chunk one fresh
     /// successor body.
     ///
@@ -748,7 +856,9 @@ impl V2CandidateAssembler {
                         let trial = native_base
                             .clone()
                             .retain_native_lane_decision_prefix(mid)
-                            .map_err(CandidateError::CanonicalEncoding)?;
+                            .map_err(CandidateError::CanonicalEncoding)?
+                            .with_network_input_time_floor(candidate_creation_time)
+                            .ok_or(CandidateError::BlockTimeOverflow)?;
                         let bytes = trial
                             .canonical_proposal_wire_len(
                                 u64::from(request.local_validator),
@@ -770,7 +880,9 @@ impl V2CandidateAssembler {
                     if low < original_count {
                         builder = builder
                             .retain_native_lane_decision_prefix(low)
-                            .map_err(CandidateError::CanonicalEncoding)?;
+                            .map_err(CandidateError::CanonicalEncoding)?
+                            .with_network_input_time_floor(candidate_creation_time)
+                            .ok_or(CandidateError::BlockTimeOverflow)?;
                         report.native_deferred += original_count - low;
                         if low == 0 {
                             prepared_work.native_lane_decisions = None;
@@ -917,6 +1029,7 @@ impl V2CandidateAssembler {
                     reason: CandidateWorkDeferral::NativeLaneSource,
                 });
             }
+            let candidate_creation_time = builder.creation_time();
             let signing = request
                 .output_guard
                 .begin_fail_stop_operation()
@@ -1275,7 +1388,9 @@ impl V2CandidateAssembler {
             .map_err(CandidateError::NativeLaneDecisionInvalid)?;
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
-        Ok(builder)
+        builder
+            .with_network_input_time_floor(candidate_creation_time)
+            .ok_or(CandidateError::BlockTimeOverflow)
     }
     #[allow(clippy::too_many_arguments)]
     fn sign_prepared_block(
@@ -2059,6 +2174,9 @@ pub(crate) enum CandidateError {
     /// Built header drifted from context/tag/parent inputs.
     #[error("built Sumeragi v2 candidate header differs from immutable inputs")]
     BuiltHeaderMismatch,
+    /// The exact input clock has no representable successor millisecond.
+    #[error("Sumeragi v2 candidate logical time exceeds u64 milliseconds")]
+    BlockTimeOverflow,
     /// BlockBuilder output order drifted from execution-context order.
     #[error("built Sumeragi v2 entrypoint order differs from its routing contexts")]
     BuiltEntrypointOrderMismatch,
@@ -2369,8 +2487,12 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = *state.network_id_ref();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                u64::MAX,
+                &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -2383,8 +2505,8 @@ pub(super) mod tests {
             snapshot_bootstrap: Some(anchor),
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"candidate snapshot Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -2410,6 +2532,45 @@ pub(super) mod tests {
             .expect("fixture roster contains its height-selected leader");
         (state, context, anchor, key)
     }
+    #[test]
+    fn native_source_wait_never_selects_ordinary_fallback() {
+        let (_, context, _, _) = snapshot_parent_fixture();
+        let pending = NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![
+                crate::state::LaneDecisionGroupPreparationV1::MissingDecisions(vec![Hash::new(
+                    b"original missing route",
+                )]),
+            ],
+        };
+        let original = pending.waits.as_ptr();
+        let ordinary = record(71, "ordinary fallback forbidden", 0);
+        let error = NativeCandidateWork(&pending)
+            .prepare(&context, 0, &[ordinary.descriptor()])
+            .unwrap_err();
+        assert!(matches!(error, CandidateWorkError::Unavailable(unavailable)
+            if unavailable.indices() == &BTreeSet::from([0])));
+        assert_eq!(pending.waits.as_ptr(), original);
+        assert_eq!(pending.waits.len(), 1);
+        assert!(
+            NativeCandidateWork(&pending)
+                .prepare(&context, 0, &[])
+                .unwrap()
+                .native_lane_decisions
+                .is_none()
+        );
+        let changed = NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![crate::state::LaneDecisionGroupPreparationV1::ObservationChanged],
+        };
+        assert!(matches!(
+            NativeCandidateWork(&changed).prepare(&context, 0, &[]),
+            Err(CandidateWorkError::Deferred(
+                CandidateWorkDeferral::NativeLaneSource
+            ))
+        ));
+    }
+
     #[test]
     fn candidate_route_preflight_defers_only_unreconciled_topology() {
         let (state, context, anchor, _) = snapshot_parent_fixture();

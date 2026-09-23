@@ -5077,7 +5077,6 @@ dependencies = [
  "iroha_schema",
  "k256",
  "lazy_static",
- "mv",
  "norito",
  "num-bigint 0.4.6",
  "num-traits",

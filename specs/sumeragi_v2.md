@@ -118,23 +118,39 @@ both context commitments reproduce exactly. A template is therefore not a deploy
 by itself.
 
 KAGEMUSHA mint-finality authority uses the same post-hash binding boundary, but remains a
-distinct signed genesis field. `ConsensusHandshakeMetadata.kagemusha_mint_finality` contains a
-mandatory networkless epoch-zero `KagemushaMintFinalityEpochRosterTemplateV1` and an optional
-networkless epoch-one template. The successor template is present only when height one is the
-epoch-zero boundary. Once the final signed genesis exists, its canonical block hash defines
-`NetworkId = hash(final signed genesis)`; only then does Core bind each signed template into an
-`KagemushaMintFinalityEpochRosterV1` before constructing the first `HeightContext`. For the
-closed four-validator genesis profile, Core requires the template's validator vector to match the
-frozen Sumeragi voter vector exactly in count, order, and `PeerId` at every position, and it rejects
-any Pasta key which is not a canonical non-identity Pallas or Vesta point.
+distinct signed genesis field. `ConsensusHandshakeMetadata.kagemusha_mint_finality` contains one
+networkless generation-zero `KagemushaMintFinalityAuthorityGenerationTemplateV1`. After the final
+signed genesis determines `NetworkId`, Core binds the template into the immutable
+`KagemushaMintFinalityAuthorityGenerationV1`. It checks exact ordered Sumeragi voter identities and
+canonical, non-identity Pallas and Vesta public keys. Genesis has no separately supplied successor
+roster.
 
-Network independence ends at the signed templates. Each bound runtime roster contains the final
-`NetworkId`; its `finality_epoch_id`, the containing `HeightContext`, every mint-finality seal
-message, and deterministic Schnorr nonce derivation remain network-bound. The paired public keys
-are provisioned earlier as a domain-separated derivation of a validator-local seed, the election
-epoch, and the canonical `PeerId`; they are not derived from BLS keys or from a placeholder network
-identity. Every validator must use a seed unique to that validator and deployment, and deployments
-must never reuse those seeds across networks.
+Every `HeightContext` carries both the complete key generation and its complete
+`KagemushaMintFinalityEpochAuthorizationV1`. Genesis authorization covers heights one through the
+signed epoch end. Its digest commits the network, scheduling epoch, exact height interval,
+authority digest, beacon binding, predecessor authorization and transition decision. An authority
+digest identifies keys; an authorization digest identifies permission to use those keys over one
+interval. They are never interchangeable as recursive checkpoint heads or release trust anchors.
+
+Scheduling epochs and cryptographic key generations advance independently. A certified `Retain`
+boundary advances the epoch and contiguous interval while preserving the exact incumbent roster,
+keys and generation. The first retained epoch binds the genuinely installed beacon session and
+transcript; later retention preserves that binding. The finalized pre-boundary beacon pulse still
+supplies authenticated leader entropy. Contexts within an epoch copy both objects exactly, and
+successor contexts consume the prior certified boundary snapshot. Every boundary requires paired
+Pasta seals even without a monetary top-up.
+
+TODO: Complete the frozen successor, all-seat key and beacon custody readiness, and atomic
+activation owner before permitting production committee replacement. A structurally valid
+`Activate` body does not establish preparation or readiness. The current cutover candidate retains
+the authenticated incumbent; it must not reselect validators and call that retention. The removed
+next-roster custom parameter is not an alternate authority path. Current merged-source runtime
+qualification remains pending; see the [migration record](../docs/history/2026-09-22/epoch-authority-cutover.md).
+
+Paired public keys are provisioned from a domain-separated validator-local seed, the key generation,
+and canonical `PeerId`, independently of BLS keys or a placeholder network identity. Network-bound
+authorization and signed messages bind use of those keys. Each validator's seed must be unique to
+that validator and deployment and must not be reused across networks.
 
 Genesis also carries `sumeragi_v2.execution_policy_hash`. This is a separate, versioned identity
 for boot configuration which is read from `State` during transaction admission, transaction and
@@ -985,12 +1001,28 @@ height, recomputes the whole plan, revalidates the restored State and audited bo
 the complete body-range preflight. Geometry changes and replay begin only from that freshly
 authenticated post-recovery image.
 
+The retained carrier publisher persists the canonical body, its original captured
+WSV checkpoint, and the manifest authenticated by the original verified decision
+before writing finality. Manifest publication binds its exact digest into that
+checkpoint. The manifest and each ancestor directory through the Kura root must
+be synced before publishing that digest. Retrying an existing finality record
+reauthenticates and syncs its exact file and held ancestors before granting a
+receipt; presence after a failed rename barrier is insufficient. Finality is the
+restart commit marker: every earlier cut is a sole pending tip, and every later
+cut has complete checkpoint-bound replay metadata.
+The publisher obtains its exact checkpoint writer receipt after manifest binding;
+a refusal retains the same execution journals and never hashes a later live State.
+
 Before any generic replay, WAL, or network ingress, startup persists the exact snapshot context in
 the immutable v2 context store and compares any first full-body artifact byte-for-byte with that
 context and PoP vector. The first full block extends the anchored hash and derives canonical ledger
-time as the maximum of `anchor_timestamp + committed_block_cadence` and every included transaction
-timestamp plus one millisecond. Zero, fractional-millisecond, or overflowing cadence geometry fails
-closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
+time as the maximum of `anchor_timestamp + committed_block_cadence` and every included timed
+Network input's creation timestamp plus one millisecond. The same rule applies with an ordinary
+parent: both ordinary inputs and the exact retained Native Decision inputs participate; sealed
+reveals contribute their signed transaction time. Admission controls and deferred inputs do not
+execute and cannot advance the clock. Candidate prefix fitting recomputes the floor before signing,
+and validation derives it independently from the signed carrier. Zero, fractional-millisecond, or
+overflowing cadence geometry and an unrepresentable input successor fail closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
 must carry the ordinary parent CommitQC and a snapshot anchor is rejected. A crash before the first
 finality sidecar can reopen only from the original anchor-height snapshot and the exact persisted
 context, safety-WAL decision, body receipt, and semantically replayed validation

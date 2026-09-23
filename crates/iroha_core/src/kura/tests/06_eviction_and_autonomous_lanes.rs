@@ -2208,7 +2208,8 @@ fn autonomous_lane_payload_for_kura(
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
     let network_id = test_network_id(b"kura-v2-finality-test");
-    let epoch = 7;
+    // This payload is also reproposed at genesis height in retained-history tests.
+    let epoch = 0;
     let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,

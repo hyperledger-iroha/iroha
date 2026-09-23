@@ -29,8 +29,9 @@ use norito::codec::DecodeAll as _;
 
 #[test]
 fn local_storage_recovery_emits_no_block_rejection() {
-    use crate::state::{LaneLifecycleError, MergeLedgerCommitError};
+    use crate::state::{LaneLifecycleError, MembershipAdmissionError, MergeLedgerCommitError};
     use iroha_data_model::block::error::BlockRejectionReason;
+    use mv::allocation::AllocationRefusal;
 
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(2_u64),
@@ -49,6 +50,11 @@ fn local_storage_recovery_emits_no_block_rejection() {
         BlockValidationError::from_certified_merge_stage_error(
             MergeLedgerCommitError::LocalDrainObservation(Box::new(
                 MergeLedgerCommitError::ExecutionMarkerConflict(diagnostic.to_owned()),
+            )),
+        ),
+        BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::MembershipAdmission(MembershipAdmissionError::Capacity(
+                AllocationRefusal::DemandOverflow,
             )),
         ),
     ];

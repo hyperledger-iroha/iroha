@@ -407,6 +407,11 @@ impl StrictReplayFixture {
                         validator.clone(),
                         iroha_primitives::numeric::Quantity::from(1_000_u64),
                         iroha_model_base::metadata::Metadata::default(),
+                        iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                            AssetId::of(definition.clone(), validator.clone()),
+                            AssetId::of(definition.clone(), genesis_account.clone()),
+                            iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        ),
                     ))
                     .append_instruction(ActivatePublicLaneValidator::new(
                         iroha_model_base::topology::LaneId::SINGLE,
@@ -1037,6 +1042,7 @@ impl StrictReplayFixture {
                 iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             transaction_history_bytes:
                 iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+            membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,

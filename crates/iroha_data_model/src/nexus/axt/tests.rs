@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 
-use mv::json::JsonKeyCodec;
+use norito::json::JsonKeyCodec;
 use norito::{decode_from_bytes, to_bytes};
 fn ordered_set_entry(seed: u8) -> TransactionEntrypoint {
     let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

@@ -438,7 +438,8 @@ fn recursive_fft<Scalar: Field, G: FftGroup<Scalar>>(
     data_in: &mut Vec<G>,
     inverse: bool,
 ) {
-    if data_in.is_empty() {
+    // Empty and singleton transforms are identities; a singleton has no FFT stages.
+    if data_in.len() <= 1 {
         return;
     }
     let num_threads = multicore::current_num_threads();
@@ -503,7 +504,8 @@ pub fn fft<Scalar: Field, G: FftGroup<Scalar>>(
     inverse: bool,
 ) {
     let len = data_in.len();
-    if len == 0 {
+    // Avoid both an empty stage lookup and unnecessary scratch for the identity transform.
+    if len <= 1 {
         return;
     }
     let filler = data_in[0];
@@ -548,14 +550,10 @@ mod tests {
     fn scratch_pool_releases_one_element_type() {
         clear_scratch::<u16>();
         release_scratch(vec![1_u16; 8]);
-        assert!(
-            FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>()))
-        );
+        assert!(FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>())));
 
         clear_scratch::<u16>();
-        assert!(
-            !FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>()))
-        );
+        assert!(!FFT_SCRATCH_POOL.with(|pool| pool.borrow().contains_key(&TypeId::of::<u16>())));
     }
 
     #[test]
@@ -586,3 +584,7 @@ mod tests {
         clear_scratch::<Fp>();
     }
 }
+
+#[cfg(test)]
+#[path = "recursive_singleton_tests.rs"]
+mod singleton_tests;

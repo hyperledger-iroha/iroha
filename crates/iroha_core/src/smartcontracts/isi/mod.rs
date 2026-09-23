@@ -50,6 +50,8 @@ pub mod sorafs;
 pub mod sorafs_final_promotion_account_custody;
 /// Governed deployment custody and durable final-promotion signer-operation authority.
 pub mod sorafs_final_promotion_authority;
+/// Closed role-13 release-manifest instruction and distinct deployment permissions.
+pub mod sorafs_release_manifest_authority;
 /// Authoritative `SoraFS` moderation commit/reveal ledger handlers.
 pub mod sorafs_moderation;
 /// Authoritative `SoraFS` orderbook instruction handlers.
@@ -325,6 +327,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> => CoreAuthorized,
@@ -516,6 +519,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary>,
     dispatch_instruction::<iroha_data_model::isi::nexus::FundFeeSponsorProgram>,
     dispatch_instruction::<iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneCandidate>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
@@ -824,6 +828,7 @@ mod registry_dispatch_tests {
             BTreeSet::from([
                 core::any::type_name::<iroha_data_model::isi::sorafs::RegisterProviderOwner>(),
                 core::any::type_name::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>(),
+                core::any::type_name::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority>(),
             ]),
         );
     }

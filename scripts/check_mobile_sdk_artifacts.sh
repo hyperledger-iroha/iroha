@@ -596,10 +596,17 @@ check_android() {
   if [[ "$REQUIRE_ANDROID_OUTPUTS" != "1" ]]; then
     return 0
   fi
-  local jar
-  jar="$(find "$ROOT_DIR/kotlin/core-jvm/build/libs" -maxdepth 1 -type f -name 'core-jvm-*.jar' -print -quit 2>/dev/null || true)"
-  [[ -n "$jar" ]] || fail "core-jvm built jar is missing"
-  local aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+  local paths jar aar
+  local path_arguments=("$ROOT_DIR/scripts/mobile_sdk_android_artifacts.py" --root "$ROOT_DIR")
+  if [[ -n "${MOBILE_SDK_ANDROID_ARTIFACT_DIR+x}" ]]; then
+    path_arguments+=(--artifact-dir "$MOBILE_SDK_ANDROID_ARTIFACT_DIR")
+  fi
+  paths="$(run_isolated_checker_python "${path_arguments[@]}")" || {
+    fail "canonical Kotlin Android build artifacts are missing or invalid"
+    return
+  }
+  jar="${paths%%$'\n'*}"
+  aar="${paths#*$'\n'}"
   require_file "$aar" "client-android release AAR"
   [[ -f "$aar" ]] || return
   command -v unzip >/dev/null 2>&1 || { fail "unzip is required for Android artifact validation"; return; }

@@ -22,7 +22,7 @@ application = ["rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 consensus = ["rand", "bls"]
 # Complete portable shipping node surface.
 node-crypto = ["application", "consensus", "gost", "sm", "rayon"]
-json = ["norito/json", "mv"]
+json = ["norito/json"]
 bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
 # Implementation lives in `signature::gost` (Streebog hashing + TC26 curves).
@@ -62,7 +62,6 @@ norito = { workspace = true, default-features = false, features = ["base-codec"]
 hex = { workspace = true, features = ["alloc", "std"] }
 hex-literal = { workspace = true }
 getset = { workspace = true }
-mv = { path = "../mv", optional = true }
 thiserror = { version = "2.0.17" }
 displaydoc = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }

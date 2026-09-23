@@ -285,8 +285,11 @@ fn kura_config(root: &Path) -> KuraConfig {
         fsync_mode: FsyncMode::Always,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -1622,8 +1625,10 @@ fn native_amx_archive_finality(
     let height = block.header().height().get();
     assert_eq!(height, 1, "Native archive fixture uses one global block");
     let network_id = crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test");
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id, 100, &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -1636,8 +1641,8 @@ fn native_amx_archive_finality(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {

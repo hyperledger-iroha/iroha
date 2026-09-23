@@ -213,7 +213,7 @@ fn physical_validate_retry_preserves_original_owner_fixture(
                     parent_ordinal: ordinal,
                     child_ordinal: ordinal + 1,
                 },
-                Claim::AwaitingValidateSidecar,
+                Claim::AwaitingNativeSource,
                 Claim::AwaitingApplyCompletion,
                 Claim::ApplyTerminalSettled,
                 Claim::AwaitingReplayCompletion,
@@ -225,16 +225,13 @@ fn physical_validate_retry_preserves_original_owner_fixture(
             }
         };
         assert_completion_claim(&launched);
-        let (mut lane_work, _) =
-            crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
         let drive =
-            |launched: &mut ReadyLocalProposalSignLaunchedFixtureGuard,
-             lane_work: &mut crate::sumeragi::v2_lane_work::V2LaneWorkAdapter| {
+            |launched: &mut ReadyLocalProposalSignLaunchedFixtureGuard| {
                 let (selected, after) =
                     super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
                         fixture.verified.context(),
                         super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-                        |runner| match launched.drive_completion_pre_gate(runner, lane_work) {
+                        |runner| match launched.drive_completion_pre_gate(runner) {
                             super::super::ProductionLifecycleCompletionPreGateV1::Selected(
                                 selected,
                             ) => Ok(selected),
@@ -266,14 +263,14 @@ fn physical_validate_retry_preserves_original_owner_fixture(
                 }
                 selected
             };
-        assert!(matches!(drive(&mut launched, &mut lane_work),
+        assert!(matches!(drive(&mut launched),
             Ok(super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting)));
         let before = launched
             .planner
             .as_ref()
             .expect("original worker")
             .lifecycle_validate_io_snapshot();
-        assert!(matches!(drive(&mut launched, &mut lane_work),
+        assert!(matches!(drive(&mut launched),
             Ok(super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting)));
         assert_eq!(
             launched
@@ -295,7 +292,7 @@ fn physical_validate_retry_preserves_original_owner_fixture(
         );
         for remaining in (0..ordinary).rev() {
             assert!(
-                matches!(drive(&mut launched, &mut lane_work), Err(1)),
+                matches!(drive(&mut launched), Err(1)),
                 "a parked capacity wait must permit exactly the normal ordinary-head drain"
             );
             let snapshot = launched
@@ -314,7 +311,7 @@ fn physical_validate_retry_preserves_original_owner_fixture(
                 );
             });
         }
-        assert!(matches!(drive(&mut launched, &mut lane_work),
+        assert!(matches!(drive(&mut launched),
             Ok(super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting)),
             "draining ordinary completions is not release of the full command owner");
         assert!(wake_rx.try_recv().is_err());
@@ -330,7 +327,7 @@ fn physical_validate_retry_preserves_original_owner_fixture(
         wake_rx
             .try_recv()
             .expect("actual admission release wakes the original runner");
-        assert!(matches!(drive(&mut launched, &mut lane_work),
+        assert!(matches!(drive(&mut launched),
             Ok(super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued)));
         let snapshot = launched
             .planner
@@ -356,7 +353,7 @@ fn physical_validate_retry_preserves_original_owner_fixture(
             1,
             "physical refusal left both semantic marker caches empty"
         );
-        assert!(matches!(drive(&mut launched, &mut lane_work),
+        assert!(matches!(drive(&mut launched),
             Ok(super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal: published })
                 if published == ordinal));
         assert_eq!(

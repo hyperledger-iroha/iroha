@@ -580,10 +580,10 @@ mod tests {
                     .expect("fixture validator PoP")
             })
             .collect::<Vec<_>>();
-        let mint_finality_roster = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let mint_finality_roster = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
             version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
-            epoch: 0,
+            generation: 0,
             validators: roster.iter().enumerate().map(|(index, validator)| {
                 let seed = 0xA0_u8 + u8::try_from(index).expect("four-validator fixture index");
                 iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
@@ -591,16 +591,15 @@ mod tests {
                 ).expect("derive canonical paired-Pasta fixture keys")
             }).collect(),
         };
-        let mint_finality_epoch_id = mint_finality_roster
-            .finality_epoch_id()
+        let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_finality_roster, 10)
             .expect("derive exact fixture mint-finality epoch identifier");
         let context = HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_roster,
             epoch_end_height: 10,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -715,12 +714,12 @@ mod tests {
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height,
             epoch: parent_artifact.height_context.epoch,
-            kagemusha_mint_finality_epoch_id: parent_artifact
+            kagemusha_mint_finality_authorization: parent_artifact
                 .height_context
-                .kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: parent_artifact
+                .kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority: parent_artifact
                 .height_context
-                .kagemusha_mint_finality_epoch_roster
+                .kagemusha_mint_finality_authority
                 .clone(),
             epoch_end_height: parent_artifact.height_context.epoch_end_height,
             next_epoch_snapshot: None,

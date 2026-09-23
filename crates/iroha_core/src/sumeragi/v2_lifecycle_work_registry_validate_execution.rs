@@ -1,33 +1,41 @@
+use crate::sumeragi::v2_apply::validation_custody::{
+    CarrierValidator, RetainedBodyValidationService,
+};
+
 // DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DetachedDurableValidateExecution {
-    /// Execute the exact detached request through the scheduler-free body-store
-    /// validation boundary.
-    ///
-    /// The request is consumed once. A storage failure returns it intact for a
-    /// typed recovery decision; a successful storage call seals the request and
-    /// closed outcome together in one move-only token.
+    /// Execute with the original candidate owner retained in the exact open
+    /// store's service, including unfinished capture and durable marker retries.
     #[allow(clippy::result_large_err)]
-    fn execute<F, E>(
+    fn execute_retained<P: CarrierValidator>(
         self,
         body_store: &mut V2BodyStore,
-        validator: F,
+        service: &mut RetainedBodyValidationService<P>,
     ) -> Result<
         ExecutedDurableValidateExecution,
         (V2BodyStoreError, DetachedDurableValidateExecution),
-    >
-    where
-        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
-        E: BodyValidationError,
-    {
-        let outcome = match body_store.execute_durable_validation(
+    > {
+        let outcome = match body_store.execute_retained_durable_validation(
             self.durable_receipt.clone(),
             self.expected_manifest_hash,
-            validator,
+            service,
         ) {
             Ok(outcome) => outcome,
             Err(error) => return Err((error, self)),
         };
+        self.seal_outcome(outcome)
+    }
+
+    /// Seal only the closed outcome for this exact detached request.
+    #[allow(clippy::result_large_err)]
+    fn seal_outcome(
+        self,
+        outcome: DurableBodyValidationOutcome,
+    ) -> Result<
+        ExecutedDurableValidateExecution,
+        (V2BodyStoreError, DetachedDurableValidateExecution),
+    > {
         if outcome.durable_body() != &self.durable_receipt {
             return Err((V2BodyStoreError::ReceiptMismatch, self));
         }
@@ -79,6 +87,10 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
+    /// Original durable subject retained by this exact worker dispatch.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.request.subject
+    }
     /// Recheck the registry-attested immutable worker key before queue publication.
     pub(in crate::sumeragi) fn matches_dispatch_key(
         &self,
@@ -94,24 +106,22 @@ impl DurableValidateDispatch {
             && self.request.lifecycle_key.phase().is_validate()
             && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
     }
-    /// Execute the exact request after its claimed lifecycle row became an
-    /// external wait.
+    /// Execute through the existing retained validator without detaching its
+    /// candidate owner from the service. Errors return this same request and
+    /// wake authority; marker retries, cache hits and reproposals retain the
+    /// original Capturing/Validated phase in that service.
     ///
-    /// This is the sole externally visible execution path. A body-store error
-    /// reconstructs and returns the complete dispatch, including its exact
-    /// wake authority, so retry cannot mint a second request or wait token.
+    /// The caller must keep the exact store/service pair alive through selected
+    /// publication. A receipt alone cannot replace its missing carrier, and this
+    /// dispatch cannot create Apply authority or fall back to scalar execution.
     #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn execute<F, E>(
+    pub(in crate::sumeragi) fn execute_retained<P: CarrierValidator>(
         self,
         body_store: &mut V2BodyStore,
-        validator: F,
-    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)>
-    where
-        F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
-        E: BodyValidationError,
-    {
+        service: &mut RetainedBodyValidationService<P>,
+    ) -> Result<ExecutedDurableValidateDispatch, (V2BodyStoreError, Self)> {
         let Self { request, wake } = self;
-        match request.execute(body_store, validator) {
+        match request.execute_retained(body_store, service) {
             Ok(executed) => Ok(ExecutedDurableValidateDispatch { executed, wake }),
             Err((error, request)) => Err((error, Self { request, wake })),
         }
@@ -188,19 +198,9 @@ impl DurableValidateCompletionAuthority {
                 payload,
             )
     }
-    /// Whether this exact result must remain Waiting for merge-sidecar service.
-    pub(super) const fn is_deferred_merge_sidecar(self) -> bool {
-        matches!(
-            self.outcome_kind,
-            DurableValidateOutcomeKind::DeferredMergeSidecar
-        )
-    }
     /// Construct the only Ready event authorized by this executable outcome.
     pub(super) fn ready_event(self) -> Option<ReadyEvent> {
         let replacement_digest = self.replacement_digest?;
-        if self.is_deferred_merge_sidecar() {
-            return None;
-        }
         Some(ReadyEvent::new(
             self.address.ordinal,
             self.address.owner,
@@ -229,18 +229,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
     ) {
         (error, self.dispatch)
     }
-    /// Retain a missing merge-sidecar result without changing either live row.
-    ///
-    /// The lifecycle sidecar owner consumes this token only in its sealed
-    /// registration and same-row wake transaction; raw wait authority remains
-    /// inaccessible.
-    pub(super) fn defer_merge_sidecar(self) -> DeferredDurableValidateDispatch {
-        debug_assert!(self.authority.is_deferred_merge_sidecar());
-        debug_assert!(self.dispatch.outcome().missing_merge_sidecar().is_some());
-        DeferredDurableValidateDispatch {
-            dispatch: self.dispatch,
-        }
-    }
     /// Stage the exact executable outcome as a same-address closed carrier.
     ///
     /// Every CAS and outcome comparison precedes mutation. Once installed, the
@@ -263,8 +251,7 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
                 )),
             );
         };
-        if authority.is_deferred_merge_sidecar() || replacement_digest == authority.incumbent_digest
-        {
+        if replacement_digest == authority.incumbent_digest {
             return Err(
                 self.fail(DurableValidateCompletionPublicationError::Registry(
                     DurableValidateCompletionConversionError::InvalidOutcome,
@@ -328,9 +315,6 @@ impl<'a> PreparedExecutedDurableValidateCompletion<'a> {
             DurableValidateOutcomeKind::Rejected => {
                 PublishedDurableValidateCompletion::Rejected(PublishedRejected { location })
             }
-            DurableValidateOutcomeKind::DeferredMergeSidecar => unreachable!(
-                "deferred Validate outcome was rejected before same-address conversion"
-            ),
         };
         let PreparedExecutedDurableValidateCompletion {
             registry,
@@ -478,48 +462,6 @@ impl StagedDurableValidateCompletion<'_> {
         } = self;
         rollback.armed = false;
         publication
-    }
-}
-#[cfg_attr(not(test), allow(dead_code))]
-impl DeferredDurableValidateDispatch {
-    /// Recheck the immutable worker key without exposing the retained request.
-    pub(in crate::sumeragi) fn matches_dispatch_key(
-        &self,
-        key: super::LifecycleValidateDispatchKeyV1,
-    ) -> bool {
-        self.dispatch.matches_dispatch_key(key)
-    }
-
-    /// Project the sole durable sidecar-registration identity from the sealed
-    /// request, missing-sidecar outcome, and exact Waiting generation.
-    pub(in crate::sumeragi) fn sidecar_registration_identity(
-        &self,
-        key: super::LifecycleValidateDispatchKeyV1,
-    ) -> Option<super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1> {
-        self.matches_dispatch_key(key).then(|| {
-            let request = &self.dispatch.executed.request;
-            super::validate_sidecar::LifecycleValidateSidecarRegistrationIdentityV1::from_sealed_dispatch(
-                key,
-                request.lifecycle_key,
-                request.lifecycle_stage,
-                request.round,
-                request.subject,
-                self.dispatch.wake.wait_token,
-                self.missing_reference().clone(),
-            )
-        })?
-    }
-
-    /// Borrow the exact missing sidecar reference without exposing wake parts.
-    pub(in crate::sumeragi) fn missing_reference(&self) -> &CertifiedMergeLedgerReference {
-        self.dispatch
-            .outcome()
-            .missing_merge_sidecar()
-            .expect("deferred Validate token retains one exact merge-sidecar reference")
-    }
-    #[cfg(test)]
-    const fn dispatch_for_test(&self) -> &ExecutedDurableValidateDispatch {
-        &self.dispatch
     }
 }
 #[cfg(test)]
@@ -1030,7 +972,6 @@ fn durable_validate_outcome_kind(
     ) {
         (true, false, false, false) => Some(DurableValidateOutcomeKind::Validated),
         (false, true, true, false) => Some(DurableValidateOutcomeKind::Rejected),
-        (false, false, false, true) => Some(DurableValidateOutcomeKind::DeferredMergeSidecar),
         _ => None,
     }
 }
@@ -1057,7 +998,6 @@ fn durable_validate_completion_digest(
                 identity,
             ))
         }
-        DurableValidateOutcomeKind::DeferredMergeSidecar => None,
     }
 }
 fn durable_validation_wait_source_for_request(

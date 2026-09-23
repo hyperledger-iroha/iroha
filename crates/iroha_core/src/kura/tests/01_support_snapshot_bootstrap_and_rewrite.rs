@@ -828,8 +828,8 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         height,
         "fixture finality artifacts must form a contiguous chain"
     );
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, epoch, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, epoch, epoch_end_height, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -842,8 +842,8 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout,
@@ -901,7 +901,7 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate Kura finality fixture votes");
-    let epoch = &context.kagemusha_mint_finality_epoch_roster;
+    let epoch = &context.kagemusha_mint_finality_authority;
     commit_qc.aggregate_signature = if let Some(message) =
         build_kagemusha_mint_finality_seal_message_v1(epoch, &context, &unsigned_vote)
             .expect("derive exact Kura fixture mint-finality message")
@@ -910,13 +910,13 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
             .signers
             .iter()
             .map(|index| {
-                // Match the deterministic keys admitted by mint_finality_roster_and_id.
+                // Match the deterministic generation keys admitted by the complete authorization fixture.
                 let seed_byte = 0xA0_u8
                     .wrapping_add(u8::try_from(*index).expect("fixture signer fits one byte"));
                 let signer = KagemushaMintFinalitySignerV1::from_seed(
                     zeroize::Zeroizing::new([seed_byte; 32]),
                     *index,
-                    epoch,
+                    &context.kagemusha_mint_finality_authority,
                 )
                 .expect("admit deterministic Kura fixture mint-finality signer");
                 sign_kagemusha_mint_finality_seal_v1(&signer, &message)
@@ -1794,7 +1794,9 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
     );
     assert_eq!(
         kura.configured_lane_catalog_baseline().unwrap(),
-        Some(LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default())),
+        Some(LaneLifecycleParameterV1::catalog_hash(
+            &LaneCatalog::default()
+        )),
     );
     assert!(
         kura.lane_storage_entry(LaneId::SINGLE).is_err(),
@@ -4111,4 +4113,249 @@ fn certified_serve_payload_directory_authority_is_kura_context_and_inode_bound()
         fs::read(&sentinel_path).expect("read replacement sentinel"),
         b"replacement"
     );
+}
+
+/// Exact signed finality and original witness for one joint-lease publication.
+struct LeaseWitnessFixture {
+    kura: Arc<Kura>,
+    artifact: V2FinalityArtifact,
+    receipt: KuraV2CommitReceipt,
+    witness: ExecWitness,
+}
+
+fn lease_witness_fixture() -> LeaseWitnessFixture {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    let (witness, mut commitment) = kagemusha_finality_witness(1, 1);
+    commitment.executed_block_wire_len =
+        u64::try_from(block.encode_wire().expect("canonical fixture wire").len()).unwrap();
+    commitment.executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .expect("canonical fixture wire hash");
+    let artifact = v2_finality_artifact_for_block_with_execution(&block, commitment);
+    kura.store_block(block)
+        .expect("persist exact original block");
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("persist actual signed finality");
+    LeaseWitnessFixture {
+        kura,
+        artifact,
+        receipt,
+        witness,
+    }
+}
+
+#[test]
+fn lease_execution_witness_keeps_all_original_fences_until_reader_release() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        task::{Context, Wake, Waker},
+    };
+
+    struct ReleaseCount(AtomicUsize);
+    impl Wake for ReleaseCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let fixture = lease_witness_fixture();
+    let lease = fixture
+        .kura
+        .try_publication_lease()
+        .expect("original joint lease");
+    let released = Arc::new(ReleaseCount(AtomicUsize::new(0)));
+    let wake = Waker::from(Arc::clone(&released));
+    let mut waits = [
+        &fixture.kura.prune_lock,
+        &fixture.kura.canonical_chain_lock,
+        &fixture.kura.lane_geometry_lock,
+        &fixture.kura.sidecar_lock,
+    ]
+    .map(|lock| {
+        let mut wait = lock
+            .try_lock_or_wait()
+            .err()
+            .expect("lease holds every original physical fence")
+            .wait_for_release();
+        assert!(
+            Pin::new(&mut wait)
+                .poll(&mut Context::from_waker(&wake))
+                .is_pending()
+        );
+        wait
+    });
+    let reader_kura = Arc::clone(&fixture.kura);
+    let (observed_tx, observed_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        let reader = scope.spawn(move || {
+            assert!(reader_kura.prune_lock.try_lock_or_wait().is_err());
+            observed_tx.send(()).unwrap();
+            let tip = reader_kura
+                .exact_kura_replica_advert_tip()
+                .expect("competing reader observes exact durable tip");
+            finished_tx.send(tip).unwrap();
+        });
+        observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        lease
+            .publish_execution_witness(&fixture.artifact, &fixture.receipt, &fixture.witness, &[])
+            .expect("same joint lease stages and promotes despite a competing reader");
+        lease
+            .reauthenticate_execution_witness(&fixture.artifact)
+            .expect("final witness remains under the original lease");
+        assert!(!fixture.kura.kagemusha_finality_staging_path(1).exists());
+        assert!(fixture.kura.kagemusha_finality_sidecar_path(1).exists());
+        assert_eq!(
+            released.0.load(Ordering::SeqCst),
+            0,
+            "no intermediate release"
+        );
+        assert!(matches!(
+            finished_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        for wait in &mut waits {
+            assert!(
+                Pin::new(wait)
+                    .poll(&mut Context::from_waker(&wake))
+                    .is_pending()
+            );
+        }
+        drop(lease);
+        assert_eq!(
+            finished_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Some((fixture.artifact.height, fixture.artifact.block_hash))
+        );
+        reader.join().unwrap();
+    });
+    for wait in &mut waits {
+        assert!(
+            Pin::new(wait)
+                .poll(&mut Context::from_waker(&wake))
+                .is_ready()
+        );
+    }
+    assert_eq!(released.0.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn lease_execution_witness_rejects_foreign_receipt_and_proof_before_staging() {
+    let fixture = lease_witness_fixture();
+    let lease = fixture.kura.try_publication_lease().unwrap();
+    let mut foreign_receipts = vec![fixture.receipt.clone(); 6];
+    foreign_receipts[0].height += 1;
+    foreign_receipts[1].block_hash = HashOf::from_untyped_unchecked(Hash::new(b"foreign block"));
+    foreign_receipts[2].context_id = iroha_data_model::block::consensus_v2::HeightContextId(
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign context")),
+    );
+    foreign_receipts[3].subject.payload_hash = Hash::new(b"foreign proposal wire");
+    foreign_receipts[4].certificate.subject.payload_hash = Hash::new(b"foreign certified wire");
+    foreign_receipts[5].artifact_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign artifact"));
+    for receipt in foreign_receipts {
+        assert!(
+            lease
+                .publish_execution_witness(&fixture.artifact, &receipt, &fixture.witness, &[])
+                .is_err()
+        );
+        assert!(!fixture.kura.kagemusha_finality_staging_path(1).exists());
+        assert!(!fixture.kura.kagemusha_finality_sidecar_path(1).exists());
+    }
+    let (foreign_witness, _) = kagemusha_finality_witness(2, 2);
+    assert!(
+        lease
+            .publish_execution_witness(&fixture.artifact, &fixture.receipt, &foreign_witness, &[])
+            .is_err()
+    );
+    assert!(!fixture.kura.kagemusha_finality_staging_path(1).exists());
+    assert!(!fixture.kura.kagemusha_finality_sidecar_path(1).exists());
+    lease
+        .publish_execution_witness(&fixture.artifact, &fixture.receipt, &fixture.witness, &[])
+        .expect("refused substitutions preserve the actual publication opportunity");
+}
+
+#[test]
+fn lease_execution_witness_reauthenticates_durable_artifact_before_staging() {
+    let fixture = lease_witness_fixture();
+    let mut substituted = fixture.artifact.clone();
+    substituted.commit_qc.aggregate_signature[0] ^= 1;
+    // Match all caller-supplied coordinates: only the actual durable artifact
+    // and cryptographic reader can reject this substitution.
+    let substituted_receipt = v2_commit_receipt(&substituted);
+    let lease = fixture.kura.try_publication_lease().unwrap();
+    assert!(
+        lease
+            .publish_execution_witness(&substituted, &substituted_receipt, &fixture.witness, &[])
+            .is_err()
+    );
+    assert!(!fixture.kura.kagemusha_finality_staging_path(1).exists());
+    assert!(!fixture.kura.kagemusha_finality_sidecar_path(1).exists());
+}
+
+#[test]
+fn lease_execution_witness_exact_retry_preserves_final_bytes_and_disk_accounting() {
+    let fixture = lease_witness_fixture();
+    let initial_disk = fixture.kura.kura_total_disk_usage_bytes().unwrap();
+    let lease = fixture.kura.try_publication_lease().unwrap();
+    lease
+        .publish_execution_witness(&fixture.artifact, &fixture.receipt, &fixture.witness, &[])
+        .unwrap();
+    let path = fixture.kura.kagemusha_finality_sidecar_path(1);
+    let bytes = fs::read(&path).unwrap();
+    let final_disk = fixture.kura.kura_total_disk_usage_bytes().unwrap();
+    assert_eq!(
+        final_disk,
+        initial_disk + u64::try_from(bytes.len()).unwrap()
+    );
+    lease
+        .publish_execution_witness(&fixture.artifact, &fixture.receipt, &fixture.witness, &[])
+        .expect("exact retained retry remains idempotent");
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert!(!fixture.kura.kagemusha_finality_staging_path(1).exists());
+    assert_eq!(
+        fixture.kura.kura_total_disk_usage_bytes().unwrap(),
+        final_disk
+    );
+    drop(lease);
+    assert_eq!(
+        fixture.kura.refresh_total_disk_usage_bytes().unwrap(),
+        final_disk
+    );
+}
+
+#[test]
+fn lease_execution_witness_preserves_corrupt_stage_and_occupied_final_evidence() {
+    for corrupt_stage in [true, false] {
+        let fixture = lease_witness_fixture();
+        let path = if corrupt_stage {
+            fixture.kura.kagemusha_finality_staging_path(1)
+        } else {
+            fixture.kura.kagemusha_finality_sidecar_path(1)
+        };
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = b"occupied corrupt witness evidence";
+        fs::write(&path, bytes).unwrap();
+        let lease = fixture.kura.try_publication_lease().unwrap();
+        assert!(
+            lease
+                .publish_execution_witness(
+                    &fixture.artifact,
+                    &fixture.receipt,
+                    &fixture.witness,
+                    &[]
+                )
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        if corrupt_stage {
+            assert!(!fixture.kura.kagemusha_finality_sidecar_path(1).exists());
+        }
+    }
 }

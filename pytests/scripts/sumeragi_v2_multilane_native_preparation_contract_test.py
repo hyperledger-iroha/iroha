@@ -51,7 +51,7 @@ def test_native_preparation_accepts_actual_owners(fixture):
 @pytest.mark.parametrize("owner,anchor,old,new", [
     ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(Box<super::StagedCarrierCapture<Admission>>)", "Capturing(super::StagedCarrierCapture<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Validated(PreparedCarrierJournals<Admission>)", "Validated(Box<PreparedCarrierJournals<Admission>>)"),
-    ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)", "Decided(PreparedCarrierJournals<Admission>)"),
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission>)", "Decided(PreparedCarrierJournals<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "crate::kura::KuraWsvCheckpointReceipt", "()"),
     ("VALIDATION_CUSTODY", "struct Candidate", "owner: Option<O>,", "owner: Option<O>, commitment: wire::ExecutionCommitment,"),
     ("VALIDATION_CUSTODY", "struct RetainedBodyValidationService", "limit: usize,", "limit: usize, decided: Vec<P::Owner>,"),
@@ -253,7 +253,7 @@ def test_retained_service_keeps_original_producer_until_payload_and_descriptor_r
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 
-@pytest.mark.parametrize("mutation", ["missing", "wrong-state", "wrong-header", "lost-refund", "after-witness"])
+@pytest.mark.parametrize("mutation", ["missing", "wrong-state", "wrong-header", "lost-original", "after-witness"])
 def test_retained_carrier_rejects_late_or_substituted_physical_target(fixture, mutation):
     root, helper, checker, _ = fixture
     path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
@@ -263,7 +263,6 @@ def test_retained_carrier_rejects_late_or_substituted_physical_target(fixture, m
             .geometry
             .matches_publication_target(target, original.block().header())
         {
-            drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
         }
 """
@@ -277,11 +276,11 @@ def test_retained_carrier_rejects_late_or_substituted_physical_target(fixture, m
     elif mutation == "wrong-header":
         helper.replace_once_after(path, anchor, ".matches_publication_target(target, original.block().header())",
                                   ".matches_publication_target(target, other.block().header())")
-    elif mutation == "lost-refund":
-        path.write_text(source.replace(guard, guard.replace("drop(installation);", "std::mem::forget(installation);"), 1))
+    elif mutation == "lost-original":
+        path.write_text(source.replace(guard, guard.replace("return Err((original,", "return Err((other,"), 1))
     else:
         source = source.replace(guard, "", 1)
-        start = source.index("        if let Err(error) = original.publish_archives()", source.index(anchor))
+        start = source.index("        if let Err(error) = self.decision.publish_archives(&self.kura)", source.index(anchor))
         path.write_text(source[:start] + guard + source[start:])
     errors = validate(fixture)
     assert any("executable relation" in e for e in errors), errors
@@ -397,7 +396,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("BLOCK", "validate_and_prepare_sumeragi_v2_candidate_keep_voting_block", "context.id() == validation_context.context_id", "context.id() != validation_context.context_id"),
     ("BLOCK", "validate_and_prepare_sumeragi_v2_candidate_keep_voting_block", "context.roster.iter().map(|entry| &entry.validator)", "other.roster.iter().map(|entry| &entry.validator)"),
     ("PREPARED", "prepare", "execution_prefix::prepare(input)", "execution_prefix::prepare(other_input)"),
-    ("PREFIX", "capture", "state.verify_execution_output_seal(block)?;", "// state.verify_execution_output_seal(block)?;"),
+    ("PREFIX", "capture", "state\n            .verify_execution_output_seal(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;", "/* state\n            .verify_execution_output_seal(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?; */"),
     ("PREFIX", "capture", "state.staged_merge_entry.is_some()", "state.staged_merge_entry.is_none()"),
     ("PREFIX", "capture", "native.retains_state(&state)", "true"),
     ("PREFIX", "capture", "context.native_lane_decisions.is_some()", "context.native_lane_decisions.is_none()"),
@@ -411,7 +410,7 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("PREFIX", "prepare", "PrefixPreparation::capture(state, &valid, native)?", "PrefixPreparation::capture(other_state, &valid, native)?"),
     ("PREFIX", "prepare", "Err(error) => Err((Box::new(valid.into()), error))", "Err(error) => retain_partial(error)"),
     ("PREFIX", "prepare_world_effects", "!self.prefix.retains_closed_state(state)", "false"),
-    ("PREFIX", "prepare_world_effects", "state.verify_lane_consensus_contexts_publication()?;", "// state.verify_lane_consensus_contexts_publication()?;"),
+    ("PREFIX", "prepare_world_effects", "state\n            .verify_lane_consensus_contexts_publication()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;", "/* state\n            .verify_lane_consensus_contexts_publication()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?; */"),
     ("JOURNALS", "prepare_journals", "prefix: source_prefix,", "prefix: &other_prefix,"),
     ("JOURNALS", "prepare_journals", "carrier: self,", "carrier: other_carrier,"),
     ("JOURNALS", "prepare_journals", "provider: provider_capture,", "provider: None,"),
@@ -441,6 +440,8 @@ def test_native_preparation_rejects_each_owner_ledger_mutation(fixture, mutation
     ("CAPACITY", "admit_native_amx_publication_capacity_plan", "old.component_bytes != new.component_bytes", "old.component_bytes == new.component_bytes"),
     ("CAPACITY", "admit_native_amx_publication_capacity_plan", "new.prune_journal_bytes > old.prune_journal_bytes", "new.prune_journal_bytes < old.prune_journal_bytes"),
     ("CAPACITY", "lane_publication_budget_reserved_bytes", "merge.checked_add(native)", "merge.checked_add(0)"),
+    ("MEMBERSHIP_STORAGE", "all_publication_budget_reserved_bytes", ".checked_add(self.membership_storage.pending_bytes())", ".checked_add(0)"),
+    ("MEMBERSHIP_STORAGE", "all_publication_budget_reserved_bytes", "self.lane_publication_budget_reserved_bytes()?", "0_u64"),
     ("ORDINARY", "lane_artifact_required_bytes_for_block", "Ok(total)", "Ok(total.saturating_add(self.native_amx_publication_capacity_reserved_bytes()?))"),
     ("KURA", "check_storage_budget", ".saturating_add(lane_publication_reservations)", ".saturating_add(0)"),
 ])
@@ -478,7 +479,7 @@ def test_native_preparation_rejects_component_or_index_charge_loss(fixture, owne
 
 
 @pytest.mark.parametrize("old,new", [
-    ("self.lane_publication_budget_reserved_bytes()?", "self.post_wsv_lane_artifact_budget_reserved_bytes()?"),
+    ("self.all_publication_budget_reserved_bytes()?", "self.post_wsv_lane_artifact_budget_reserved_bytes()?"),
     ("self.certified_bundle_capacity_reserved_bytes()?", "0"),
     (".checked_add(pending_canonical_bytes)", ".checked_add(0)"),
     ("bytes.checked_add(additional_unreserved_stable_bytes)", "bytes.checked_add(0)"),
@@ -611,14 +612,14 @@ def test_native_control_recording_refuses_capture_before_final_contexts(fixture)
     ("NATIVE_STAGE", "retains_carrier", "self.context.context() == context", "true"),
     ("NATIVE_STAGE", "retains_carrier", "self.seal.completed_write_set_root.is_some()", "true"),
     ("NATIVE_STAGE", "retains_carrier", "source.decisions() == wire.decisions", "true"),
-    ("ARCHIVE_CARRIER", "publish_archives", "drop(lease);", "// drop(lease);"),
+    ("ARCHIVE_CARRIER", "publish_archives", "lease: &KuraPublicationLease<'_>", "lease: &ForeignPublicationLease<'_>"),
     ("ARCHIVE_CARRIER", "publish_archives", "self.finality.artifact()", "other.finality.artifact()"),
     ("ARCHIVE_CARRIER", "publish_archives", "self.checkpoint.finality_receipt()", "other.checkpoint.finality_receipt()"),
-    ("ARCHIVE_CARRIER", "publish_archives", ".publish_under_publication_lease(&lease, receipt)", ".publish_under_publication_lease(&lease, other_receipt)"),
-    ("ARCHIVE_CARRIER", "publish_archives", ".publish_under_publication_lease(&lease, receipt)", ".publish(receipt)"),
+    ("ARCHIVE_CARRIER", "publish_archives", ".publish_under_publication_lease(lease, receipt)", ".publish_under_publication_lease(lease, other_receipt)"),
+    ("ARCHIVE_CARRIER", "publish_archives", ".publish_under_publication_lease(lease, receipt)", ".publish(receipt)"),
     ("ARCHIVE_CARRIER", "publish_archives", "let receipt = self.checkpoint.finality_receipt();", "drop(lease); let receipt = self.checkpoint.finality_receipt();"),
-    ("PHYSICAL_CARRIER", "try_prepare_physical", "original.publish_archives()", "Ok::<_, CarrierArchivePublicationError>(())"),
-    ("PHYSICAL_CARRIER", "try_prepare_physical", "admit(&original, target)", "admit(&other, target)"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "self.decision.publish_archives(&self.kura)", "Ok::<_, CarrierArchivePublicationError>(())"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "SourceAuthenticatedCarrier::try_new(original, kura)", "SourceAuthenticatedCarrier::try_new(other, kura)"),
     ("GEOMETRY_CARRIER", "is_identity_transition", "self._pending.is_none()", "true"),
     ("GEOMETRY_CARRIER", "is_identity_transition", "self._previous_runtime_catalog == self._accepted_runtime_catalog", "true"),
     ("TERMINAL_CARRIER", "publish", "journals.effects.replay_prevalidation", "false"),
@@ -713,13 +714,13 @@ def test_terminal_carrier_rejects_post_write_retry_and_repeated_visibility(fixtu
 
 
 @pytest.mark.parametrize("owner,symbol,old,new", [
-    ("WITNESS_CARRIER", "publish_execution_witness", "drop(lease);", "// drop(lease);"),
+    ("WITNESS_CARRIER", "publish_execution_witness", "lease: &KuraPublicationLease<'_>", "lease: &ForeignPublicationLease<'_>"),
     ("WITNESS_CARRIER", "publish_execution_witness", "self.journals.source_prefix.witness()", "other.source_prefix.witness()"),
-    ("WITNESS_CARRIER", "publish_execution_witness", "self.journals.execution_prefix", "other.execution_prefix"),
+    ("WITNESS_LEASE", "publish_execution_witness", "finality.commit_qc.execution_commitment", "other.execution_prefix"),
     ("WITNESS_CARRIER", "publish_execution_witness", "self.checkpoint.finality_receipt()", "other.checkpoint.finality_receipt()"),
     ("WITNESS_LEASE", "reauthenticate_execution_witness", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;", "// Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)?;"),
     ("WITNESS_LEASE", "reauthenticate_execution_witness", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "true"),
-    ("PHYSICAL_CARRIER", "try_prepare_physical", "original.publish_execution_witness()", "Ok::<_, CarrierExecutionWitnessPublicationError>(())"),
+    ("PHYSICAL_CARRIER", "try_prepare_physical", "self.decision.publish_execution_witness(&self.kura)", "Ok::<_, CarrierExecutionWitnessPublicationError>(())"),
     ("PHYSICAL_CARRIER", "try_prepare_physical", ".reauthenticate_execution_witness(authenticated.decision.finality.artifact())", ".unchecked_execution_witness(authenticated.decision.finality.artifact())"),
 ])
 def test_terminal_carrier_requires_its_actual_durable_execution_witness(fixture, owner, symbol, old, new):
@@ -1594,8 +1595,8 @@ def test_ebr_fresh_pair_acquisition_requires_original_joint_custody(fixture, sym
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'block.failed = true;', 'block.failed = false;', id='map-reset-and-replay-arm-logical-failure'),
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::initialize', 'revert.clear();\n        block.failed = false;', 'block.failed = false;\n        revert.clear();', id='map-clear-finishes-before-disarming'),
     pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::release', '*self = Self::Retired(retirement);', 'drop(retirement);', id='map-retains-cursor-after-physical-release'),
-    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-map-cannot-transfer'),
-    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'crate::BlockAcquisition::release(self);', 'let _ = self;', id='default-map-slot-drop-releases-before-fields'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'inherent BlockAcquisitionSlot::into_block', 'self.complete,', 'true,', id='partial-map-cannot-transfer'),
+    pytest.param('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', 'self.release();', 'let _ = self;', id='default-map-slot-drop-releases-before-fields'),
     pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::release', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());', 'let (blocks, blocks_release) = blocks.release_deferred(|writer| writer.abort_retaining());\n        drop(blocks);\n        let blocks = panic!("premature original current destruction");', id='map-retirement-retains-current-through-undo-unlock'),
     pytest.param('crates/mv/src/storage.rs', 'method', 'StorageWriters::drop', 'self.release();', 'let _ = self;', id='default-map-pair-drop-shares-retirement'),
     pytest.param('crates/mv/src/storage.rs', 'enum', 'StorageWriterState', '        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,\n        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,', '        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,\n        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,', id='map-cleanup-before-original-notifications'),
@@ -2024,7 +2025,7 @@ def test_group_preparation_requires_concrete_original_inventory(fixture, path, o
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'admit(self.original(), self.target)', 'admit(other, self.target)', id='world-original-admission'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.installation = Some(installation);', 'drop(installation);', id='world-installation-retained'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'self.phase = Some(Phase::Fields(', 'let _callee = Some(Phase::Fields(', id='world-phase-installed-before-fields'),
-    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.fields.push(original.publication_slot(self.target));', 'let mut field = original.publication_slot(self.target); field.try_prepare().unwrap(); fields.fields.push(field);', id='world-all-inert-slots-before-callee'),
+    pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields\n                .fields\n                .push(original.publication_slot(self.target, self.scope));', 'let mut field = original.publication_slot(self.target, self.scope); field.try_prepare().unwrap(); fields.fields.push(field);', id='world-all-inert-slots-before-callee'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'fields.retry.reverse();', '// reverse omitted', id='world-exact-original-field-order'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', 'return Err(WorldPublicationError::Field(error));', 'let _ignored = error;', id='world-component-refusal-propagates'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', 'self.retryable && !self.released', 'true', id='world-recovery-no-unwound-authority'),
@@ -2034,11 +2035,11 @@ def test_group_preparation_requires_concrete_original_inventory(fixture, path, o
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_prepared', 'self.complete && !self.released', 'true', id='world-rejects-partial-publication'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_cleanup', 'fields.admission.is_none()', 'true', id='world-recovery-before-cleanup'),
     pytest.param('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::drop', 'self.release_writers();', '// physical release lost', id='world-drop-original-slots'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='storage-same-original-prepared-field'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'slot.release_writers();', 'drop(slot);', id='storage-partial-field-physical-pass'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', 'self.phase = FieldPhase::Prepared(M::into_prepared(slot));', 'self.phase = FieldPhase::Prepared(M::into_prepared(other));', id='storage-same-original-prepared-field'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'M::release_writers(slot);', 'drop(slot);', id='storage-partial-field-physical-pass'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='storage-prepared-field-retains-abort-cleanup'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'slot.recover_original()', '{ slot.release_writers(); slot.recover_original() }', id='storage-normal-recovery-before-terminal-release'),
-    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', 'self.published = Some(journal.publish());', 'drop(journal.publish());', id='storage-published-original-retirement-retained'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', 'M::recover_original(slot)', '{ M::release_writers(slot); M::recover_original(slot) }', id='storage-normal-recovery-before-terminal-release'),
+    pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', 'self.published = Some(M::publish(journal));', 'drop(M::publish(journal));', id='storage-published-original-retirement-retained'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::try_prepare', 'self.phase = FieldPhase::Prepared(slot.into_prepared());', 'self.phase = FieldPhase::Prepared(other.into_prepared());', id='cell-same-original-prepared-field'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'slot.release_writers();', 'drop(slot);', id='cell-partial-field-physical-pass'),
     pytest.param('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', 'self.aborted = Some(retirement);', 'drop(retirement);', id='cell-prepared-field-retains-abort-cleanup'),
@@ -2423,3 +2424,177 @@ def test_committed_drain_metadata_release_custody(fixture, path, kind, symbol, o
     errors = validate(fixture)
     assert any(f"Native preparation {symbol} missing executable relation " in error for error in errors), errors
     assert all(error.startswith("Native preparation ") and (" missing executable relation " in error or " missing or reorders executable relation " in error) for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    pytest.param("WorldStorageMode<K, V> for Prepaid::publication_slot",
+                 "Some(scope) => original.try_publication_slot(scope, target)",
+                 "Some(scope) => original.try_publication_slot(scope, other)",
+                 id="prepaid-original-target"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::publication_slot",
+                 "PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity)",
+                 "PublicationPreparationError::Changed", id="missing-scope-is-admission-refusal"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::release_writers",
+                 "slot.release_writers();", "let _ = slot;", id="prepaid-original-writer-release"),
+    pytest.param("WorldStorageMode<K, V> for Prepaid::recover_original",
+                 'journal.take().expect("original refused field")',
+                 'panic!("discarded original journal")', id="refusal-retains-original-journal"),
+    pytest.param("WorldStorageMode<K, V> for Untracked::abort",
+                 "prepared.abort()", "other.abort()", id="untracked-original-abort"),
+])
+def test_world_storage_mode_delegates_exact_original_owners(fixture, symbol, old, new):
+    root, _, checker, _ = fixture
+    target = root / "crates/iroha_core/src/state/world_storage_mode.rs"
+    source = target.read_text()
+    (item,) = checker._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1
+    owners = [owner for owner in checker._rust_impl_items(source, symbol.rsplit("::", 1)[0])
+              if item in owner]
+    assert len(owners) == 1
+    owner = owners[0]
+    assert source.count(owner) == 1
+    target.write_text(source.replace(owner, owner.replace(item, item.replace(old, new), 1), 1))
+    errors = validate(fixture)
+    assert any(f"{symbol} missing executable relation" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("BLOCK", "let (block, state, native)", "MergeLedgerCommitError::ExecutionBatchInvalid(reason)", "MergeLedgerCommitError::Storage(reason)"),
+    ("PREFIX", "fn capture", ".verify_execution_output_seal(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".verify_execution_output_seal(block).unwrap_or_default()"),
+    ("PREFIX", "fn capture", ".verified_fastpq_source_inventory_for_capture()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".verified_fastpq_source_inventory_for_capture().unwrap_or_default()"),
+    ("PREFIX", "fn capture", ".verify_cached_ordinary_witness_content(&verified_inventory)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".verify_cached_ordinary_witness_content(&verified_inventory).ok()"),
+    ("PREFIX", "let manifest =", ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".map_err(MergeLedgerCommitError::Storage)?"),
+    ("PREFIX", "let lanes =", ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".map_err(MergeLedgerCommitError::Storage)?"),
+    ("PREFIX", "let commitment =", "MergeLedgerCommitError::ExecutionBatchInvalid(error.to_owned())", "MergeLedgerCommitError::Storage(error.to_owned())"),
+    ("PREFIX", "let inventory = state", ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".unwrap_or_default()"),
+    ("PREFIX", "fn prepare_world_effects", "state.validate_merge_carrier_entrypoint_binding()?;", "state.validate_merge_carrier_entrypoint_binding().map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;"),
+    ("PREFIX", "fn prepare_world_effects", ".validate_canonical_runtime_projection()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".validate_canonical_runtime_projection().ok()"),
+    ("PREFIX", "fn prepare_world_effects", ".verify_lane_consensus_contexts_publication()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?", ".verify_lane_consensus_contexts_publication().ok()"),
+    ("PREFIX", "fn prepare_world_effects", ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)\n    }", ".map_err(MergeLedgerCommitError::Storage)\n    }"),
+    ("PREFIX", "pub(super) fn prepare", "if !preparation.state.autoscale_lifecycle_evaluated", "if false"),
+    ("PREFIX", "pub(super) fn prepare", "ApplyTopologyAuthority::V2Finality,\n        )?;", "ApplyTopologyAuthority::V2Finality,\n        ).map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;"),
+    ("PREFIX", "pub(super) fn prepare", ".prepare_carrier_publication_events(block.header())?", ".prepare_carrier_publication_events(block.header()).map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?"),
+    ("NATIVE_VALIDATION", "struct NativeValidationCandidate", "phase: Box<Option<NativeValidationPhase>>", "phase: Option<NativeValidationPhase>"),
+    ("NATIVE_VALIDATION", "enum NativeValidationPhase", "carrier: RetainedCarrier<CarrierShellAdmission>", "carrier: wire::ExecutionCommitment"),
+    ("NATIVE_VALIDATION", "struct AwaitingNativeSource", "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>", "recovered: Vec<usize>"),
+    ("NATIVE_VALIDATION", "fn matches_candidate", "source.context.context() == context && source.proposal == *body", "source.context.context() == context"),
+    ("NATIVE_VALIDATION", "fn matches_candidate", "*context_id == context.id()", "true"),
+    ("NATIVE_VALIDATION", "fn matches_candidate", "carrier.matches_validation_candidate(context, body)", "true"),
+    ("NATIVE_VALIDATION", "fn matches_candidate", "carrier.artifact().height_context == *context", "true"),
+    ("NATIVE_VALIDATION", "fn ready_commitment", "evidence_ready.then(|| carrier.ready_commitment()).flatten()", "carrier.ready_commitment()"),
+    ("NATIVE_VALIDATION", "fn ready_commitment", "Some(carrier.artifact().commit_qc.execution_commitment)", "Some(Default::default())"),
+    ("NATIVE_VALIDATION", "fn try_publish", "&validator.service,", "&other_service,"),
+    ("NATIVE_VALIDATION", "fn try_publish", "&validator.service.state,", "&other_state,"),
+    ("NATIVE_VALIDATION", "fn try_publish", "return Err((self, refusal));", "return Err((replacement, refusal));"),
+    ("SERVICE_QUEUE", "fn from_service", "state: &service.state", "state: other_state"),
+    ("SERVICE_QUEUE", "fn from_service", "queue: &service.queue", "queue: other_queue"),
+    ("SERVICE_QUEUE", "impl<'service> OriginalCarrierQueue", "#[cfg(test)]", ""),
+    ("APPLY", "impl V2ApplyService {\n    /// Borrow this service", "#[cfg(test)]", ""),
+    ("RUNNER_HISTORY", "fn schedule_local_proposal", "native.retain_candidate_source(source);", "drop(source);"),
+    ("RUNNER_HISTORY", "fn schedule_local_proposal", "native.retain_candidate_source(source);", "let assembly = outcome?; native.retain_candidate_source(source);"),
+])
+def test_native_preparation_requires_typed_errors_and_current_original_owners(fixture, owner, anchor, old, new):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+def test_native_preparation_unlocks_before_original_admission_drop(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    anchor = "struct SourceAuthenticatedCarrier<'target, Admission>"
+    helper.replace_once_after(path, anchor, "    kura: KuraPublicationLease<'target>,\n", "")
+    helper.replace_once_after(path, anchor, "        KuraWsvCheckpointReceipt,\n    >,", "        KuraWsvCheckpointReceipt,\n    >,\n    kura: KuraPublicationLease<'target>,")
+    errors = validate(fixture)
+    assert any("Native single-lease SourceAuthenticatedCarrier" in error for error in errors), errors
+
+
+@pytest.fixture
+def generic_fixture(fixture):
+    """Copy all owners before mutating either canonical consumer's source."""
+    root, helper, checker, models = fixture
+    model, = [model for model in models if model["module"] == checker.native_preparation_contract.MODEL]
+    relatives = {Path(row["path"]) for row in model["production_symbols"]}
+    relatives.update(Path(path) for path, _, _, _ in checker.NATIVE_PREPUBLICATION_BINDINGS)
+    relatives.update(path for path, _, _ in checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS)
+    relatives.update(Path(path) for path, _, _, _ in (
+        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
+        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
+    ))
+    helper.copy_reviewed_source_fixture_with_includes(root, checker, relatives)
+    return fixture
+
+
+def generic_native_errors(fixture):
+    """Run the canonical literal-token consumer, including its real TLA ledger."""
+    root, helper, checker, models = fixture
+    model, = [model for model in models if model["module"] == checker.native_preparation_contract.MODEL]
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        checker._validate_model(root, helper.ROOT_DIR / "formal/sumeragi_v2", model, errors)
+    return errors
+
+
+def test_native_preparation_accepts_canonical_generic_consumer(generic_fixture):
+    assert generic_native_errors(generic_fixture) == []
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("LifecycleProducerClaimDispositionV1::blocks_runtime", "Self::AwaitingNativeSource", "Self::AwaitingCompletion"),
+    ("LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner", "RetainedLifecycleDecisionApplyDeferredV1 { completion }", "RetainedLifecycleDecisionApplyDeferredV1 { completion: replacement }"),
+    ("LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner", "let owner = &mut self.owner;", "let owner = &mut other.owner;"),
+    ("LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner", "settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)", "settle_applied_lifecycle_decision_apply_completion(owner, executor, replacement)"),
+    ("run_lifecycle_active_height", "native.take_service_publication(services);", "native.take_service_publication(other_services);"),
+    ("run_lifecycle_active_height", "native.service_sources(services, now)?;", "native.service_sources(other_services, now)?;"),
+    ("run_lifecycle_active_height", "native.poll(native_global, native_network, now, receiver)?;", "native.poll(native_global, native_network, now, other_receiver)?;"),
+    ("run_pending_active_height", "native.take_service_publication(services);", "native.take_service_publication(other_services);"),
+    ("run_pending_active_height", "native.service_sources(services, Instant::now())", "native.service_sources(other_services, Instant::now())"),
+    ("run_pending_active_height", "native.poll(native_global, native_network, Instant::now(), receiver)?;", "native.poll(native_global, native_network, Instant::now(), other_receiver)?;"),
+])
+def test_native_preparation_both_consumers_bind_current_runner_owners(generic_fixture, symbol, old, new):
+    fixture = generic_fixture
+    root, helper, checker, _ = fixture
+    binding, = [row for row in checker.native_preparation_contract.NATIVE_CURRENT_RUNNER_BINDINGS if row[2] == symbol]
+    path = root / binding[0]
+    helper.replace_once_after(path, "fn " + symbol.rsplit("::", 1)[-1], old, new)
+    assert any("source-binding token" in error for error in generic_native_errors(fixture))
+    assert any("executable relation" in error or "retained carrier" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("symbol", ["run_lifecycle_active_height", "run_pending_active_height"])
+def test_native_preparation_keeps_native_source_service_order(fixture, symbol):
+    root, helper, checker, _ = fixture
+    binding, = [row for row in checker.native_preparation_contract.NATIVE_CURRENT_RUNNER_BINDINGS if row[2] == symbol]
+    path = root / binding[0]
+    helper.replace_once_after(path, "fn " + symbol, "native.take_service_publication(services);", "native.poll(native_global, native_network, now, receiver)?; native.take_service_publication(services);")
+    # The canonical raw fragments still exist; the Native order check must reject
+    # an additional early poll rather than merely find the later valid sequence.
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+def test_native_preparation_accepts_prepublication_consumer(generic_fixture):
+    root, _, checker, models = generic_fixture
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        checker._validate_native_prepublication_contract(root, models, errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("                block, None,\n", "                block, state.staged_merge_entry(),\n"),
+    (".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;", ".map_err(MergeLedgerCommitError::Storage)?;"),
+])
+def test_native_preparation_prepublication_keeps_exact_typed_manifest(generic_fixture, old, new):
+    root, helper, checker, models = generic_fixture
+    path = root / checker.native_preparation_contract.PREFIX
+    source = path.read_text()
+    start = source.index("let manifest =", source.index("fn capture("))
+    assert old in source[start:]
+    path.write_text(source[:start] + source[start:].replace(old, new, 1))
+    errors = []
+    with checker._reviewed_rust_source_cache():
+        checker._validate_native_prepublication_contract(root, models, errors)
+    assert any("PrefixPreparation::capture" in error for error in errors), errors

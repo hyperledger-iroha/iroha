@@ -61,11 +61,31 @@ impl<K: Key, V: Value, Admission, Installation, M: StorageMode<K, V>>
 pub trait StorageMode<K: Key, V: Value>:
     MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
 {
+    /// Physical acquisition custody carried by this mode's original block.
+    /// Ordinary storage has no allocation scope; prepaid storage retains the
+    /// original thread-bound refund scope until its physical writers release.
+    type AcquisitionCustody: Copy;
 }
-impl<K: Key, V: Value, M> StorageMode<K, V> for M where
-    M: MapMode + NodeCloning<K, V> + NodeCloning<K, Option<V>>
+impl<K: Key, V: Value> StorageMode<K, V> for Untracked {
+    type AcquisitionCustody = ();
+}
+impl<K: Key, V: Value, P> StorageMode<K, V> for concread::bptree::Prepaid<P>
+where
+    P: concread::bptree::NodeFunding,
+    concread::bptree::Prepaid<P>: NodeCloning<K, V> + NodeCloning<K, Option<V>>,
 {
+    type AcquisitionCustody = AdmittedAcquisitionCustody;
 }
+
+/// Thread custody for physical prepaid storage acquisition.
+///
+/// This zero-sized marker cannot be constructed outside the original scoped
+/// constructor and is not admission authority by itself. The constructor binds
+/// the returned slot and block's existing storage lifetime to the borrowed
+/// AllocationScope. Keeping this mode-associated type independent of that
+/// lifetime preserves ordinary Block covariance and zero-sized ordinary custody.
+#[derive(Clone, Copy)]
+pub struct AdmittedAcquisitionCustody(std::marker::PhantomData<*mut ()>);
 
 /// Multi-version key value storage using the original current and undo maps.
 pub struct Storage<K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
@@ -692,6 +712,10 @@ mod block {
         pub(super) predecessor: CapturedPublication,
         pub(super) next: Option<NextPublication>,
         pub(super) mode: BlockMode,
+        // The scoped constructor binds 'store to the original borrowed scope.
+        // This mode-specific marker keeps physical owners on that same thread
+        // without adding a scope pointer or changing ordinary Block covariance.
+        pub(super) _acquisition_custody: M::AcquisitionCustody,
     }
     impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {
         pub(super) fn assert_operable(&self) {
@@ -797,6 +821,7 @@ mod block {
                 predecessor,
                 next: Some(NextPublication::new()),
                 mode,
+                _acquisition_custody: (),
             }
         }
         /// Retain both original parent roots, refusing generation exhaustion.

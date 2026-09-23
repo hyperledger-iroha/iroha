@@ -2,7 +2,7 @@
 //!
 //! All original proof owners remain attached. The scratch bound covers only this continuation;
 //! inherited key/storage/MSM allocations and complete proof qualification remain separate work.
-//! TODO: compile and qualify this continuation with all exact predecessor overlays.
+//! TODO: qualify the complete stored proof and exact authenticated Core integration.
 
 use super::{
     lookup::StoredLookupErrorV1,

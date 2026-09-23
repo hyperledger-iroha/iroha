@@ -651,6 +651,38 @@ fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
         });
     }
 
+    // Reward records, cursors and accruals are pruned with a retired/replaced lane. Its
+    // recipients must receive every promised payment before that destructive
+    // boundary, including rewards owed after all staking custody has drained.
+    if let Some(((lane, _, _), _)) = world.public_lane_reward_accruals().iter()
+        .find(|((lane, _, _), _)| lanes_to_reset.contains(lane))
+    {
+        return Err(LaneLifecycleError::UnsafeRetirement {
+            lane: *lane,
+            reason: "public-lane accrued rewards remain unpaid",
+        });
+    }
+    for (key, reward) in world.public_lane_rewards().iter() {
+        if !lanes_to_reset.contains(&key.0) && !lanes_to_reset.contains(&reward.lane_id) {
+            continue;
+        }
+        if !public_lane_reward_record_matches_key(key, reward)
+            || reward.shares.iter().any(|share| {
+                !share.amount.is_zero()
+                    && world
+                        .public_lane_reward_claims()
+                        .get(&(key.0, share.account.clone()))
+                        .and_then(|claim| claim.through_epoch)
+                        .is_none_or(|through| through < key.1)
+            })
+        {
+            return Err(LaneLifecycleError::UnsafeRetirement {
+                lane: key.0,
+                reason: "public-lane rewards remain unpaid or their retained record is invalid",
+            });
+        }
+    }
+
     let dataspaces = nexus
         .lane_catalog
         .lanes()

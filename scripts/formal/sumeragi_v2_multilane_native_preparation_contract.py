@@ -46,10 +46,11 @@ NATIVE_FINALIZED = "crates/iroha_core/src/kura/native_lane_batch_source.rs"
 BODY_STORE = "crates/iroha_core/src/sumeragi/v2_body_store.rs"
 ORDINARY = "crates/iroha_core/src/kura/lane_artifact_budget.rs"
 CAPACITY = "crates/iroha_core/src/kura/native_amx_publication_capacity.rs"
+MEMBERSHIP_STORAGE = "crates/iroha_core/src/kura/membership_storage.rs"
 DURABLE = "crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"
 KURA = "crates/iroha_core/src/kura.rs"
 AUTONOMOUS = "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"
-AUTONOMOUS_TOKENS = ('additional_unreserved_stable_bytes: u64', 'additional_missing_terminal_identities: usize', 'additional_incomplete_terminal_identities: usize', 'allowed_view_temp: Option<&Path>', 'autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(', 'allowed_view_temp', 'AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES', 'resulting_missing', 'resulting_incomplete', 'MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES', 'stable_terminal_reservations', 'shared_terminal_transient', 'consumes_terminal_cas_transient', 'self.lane_publication_budget_reserved_bytes()?', '.kura_disk_usage_bytes()?', 'bytes.checked_add(stable_terminal_reservations)', 'bytes.checked_add(lane_publication_reservations)', 'self.certified_bundle_capacity_reserved_bytes()?', 'bytes.checked_add(certified_bundle_reservations)', 'required > self.max_disk_usage_bytes')
+AUTONOMOUS_TOKENS = ('additional_unreserved_stable_bytes: u64', 'additional_missing_terminal_identities: usize', 'additional_incomplete_terminal_identities: usize', 'allowed_view_temp: Option<&Path>', 'autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(', 'allowed_view_temp', 'AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES', 'resulting_missing', 'resulting_incomplete', 'MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES', 'stable_terminal_reservations', 'shared_terminal_transient', 'consumes_terminal_cas_transient', 'self.all_publication_budget_reserved_bytes()?', '.kura_disk_usage_bytes()?', 'bytes.checked_add(stable_terminal_reservations)', 'bytes.checked_add(lane_publication_reservations)', 'self.certified_bundle_capacity_reserved_bytes()?', 'bytes.checked_add(certified_bundle_reservations)', 'required > self.max_disk_usage_bytes')
 CANDIDATE_TOKENS = (
     "ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(",
     "SumeragiV2ValidationContext::from_height_context(context)",
@@ -98,21 +99,7 @@ NATIVE_CONTROL_BINDINGS = (
         "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
         "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
     )),
-    (BLOCK, "method", "ValidBlock::prepare_native_candidate", (
-        "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
-        "context: crate::sumeragi::v2::VerifiedHeightContext",
-        "ensure_state_access_without_exec_witness()",
-        "let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };",
-        "if !body.is_resultless_proposal()", "native_lane_batch_for_execution(body)",
-        "body.validate_proposal_commitments()", "frozen.height != body.header().height().get()",
-        "frozen.network_id != *state.network_id_ref()", "!= body.header().prev_block_hash()",
-        "verify_origin_block_signature(", "BlockSignaturePolicy::RotatingLeader",
-        "length > frozen.da_layout.max_payload_size_bytes", "ConsensusValidationProfile::NativePreparation",
-        "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
-        "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
-        "recorded.into_preparation_parts()", "Arc::new(native.context().context().clone())",
-        "PreparedCarrier::prepare(ValidatedCarrierPreparationInput", "native: Some(native)",
-    )),
+    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::prepare_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'PreparedCarrier::prepare(ValidatedCarrierPreparationInput', 'native: Some(native)')),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ValidBlock::prepare_native_candidate(", "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
@@ -213,22 +200,7 @@ NATIVE_CONTROL_BINDINGS = (
         "self.native_lane_stage.is_some()", "!self.world.merge_execution_write_set_bytes().is_empty()",
         "return Err(",
     )),
-    (NATIVE_STAGE, "method", "State::record_native_lane_decision_batch", (
-        "groups: Vec<VerifiedLaneDecisionGroupV1>", "context: crate::sumeragi::v2::VerifiedHeightContext",
-        "ensure_exec_witness_capture_available()", "with_stable_observation(self, ||",
-        "if !carrier.is_resultless_proposal()", "native_lane_batch_for_execution(&carrier)",
-        "ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )",
-        "self.prepare_lane_decision_batch(&groups)?", "if &batch != expected",
-        "self.with_native_lane_execution_scope(", "begin_exec_witness_capture()",
-        "controls\n                        .apply(overlay)", "Ok((recorder, context))",
-        "overlay.seal_native_lane_decision_batch(results, batch)",
-        "|overlay, executions, (recorder, context)|",
-        "ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )",
-        "ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )",
-        "overlay.capture_exec_witness()", "verify_execution_output_seal(&carrier)",
-        "drop(recorder)", "Ok((executions, context))", "PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?",
-        "Ok(RecordedNativeLaneBatchV1 {\n                prepared,\n                carrier,\n                context,\n            })",
-    )),
+    ('crates/iroha_core/src/state/lane_decision_batch.rs', 'method', 'State::record_native_lane_decision_batch', ('groups: Vec<VerifiedLaneDecisionGroupV1>', 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_exec_witness_capture_available()', 'with_stable_observation(self, ||', 'if !carrier.is_resultless_proposal()', 'native_lane_batch_for_execution(&carrier)', 'ValidBlock::prepare_native_execution_controls(\n                &carrier, self, context,\n            )', 'self.prepare_lane_decision_batch(&groups)?', 'if &batch != expected', 'self.with_native_lane_execution_scope(', 'begin_exec_witness_capture()', 'controls.apply(overlay).map_err(|error| {\n                        MergeLedgerCommitError::NativeControlValidation(Box::new(error))', 'Ok((recorder, context))', 'overlay.seal_native_lane_decision_batch(results, batch)', '|overlay, executions, (recorder, context)|', 'ValidBlock::seal_native_execution_outputs(\n                        &mut carrier,\n                        overlay,\n                        &executions,\n                    )', 'ValidBlock::finalize_native_execution_contexts(\n                        &carrier, overlay, &context,\n                    )', 'overlay.capture_exec_witness()', 'verify_execution_output_seal(&carrier)', 'drop(recorder)', 'Ok((executions, context))', 'PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?', 'Ok(RecordedNativeLaneBatchV1 {\n                prepared,\n                carrier,\n                context,\n            })')),
     (NATIVE_KERNEL, "method", "State::with_native_lane_execution_scope", (
         "enter: impl FnOnce(&mut StateBlock<'state>)",
         "ensure_state_access_without_exec_witness()", "self.block_with_owned_start_stages(",
@@ -376,21 +348,31 @@ PREPARATION_OWNER_BINDINGS = (
     (PREFIX, "struct", "PrefixPreparation", (
         "state: Box<StateBlock<'state>>", "prefix: ValidatedExecutionPrefix",
     )),
-    (PREFIX, "method", "PrefixPreparation::capture", (
-        "native: Option<lane_decision_batch::NativeExecutionCustody>", "let authority = match native",
-        "Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>",
-        "PrefixSourceAuthority::Native(Box::new(native))",
-        "None if state.native_lane_stage.is_none()", "state.merge_carrier_entrypoints.is_empty()",
-        "context.native_lane_decisions.is_some()", "state.staged_merge_entry.is_some()",
-        "state.canonical_wsv_merge_commit_authorization.is_some()",
-        "state.verify_execution_output_seal(block)?", "state.verified_fastpq_source_inventory_for_capture()?",
-        "state.verify_cached_ordinary_witness_content(&verified_inventory)?", ".exec_witness",
-        "from_result_bearing_block_and_merge_entry", "LaneFinalityManifestV1::from_result_bearing_block(block)?",
-        "execution_commitment_from_validated_block(witness, &manifest, &lanes, block)",
-        ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
-        "sealed.sources().is_native()", "sealed.sources().proposal() != block.hash()",
-        "Arc::ptr_eq(&inventory, &verified_inventory)", "let prefix = ValidatedExecutionPrefix {",
-        "Ok((Self { state, prefix }, manifest, commitment))",
+    (PREFIX, 'method', 'PrefixPreparation::capture', (
+        'native: Option<lane_decision_batch::NativeExecutionCustody>',
+        'let authority = match native',
+        'Some(native)\n                if native.retains_state(&state)\n                    && block\n                        .execution_context()\n                        .is_some_and(|context| context.native_lane_decisions.is_some()) =>',
+        'PrefixSourceAuthority::Native(Box::new(native))',
+        'None if state.native_lane_stage.is_none()',
+        'state.merge_carrier_entrypoints.is_empty()',
+        'context.native_lane_decisions.is_some()',
+        'state.staged_merge_entry.is_some()',
+        'state.canonical_wsv_merge_commit_authorization.is_some()',
+        'state\n            .verify_execution_output_seal(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verified_fastpq_source_inventory_for_capture()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verify_cached_ordinary_witness_content(&verified_inventory)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        '.exec_witness',
+        'from_result_bearing_block_and_merge_entry',
+        'LaneFinalityManifestV1::from_result_bearing_block(block)\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'execution_commitment_from_validated_block(witness, &manifest, &lanes, block)',
+        '.replace(output_capacity::ExecutionOutputPlanState::Captured)',
+        'sealed.sources().is_native()',
+        'sealed.sources().proposal() != block.hash()',
+        'Arc::ptr_eq(&inventory, &verified_inventory)',
+        'let prefix = ValidatedExecutionPrefix {',
+        'Ok((Self { state, prefix }, manifest, commitment))',
+        'MergeLedgerCommitError,\n    >',
+        'let inventory = state\n            .fastpq_source_inventory\n            .take()\n            .ok_or_else(|| {\n                MergeLedgerCommitError::ExecutionBatchInvalid(\n                    "carrier prefix lost its owned source inventory".to_owned(),\n                )\n            })?\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;',
     )),
     (PREFIX, "method", "ValidatedExecutionPrefix::retains_closed_state", (
         "self.sealed.proposal() == state._curr_block.hash()",
@@ -399,20 +381,39 @@ PREPARATION_OWNER_BINDINGS = (
         "state.parliament_timed_ovn_casting_bindings.is_none()", "state.native_lane_stage.is_none()",
         "PrefixSourceAuthority::Native(native) => native.retains_state(state)",
     )),
-    (PREFIX, "method", "PrefixPreparation::prepare_world_effects", (
-        "let state = &mut *self.state", "!self.prefix.retains_closed_state(state)",
-        "!state\n                .block_hashes\n                .pending()\n                .iter()\n                .copied()\n                .eq([state._curr_block.hash()])",
-        "state.validate_canonical_runtime_projection()?", "state.verify_lane_consensus_contexts_publication()?",
-        "validate_merge_carrier_entrypoint_binding()", "finalize_axt_asset_incarnations()",
-        "finalize_axt_policy_transition_ratchets()", "state.prune_axt_replay_ledger(",
-        "validate_owned_runtime_catalog_overlay()", "ensure_pending_autoscale_lifecycle_staking_is_safe(",
-        "world_commit::PreparedWorldCommit::prepare_overlay(",
+    (PREFIX, 'method', 'PrefixPreparation::prepare_world_effects', (
+        'let state = &mut *self.state',
+        '!self.prefix.retains_closed_state(state)',
+        '!state\n                .block_hashes\n                .pending()\n                .iter()\n                .copied()\n                .eq([state._curr_block.hash()])',
+        'state\n            .validate_canonical_runtime_projection()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'state\n            .verify_lane_consensus_contexts_publication()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?',
+        'validate_merge_carrier_entrypoint_binding()',
+        'finalize_axt_asset_incarnations()',
+        'finalize_axt_policy_transition_ratchets()',
+        'state.prune_axt_replay_ledger(',
+        'validate_owned_runtime_catalog_overlay()',
+        'ensure_pending_autoscale_lifecycle_staking_is_safe(',
+        'world_commit::PreparedWorldCommit::prepare_overlay(',
+        'Result<world_commit::PreparedWorldEffects, MergeLedgerCommitError>',
+        'state.validate_merge_carrier_entrypoint_binding()?;',
+        'state\n            .finalize_axt_asset_incarnations()\n            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;',
+        'state\n            .finalize_axt_policy_transition_ratchets()\n            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;',
+        'state\n            .validate_owned_runtime_catalog_overlay()\n            .map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string()))?;',
+        'world_commit::PreparedWorldCommit::prepare_overlay(\n            &mut fields.world,\n            height,\n            &fields.nexus,\n            &fields.lane_incarnation_activation_heights,\n            fields.pending_da_pin_intents.as_ref(),\n            fields.pending_autoscale_lifecycle.as_ref(),\n        )\n        .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)',
     )),
-    (PREFIX, "fn", "prepare", (
-        "input.into_parts()", "PrefixPreparation::capture(state, &valid, native)?",
-        "prepare_deterministic_carrier_metadata", "preparation.prepare_world_effects()?",
-        "prepare_carrier_publication_events(block.header())",
-        "prefix: source_prefix", "Ok(PreparedCarrier::new(super::PreparedCarrierFields {", "Err(error) => Err((Box::new(valid.into()), error))",
+    (PREFIX, 'fn', 'prepare', (
+        'input.into_parts()',
+        'PrefixPreparation::capture(state, &valid, native)?',
+        'prepare_deterministic_carrier_metadata',
+        'preparation.prepare_world_effects()?',
+        'prepare_carrier_publication_events(block.header())',
+        'prefix: source_prefix',
+        'Ok(PreparedCarrier::new(super::PreparedCarrierFields {',
+        'Err(error) => Err((Box::new(valid.into()), error))',
+        'MergeLedgerCommitError',
+        'if !preparation.state.autoscale_lifecycle_evaluated {\n            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(',
+        'preparation.state.prepare_deterministic_carrier_metadata(\n            block,\n            context\n                .roster\n                .iter()\n                .map(|entry| entry.validator.clone())\n                .collect(),\n            ApplyTopologyAuthority::V2Finality,\n        )?;',
+        'preparation\n            .state\n            .prepare_carrier_publication_events(block.header())?;',
     )),
     (JOURNALS, "struct", "CarrierJournalInputs", (
         "pub(crate) valid:", "pub(crate) state:", "pub(crate) prefix:",
@@ -522,11 +523,16 @@ PREPARATION_OWNER_BINDINGS = (
         "let native = self.native_amx_publication_capacity_reserved_bytes()?",
         "merge.checked_add(native).ok_or_else(",
     )),
+    (MEMBERSHIP_STORAGE, "method", "Kura::all_publication_budget_reserved_bytes", (
+        "self.lane_publication_budget_reserved_bytes()?",
+        ".checked_add(self.membership_storage.pending_bytes())",
+        ".ok_or_else(",
+    )),
     (KURA, "method", "Kura::check_storage_budget", (
         ".post_wsv_prepend_admission_extra_under_prune_and_canonical_guards(",
         ".block_required_bytes_for_budget(block, merge_entry, limit)?",
         ".checked_add(prepend_extra)",
-        "self.lane_publication_budget_reserved_bytes()?",
+        "self.all_publication_budget_reserved_bytes()?",
         ".saturating_add(lane_publication_reservations)",
         "if required > limit", "Error::StorageBudgetExceeded",
     )),
@@ -550,13 +556,11 @@ WITNESS_LEASE = "crates/iroha_core/src/kura/publication_lease.rs"
 SERVICE_QUEUE = "crates/iroha_core/src/sumeragi/v2_apply/carrier_queue_retirement.rs"
 CARRIER_QUEUE = "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs"
 TERMINAL_OWNER_BINDINGS = (
-    (WITNESS_CARRIER, "fn", "publish_execution_witness", (
-        "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
-        "self.journals.checkpoint", "drop(lease)", "stage_kagemusha_finality_sidecar(",
-        "self.finality.artifact().height", "self.finality.artifact().block_hash",
-        "self.journals.source_prefix.witness()", "self.journals.execution_prefix",
-        "self.journals\n                    .source_prefix\n                    .parliament_timed_ovn_casting_bindings()\n                    .unwrap_or(&[])",
-        "promote_kagemusha_finality_sidecar(\n                self.finality.artifact(),\n                self.checkpoint.finality_receipt(),\n            )",
+    (WITNESS_CARRIER, 'fn', 'publish_execution_witness', (
+        '&mut self',
+        "lease: &KuraPublicationLease<'_>",
+        'lease\n            .reauthenticate_checkpoint(\n                &self.checkpoint,\n                self.finality.artifact(),\n                self.journals.checkpoint,\n            )\n            .map_err(CarrierExecutionWitnessPublicationError::Checkpoint)?;',
+        'lease\n            .publish_execution_witness(\n                self.finality.artifact(),\n                self.checkpoint.finality_receipt(),\n                self.journals.source_prefix.witness(),\n                self.journals\n                    .source_prefix\n                    .parliament_timed_ovn_casting_bindings()\n                    .unwrap_or(&[]),\n            )\n            .map_err(CarrierExecutionWitnessPublicationError::Witness)',
     )),
     (WITNESS_LEASE, "method", "KuraPublicationLease::reauthenticate_execution_witness", (
         "self.kura.kagemusha_finality_sidecar_path(finality.height)",
@@ -577,12 +581,14 @@ TERMINAL_OWNER_BINDINGS = (
         "Some(self.seal.batch.as_ref())", "self.sources.len() == self.seal.batch.groups.len()",
         "self.executions.len() == self.sources.len()", "source.body().payload() == &wire.payload && source.decisions() == wire.decisions",
     )),
-    (ARCHIVE_CARRIER, "fn", "publish_archives", (
-        "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
-        "self.journals.checkpoint", "drop(lease)", "self.checkpoint.finality_receipt()",
-        "self.journals.provider_capture.as_mut()", "self.journals.reputation_capture.as_mut()",
-        "provider\n                .publish_under_publication_lease(&lease, receipt)",
-        "reputation\n                .publish_under_publication_lease(&lease, receipt)",
+    (ARCHIVE_CARRIER, 'fn', 'publish_archives', (
+        '&mut self',
+        "lease: &KuraPublicationLease<'_>",
+        'lease\n            .reauthenticate_checkpoint(\n                &self.checkpoint,\n                self.finality.artifact(),\n                self.journals.checkpoint,\n            )\n            .map_err(CarrierArchivePublicationError::Checkpoint)?;',
+        'let receipt = self.checkpoint.finality_receipt();',
+        'if let Some(provider) = self.journals.provider_capture.as_mut() {\n            provider\n                .publish_under_publication_lease(lease, receipt)\n                .map_err(CarrierArchivePublicationError::Provider)?;\n        }',
+        'if let Some(reputation) = self.journals.reputation_capture.as_mut() {\n            reputation\n                .publish_under_publication_lease(lease, receipt)\n                .map_err(CarrierArchivePublicationError::Reputation)?;\n        }',
+        'Ok(())',
     )),
     (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_new", (
         "let owner = Self { decision, kura };", "let original = &owner.decision;",
@@ -594,7 +600,15 @@ TERMINAL_OWNER_BINDINGS = (
         'if let Some(capture) = original.journals.provider_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Provider)?;\n            }',
         'if let Some(capture) = original.journals.reputation_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Reputation)?;\n            }',
     )),
-    ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'fn', 'try_prepare_physical', ('    pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<\n        \'target,\n        Installation,\n        E,\n    >(\n        self,\n        target: &\'target State,\n        queue_source: Option<&OriginalCarrierQueue<\'target>>,\n        admit: impl FnOnce(&Self, &State) -> Result<Installation, E>,\n    ) -> Result<\n        PhysicallyPreparedCarrier<\'target, Admission, BindingAdmission, Installation>,\n        (Self, CarrierPhysicalPreparationError<E>),\n    > {\n        // Shadow the original after declaring installation: even an unwind in\n        // an early probe drops every retained original before its reservation.\n        let installation;\n        let mut original = self;\n        installation = match admit(&original, target) {\n            Ok(guard) => guard,\n            Err(error) => {\n                return Err((original, CarrierPhysicalPreparationError::Admission(error)));\n            }\n        };\n        if !target.matches_kura_instance(&original.journals.kura) {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignKura));\n        }\n        // The original geometry pins the State identity as well as its header.\n        // Reject another State sharing this Kura before any durable side effect;\n        // physical predecessor and terminal geometry checks still follow below.\n        if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }\n        if original.journals.geometry.requires_queue_custody() {\n            let refusal = match queue_source {\n                None => Some(CarrierQueueRetirementError::Missing),\n                Some(source) if !source.belongs_to(target) => {\n                    Some(CarrierQueueRetirementError::ForeignState)\n                }\n                Some(_) => None,\n            };\n            if let Some(error) = refusal {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n            }\n        }\n        // Reject substituted execution or archive custody before any derived\n        // persistence can modify its durable namespace. Release the temporary\n        // lease before the continuations enter their own storage APIs; the final\n        // lease below must authenticate all these same owners again.\n        let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };\n        original = match SourceAuthenticatedCarrier::try_new(original, kura) {\n            Ok(owner) => owner.release(),\n            Err((original, error)) => {\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        if let Err(error) = original.publish_execution_witness() {\n            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;\n            let error = match error {\n                CarrierExecutionWitnessPublicationError::Kura(error) => {\n                    CarrierPhysicalPreparationError::Kura(error)\n                }\n                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                CarrierExecutionWitnessPublicationError::Witness(error) => {\n                    CarrierPhysicalPreparationError::ExecutionWitness(error)\n                }\n            };\n            drop(installation);\n            return Err((original, error));\n        }\n        if let Err(error) = original.publish_archives() {\n            use super::archive_publication::CarrierArchivePublicationError;\n            let error = match error {\n                CarrierArchivePublicationError::Kura(error) => {\n                    CarrierPhysicalPreparationError::Kura(error)\n                }\n                CarrierArchivePublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                error => CarrierPhysicalPreparationError::Archive(error),\n            };\n            drop(installation);\n            return Err((original, error));\n        }\n        // Borrow the exact target\'s Arc, never a self-referential field inside\n        // the retained carrier. Identity equality above joins that same owner.\n        let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                drop(installation);\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };\n        // Join the original source and checkpoint under all four Kura fences\n        // before any State probe. The complete owner carries this authentication\n        // only while that same lease remains held.\n        let authenticated = match SourceAuthenticatedCarrier::try_new(original, kura) {\n            Ok(owner) => owner,\n            Err((original, error)) => {\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        if let Err(error) = authenticated\n            .kura\n            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())\n        {\n            let original = authenticated.release();\n            drop(installation);\n            return Err((\n                original,\n                CarrierPhysicalPreparationError::ExecutionWitness(error),\n            ));\n        }\n        // Queue transition ownership precedes lifecycle; all later probes are\n        // try-only because ordinary ingress may own a State view before Queue.\n        let queue_observer = if authenticated\n            .decision\n            .journals\n            .geometry\n            .requires_queue_custody()\n        {\n            let source = queue_source.expect("required original source checked before persistence");\n            match source.try_observe() {\n                Ok(observer) => Some(observer),\n                Err(wait) => {\n                    let original = authenticated.release();\n                    drop(installation);\n                    return Err((\n                        original,\n                        CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {\n                            field: "lane_reservation_transition_lock",\n                            wait,\n                        }),\n                    ));\n                }\n            }\n        } else {\n            None\n        };\n        let state = match StateFences::try_acquire(target) {\n            Ok(fences) => fences,\n            Err((error, state_retirement)) => {\n                let queue_retirement = queue_observer.map(|observer| observer.release_deferred());\n                let SourceAuthenticatedCarrier {\n                    decision: original,\n                    kura,\n                } = authenticated;\n                let kura_retirement = kura.release_deferred();\n                drop((state_retirement, queue_retirement, kura_retirement));\n                drop(installation);\n                return Err((original, error));\n            }\n        };\n        let queue = match queue_observer {\n            Some(observer) => {\n                let source = queue_source.expect("original service source remains borrowed");\n                let acquired = observer\n                    .try_into_cut()\n                    .map_err(|(error, cleanup)| {\n                        (\n                            CarrierQueueRetirementError::Busy {\n                                field: error.field,\n                                wait: error.wait,\n                            },\n                            cleanup,\n                        )\n                    })\n                    .and_then(|cut| {\n                        CarrierQueueRetirement::try_new(\n                            target,\n                            &authenticated.decision.journals.geometry,\n                            authenticated.decision.block().header(),\n                            source,\n                            cut,\n                        )\n                    });\n                match acquired {\n                    Ok(cut) => Some(cut),\n                    Err((error, queue_retirement)) => {\n                        let state_retirement = state.release_deferred();\n                        let SourceAuthenticatedCarrier {\n                            decision: original,\n                            kura,\n                        } = authenticated;\n                        let kura_retirement = kura.release_deferred();\n                        drop((queue_retirement, state_retirement, kura_retirement));\n                        drop(installation);\n                        return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n                    }\n                }\n            }\n            None => None,\n        };\n        let SourceAuthenticatedCarrier {\n            decision: original,\n            kura,\n        } = authenticated;\n        let fences = CarrierFences {\n            _state: state,\n            _queue: queue,\n            _kura: kura,\n        };\n        let binding_admission;\n        let Self {\n            checkpoint,\n            finality,\n            committed_event,\n            journals,\n            _binding_admission: original_binding_admission,\n        } = original;\n        binding_admission = original_binding_admission;\n        let prepared = journals.try_map_components(|original| {\n            let mut preparation = CarrierPreparation::new(original, target, fences);\n            match preparation.try_prepare::<E>() {\n                Ok(()) => Ok(preparation.into_prepared()),\n                Err(error) => {\n                    let original = preparation.recover_original();\n                    drop(preparation);\n                    Err((original, error))\n                }\n            }\n        });\n        macro_rules! retain {\n            ($journals:expr) => {\n                DecisionBoundCarrierJournals {\n                    checkpoint,\n                    finality,\n                    committed_event,\n                    journals: $journals,\n                    _binding_admission: binding_admission,\n                }\n            };\n        }\n        match prepared {\n            Ok(journals) => Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n                installation,\n            }),\n            Err((journals, error)) => {\n                // All partially acquired writers, State fences and Kura lease are gone.\n                drop(installation);\n                Err((retain!(journals), error))\n            }\n        }\n    }',)),
+    (PHYSICAL_CARRIER, 'fn', 'try_prepare_physical', (
+        "fn try_prepare_physical<'target>(\n        self,\n        target: &'target State,\n        queue_source: Option<&OriginalCarrierQueue<'target>>,\n    )",
+        'let original = self;',
+        'if !target.matches_kura_instance(&original.journals.kura) {\n            return Err((original, CarrierPhysicalPreparationError::ForeignKura));\n        }',
+        'if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }',
+        'if original.journals.geometry.requires_queue_custody() {\n            let refusal = match queue_source {\n                None => Some(CarrierQueueRetirementError::Missing),\n                Some(source) if !source.belongs_to(target) => {\n                    Some(CarrierQueueRetirementError::ForeignState)\n                }\n                Some(_) => None,\n            };\n            if let Some(error) = refusal {\n                return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n            }\n        }',
+        'let kura = match target.kura.try_publication_lease() {\n            Ok(lease) => lease,\n            Err(error) => {\n                return Err((original, CarrierPhysicalPreparationError::Kura(error)));\n            }\n        };',
+        'let authenticated = SourceAuthenticatedCarrier::try_new(original, kura)?;\n        authenticated.try_prepare(target, queue_source)',
+    )),
     (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::is_identity_transition", (
         "self._header == header", "self._pending.is_none()", "self._certified_frontiers.is_empty()",
         "self._previous_runtime_catalog == self._accepted_runtime_catalog",
@@ -667,7 +681,7 @@ TERMINAL_OWNER_BINDINGS = (
         "queue.map(CarrierQueueRetirement::release_deferred)", "kura.release_deferred()",
         "CompletionFences {", "_commit: commit", "_state: state", "_queue: queue", "_kura: kura",
     )),
-    ('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', ('let mut publication_notice = self.target.state_view_publication();', 'let mut this = self;', 'queue.ensure_available().err()', 'Some(CarrierPublicationError::QueueRetirement(error))', 'journals.effects.replay_prevalidation', 'journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)', 'journals.effects.header != journals.valid.as_ref().header()', 'journals.staged_legacy_source()', 'journals\n            .geometry\n            .matches_publication_target(this.target, journals.effects.header)', 'journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()', '!journals.geometry.has_queue_custody(\n            this.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )', 'Some(CarrierPublicationError::QueueRetirementRequired)', 'journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'this\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'CarrierPublicationError::QueueRetirement(error)', 'journals.native_amx_manifest.entries().is_empty()', 'return Err((this.abort(), error))', 'let update_da_mapping = match this.try_complete_geometry()', 'return Err((\n                    this.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))', 'publication_notice.begin()', 'transactions.publish()', 'runtime.publish()', 'world.publish()', 'world_effects.publish(\n            target,\n            effect_locks\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pin cache"),\n        )', 'if update_da_mapping', 'effect_locks\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .sync_mapping(&effects.nexus.lane_config)', 'let mut lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'let mut da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry))', 'hash_retirement = block_hashes.publish()', '**effect_locks\n            .latest_block_header\n            .as_mut()\n            .expect("prepared header") = Some(effects.header)', 'drop(generation)', 'if let Some(post) = da_post_publication {\n            post.publish(target);\n        }', 'if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }', 'fences.release_for_completion()', 'effects.publish_observability(target)', 'target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)', 'tiered_snapshot.publish(target, false)', 'target.enforce_nexus_storage_budget(height)', 'target.persist_query_index_status(height, Some(effects.header.hash()))', 'publication_events.append(&mut extra_events)', 'drop(commit)', 'drop(membership_retirement)', 'drop(hash_retirement)', 'Ok(PublishedCarrier {', 'source: source_prefix', '_admission: admission,\n            _binding: binding,\n            _installation: installation', 'let mut effect_cleanup;', 'effect_cleanup = original_effect_locks;', 'let mut effect_locks = effect_cleanup.physical_scope();', 'effect_locks.release_writers();', 'post.capture_snapshot(')),
+    ('crates/iroha_core/src/state/carrier_preparation/publication.rs', 'method', 'PhysicallyPreparedCarrier::publish', ('let mut publication_notice = self.target.state_view_publication();', 'let mut this = self;', 'queue.ensure_available().err()', 'Some(CarrierPublicationError::QueueRetirement(error))', 'journals.effects.replay_prevalidation', 'journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)', 'journals.effects.header != journals.valid.as_ref().header()', 'journals.staged_legacy_source()', 'journals\n            .geometry\n            .matches_publication_target(this.target, journals.effects.header)', 'journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()', '!journals.geometry.has_queue_custody(\n            this.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )', 'Some(CarrierPublicationError::QueueRetirementRequired)', 'journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'this\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())', 'CarrierPublicationError::QueueRetirement(error)', 'journals.native_amx_manifest.entries().is_empty()', 'return Err((this.abort(), error))', 'let update_da_mapping = match this.try_complete_geometry()', 'return Err((\n                    this.abort(),\n                    CarrierPublicationError::GeometryStorage(error),\n                ))', 'publication_notice.begin()', 'transactions.publish()', 'runtime.publish()', 'world.publish()', 'world_effects.publish(\n            target,\n            effect_locks\n                .da_pin_intents\n                .as_mut()\n                .expect("prepared pin cache"),\n        )', 'if update_da_mapping', 'effect_locks\n                .da_shard_cursors\n                .as_mut()\n                .expect("prepared shard cursors")\n                .sync_mapping(&effects.nexus.lane_config)', 'let mut lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'let mut da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &mut effect_locks, &generation, true))', 'effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry))', 'hash_retirement = block_hashes.publish()', '**effect_locks\n            .latest_block_header\n            .as_mut()\n            .expect("prepared header") = Some(effects.header)', 'drop(generation)', 'if let Some(post) = da_post_publication {\n            post.publish(target);\n        }', 'if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }', 'fences.release_for_completion()', 'effects.publish_observability(target)', 'target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)', 'tiered_snapshot.publish(target, false)', 'target.enforce_nexus_storage_budget(height)', 'target.persist_query_index_status(height, Some(effects.header.hash()))', 'publication_events.append(&mut extra_events)', 'drop(commit)', 'drop(membership_retirement)', 'drop(hash_retirement)', 'Ok(PublishedCarrier {', 'source: source_prefix', '_admission: admission', 'let mut effect_cleanup;', 'effect_cleanup = original_effect_locks;', 'let mut effect_locks = effect_cleanup.physical_scope();', 'effect_locks.release_writers();', 'post.capture_snapshot(')),
 )
 PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
 
@@ -754,10 +768,8 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "fn new(value: T) -> Self", "inner: parking_lot::Mutex::new(value)",
         "released: concread::release::ReleaseNotification::default()",
     )),
-    (PUBLICATION_MUTEX, "method", "PublicationMutex::wrap", (
-        "guard: parking_lot::MutexGuard<'state, T>",
-        "self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            })",
-    )),
+    (PUBLICATION_MUTEX, "method", 'PublicationMutex::wrap', ("fn wrap<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        // Advance while the actual physical mutex is held, before any caller\n        // can create/rename/unlink or unwind. Saturation permanently disables\n        // observation reuse instead of allowing an ABA wraparound.\n        if let Some(epoch) = &self.mutation_epoch {\n            let _ = epoch.fetch_update(\n                std::sync::atomic::Ordering::Relaxed,\n                std::sync::atomic::Ordering::Relaxed,\n                |epoch| epoch.checked_add(1),\n            );\n        }\n        self.wrap_read_only(guard)\n    }",)),
+    (PUBLICATION_MUTEX, "method", "PublicationMutex::wrap_read_only", ("fn wrap_read_only<'state>(\n        &'state self,\n        guard: parking_lot::MutexGuard<'state, T>,\n    ) -> PublicationGuard<'state, T> {\n        let epoch = self.mutation_epoch.as_ref().and_then(|epoch| {\n            let epoch = epoch.load(std::sync::atomic::Ordering::Relaxed);\n            (epoch != u64::MAX).then_some(epoch)\n        });\n        PublicationGuard {\n            mutation_epoch: epoch,\n            inner: self.released.guard(PhysicalPublicationGuard {\n                guard: Some(guard),\n                fair: false,\n            }),\n        }\n    }",)),
     (PUBLICATION_MUTEX, "method", "PublicationMutex::lock", (
         "self.wrap(self.inner.lock())",
     )),
@@ -896,7 +908,7 @@ RETAINED_CARRIER_BINDINGS = (
     (DECISION_CARRIER, "enum", "RetainedCarrier", (
         "Capturing(Box<super::StagedCarrierCapture<Admission>>)",
         "Validated(PreparedCarrierJournals<Admission>)",
-        "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
+        "Decided(DecisionBoundCarrierJournals<Admission>)",
         "super::DetachedCarrierComponents", "crate::kura::KuraWsvCheckpointReceipt",
     )),
     (DECISION_CARRIER, "method", "RetainedCarrier::matches_validation_candidate", (
@@ -1026,7 +1038,7 @@ PREPARATION_OWNER_BINDINGS += RETAINED_CARRIER_BINDINGS
 # The original service State/Queue pair and exact route cut now discharge the
 # formerly unconditional retirement refusal; emptiness alone grants no authority.
 CARRIER_QUEUE_BINDINGS = (
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'DetachedWorld::try_prepare_publication', ("    pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(\n        self,\n        target: &'target World,\n        admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,\n    ) -> Result<\n        PreparedWorld<'target, Admission, Installation>,\n        (\n            Self,\n            WorldPublicationError<E>,\n            AbortedWorld<'target, Installation>,\n        ),\n    > {\n        let mut slot = self.publication_slot(target);\n        match slot.try_prepare(admit) {\n            Ok(()) => Ok(slot.into_prepared()),\n            Err(error) => {\n                let original = slot.recover_original();\n                Err((original, error, slot.into_cleanup()))\n            }\n        }\n    }",)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'DetachedWorld::try_prepare_publication', ("    pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(\n        self,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n        admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,\n    ) -> Result<\n        PreparedWorld<'target, Admission, Installation>,\n        (\n            Self,\n            WorldPublicationError<E>,\n            AbortedWorld<'target, Installation>,\n        ),\n    > {\n        let mut slot = self.publication_slot(target, scope);\n        match slot.try_prepare(admit) {\n            Ok(()) => Ok(slot.into_prepared()),\n            Err(error) => {\n                let original = slot.recover_original();\n                Err((original, error, slot.into_cleanup()))\n            }\n        }\n    }",)),
     ('crates/iroha_core/src/state/world_publication.rs', 'struct', 'AbortedWorld', ("pub(in crate::state) struct AbortedWorld<'target, Installation> {\n    _fields: PreparedWorldFields<'target>,\n    _installation: Option<Installation>,\n}",)),
     (APPLY, 'method', 'V2ApplyService::carrier_queue_source', (
         'carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)',
@@ -1163,7 +1175,7 @@ CARRIER_QUEUE_BINDINGS = (
         "if let Some(original) = self.original.take()", "drop(original.abort())",
     )),
     ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'AcquiredCarrierParticipants::abort', ('    fn abort(self) -> DetachedCarrierComponents {\n        // Reverse local drop order also keeps fences behind all components if\n        // abort bookkeeping unwinds before the explicit release below.\n        let mut effect_cleanup;\n        let fences;\n        let Self {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n            effect_locks: original_effect_locks,\n            _fences: original_fences,\n        } = self;\n        fences = original_fences;\n        effect_cleanup = original_effect_locks;\n        let mut effect_locks = effect_cleanup.physical_scope();\n        let (world, world_retirement) = world.abort();\n        let (runtime, runtime_retirement) = runtime.abort();\n        let (transactions, transactions_retirement) = transactions.abort();\n        let (block_hashes, block_hashes_retirement) = block_hashes.abort();\n        effect_locks.release_writers();\n        drop(fences.release_for_completion());\n        drop((\n            world_retirement,\n            runtime_retirement,\n            transactions_retirement,\n            block_hashes_retirement,\n        ));\n        DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        }\n    }',)),
-    (PHYSICAL_CARRIER, 'method', 'StateFences::try_acquire', ('fn try_acquire<E>(\n        target: &\'target State,\n    ) -> Result<\n        Self,\n        (\n            CarrierPhysicalPreparationError<E>,\n            [Option<concread::release::DeferredRelease>; 3],\n        ),\n    > {\n        let acquire = |field, lock: &\'target crate::publication_lock::PublicationMutex| {\n            lock.try_lock_or_wait()\n                .map_err(|wait| CarrierPhysicalPreparationError::Fence { field, wait })\n        };\n        let commit = acquire("state_commit_lock", &target.state_commit_lock)\n            .map_err(|error| (error, [None, None, None]))?;\n        let lifecycle = match acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock) {\n            Ok(guard) => guard,\n            Err(error) => return Err((error, [None, None, Some(commit.release_deferred())])),\n        };\n        let write = match acquire("state_write_lock", &target.state_write_lock) {\n            Ok(guard) => guard,\n            Err(error) => {\n                let lifecycle = lifecycle.release_deferred();\n                let commit = commit.release_deferred();\n                return Err((error, [None, Some(lifecycle), Some(commit)]));\n            }\n        };\n        Ok(Self {\n            _write: write,\n            _lifecycle: lifecycle,\n            _commit: commit,\n        })\n    }',)),
+    (PHYSICAL_CARRIER, 'method', 'StateFences::try_acquire', ('fn try_acquire(\n        target: &\'target State,\n    ) -> Result<\n        Self,\n        (\n            CarrierPhysicalPreparationError,\n            [Option<concread::release::DeferredRelease>; 3],\n        ),\n    > {\n        let acquire = |field, lock: &\'target crate::publication_lock::PublicationMutex| {\n            lock.try_lock_or_wait()\n                .map_err(|wait| CarrierPhysicalPreparationError::Fence { field, wait })\n        };\n        let commit = acquire("state_commit_lock", &target.state_commit_lock)\n            .map_err(|error| (error, [None, None, None]))?;\n        let lifecycle = match acquire("lane_lifecycle_lock", &target.lane_lifecycle_lock) {\n            Ok(guard) => guard,\n            Err(error) => return Err((error, [None, None, Some(commit.release_deferred())])),\n        };\n        let write = match acquire("state_write_lock", &target.state_write_lock) {\n            Ok(guard) => guard,\n            Err(error) => {\n                let lifecycle = lifecycle.release_deferred();\n                let commit = commit.release_deferred();\n                return Err((error, [None, Some(lifecycle), Some(commit)]));\n            }\n        };\n        Ok(Self {\n            _write: write,\n            _lifecycle: lifecycle,\n            _commit: commit,\n        })\n    }',)),
 )
 PREPARATION_OWNER_BINDINGS += CARRIER_QUEUE_BINDINGS
 
@@ -1389,7 +1401,6 @@ AGGREGATE_ABANDONMENT_BINDINGS = (
 PREPARATION_OWNER_BINDINGS += AGGREGATE_ABANDONMENT_BINDINGS
 
 PARTIAL_FENCE_REFUSAL_BINDINGS = (
-    ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'SourceAuthenticatedCarrier::release', ('drop(kura.release_deferred())',)),
     ('crates/iroha_core/src/state/carrier_preparation/physical_publication.rs', 'method', 'StateFences::release_deferred', ('self._write.release_deferred()', 'self._lifecycle.release_deferred()', 'self._commit.release_deferred()')),
     ('crates/iroha_core/src/queue.rs', 'struct', 'QueueRetirementCleanup', ('released: [Option<concread::release::DeferredRelease>; 3]',)),
     ('crates/iroha_core/src/queue.rs', 'method', 'QueueLaneRetirementObserver::release_deferred', ('self._reservation_transition_guard.release_deferred()',)),
@@ -1411,7 +1422,7 @@ KURA_JOINT_RELEASE_BINDINGS = (
     ('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into', ('fn try_release_into<R>(\n        mut self,\n        batch: &mut DeferredReleaseBatch,\n        release: impl FnOnce(T) -> R,\n    ) -> Result<R, Self> {\n        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {\n            return Err(self);\n        }\n        struct Record<\'a> {\n            batch: &\'a mut DeferredReleaseBatch,\n            poison_on_unwind: bool,\n        }\n        impl Drop for Record<\'_> {\n            fn drop(&mut self) {\n                self.batch.released = true;\n                self.batch.poisoned |= self.poison_on_unwind && std::thread::panicking();\n            }\n        }\n        // On callback unwind the original physical owner drops before this\n        // record. The batch remains in its caller\'s aggregate throughout.\n        let record = Record {\n            batch,\n            poison_on_unwind: self.poison_on_unwind,\n        };\n        let inner = self.inner.take().expect("owned release guard");\n        let _transferred = std::mem::ManuallyDrop::new(self);\n        let result = release(inner);\n        drop(record);\n        Ok(result)\n    }',)),
     ('vendor/concread/src/release.rs', 'method', 'DeferredReleaseBatch::drop', ('fn drop(&mut self) {\n        if self.released {\n            self.notification.released(self.poisoned);\n        }\n    }',)),
     ('crates/iroha_core/src/publication_lock.rs', 'method', 'PublicationMutex::deferred_releases', ('fn deferred_releases(&self) -> concread::release::DeferredReleaseBatch {\n        self.released.deferred_batch()\n    }',)),
-    ('crates/iroha_core/src/publication_lock.rs', 'method', 'PublicationGuard::try_release_into', ('fn try_release_into(\n        self,\n        batch: &mut concread::release::DeferredReleaseBatch,\n    ) -> Result<(), Self> {\n        self.inner\n            .try_release_into(batch, drop)\n            .map_err(|inner| Self { inner })\n    }',)),
+    ('crates/iroha_core/src/publication_lock.rs', 'method', 'PublicationGuard::try_release_into', ('fn try_release_into(\n        self,\n        batch: &mut concread::release::DeferredReleaseBatch,\n    ) -> Result<(), Self> {\n        let mutation_epoch = self.mutation_epoch;\n        self.inner\n            .try_release_into(batch, drop)\n            .map_err(|inner| Self {\n                inner,\n                mutation_epoch,\n            })\n    }',)),
     ('crates/iroha_core/src/kura.rs', 'method', 'Kura::merge_entry_by_hash_with_sidecar_guard', ("fn merge_entry_by_hash_with_sidecar_guard(\n        &self,\n        hash: HashOf<MergeLedgerEntry>,\n        sidecar: PublicationGuard<'_>,\n    ) -> Result<Option<MergeLedgerEntry>> {\n        let pending = self.pending_merge_entry_by_hash_under_sidecar_guard(hash)?;\n        drop(sidecar);\n        self.merge_entry_by_hash_after_sidecar(hash, pending)\n    }",)),
     ('crates/iroha_core/src/kura.rs', 'method', 'Kura::pending_merge_entry_by_hash_under_sidecar_guard', ('fn pending_merge_entry_by_hash_under_sidecar_guard(\n        &self,\n        hash: HashOf<MergeLedgerEntry>,\n    ) -> Result<Option<MergeLedgerEntry>> {\n        self.ensure_prune_recovery_not_required()?;\n        self.ensure_canonical_storage_not_poisoned()?;\n        self.read_pending_merge_entry_path(&self.pending_merge_entry_path(hash), Some(hash))\n    }',)),
     ('crates/iroha_core/src/kura.rs', 'method', 'Kura::merge_entry_by_hash_after_sidecar', ('fn merge_entry_by_hash_after_sidecar(\n        &self,\n        hash: HashOf<MergeLedgerEntry>,\n        pending: Option<MergeLedgerEntry>,\n    ) -> Result<Option<MergeLedgerEntry>> {\n        self.ensure_prune_recovery_not_required()?;\n        if pending.is_some() {\n            return Ok(pending);\n        }\n        let mut merge_log = self.merge_log.lock();\n        self.ensure_prune_recovery_not_required()?;\n        let entry = merge_log.entry_by_hash(hash)?;\n        self.ensure_prune_recovery_not_required()?;\n        Ok(entry)\n    }',)),
@@ -1474,8 +1485,8 @@ FRESH_PAIR_ACQUISITION_BINDINGS = (
     ('crates/mv/src/storage.rs', 'method', 'Storage::block_and_revert', ("    pub fn block_and_revert(&self) -> Block<'_, K, V> {\n        let mut slot = self.block_acquisition();\n        crate::BlockAcquisition::initialize(&mut slot, BlockMode::Replace);\n        crate::BlockAcquisition::into_block(slot)\n    }",)),
     ('crates/mv/src/storage/admitted.rs', 'method', 'Storage::open_admitted_writers', ('fn open_admitted_writers(&self) -> Result<AdmittedWriters<\'_, K, V, P>, AdmittedStorageError> {\n        let budget = self\n            .allocation\n            .as_ref()\n            .expect("admitted Storage original pool");\n        let current = BptreeMap::<K, V, Prepaid<P>>::writer_start_allocation_demand()\n            .map_err(AdmittedStorageError::Planning)?;\n        let undo = BptreeMap::<K, Option<V>, Prepaid<P>>::writer_start_allocation_demand()\n            .map_err(AdmittedStorageError::Planning)?;\n        let identity =\n            NextPublication::allocation_demand().map_err(AdmittedStorageError::Planning)?;\n        let (current, undo, identity) = reserve_owners(budget, current, undo, identity)?;\n        let undo_wait = self.revert_released.observe();\n        let revert = self.revert.try_acquire_writer().ok_or_else(|| {\n            writer_error(\n                MapAdmissionError::Busy,\n                StorageRole::Undo,\n                undo_wait.clone(),\n            )\n        })?;\n        let revert = self.revert_released.poisoning_guard(revert);\n        if revert.is_poisoned() {\n            revert.release_with_observed_poison(drop, || self.revert.is_poisoned());\n            return Err(AdmittedStorageError::Poisoned {\n                role: StorageRole::Undo,\n            });\n        }\n        let current_wait = self.blocks_released.observe();\n        let blocks = self.blocks.try_acquire_writer().ok_or_else(|| {\n            writer_error(\n                MapAdmissionError::Busy,\n                StorageRole::Current,\n                current_wait.clone(),\n            )\n        })?;\n        let blocks = self.blocks_released.poisoning_guard(blocks);\n        let (revert, blocks) = revert.try_map_pair_preserving_release(\n            blocks,\n            |revert, blocks| {\n                // Both actual poison checks precede either cursor allocation.\n                if blocks.is_poisoned() {\n                    return Err(AdmittedStorageError::Poisoned {\n                        role: StorageRole::Current,\n                    });\n                }\n                let revert = revert\n                    .try_write_admitted(|demand| policy::<P>(budget, undo, demand))\n                    .map_err(|(acquired, error)| {\n                        drop(acquired);\n                        writer_error(error, StorageRole::Undo, undo_wait)\n                    })?;\n                let blocks = blocks\n                    .try_write_admitted(|demand| policy::<P>(budget, current, demand))\n                    .map_err(|(acquired, error)| {\n                        drop(acquired);\n                        writer_error(error, StorageRole::Current, current_wait)\n                    })?;\n                Ok((revert, blocks))\n            },\n            || (self.revert.is_poisoned(), self.blocks.is_poisoned()),\n        )?;\n        // Refused/poisoned acquisition must not allocate an unused identity.\n        // Its original reservation already exists; both writers now belong to\n        // this opening, before reset, replacement copying or user execution.\n        let writers = StorageWriters::new(self, revert, blocks);\n        let next = NextPublication::from_admission(identity);\n        Ok(AdmittedWriters { writers, next })\n    }',)),
     ('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::release_with_observed_poison', ('pub fn release_with_observed_poison<R>(\n        mut self,\n        consume: impl FnOnce(T) -> R,\n        observe_poison: impl Fn() -> bool,\n    ) -> R {\n        struct Signal<\'a, F: Fn() -> bool> {\n            notification: &\'a ReleaseNotification,\n            observe_poison: F,\n        }\n        impl<F: Fn() -> bool> Drop for Signal<\'_, F> {\n            fn drop(&mut self) {\n                self.notification.released((self.observe_poison)());\n            }\n        }\n        let signal = Signal {\n            notification: self.notification,\n            observe_poison,\n        };\n        let inner = self.inner.take().expect("owned release guard");\n        let _transferred = std::mem::ManuallyDrop::new(self);\n        let result = consume(inner);\n        drop(signal);\n        result\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::release', ('    fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Pending { undo, current } => {\n                current.release(&self.target.blocks, &mut self.current_release);\n                undo.release(&self.target.revert, &mut self.undo_release);\n            }\n        }\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::release', ('    fn release(&mut self, target: &BptreeMap<K, V>, releases: &mut DeferredReleaseBatch) {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Empty => {}\n            Self::Raw(raw) => {\n                raw.try_release_into_observed(releases, drop, || target.is_poisoned())\n                    .unwrap_or_else(|_| unreachable!("original raw release source"));\n            }\n            Self::Writer(writer) => {\n                let retirement = writer\n                    .try_release_into_observed(\n                        releases,\n                        |writer| writer.abort_retaining(),\n                        || target.is_poisoned(),\n                    )\n                    .unwrap_or_else(|_| unreachable!("original converted release source"));\n                *self = Self::Retired(retirement);\n            }\n            Self::Retired(retirement) => *self = Self::Retired(retirement),\n        }\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'inherent BlockAcquisitionSlot::release', ('    pub fn release(&mut self) {\n        self.complete = false;\n        self.started = true;\n        match &mut self.phase {\n            AcquisitionPhase::Empty => {}\n            AcquisitionPhase::Block(block) => crate::BlockRetirement::release_writers(block),\n            AcquisitionPhase::Pending { undo, current } => {\n                current.release(&self.target.blocks, &mut self.current_release);\n                undo.release(&self.target.revert, &mut self.undo_release);\n            }\n        }\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::release', ('    fn release(&mut self, target: &BptreeMap<K, V, M>, releases: &mut DeferredReleaseBatch) {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Empty => {}\n            Self::Raw(raw) => {\n                raw.try_release_into_observed(releases, drop, || target.is_poisoned())\n                    .unwrap_or_else(|_| unreachable!("original raw release source"));\n            }\n            Self::Writer(writer) => {\n                let retirement = writer\n                    .try_release_into_observed(\n                        releases,\n                        |writer| writer.abort_retaining(),\n                        || target.is_poisoned(),\n                    )\n                    .unwrap_or_else(|_| unreachable!("original converted release source"));\n                *self = Self::Retired(retirement);\n            }\n            Self::Retired(retirement) => *self = Self::Retired(retirement),\n        }\n    }',)),
 )
 PREPARATION_OWNER_BINDINGS += FRESH_PAIR_ACQUISITION_BINDINGS
 
@@ -1531,11 +1542,11 @@ AGGREGATE_ACQUISITION_BINDINGS = (
     ('crates/mv/src/cell/acquisition.rs', 'enum', 'AcquisitionPhase', ("enum AcquisitionPhase<'a, V: Value, C: Send + Sync + 'static> {\n    Empty,\n    Pending(PendingPair<'a, V, C>),\n    Writers(CellWriters<'a, V, C>),\n    Block(Block<'a, V, C>),\n}",)),
     ('crates/mv/src/cell/acquisition.rs', 'struct', 'PendingPair', ("struct PendingPair<'a, V: Value, C: Send + Sync + 'static> {\n    revert: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, Option<V>, C>>>,\n    blocks: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>>,\n    undo_value: Option<EbrCellOwned<Option<V>, C>>,\n    current_value: Option<EbrCellOwned<V, C>>,\n    undo_charge: Option<C>,\n    current_charge: Option<C>,\n}",)),
     ('crates/mv/src/cell/acquisition.rs', 'method', 'BlockAcquisitionSlot::take_writers', ('    fn take_writers(&mut self) -> CellWriters<\'a, V, C> {\n        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {\n            AcquisitionPhase::Writers(writers) => writers,\n            other => {\n                self.phase = other;\n                panic!("original initialized pair")\n            }\n        }\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'enum', 'AcquisitionPhase', ("enum AcquisitionPhase<'a, K: Key, V: Value> {\n    Empty,\n    Pending {\n        undo: WriterPhase<'a, K, Option<V>>,\n        current: WriterPhase<'a, K, V>,\n    },\n    Block(Block<'a, K, V>),\n}",)),
-    ('crates/mv/src/storage/acquisition.rs', 'enum', 'WriterPhase', ("enum WriterPhase<'a, K: Key, V: Value> {\n    Empty,\n    Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V>>),\n    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V>>),\n    Retired(BptreeMapAbandonment<K, V>),\n}",)),
+    ('crates/mv/src/storage/acquisition.rs', 'enum', 'AcquisitionPhase', ("enum AcquisitionPhase<'a, K: Key, V: Value, M: StorageMode<K, V>> {\n    Empty,\n    Pending {\n        undo: WriterPhase<'a, K, Option<V>, M>,\n        current: WriterPhase<'a, K, V, M>,\n    },\n    Block(Block<'a, K, V, M>),\n}",)),
+    ('crates/mv/src/storage/acquisition.rs', 'enum', 'WriterPhase', ("enum WriterPhase<'a, K: Key, V: Value, M: MapMode + NodeCloning<K, V>> {\n    Empty,\n    Raw(ReleaseGuard<'a, BptreeMapWriterAcquisition<'a, K, V, M>>),\n    Writer(ReleaseGuard<'a, BptreeMapWriteTxn<'a, K, V, M>>),\n    Retired(BptreeMapAbandonment<K, V, M>),\n}",)),
     ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::is_poisoned', ('    fn is_poisoned(&self) -> bool {\n        match self {\n            Self::Raw(raw) => raw.is_poisoned(),\n            _ => panic!("original raw writer"),\n        }\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::take_raw', ('    fn take_raw(&mut self) -> ReleaseGuard<\'a, BptreeMapWriterAcquisition<\'a, K, V>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Raw(raw) => raw,\n            other => {\n                *self = other;\n                panic!("original raw writer")\n            }\n        }\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::take_writer', ('    fn take_writer(&mut self) -> ReleaseGuard<\'a, BptreeMapWriteTxn<\'a, K, V>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Writer(writer) => writer,\n            other => {\n                *self = other;\n                panic!("original converted writer")\n            }\n        }\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::take_raw', ('    fn take_raw(&mut self) -> ReleaseGuard<\'a, BptreeMapWriterAcquisition<\'a, K, V, M>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Raw(raw) => raw,\n            other => {\n                *self = other;\n                panic!("original raw writer")\n            }\n        }\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'WriterPhase::take_writer', ('    fn take_writer(&mut self) -> ReleaseGuard<\'a, BptreeMapWriteTxn<\'a, K, V, M>> {\n        match std::mem::replace(self, Self::Empty) {\n            Self::Writer(writer) => writer,\n            other => {\n                *self = other;\n                panic!("original converted writer")\n            }\n        }\n    }',)),
     ('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_map_preserving_release_into', ('    pub fn try_map_preserving_release_into<R, E>(\n        mut self,\n        batch: &mut DeferredReleaseBatch,\n        consume: impl FnOnce(T) -> Result<R, (T, E)>,\n        observe_poison: impl Fn() -> bool,\n    ) -> Result<Result<ReleaseGuard<\'owner, R>, (Self, E)>, Self> {\n        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {\n            return Err(self);\n        }\n        struct Record<\'a, F: Fn() -> bool> {\n            batch: &\'a mut DeferredReleaseBatch,\n            observe_poison: F,\n            armed: bool,\n        }\n        impl<F: Fn() -> bool> Drop for Record<\'_, F> {\n            fn drop(&mut self) {\n                if self.armed {\n                    self.batch.released = true;\n                    self.batch.poisoned |= (self.observe_poison)();\n                }\n            }\n        }\n        let mut record = Record {\n            batch,\n            observe_poison,\n            armed: true,\n        };\n        let inner = self.inner.take().expect("original physical guard");\n        let transferred = std::mem::ManuallyDrop::new(self);\n        let result = consume(inner);\n        record.armed = false;\n        drop(record);\n        Ok(match result {\n            Ok(inner) => Ok(ReleaseGuard {\n                inner: Some(inner),\n                notification: transferred.notification,\n                poison_on_unwind: transferred.poison_on_unwind,\n            }),\n            Err((inner, error)) => Err((\n                Self {\n                    inner: Some(inner),\n                    notification: transferred.notification,\n                    poison_on_unwind: transferred.poison_on_unwind,\n                },\n                error,\n            )),\n        })\n    }',)),
     ('vendor/concread/src/release.rs', 'method', 'ReleaseGuard::try_release_into_observed', ('    pub fn try_release_into_observed<R>(\n        mut self,\n        batch: &mut DeferredReleaseBatch,\n        release: impl FnOnce(T) -> R,\n        observe_poison: impl Fn() -> bool,\n    ) -> Result<R, Self> {\n        if !Arc::ptr_eq(&self.notification.state, &batch.notification.state) {\n            return Err(self);\n        }\n        struct Record<\'a, F: Fn() -> bool> {\n            batch: &\'a mut DeferredReleaseBatch,\n            observe_poison: F,\n        }\n        impl<F: Fn() -> bool> Drop for Record<\'_, F> {\n            fn drop(&mut self) {\n                self.batch.released = true;\n                self.batch.poisoned |= (self.observe_poison)();\n            }\n        }\n        let record = Record {\n            batch,\n            observe_poison,\n        };\n        let inner = self.inner.take().expect("original physical guard");\n        let _transferred = std::mem::ManuallyDrop::new(self);\n        let result = release(inner);\n        drop(record);\n        Ok(result)\n    }',)),
     ('vendor/concread/src/bptree/mod.rs', 'struct', 'BptreeMapAbandonment', ("pub struct BptreeMapAbandonment<K, V, M = Untracked>\nwhere\n    K: Clone + Ord + Debug + Send + Sync + 'static,\n    V: Clone + Send + Sync + 'static,\n    M: MapMode + NodeCloning<K, V>,\n{\n    _inner:\n        LinCowCellOwned<SuperBlock<K, V, M>, CursorRead<K, V, M>, CursorWrite<K, V, M>, M::Charge>,\n}",)),
@@ -1550,10 +1561,10 @@ AGGREGATE_ACQUISITION_BINDINGS = (
     ('crates/mv/src/cell/acquisition.rs', 'method', 'CellWriters::as_mut', ('    pub(super) fn as_mut(&mut self) -> &mut OriginalCellWriters<\'a, V, C> {\n        match self.state.as_mut() {\n            Some(CellWriterState::Attached(original)) => original,\n            _ => panic!("original cell pair was released"),\n        }\n    }',)),
     ('crates/mv/src/cell.rs', 'method', 'Block::release_writers', ('    fn release_writers(&mut self) {\n        self.writers.release();\n    }',)),
     ('crates/mv/src/storage.rs', 'method', 'Storage::block_acquisition', ("    pub fn block_acquisition(&self) -> BlockAcquisitionSlot<'_, K, V> {\n        BlockAcquisitionSlot::new(self)\n    }",)),
-    ('crates/mv/src/storage/acquisition.rs', 'struct', 'BlockAcquisitionSlot', ("pub struct BlockAcquisitionSlot<'a, K: Key, V: Value> {\n    target: &'a Storage<K, V>,\n    phase: AcquisitionPhase<'a, K, V>,\n    started: bool,\n    complete: bool,\n    // Last: recorded native notifications survive payload/charge destruction.\n    undo_release: DeferredReleaseBatch,\n    current_release: DeferredReleaseBatch,\n}",)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::new', ("    pub(super) fn new(target: &'a Storage<K, V>) -> Self {\n        Self {\n            target,\n            phase: AcquisitionPhase::Pending {\n                undo: WriterPhase::Empty,\n                current: WriterPhase::Empty,\n            },\n            started: false,\n            complete: false,\n            undo_release: target.revert_released.deferred_batch(),\n            current_release: target.blocks_released.deferred_batch(),\n        }\n    }",)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::into_block', ('    fn into_block(mut self) -> Self::Block {\n        assert!(\n            self.complete,\n            "original storage initialization did not complete"\n        );\n        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {\n            AcquisitionPhase::Block(block) => block,\n            other => {\n                self.phase = other;\n                panic!("original completed storage block")\n            }\n        }\n    }',)),
-    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', ('    fn drop(&mut self) {\n        crate::BlockAcquisition::release(self);\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'struct', 'BlockAcquisitionSlot', ("pub struct BlockAcquisitionSlot<'a, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {\n    target: &'a Storage<K, V, M>,\n    phase: AcquisitionPhase<'a, K, V, M>,\n    started: bool,\n    complete: bool,\n    custody: M::AcquisitionCustody,\n    // Last: recorded native notifications survive payload/charge destruction.\n    undo_release: DeferredReleaseBatch,\n    current_release: DeferredReleaseBatch,\n}",)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::new', ("    pub(super) fn new(target: &'a Storage<K, V>) -> Self {\n        Self {\n            target,\n            phase: AcquisitionPhase::Pending {\n                undo: WriterPhase::Empty,\n                current: WriterPhase::Empty,\n            },\n            started: false,\n            complete: false,\n            custody: (),\n            undo_release: target.revert_released.deferred_batch(),\n            current_release: target.blocks_released.deferred_batch(),\n        }\n    }",)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'inherent BlockAcquisitionSlot::into_block', ('    pub fn into_block(mut self) -> Block<\'a, K, V, M> {\n        assert!(\n            self.complete,\n            "original storage initialization did not complete"\n        );\n        match std::mem::replace(&mut self.phase, AcquisitionPhase::Empty) {\n            AcquisitionPhase::Block(block) => block,\n            other => {\n                self.phase = other;\n                panic!("original completed storage block")\n            }\n        }\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'BlockAcquisitionSlot::drop', ('    fn drop(&mut self) {\n        self.release();\n    }',)),
     ('crates/mv/src/storage.rs', 'enum', 'StorageWriterState', ("enum StorageWriterState<'a, K: Key, V: Value, M: StorageMode<K, V>> {\n    Attached(OriginalWriters<'a, K, V, M>),\n    Preparing(PreparedStorageWriters<'a, K, V, M>),\n    Published {\n        _retirement: PublicationRetirement<K, V, M>,\n    },\n    Released {\n        _blocks: BptreeMapAbandonment<K, V, M>,\n        _revert: BptreeMapAbandonment<K, Option<V>, M>,\n        _blocks_release: concread::release::DeferredRelease,\n        _revert_release: concread::release::DeferredRelease,\n    },\n}",)),
     ('crates/mv/src/storage.rs', 'struct', 'StorageWriters', ("struct StorageWriters<'target, K: Key, V: Value, M: StorageMode<K, V>> {\n    state: Option<StorageWriterState<'target, K, V, M>>,\n    target: &'target Storage<K, V, M>,\n}",)),
     ('crates/mv/src/storage.rs', 'method', 'StorageWriters::new', ("    fn new(\n        target: &'target Storage<K, V, M>,\n        revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>, M>>,\n        blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V, M>>,\n    ) -> Self {\n        Self {\n            state: Some(StorageWriterState::Attached(OriginalWriters {\n                revert,\n                blocks,\n            })),\n            target,\n        }\n    }",)),
@@ -1609,7 +1620,7 @@ CAPTURE_OWNER_BINDINGS = (
     ('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::into_detached', ('    fn into_detached(mut self) -> (Self::Detached, CaptureCleanup) {\n        match std::mem::replace(&mut self.phase, CapturePhase::Empty) {\n            CapturePhase::Captured(journal) => (journal, std::mem::take(&mut self.cleanup)),\n            original => {\n                self.phase = original;\n                panic!("original map capture did not complete");\n            }\n        }\n    }',)),
     ('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::drop', ('    fn drop(&mut self) {\n        self.release();\n    }',)),
     ('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::capture_admitted', ('    pub(super) fn capture_admitted(&mut self, admission: Admission) {\n        assert!(!self.started, "original map capture is one-shot");\n        self.started = true;\n        let CapturePhase::Attached {\n            block,\n            admission: retained,\n        } = &mut self.phase\n        else {\n            panic!("original attached map capture");\n        };\n        *retained = Some(admission);\n        block.assert_operable();\n        self.finish_capture();\n    }',)),
-    ('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::finish_capture', ('    fn finish_capture(&mut self) {\n        let CapturePhase::Attached {\n            block,\n            admission: Some(admission),\n        } = std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!("original checked map block");\n        };\n        let Block {\n            writers,\n            dirty,\n            failed: _,\n            predecessor,\n            next,\n            mode,\n        } = block;\n        let OriginalWriters { revert, blocks } = writers.into_original();\n        let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);\n        self.phase = CapturePhase::Captured(Detached {\n            revert,\n            blocks,\n            metadata: DetachedMetadata {\n                predecessor,\n                mode,\n                dirty,\n                next: next.expect("attached block retained original successor identity"),\n                admission,\n            },\n        });\n        self.cleanup = cleanup;\n    }',)),
+    ('crates/mv/src/storage/capture.rs', 'method', 'BlockCaptureSlot::finish_capture', ('    fn finish_capture(&mut self) {\n        let CapturePhase::Attached {\n            block,\n            admission: Some(admission),\n        } = std::mem::replace(&mut self.phase, CapturePhase::Empty)\n        else {\n            unreachable!("original checked map block");\n        };\n        let Block {\n            writers,\n            dirty,\n            failed: _,\n            predecessor,\n            next,\n            mode,\n            _acquisition_custody: _,\n        } = block;\n        let OriginalWriters { revert, blocks } = writers.into_original();\n        let (blocks, revert, cleanup) = detach_pair_retaining(blocks, revert);\n        self.phase = CapturePhase::Captured(Detached {\n            revert,\n            blocks,\n            metadata: DetachedMetadata {\n                predecessor,\n                mode,\n                dirty,\n                next: next.expect("attached block retained original successor identity"),\n                admission,\n            },\n        });\n        self.cleanup = cleanup;\n    }',)),
     ('crates/mv/src/storage.rs', 'fn', 'detach_pair_retaining', ("fn detach_pair_retaining<K: Key, V: Value, M: StorageMode<K, V>>(\n    blocks: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, V, M>>,\n    revert: ReleaseGuard<'_, BptreeMapWriteTxn<'_, K, Option<V>, M>>,\n) -> (\n    BptreeMapOwned<K, V, M>,\n    BptreeMapOwned<K, Option<V>, M>,\n    crate::CaptureCleanup,\n) {\n    // Both cursor flags were checked while the caller still owned its Block.\n    // Exclusive ownership prevents a new edit between that check and detach.\n    let (blocks, current_release) = blocks.release_deferred(|writer| writer.detach());\n    let (revert, undo_release) = revert.release_deferred(|writer| writer.detach());\n    (\n        blocks,\n        revert,\n        crate::CaptureCleanup::new(current_release, undo_release),\n    )\n}",)),
     ('crates/mv/src/storage.rs', 'method', 'Block::detach_owned', ('        pub(super) fn detach_owned<Admission>(\n            self,\n            admission: Admission,\n        ) -> Detached<K, V, Admission, M> {\n            let mut slot = self.capture_slot();\n            slot.capture_admitted(admission);\n            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);\n            drop(cleanup);\n            journal\n        }',)),
     ('crates/mv/src/storage.rs', 'method', 'Block::try_detach', ('        pub fn try_detach<Admission, E>(\n            self,\n            admit: impl FnOnce(&Self) -> Result<Admission, E>,\n        ) -> Result<Detached<K, V, Admission>, E> {\n            let mut slot = self.capture_slot();\n            crate::BlockCapture::try_capture(&mut slot, admit)?;\n            let (journal, cleanup) = crate::BlockCapture::into_detached(slot);\n            drop(cleanup);\n            Ok(journal)\n        }',)),
@@ -1896,8 +1907,8 @@ RETAINED_HASH_PREPARATION_BINDINGS = (
     ('crates/iroha_core/src/state/block_hashes_publication.rs', 'struct', 'AbortedBlockHashes', ('pub(crate) struct AbortedBlockHashes<Installation> {\n    _owner: NativeLaneStateOwner,\n    _release: [concread::release::DeferredRelease; 2],\n    _installation: Installation,\n    _preflight_release: Option<concread::release::DeferredRelease>,\n}',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'struct', 'ReleasedCarrierFences', ('struct ReleasedCarrierFences {\n    _state: [concread::release::DeferredRelease; 3],\n    _queue: Option<ReleasedCarrierQueue>,\n    _kura: KuraPublicationCleanup,\n}',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'struct', 'CarrierPreparation', ("pub(super) struct CarrierPreparation<'target> {\n    world: Option<WorldPublicationSlot<'target, (), ()>>,\n    runtime: Option<RuntimePublicationSlot<'target, (), ()>>,\n    transactions: Option<DetachedTransactionsPublicationSlot<'target, ()>>,\n    block_hashes: RetainedHashSlot<'target, ()>,\n    effect_locks: Option<crate::state::effect_publication::StateEffectLocks<'target>>,\n    fences: Option<CarrierFences<'target>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    retired_fences: Option<ReleasedCarrierFences>,\n}",)),
-    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', ("    pub(super) fn new(\n        original: DetachedCarrierComponents,\n        target: &'target State,\n        fences: CarrierFences<'target>,\n    ) -> Self {\n        let DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        } = original;\n        Self {\n            world: Some(world.publication_slot(&target.world)),\n            runtime: Some(runtime.publication_slot(target)),\n            transactions: Some(transactions.publication_slot(&target.transactions)),\n            block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),\n            effect_locks: Some(crate::state::effect_publication::StateEffectLocks::new(\n                target,\n            )),\n            fences: Some(fences),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            retired_fences: None,\n        }\n    }",)),
-    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', ('    pub(super) fn try_prepare<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            "carrier preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let result = self.prepare_inner();\n        self.retryable = true;\n        self.complete = result.is_ok();\n        result\n    }',)),
+    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::new', ("    pub(super) fn new(\n        original: DetachedCarrierComponents,\n        target: &'target State,\n        fences: CarrierFences<'target>,\n    ) -> Self {\n        let DetachedCarrierComponents {\n            world,\n            runtime,\n            transactions,\n            block_hashes,\n        } = original;\n        Self {\n            world: Some(world.publication_slot(&target.world, None)),\n            runtime: Some(runtime.publication_slot(target)),\n            transactions: Some(transactions.publication_slot(&target.transactions)),\n            block_hashes: RetainedHashSlot::new(block_hashes, &target.block_hashes),\n            effect_locks: Some(crate::state::effect_publication::StateEffectLocks::new(\n                target,\n            )),\n            fences: Some(fences),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            retired_fences: None,\n        }\n    }",)),
+    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::try_prepare', ('    pub(super) fn try_prepare(&mut self) -> Result<(), CarrierPhysicalPreparationError> {\n        assert!(\n            !self.attempted && !self.released,\n            "carrier preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let result = self.prepare_inner();\n        self.retryable = true;\n        self.complete = result.is_ok();\n        result\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::release_fences', ('    fn release_fences(&mut self) {\n        if let Some(fences) = self.fences.take() {\n            let CarrierFences {\n                _state: state,\n                _queue: queue,\n                _kura: kura,\n            } = fences;\n            self.retired_fences = Some(ReleasedCarrierFences {\n                _state: state.release_deferred(),\n                _queue: queue.map(CarrierQueueRetirement::release_deferred),\n                _kura: kura.release_deferred(),\n            });\n        }\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::recover_original', ('    pub(super) fn recover_original(&mut self) -> DetachedCarrierComponents {\n        assert!(\n            self.retryable && !self.released,\n            "unwound or released carrier grants no retry authority"\n        );\n        self.complete = false;\n        self.released = true;\n        // Normal recovery moves the original journals and retains every release\n        // in the installed slots. It invokes no callback or new admission.\n        let original = DetachedCarrierComponents {\n            world: self\n                .world\n                .as_mut()\n                .expect("original World slot")\n                .recover_original(),\n            runtime: self\n                .runtime\n                .as_mut()\n                .expect("original runtime slot")\n                .recover_original(),\n            transactions: self\n                .transactions\n                .as_mut()\n                .expect("original membership slot")\n                .recover_original(),\n            block_hashes: self.block_hashes.recover_original(),\n        };\n        self.effect_locks\n            .as_mut()\n            .expect("original effect locks")\n            .release_writers();\n        self.release_fences();\n        original\n    }',)),
     ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::into_prepared', ('    pub(super) fn into_prepared(mut self) -> AcquiredCarrierComponents<\'target> {\n        assert!(\n            self.complete && !self.released,\n            "complete original carrier preparation"\n        );\n        self.released = true;\n        AcquiredCarrierComponents {\n            original: Some(AcquiredCarrierParticipants {\n                world: self\n                    .world\n                    .take()\n                    .expect("complete original World")\n                    .into_prepared(),\n                runtime: self\n                    .runtime\n                    .take()\n                    .expect("complete original runtime")\n                    .into_prepared(),\n                transactions: self\n                    .transactions\n                    .take()\n                    .expect("complete original membership")\n                    .into_prepared(),\n                block_hashes: self.block_hashes.take_prepared(),\n                effect_locks: self.effect_locks.take().expect("prepared effect locks"),\n                _fences: self.fences.take().expect("original carrier fences"),\n            }),\n        }\n    }',)),
@@ -1996,38 +2007,38 @@ GROUP_COMPONENT_INVOCATIONS = (
 )
 
 WORLD_CARRIER_PREPARATION_BINDINGS = (
-    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', ('    fn prepare_inner<E>(&mut self) -> Result<(), CarrierPhysicalPreparationError<E>> {\n        self.block_hashes\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "block_hashes",\n                cause,\n            })?;\n        self.transactions\n            .as_mut()\n            .expect("original membership slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "transactions",\n                cause,\n            })?;\n        self.runtime\n            .as_mut()\n            .expect("original runtime slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::Runtime)?;\n        self.world\n            .as_mut()\n            .expect("original World slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::World)?;\n        self.effect_locks\n            .as_mut()\n            .expect("original effect lock slot")\n            .try_prepare()\n            .map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait })?;\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/carrier_preparation/participant_preparation.rs', 'method', 'CarrierPreparation::prepare_inner', ('    fn prepare_inner(&mut self) -> Result<(), CarrierPhysicalPreparationError> {\n        self.block_hashes\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "block_hashes",\n                cause,\n            })?;\n        self.transactions\n            .as_mut()\n            .expect("original membership slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| CarrierPhysicalPreparationError::Component {\n                field: "transactions",\n                cause,\n            })?;\n        self.runtime\n            .as_mut()\n            .expect("original runtime slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::Runtime)?;\n        self.world\n            .as_mut()\n            .expect("original World slot")\n            .try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(CarrierPhysicalPreparationError::World)?;\n        self.effect_locks\n            .as_mut()\n            .expect("original effect lock slot")\n            .try_prepare()\n            .map_err(|(field, wait)| CarrierPhysicalPreparationError::Fence { field, wait })?;\n        Ok(())\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'struct', 'Fields', ("struct Fields<'target, Admission> {\n    mode: BlockMode,\n    fields: PreparedWorldFields<'target>,\n    retry: Vec<Box<dyn RetainedWorldField>>,\n    dataspace_catalog: Option<DataSpaceCatalog>,\n    external_event_buf: Option<Vec<EventBox>>,\n    admission: Option<Admission>,\n}",)),
-    ('crates/iroha_core/src/state/world_preparation.rs', 'struct', 'WorldPublicationSlot', ("pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {\n    target: &'target World,\n    phase: Option<Phase<'target, Admission>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    installation: Option<Installation>,\n}",)),
+    ('crates/iroha_core/src/state/world_preparation.rs', 'struct', 'WorldPublicationSlot', ("pub(in crate::state) struct WorldPublicationSlot<'target, Admission, Installation> {\n    target: &'target World,\n    scope: Option<&'target AllocationScope<'target>>,\n    phase: Option<Phase<'target, Admission>>,\n    attempted: bool,\n    retryable: bool,\n    complete: bool,\n    released: bool,\n    installation: Option<Installation>,\n}",)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'enum', 'Phase', ("enum Phase<'target, Admission> {\n    Original(DetachedWorld<Admission>),\n    Fields(Fields<'target, Admission>),\n}",)),
-    ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'DetachedWorld::publication_slot', ("    pub(in crate::state) fn publication_slot<Installation>(\n        self,\n        target: &World,\n    ) -> WorldPublicationSlot<'_, Admission, Installation> {\n        WorldPublicationSlot {\n            target,\n            phase: Some(Phase::Original(self)),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            installation: None,\n        }\n    }",)),
+    ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'DetachedWorld::publication_slot', ("    pub(in crate::state) fn publication_slot<'target, Installation>(\n        self,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> WorldPublicationSlot<'target, Admission, Installation> {\n        WorldPublicationSlot {\n            target,\n            scope,\n            phase: Some(Phase::Original(self)),\n            attempted: false,\n            retryable: true,\n            complete: false,\n            released: false,\n            installation: None,\n        }\n    }",)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::original', ('    fn original(&self) -> &DetachedWorld<Admission> {\n        let Some(Phase::Original(original)) = self.phase.as_ref() else {\n            panic!("original unattempted World");\n        };\n        original\n    }',)),
-    ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', ('    pub(in crate::state) fn try_prepare<E>(\n        &mut self,\n        admit: impl FnOnce(&DetachedWorld<Admission>, &World) -> Result<Installation, E>,\n    ) -> Result<(), WorldPublicationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            "World preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let installation = match admit(self.original(), self.target) {\n            Ok(installation) => installation,\n            Err(error) => {\n                self.retryable = true;\n                return Err(WorldPublicationError::Admission(error));\n            }\n        };\n        self.installation = Some(installation);\n        // This is the existing admitted prepared Vec. The original stays in the\n        // caller while allocating; its allocation becomes the exact retry Vec.\n        let fields = PreparedWorldFields(Vec::with_capacity(self.original().fields.len()));\n        let Some(Phase::Original(original)) = self.phase.take() else {\n            unreachable!("checked original World");\n        };\n        let DetachedWorld {\n            mode,\n            fields: retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission,\n        } = original;\n        self.phase = Some(Phase::Fields(Fields {\n            mode,\n            fields,\n            retry,\n            dataspace_catalog: Some(dataspace_catalog),\n            external_event_buf: Some(external_event_buf),\n            admission: Some(admission),\n        }));\n        let Some(Phase::Fields(fields)) = self.phase.as_mut() else {\n            unreachable!("installed original World fields");\n        };\n        fields.retry.reverse();\n        while let Some(original) = fields.retry.pop() {\n            fields.fields.push(original.publication_slot(self.target));\n        }\n        // Every shell and its original journal is already in this caller before\n        // the first physical acquisition or a native field preparation can panic.\n        for field in fields.fields.iter_mut() {\n            if let Err(error) = field.try_prepare() {\n                self.retryable = true;\n                return Err(WorldPublicationError::Field(error));\n            }\n        }\n        self.complete = true;\n        self.retryable = true;\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::try_prepare', ('    pub(in crate::state) fn try_prepare<E>(\n        &mut self,\n        admit: impl FnOnce(&DetachedWorld<Admission>, &World) -> Result<Installation, E>,\n    ) -> Result<(), WorldPublicationError<E>> {\n        assert!(\n            !self.attempted && !self.released,\n            "World preparation is one-shot"\n        );\n        self.attempted = true;\n        self.retryable = false;\n        let installation = match admit(self.original(), self.target) {\n            Ok(installation) => installation,\n            Err(error) => {\n                self.retryable = true;\n                return Err(WorldPublicationError::Admission(error));\n            }\n        };\n        self.installation = Some(installation);\n        // This is the existing admitted prepared Vec. The original stays in the\n        // caller while allocating; its allocation becomes the exact retry Vec.\n        let fields = PreparedWorldFields(Vec::with_capacity(self.original().fields.len()));\n        let Some(Phase::Original(original)) = self.phase.take() else {\n            unreachable!("checked original World");\n        };\n        let DetachedWorld {\n            mode,\n            fields: retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission,\n        } = original;\n        self.phase = Some(Phase::Fields(Fields {\n            mode,\n            fields,\n            retry,\n            dataspace_catalog: Some(dataspace_catalog),\n            external_event_buf: Some(external_event_buf),\n            admission: Some(admission),\n        }));\n        let Some(Phase::Fields(fields)) = self.phase.as_mut() else {\n            unreachable!("installed original World fields");\n        };\n        fields.retry.reverse();\n        while let Some(original) = fields.retry.pop() {\n            fields\n                .fields\n                .push(original.publication_slot(self.target, self.scope));\n        }\n        // Every shell and its original journal is already in this caller before\n        // the first physical acquisition or a native field preparation can panic.\n        for field in fields.fields.iter_mut() {\n            if let Err(error) = field.try_prepare() {\n                self.retryable = true;\n                return Err(WorldPublicationError::Field(error));\n            }\n        }\n        self.complete = true;\n        self.retryable = true;\n        Ok(())\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::recover_original', ('    pub(in crate::state) fn recover_original(&mut self) -> DetachedWorld<Admission> {\n        assert!(\n            self.retryable && !self.released,\n            "unwound or released World is not retry authority"\n        );\n        self.complete = false;\n        self.released = true;\n        if matches!(self.phase, Some(Phase::Original(_))) {\n            let Some(Phase::Original(original)) = self.phase.take() else {\n                unreachable!("checked original World phase");\n            };\n            return original;\n        }\n        let Some(Phase::Fields(fields)) = self.phase.as_mut() else {\n            unreachable!("original World fields");\n        };\n        assert!(\n            fields.retry.is_empty() && fields.retry.capacity() >= fields.fields.len(),\n            "original retry allocation"\n        );\n        // Normal recovery precedes terminal release: these slots still have the\n        // original retry authority. Each physical release remains deferred.\n        fields.fields.recover_all();\n        fields\n            .retry\n            .extend(fields.fields.iter_mut().map(|field| field.abort()));\n        DetachedWorld {\n            mode: fields.mode,\n            fields: std::mem::take(&mut fields.retry),\n            dataspace_catalog: fields.dataspace_catalog.take().expect("original catalog"),\n            external_event_buf: fields.external_event_buf.take().expect("original events"),\n            admission: fields.admission.take().expect("original capture admission"),\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::release_writers', ('    pub(in crate::state) fn release_writers(&mut self) {\n        self.released = true;\n        self.retryable = false;\n        self.complete = false;\n        if let Some(Phase::Fields(fields)) = self.phase.as_mut() {\n            fields.fields.release_all();\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_prepared', ('    pub(in crate::state) fn into_prepared(\n        mut self,\n    ) -> PreparedWorld<\'target, Admission, Installation> {\n        assert!(\n            self.complete && !self.released,\n            "complete original World preparation"\n        );\n        let Some(Phase::Fields(fields)) = self.phase.take() else {\n            unreachable!("checked complete World fields");\n        };\n        self.released = true;\n        PreparedWorld {\n            mode: fields.mode,\n            fields: fields.fields,\n            retry: fields.retry,\n            dataspace_catalog: fields.dataspace_catalog.expect("original catalog"),\n            external_event_buf: fields.external_event_buf.expect("original events"),\n            admission: fields.admission.expect("original capture admission"),\n            installation: self.installation.take().expect("original installation"),\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::into_cleanup', ('    pub(super) fn into_cleanup(mut self) -> AbortedWorld<\'target, Installation> {\n        assert!(self.released, "original World must be recovered");\n        if let Some(Phase::Fields(fields)) = self.phase.as_ref() {\n            assert!(\n                fields.admission.is_none()\n                    && fields.dataspace_catalog.is_none()\n                    && fields.external_event_buf.is_none(),\n                "complete original recovery before cleanup"\n            );\n        }\n        let fields = match self.phase.take() {\n            Some(Phase::Fields(fields)) => fields.fields,\n            None => PreparedWorldFields(Vec::new()),\n            Some(Phase::Original(_)) => panic!("original World is not cleanup"),\n        };\n        AbortedWorld {\n            _fields: fields,\n            _installation: self.installation.take(),\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_preparation.rs', 'method', 'WorldPublicationSlot::drop', ('    fn drop(&mut self) {\n        self.release_writers();\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'enum', 'FieldPhase', ('enum FieldPhase<Slot, Prepared> {\n    Preparing(Slot),\n    Prepared(Prepared),\n    Recovered,\n}',)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'struct', 'PreparedStorage', ("struct PreparedStorage<'target, K: Key, V: Value> {\n    original: Option<Box<RetainedStorage<K, V>>>,\n    phase: FieldPhase<\n        mv::storage::DetachedPublicationSlot<'target, K, V, (), ()>,\n        mv::storage::PreparedPublication<'target, K, V, (), ()>,\n    >,\n    published: Option<mv::storage::PublishedPublication<K, V, (), ()>>,\n    aborted: Option<mv::PublicationCleanup<()>>,\n    released: bool,\n    normal_recovery: bool,\n}",)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause,\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }',)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', ('    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            slot.release_writers();\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!("original prepared field");\n            };\n            let (journal, retirement) = journal.abort();\n            self.original.as_mut().expect("original field box").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'struct', 'PreparedStorage', ("struct PreparedStorage<'target, K: Key, V: Value, M: WorldStorageMode<K, V>> {\n    original: Option<Box<RetainedStorage<K, V, M>>>,\n    phase: FieldPhase<M::Slot<'target>, M::Prepared<'target>>,\n    published: Option<M::Published<'target>>,\n    aborted: Option<M::Aborted<'target>>,\n    released: bool,\n    normal_recovery: bool,\n}",)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        M::try_prepare(slot).map_err(|cause| FieldRefusal {\n            field: name,\n            trigger_component: None,\n            cause,\n        })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(M::into_prepared(slot));\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release', ('    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            M::release_writers(slot);\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!("original prepared field");\n            };\n            let (journal, retirement) = M::abort(journal);\n            self.original.as_mut().expect("original field box").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::abort', ('    fn abort(&mut self) -> Box<dyn RetainedWorldField> {\n        self.release_for_recovery();\n        self.released = true;\n        self.original.take().expect("original field box")\n    }',)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', ('    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            "complete original field"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original prepared field");\n        };\n        self.published = Some(journal.publish());\n        self.released = true;\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::publish', ('    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            "complete original field"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original prepared field");\n        };\n        self.published = Some(M::publish(journal));\n        self.released = true;\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'struct', 'PreparedCell', ("struct PreparedCell<'target, V: Value> {\n    original: Option<Box<RetainedCell<V>>>,\n    phase: FieldPhase<\n        mv::cell::DetachedPublicationSlot<'target, V, (), ()>,\n        mv::cell::PreparedPublication<'target, V, (), ()>,\n    >,\n    published: Option<mv::cell::PublishedPublication<V, (), ()>>,\n    aborted: Option<mv::PublicationCleanup<()>>,\n    released: bool,\n    normal_recovery: bool,\n}",)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause,\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|cause| FieldRefusal {\n                field: name,\n                trigger_component: None,\n                cause: storage_mode::widen_untracked(cause),\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release', ('    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            slot.release_writers();\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!("original prepared field");\n            };\n            let (journal, retirement) = journal.abort();\n            self.original.as_mut().expect("original field box").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::abort', ('    fn abort(&mut self) -> Box<dyn RetainedWorldField> {\n        self.release_for_recovery();\n        self.released = true;\n        self.original.take().expect("original field box")\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::publish', ('    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            "complete original field"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original prepared field");\n        };\n        self.published = Some(journal.publish());\n        self.released = true;\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'struct', 'PreparedTriggers', ("struct PreparedTriggers<'target> {\n    original: Option<Box<RetainedTriggers>>,\n    phase: FieldPhase<\n        crate::smartcontracts::isi::triggers::set::DetachedSetPublicationSlot<'target, (), ()>,\n        PreparedSet<'target, (), ()>,\n    >,\n    published: Option<crate::smartcontracts::isi::triggers::set::PublishedSet<(), ()>>,\n    aborted: Option<crate::smartcontracts::isi::triggers::set::AbortedSet<()>>,\n    released: bool,\n    normal_recovery: bool,\n}",)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|error| match error {\n                SetPublicationError::Admission(impossible) => match impossible {},\n                SetPublicationError::Component { field, cause } => FieldRefusal {\n                    field: name,\n                    trigger_component: Some(field),\n                    cause,\n                },\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::try_prepare', ('    fn try_prepare(&mut self) -> Result<(), FieldRefusal> {\n        assert!(!self.released, "original field was terminally released");\n        let name = self.original.as_ref().expect("original field box").name;\n        let FieldPhase::Preparing(slot) = &mut self.phase else {\n            panic!("original field preparation is one-shot");\n        };\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(|error| match error {\n                SetPublicationError::Admission(impossible) => match impossible {},\n                SetPublicationError::Component { field, cause } => FieldRefusal {\n                    field: name,\n                    trigger_component: Some(field),\n                    cause: storage_mode::widen_untracked(cause),\n                },\n            })?;\n        let FieldPhase::Preparing(slot) = std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original field slot");\n        };\n        self.phase = FieldPhase::Prepared(slot.into_prepared());\n        Ok(())\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release', ('    fn release(&mut self) {\n        self.released = true;\n        if let FieldPhase::Preparing(slot) = &mut self.phase {\n            slot.release_writers();\n        } else if matches!(&self.phase, FieldPhase::Prepared(_)) {\n            let FieldPhase::Prepared(journal) =\n                std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n            else {\n                unreachable!("original prepared field");\n            };\n            let (journal, retirement) = journal.abort();\n            self.original.as_mut().expect("original field box").journal = Some(journal);\n            self.aborted = Some(retirement);\n        }\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::abort', ('    fn abort(&mut self) -> Box<dyn RetainedWorldField> {\n        self.release_for_recovery();\n        self.released = true;\n        self.original.take().expect("original field box")\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::publish', ('    fn publish(&mut self) {\n        assert!(\n            !self.released && matches!(&self.phase, FieldPhase::Prepared(_)),\n            "complete original field"\n        );\n        let FieldPhase::Prepared(journal) =\n            std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n        else {\n            unreachable!("checked original prepared field");\n        };\n        self.published = Some(journal.publish());\n        self.released = true;\n    }',)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'storage_slot', ('pub(super) fn storage_slot<\'target, K: Key, V: Value>(\n    mut original: Box<RetainedStorage<K, V>>,\n    world: &\'target World,\n) -> Box<dyn PreparedWorldField + \'target> {\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect("retained original journal");\n    // Inert shell construction precedes every field\'s physical preparation.\n    Box::new(PreparedStorage {\n        original: Some(original),\n        phase: FieldPhase::Preparing(journal.publication_slot(target)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'storage_slot', ('pub(super) fn storage_slot<\'target, K: Key, V: Value, M: WorldStorageMode<K, V>>(\n    mut original: Box<RetainedStorage<K, V, M>>,\n    world: &\'target World,\n    scope: Option<&\'target AllocationScope<\'target>>,\n) -> Box<dyn PreparedWorldField + \'target>\nwhere\n    M::Charge: Send + Sync + \'static,\n{\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect("retained original journal");\n    // Inert shell construction precedes every field\'s physical preparation.\n    Box::new(PreparedStorage {\n        original: Some(original),\n        phase: FieldPhase::Preparing(M::publication_slot(journal, target, scope)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'cell_slot', ('pub(super) fn cell_slot<\'target, V: Value>(\n    mut original: Box<RetainedCell<V>>,\n    world: &\'target World,\n) -> Box<dyn PreparedWorldField + \'target> {\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect("retained original journal");\n    // Inert shell construction precedes every field\'s physical preparation.\n    Box::new(PreparedCell {\n        original: Some(original),\n        phase: FieldPhase::Preparing(journal.publication_slot(target)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'triggers_slot', ('pub(super) fn triggers_slot<\'target>(\n    mut original: Box<RetainedTriggers>,\n    world: &\'target World,\n) -> Box<dyn PreparedWorldField + \'target> {\n    let target = (original.target)(world);\n    let journal = original.journal.take().expect("retained original journal");\n    // Inert shell construction precedes every field\'s physical preparation.\n    Box::new(PreparedTriggers {\n        original: Some(original),\n        phase: FieldPhase::Preparing(journal.publication_slot(target)),\n        published: None,\n        aborted: None,\n        released: false,\n        normal_recovery: false,\n    })\n}',)),
-    ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'storage_shell_layout', ("pub(super) fn storage_shell_layout<K: Key, V: Value>() -> Layout {\n    Layout::new::<PreparedStorage<'static, K, V>>()\n}",)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'storage_shell_layout', ("pub(super) fn storage_shell_layout<K: Key, V: Value, M: WorldStorageMode<K, V>>() -> Layout {\n    Layout::new::<PreparedStorage<'static, K, V, M>>()\n}",)),
     ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'cell_shell_layout', ("pub(super) fn cell_shell_layout<V: Value>() -> Layout {\n    Layout::new::<PreparedCell<'static, V>>()\n}",)),
     ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'triggers_shell_layout', ("pub(super) fn triggers_shell_layout() -> Layout {\n    Layout::new::<PreparedTriggers<'static>>()\n}",)),
     ('crates/iroha_core/src/state/world_publication.rs', 'fn', 'field_vector_layout', ('pub(super) fn field_vector_layout(capacity: usize) -> Result<Layout, std::alloc::LayoutError> {\n    Layout::array::<Box<dyn PreparedWorldField>>(capacity)\n}',)),
@@ -2036,17 +2047,42 @@ WORLD_CARRIER_PREPARATION_BINDINGS = (
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorldFields::drop', ('    fn drop(&mut self) {\n        self.release_all();\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorld::abort', ("    pub(in crate::state) fn abort(\n        self,\n    ) -> (\n        DetachedWorld<Admission>,\n        AbortedWorld<'target, Installation>,\n    ) {\n        let installation;\n        let admission;\n        let Self {\n            mode,\n            mut fields,\n            mut retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission: retained_admission,\n            installation: retained_installation,\n        } = self;\n        installation = retained_installation;\n        admission = retained_admission;\n        fields.recover_all();\n        retry.extend(fields.iter_mut().map(|field| field.abort()));\n        let retirement = AbortedWorld {\n            _fields: fields,\n            _installation: Some(installation),\n        };\n        (\n            DetachedWorld {\n                mode,\n                fields: retry,\n                dataspace_catalog,\n                external_event_buf,\n                admission,\n            },\n            retirement,\n        )\n    }",)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorld::publish', ("    pub(in crate::state) fn publish(\n        self,\n    ) -> (\n        DataSpaceCatalog,\n        Vec<EventBox>,\n        WorldRetirement<'target>,\n        Admission,\n        Installation,\n    ) {\n        let installation;\n        let admission;\n        let Self {\n            mode: _,\n            mut fields,\n            retry,\n            dataspace_catalog,\n            external_event_buf,\n            admission: retained_admission,\n            installation: retained_installation,\n        } = self;\n        installation = retained_installation;\n        admission = retained_admission;\n        for field in fields.iter_mut() {\n            field.publish();\n        }\n        let retirement = WorldRetirement {\n            _fields: fields.into_inner(),\n            _retry: retry,\n        };\n        (\n            dataspace_catalog,\n            external_event_buf,\n            retirement,\n            admission,\n            installation,\n        )\n    }",)),
-    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedStorage::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::storage_slot(self, target)\n    }",)),
-    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedCell::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::cell_slot(self, target)\n    }",)),
-    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedTriggers::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::triggers_slot(self, target)\n    }",)),
+    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedStorage::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        publication::storage_slot(self, target, scope)\n    }",)),
+    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedCell::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        let _ = scope;\n        publication::cell_slot(self, target)\n    }",)),
+    ('crates/iroha_core/src/state/world_journals.rs', 'method', 'RetainedTriggers::publication_slot', ("    fn publication_slot<'target>(\n        self: Box<Self>,\n        target: &'target World,\n        scope: Option<&'target AllocationScope<'target>>,\n    ) -> Box<dyn publication::PreparedWorldField + 'target> {\n        let _ = scope;\n        publication::triggers_slot(self, target)\n    }",)),
 )
 WORLD_RECOVERY_BINDINGS = (
-    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', ('    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            "terminal field release is not retry authority"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = slot.recover_original();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!("original prepared field");\n                };\n                let (journal, retirement) = journal.abort();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!("original field was already consumed"),\n        }\n        self.normal_recovery = true;\n    }',)),
+    ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedStorage::release_for_recovery', ('    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            "terminal field release is not retry authority"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = M::recover_original(slot);\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!("original prepared field");\n                };\n                let (journal, retirement) = M::abort(journal);\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!("original field was already consumed"),\n        }\n        self.normal_recovery = true;\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedCell::release_for_recovery', ('    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            "terminal field release is not retry authority"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = slot.recover_original();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!("original prepared field");\n                };\n                let (journal, retirement) = journal.abort();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!("original field was already consumed"),\n        }\n        self.normal_recovery = true;\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedTriggers::release_for_recovery', ('    fn release_for_recovery(&mut self) {\n        assert!(\n            !self.released,\n            "terminal field release is not retry authority"\n        );\n        if self.normal_recovery {\n            return;\n        }\n        match &mut self.phase {\n            FieldPhase::Preparing(slot) => {\n                let journal = slot.recover_original();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n            }\n            FieldPhase::Prepared(_) => {\n                let FieldPhase::Prepared(journal) =\n                    std::mem::replace(&mut self.phase, FieldPhase::Recovered)\n                else {\n                    unreachable!("original prepared field");\n                };\n                let (journal, retirement) = journal.abort();\n                self.original.as_mut().expect("original field box").journal = Some(journal);\n                self.aborted = Some(retirement);\n            }\n            FieldPhase::Recovered => panic!("original field was already consumed"),\n        }\n        self.normal_recovery = true;\n    }',)),
     ('crates/iroha_core/src/state/world_publication.rs', 'method', 'PreparedWorldFields::recover_all', ('    fn recover_all(&mut self) {\n        // Retain every original box and notification through the full physical\n        // pass. Only a subsequent normal transfer may return retry authority.\n        for field in &mut self.0 {\n            field.release_for_recovery();\n        }\n    }',)),
 )
 PREPARATION_OWNER_BINDINGS += WORLD_CARRIER_PREPARATION_BINDINGS + WORLD_RECOVERY_BINDINGS
+
+# Exact delegation preserves both original map modes; no parallel publisher is introduced.
+WORLD_STORAGE_MODE_BINDINGS = (
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'fn', 'widen_untracked', ('pub(super) fn widen_untracked(error: PublicationPreparationError<Infallible>) -> Refusal {\n    match error {\n        PublicationPreparationError::Busy(wait) => PublicationPreparationError::Busy(wait),\n        PublicationPreparationError::Poisoned => PublicationPreparationError::Poisoned,\n        PublicationPreparationError::Changed => PublicationPreparationError::Changed,\n        PublicationPreparationError::Admission(impossible) => match impossible {},\n    }\n}',)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'enum', 'PrepaidSlot', ("pub(super) enum PrepaidSlot<'a, K: Key, V: Value, P>\nwhere\n    P: mv::storage::AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,\n{\n    Original(mv::storage::AdmittedDetachedPublicationSlot<'a, 'a, K, V, (), P>),\n    Refused {\n        journal: Option<mv::storage::Detached<K, V, (), Prepaid<P>>>,\n        cause: Option<Refusal>,\n    },\n}",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::publication_slot', ("    fn publication_slot<'a>(\n        original: mv::storage::Detached<K, V, ()>,\n        target: &'a Storage<K, V>,\n        _scope: Option<&'a AllocationScope<'a>>,\n    ) -> Self::Slot<'a> {\n        original.publication_slot(target)\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::try_prepare', ("    fn try_prepare(slot: &mut Self::Slot<'_>) -> Result<(), Refusal> {\n        slot.try_prepare(|_, _| Ok::<_, Infallible>(()))\n            .map_err(widen_untracked)\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::release_writers', ("    fn release_writers(slot: &mut Self::Slot<'_>) {\n        slot.release_writers();\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::recover_original', ("    fn recover_original(slot: &mut Self::Slot<'_>) -> mv::storage::Detached<K, V, ()> {\n        slot.recover_original()\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::into_prepared', ("    fn into_prepared<'a>(slot: Self::Slot<'a>) -> Self::Prepared<'a> {\n        slot.into_prepared()\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::abort', ("    fn abort<'a>(\n        prepared: Self::Prepared<'a>,\n    ) -> (mv::storage::Detached<K, V, ()>, Self::Aborted<'a>) {\n        prepared.abort()\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Untracked::publish', ("    fn publish<'a>(prepared: Self::Prepared<'a>) -> Self::Published<'a> {\n        prepared.publish()\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::publication_slot', ("    fn publication_slot<'a>(\n        original: mv::storage::Detached<K, V, (), Self>,\n        target: &'a Storage<K, V, Self>,\n        scope: Option<&'a AllocationScope<'a>>,\n    ) -> Self::Slot<'a> {\n        let result = match scope {\n            Some(scope) => original.try_publication_slot(scope, target),\n            None => Err((\n                original,\n                PublicationPreparationError::Admission(AdmittedStorageError::ScopeIdentity),\n            )),\n        };\n        match result {\n            Ok(slot) => PrepaidSlot::Original(slot),\n            Err((journal, cause)) => PrepaidSlot::Refused {\n                journal: Some(journal),\n                cause: Some(cause),\n            },\n        }\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::try_prepare', ('    fn try_prepare(slot: &mut Self::Slot<\'_>) -> Result<(), Refusal> {\n        match slot {\n            PrepaidSlot::Original(slot) => slot.try_prepare(),\n            PrepaidSlot::Refused { cause, .. } => Err(cause\n                .take()\n                .expect("original field preparation is one-shot")),\n        }\n    }',)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::release_writers', ("    fn release_writers(slot: &mut Self::Slot<'_>) {\n        if let PrepaidSlot::Original(slot) = slot {\n            slot.release_writers();\n        }\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::recover_original', ('    fn recover_original(slot: &mut Self::Slot<\'_>) -> mv::storage::Detached<K, V, (), Self> {\n        match slot {\n            PrepaidSlot::Original(slot) => slot.recover_original(),\n            PrepaidSlot::Refused { journal, .. } => journal.take().expect("original refused field"),\n        }\n    }',)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::into_prepared', ('    fn into_prepared<\'a>(slot: Self::Slot<\'a>) -> Self::Prepared<\'a> {\n        let PrepaidSlot::Original(slot) = slot else {\n            unreachable!("refused field cannot complete preparation")\n        };\n        slot.into_prepared()\n    }',)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::abort', ("    fn abort<'a>(\n        prepared: Self::Prepared<'a>,\n    ) -> (mv::storage::Detached<K, V, (), Self>, Self::Aborted<'a>) {\n        prepared.abort()\n    }",)),
+    ('crates/iroha_core/src/state/world_storage_mode.rs', 'method', 'WorldStorageMode<K, V> for Prepaid::publish', ("    fn publish<'a>(prepared: Self::Prepared<'a>) -> Self::Published<'a> {\n        prepared.publish()\n    }",)),
+)
+WORLD_STORAGE_MODE_BINDINGS += (
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'crate::BlockAcquisition for BlockAcquisitionSlot::release', ('    fn release(&mut self) {\n        BlockAcquisitionSlot::release(self);\n    }',)),
+    ('crates/mv/src/storage/acquisition.rs', 'method', 'crate::BlockAcquisition for BlockAcquisitionSlot::into_block', ('    fn into_block(self) -> Self::Block {\n        BlockAcquisitionSlot::into_block(self)\n    }',)),
+)
+PREPARATION_OWNER_BINDINGS += WORLD_STORAGE_MODE_BINDINGS
 
 _NATIVE_EXPLICIT_SOURCE_RELATIVES = tuple(Path(p) for p in (
     "crates/mv/src/lib.rs",
@@ -2191,6 +2227,373 @@ COMMITTED_DRAIN_RELEASE_BINDINGS = (
 )
 PREPARATION_OWNER_BINDINGS += COMMITTED_DRAIN_RELEASE_BINDINGS
 
+# These owners make one physical boundary continuous from the authenticated
+# original source through durable proof publication and every State/Queue writer.
+# They replace the retired split-lease path; this is not scalar admission evidence.
+SINGLE_LEASE_ADDITIONAL_BINDINGS = (
+    (PHYSICAL_CARRIER, "struct", "SourceAuthenticatedCarrier", (
+        "struct SourceAuthenticatedCarrier<'target, Admission> {\n    // Unlock the complete physical boundary before original values/admission\n    // can run cleanup callbacks during abandonment or unwind.\n    kura: KuraPublicationLease<'target>,\n    decision: DecisionBoundCarrierJournals<\n        Admission,\n        DetachedCarrierComponents,\n        KuraWsvCheckpointReceipt,\n    >,\n}",
+    )),
+    (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::release", (
+        'let Self { decision, kura } = self;\n        drop(kura.release_deferred());\n        decision',
+    )),
+    (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_prepare", (
+        "fn try_prepare(\n        mut self,\n        target: &'target State,\n        queue_source: Option<&OriginalCarrierQueue<'target>>,\n    )",
+        'if let Err(error) = self.decision.publish_execution_witness(&self.kura) {\n            use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;\n            let error = match error {\n                CarrierExecutionWitnessPublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                CarrierExecutionWitnessPublicationError::Witness(error) => {\n                    CarrierPhysicalPreparationError::ExecutionWitness(error)\n                }\n            };\n            return Err((self.release(), error));\n        }',
+        'if let Err(error) = self.decision.publish_archives(&self.kura) {\n            use super::archive_publication::CarrierArchivePublicationError;\n            let error = match error {\n                CarrierArchivePublicationError::Checkpoint(error) => {\n                    CarrierPhysicalPreparationError::Checkpoint(error)\n                }\n                error => CarrierPhysicalPreparationError::Archive(error),\n            };\n            return Err((self.release(), error));\n        }',
+        "let authenticated = self;",
+        'if let Err(error) = authenticated\n            .kura\n            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())\n        {\n            let original = authenticated.release();\n\n            return Err((\n                original,\n                CarrierPhysicalPreparationError::ExecutionWitness(error),\n            ));\n        }',
+        'let queue_observer = if authenticated\n            .decision\n            .journals\n            .geometry\n            .requires_queue_custody()\n        {\n            let source = queue_source.expect("required original source checked before persistence");\n            match source.try_observe() {\n                Ok(observer) => Some(observer),\n                Err(wait) => {\n                    let original = authenticated.release();\n\n                    return Err((\n                        original,\n                        CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy {\n                            field: "lane_reservation_transition_lock",\n                            wait,\n                        }),\n                    ));\n                }\n            }\n        } else {\n            None\n        };',
+        'let state = match StateFences::try_acquire(target) {\n            Ok(fences) => fences,\n            Err((error, state_retirement)) => {\n                let queue_retirement = queue_observer.map(|observer| observer.release_deferred());\n                let SourceAuthenticatedCarrier {\n                    decision: original,\n                    kura,\n                } = authenticated;\n                let kura_retirement = kura.release_deferred();\n                drop((state_retirement, queue_retirement, kura_retirement));\n\n                return Err((original, error));\n            }\n        };',
+        'let queue = match queue_observer {\n            Some(observer) => {\n                let source = queue_source.expect("original service source remains borrowed");\n                let acquired = observer\n                    .try_into_cut()\n                    .map_err(|(error, cleanup)| {\n                        (\n                            CarrierQueueRetirementError::Busy {\n                                field: error.field,\n                                wait: error.wait,\n                            },\n                            cleanup,\n                        )\n                    })\n                    .and_then(|cut| {\n                        CarrierQueueRetirement::try_new(\n                            target,\n                            &authenticated.decision.journals.geometry,\n                            authenticated.decision.block().header(),\n                            source,\n                            cut,\n                        )\n                    });\n                match acquired {\n                    Ok(cut) => Some(cut),\n                    Err((error, queue_retirement)) => {\n                        let state_retirement = state.release_deferred();\n                        let SourceAuthenticatedCarrier {\n                            decision: original,\n                            kura,\n                        } = authenticated;\n                        let kura_retirement = kura.release_deferred();\n                        drop((queue_retirement, state_retirement, kura_retirement));\n\n                        return Err((original, CarrierPhysicalPreparationError::Queue(error)));\n                    }\n                }\n            }\n            None => None,\n        };',
+        'let SourceAuthenticatedCarrier {\n            decision: original,\n            kura,\n        } = authenticated;\n        let fences = CarrierFences {\n            _state: state,\n            _queue: queue,\n            _kura: kura,\n        };',
+        'let DecisionBoundCarrierJournals {\n            checkpoint,\n            finality,\n            committed_event,\n            journals,\n        } = original;',
+        'let prepared = journals.try_map_components(|original| {\n            let mut preparation = CarrierPreparation::new(original, target, fences);\n            match preparation.try_prepare() {\n                Ok(()) => Ok(preparation.into_prepared()),\n                Err(error) => {\n                    let original = preparation.recover_original();\n                    drop(preparation);\n                    Err((original, error))\n                }\n            }\n        });',
+        'macro_rules! retain {\n            ($journals:expr) => {\n                DecisionBoundCarrierJournals {\n                    checkpoint,\n                    finality,\n                    committed_event,\n                    journals: $journals,\n                }\n            };\n        }',
+        'match prepared {\n            Ok(journals) => Ok(PhysicallyPreparedCarrier {\n                target,\n                decision: retain!(journals),\n            }),\n            Err((journals, error)) => {\n                // All partially acquired writers, State fences and Kura lease are gone.\n\n                Err((retain!(journals), error))\n            }\n        }',
+    )),
+    (WITNESS_LEASE, "method", "KuraPublicationLease::publish_execution_witness", (
+        "&self", "finality: &super::V2FinalityArtifact", "receipt: &super::KuraV2CommitReceipt", "witness: &super::ExecWitness",
+        "parliament_timed_ovn_casting_bindings: &[super::ParliamentTimedOvnCastingContextBindingV1]",
+        "self.kura.durable_mutation_authorized()?;",
+        'self.kura\n            .authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;',
+        'let staged = Kura::prepare_kagemusha_finality_sidecar(\n            finality.height,\n            finality.block_hash,\n            witness,\n            finality.commit_qc.execution_commitment,\n            parliament_timed_ovn_casting_bindings,\n        )?;',
+        'self.kura\n            .stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;',
+        'self.kura\n            .promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;',
+        "self.reauthenticate_execution_witness(finality)",
+    )),
+    (KURA, "method", "Kura::authenticate_kagemusha_finality_receipt_under_publication_guards", (
+        'if receipt.height != artifact.height\n            || receipt.block_hash != artifact.block_hash\n            || receipt.context_id != artifact.context_id()\n            || receipt.subject != artifact.subject\n            || receipt.certificate != artifact.commit_qc.as_ref()\n            || receipt.artifact_hash != HashOf::new(artifact)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let durable = self\n            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?\n            .map(|(_, artifact, _)| artifact)\n            .ok_or_else(|| {\n                Error::KagemushaFinalitySidecar(',
+        'if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {\n            return Err(Error::KagemushaFinalitySidecar(', "Ok(())",
+    )),
+    (KURA, "method", "Kura::prepare_kagemusha_finality_sidecar", (
+        "crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)",
+        "crate::state::LaneConsensusContextsWitnessV1::from_witness(witness)",
+        "crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)",
+        "crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)",
+        'if validation_fee_root != expected.ordinary_writes_root\n            || lane_contexts_root != expected.ordinary_writes_root\n            || lane_consensus_contexts_witness.carrier_height() != height\n            || !lane_consensus_contexts_witness.verify_root(expected.ordinary_writes_root)\n            || casting_root != expected.ordinary_writes_root\n            || kagemusha_root != expected.ordinary_writes_root\n            || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)\n            || !parliament_timed_ovn_casting_witness.verify(expected.ordinary_writes_root)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let validation_fee_snapshot = validation_fee_policy_witness\n            .commitment()', 'if validation_fee_snapshot.evaluated_height != height {\n            return Err(Error::KagemushaFinalitySidecar(',
+        'let casting_snapshot = parliament_timed_ovn_casting_witness\n            .commitment()',
+        'ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(\n                height,\n                parliament_timed_ovn_casting_bindings,\n            )',
+        'if casting_snapshot != rebuilt_casting_snapshot {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "ordinary_writes_root: expected.ordinary_writes_root", "post_state_root: expected.post_state_root",
+        "parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec()", "Ok(staged)",
+    )),
+    (KURA, "method", "Kura::stage_kagemusha_finality_sidecar_under_sidecar_guard", (
+        "self.durable_mutation_authorized()?;", "let bytes = staged.encode();", "if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES",
+        "self.kagemusha_finality_staging_path(staged.height)",
+        'if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {\n            if &existing == staged\n                && identity.bytes == bytes\n                && identity.bytes_hash == Hash::new(&bytes)\n            {\n                return Ok(());\n            }\n            return Err(Error::KagemushaFinalitySidecar(',
+        'self\n            .begin_total_disk_usage_mutation()\n            .with_resource_paths(vec![path.clone()])',
+        "if !self.write_atomic_synced_noclobber(&path, &bytes)?",
+        'if &existing != staged {\n                return Err(Error::KagemushaFinalitySidecar(',
+        'let Some((persisted, identity)) = self.decode_staged_kagemusha_finality(&path)? else {\n            return Err(',
+        'if &persisted != staged\n            || identity.bytes != bytes\n            || identity.bytes_hash != Hash::new(&bytes)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())",
+    )),
+    (KURA, "method", "Kura::promote_kagemusha_finality_sidecar_under_sidecar_guard", (
+        "self.durable_mutation_authorized()?;",
+        "let final_path = self.kagemusha_finality_sidecar_path(artifact.height);",
+        "let staged_path = self.kagemusha_finality_staging_path(artifact.height);",
+        'if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {\n            Self::validate_kagemusha_finality_sidecar(&existing, artifact)?;\n            if let Some((staged, identity)) = self.decode_staged_kagemusha_finality(&staged_path)? {\n                Self::validate_staged_kagemusha_finality(&staged, artifact)?;\n                self.remove_exact_staged_kagemusha_finality(&staged_path, &identity)?;\n            }\n            return Ok(());\n        }',
+        'let Some((staged, staged_identity)) =\n            self.decode_staged_kagemusha_finality(&staged_path)?\n        else {\n            return Err(',
+        '};\n        Self::validate_staged_kagemusha_finality(&staged, artifact)?;\n        let final_sidecar = KagemushaFinalitySidecarV1 {', "finality_artifact_hash: receipt.artifact_hash",
+        "Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;",
+        "let bytes = final_sidecar.encode();", "if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES",
+        'self\n            .begin_total_disk_usage_mutation()\n            .with_resource_paths(vec![final_path.clone()])',
+        "if !self.write_atomic_synced_noclobber(&final_path, &bytes)?",
+        'if existing != final_sidecar {\n                return Err(Error::KagemushaFinalitySidecar(',
+        'let Some((persisted, identity)) = self.decode_kagemusha_finality_sidecar(&final_path)?\n        else {\n            return Err(',
+        'if persisted != final_sidecar\n            || identity.bytes != bytes\n            || identity.bytes_hash != Hash::new(&bytes)\n        {\n            return Err(Error::KagemushaFinalitySidecar(',
+        "self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;",
+        "resource_mutation.finish_resources_before_disk_rescan();", "Ok(())",
+    )),
+    (KURA, "method", "Kura::stage_kagemusha_finality_sidecar", (
+        "self.durable_mutation_authorized()?;",
+        'let staged = Self::prepare_kagemusha_finality_sidecar(\n            height,\n            block_hash,\n            witness,\n            expected,\n            parliament_timed_ovn_casting_bindings,\n        )?;',
+        "let _guard = self.sidecar_lock.lock();",
+        "self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)",
+    )),
+)
+SINGLE_LEASE_OWNER_BINDINGS = tuple(
+    binding for binding in TERMINAL_OWNER_BINDINGS
+    if binding[2] in {
+        "publish_execution_witness", "publish_archives", "try_prepare_physical",
+        "SourceAuthenticatedCarrier::try_new",
+        "KuraPublicationLease::reauthenticate_execution_witness",
+    }
+) + SINGLE_LEASE_ADDITIONAL_BINDINGS
+SINGLE_LEASE_OWNER_KEYS = frozenset(binding[:3] for binding in SINGLE_LEASE_OWNER_BINDINGS)
+PREPARATION_OWNER_BINDINGS += SINGLE_LEASE_ADDITIONAL_BINDINGS
+
+
+def _validate_single_lease_publication_contract(
+    root: Path, rows: Any, errors: list[str], rust_binding_item: Callable,
+) -> dict[str, str]:
+    """Bind the continuous original lease and guarded proof cores to real owners."""
+    items = {}
+    for path, kind, symbol, tokens in SINGLE_LEASE_OWNER_BINDINGS:
+        matches = [row for row in rows if isinstance(row, dict)
+                   and (row.get("path"), row.get("kind"), row.get("symbol"))
+                   == (path, kind, symbol)]
+        if len(matches) != 1:
+            errors.append(f"Native single-lease ledger owner {symbol} must occur exactly once")
+        elif tuple(matches[0].get("required_tokens", ())) != tokens:
+            errors.append(f"Native single-lease reviewed tokens changed for {symbol}")
+        source = rust_binding_item(root, path, kind, symbol, "Native single-lease", errors)
+        if source is None:
+            continue
+        item = items[symbol] = _code(source)
+        if symbol in {"SourceAuthenticatedCarrier", "SourceAuthenticatedCarrier::try_prepare"} and re.search(
+            r"\bpub(?:\s*\([^)]*\))?\s+(?:fn|struct)\s+(?:try_prepare|SourceAuthenticatedCarrier)\b",
+            _mask_rust_comments(source),
+        ):
+            errors.append(f"Native single-lease {symbol} exposes its private executable relation")
+        for token in tokens:
+            if _code(token) not in item:
+                errors.append(f"Native single-lease {symbol} missing executable relation {token!r}")
+
+    def ordered(symbol: str, *relations: str) -> None:
+        cursor = 0
+        for relation in relations:
+            body = items.get(symbol)
+            if body is None:
+                return
+            index = body.find(_code(relation), cursor)
+            if index < 0:
+                errors.append(f"Native single-lease {symbol} reorders executable relation {relation!r}")
+                return
+            cursor = index + len(_code(relation))
+
+    def exact_count(symbol: str, token: str, expected: int) -> None:
+        if symbol in items and items[symbol].count(_code(token)) != expected:
+            errors.append(f"Native single-lease {symbol} repeats or omits executable relation {token!r}")
+
+    ordered("try_prepare_physical", "target.matches_kura_instance(&original.journals.kura)",
+            "original.journals.geometry.matches_publication_target(target, original.block().header())",
+            "if original.journals.geometry.requires_queue_custody()",
+            "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)?;",
+            "authenticated.try_prepare(target, queue_source)")
+    exact_count("try_prepare_physical", "try_publication_lease(", 1)
+    exact_count("try_prepare_physical", "SourceAuthenticatedCarrier::try_new(", 1)
+    ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
+            "original.journals.source_prefix.authenticate_durable_carrier(",
+            "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()",
+            "Ok(()) => Ok(owner)", "Err(error) => Err((owner.release(), error))")
+    ordered("SourceAuthenticatedCarrier::try_prepare", "self.decision.publish_execution_witness(&self.kura)",
+            "self.decision.publish_archives(&self.kura)", "let authenticated = self;",
+            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
+            "let queue_observer = if authenticated.decision.journals.geometry.requires_queue_custody()",
+            "source.try_observe()", "StateFences::try_acquire(target)", "observer.try_into_cut()",
+            "CarrierQueueRetirement::try_new(target, &authenticated.decision.journals.geometry, authenticated.decision.block().header(), source, cut,)",
+            "let fences = CarrierFences { _state: state, _queue: queue, _kura: kura, }",
+            "journals.try_map_components(")
+    for operation in ("publish_execution_witness(", "publish_archives(",
+                      "reauthenticate_execution_witness(", "source.try_observe()",
+                      "StateFences::try_acquire(target)", "observer.try_into_cut()", "journals.try_map_components("):
+        exact_count("SourceAuthenticatedCarrier::try_prepare", operation, 1)
+    # All releases are in the exact immediate-refusal branches bound above;
+    # no extra release or fence extraction may be inserted on the success path.
+    for operation, count in (("self.release()", 2), ("authenticated.release()", 2),
+                             ("kura.release_deferred()", 2), ("state.release_deferred()", 1),
+                             ("observer.release_deferred()", 1),
+                             ("SourceAuthenticatedCarrier { decision: original, kura, } = authenticated;", 3)):
+        exact_count("SourceAuthenticatedCarrier::try_prepare", operation, count)
+    ordered("publish_execution_witness", "lease.reauthenticate_checkpoint(", "lease.publish_execution_witness(")
+    ordered("publish_archives", "lease.reauthenticate_checkpoint(", "let receipt = self.checkpoint.finality_receipt();",
+            "provider.publish_under_publication_lease(lease, receipt)",
+            "reputation.publish_under_publication_lease(lease, receipt)", "Ok(())")
+    ordered("KuraPublicationLease::publish_execution_witness", "durable_mutation_authorized()?;",
+            "authenticate_kagemusha_finality_receipt_under_publication_guards(finality, receipt)?;",
+            "Kura::prepare_kagemusha_finality_sidecar(",
+            "stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)?;",
+            "promote_kagemusha_finality_sidecar_under_sidecar_guard(finality, receipt)?;",
+            "self.reauthenticate_execution_witness(finality)")
+    ordered("KuraPublicationLease::reauthenticate_execution_witness",
+            "decode_kagemusha_finality_sidecar(&path)", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)",
+            "regular_sidecar_metadata(&path, &directory)", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())")
+    ordered("Kura::authenticate_kagemusha_finality_receipt_under_publication_guards",
+            "receipt.height != artifact.height", "v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?",
+            "if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash", "Ok(())")
+    ordered("Kura::stage_kagemusha_finality_sidecar_under_sidecar_guard", "let bytes = staged.encode();",
+            "self.decode_staged_kagemusha_finality(&path)?", "self.write_atomic_synced_noclobber(&path, &bytes)?",
+            "let Some((persisted, identity))", "resource_mutation.finish_resources_before_disk_rescan();")
+    ordered("Kura::promote_kagemusha_finality_sidecar_under_sidecar_guard",
+            "Self::validate_staged_kagemusha_finality(&staged, artifact)?;", "let final_sidecar =",
+            "Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;",
+            "self.write_atomic_synced_noclobber(&final_path, &bytes)?", "let Some((persisted, identity))",
+            "self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;",
+            "resource_mutation.finish_resources_before_disk_rescan();")
+    ordered("Kura::stage_kagemusha_finality_sidecar", "Self::prepare_kagemusha_finality_sidecar(",
+            "self.sidecar_lock.lock()", "self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)")
+    for symbol in items:
+        forbidden = [".await", "mem::forget", "ManuallyDrop", "block_on("]
+        if symbol not in {"try_prepare_physical", "Kura::stage_kagemusha_finality_sidecar"}:
+            forbidden += ["try_publication_lease(", ".lock()", "stage_kagemusha_finality_sidecar(",
+                          "promote_kagemusha_finality_sidecar(", "v2_finality_artifact("]
+        if symbol in {"try_prepare_physical", "publish_execution_witness", "publish_archives",
+                      "KuraPublicationLease::publish_execution_witness"}:
+            forbidden += [".release()", "release_deferred("]
+        if symbol != "SourceAuthenticatedCarrier::release":
+            forbidden += ["drop(lease)", "drop(kura)", "drop(self.kura)", "drop(authenticated)"]
+        for token in forbidden:
+            if _code(token) in items[symbol]:
+                errors.append(f"Native single-lease {symbol} splits or replaces executable relation {token!r}")
+    return items
+
+
+# Actual Native recovery custody supplements the detached execution phase. These
+# shapes retain concrete owners; neither one is aggregate process-memory admission.
+NATIVE_VALIDATION = "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs"
+NATIVE_VALIDATION_OWNER_BODIES = {
+    "NativeValidationCandidate": """{
+        phase: Box<Option<NativeValidationPhase>>,
+        _container_admission: AllocationCharge,
+    }""",
+    "NativeValidationPhase": """{
+        AwaitingSource(AwaitingNativeSource),
+        Stopped { context_id: wire::HeightContextId, proposal_hash: iroha_crypto::Hash, reason: String, },
+        Executed { carrier: RetainedCarrier<CarrierShellAdmission>, evidence_ready: bool, },
+        Published { carrier: PublishedNativeCarrier, outbox_published: bool, queue_cleaned: bool, },
+    }""",
+    "AwaitingNativeSource": """{
+        class: CurrentCarrierSourceClass, context: VerifiedHeightContext, proposal: SignedBlock,
+        recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>, pending: Option<PendingNativeSource>,
+        shell_admission: CarrierShellAdmission,
+    }""",
+    "NativeValidationCandidate::matches_candidate": """{
+        match self.phase.as_ref().as_ref().expect("original Native validation phase") {
+            NativeValidationPhase::AwaitingSource(source) => {
+                source.context.context() == context && source.proposal == *body
+            }
+            NativeValidationPhase::Stopped { context_id, proposal_hash, .. } => {
+                *context_id == context.id() && body.canonical_proposal_wire_hash().is_ok_and(|hash| hash == *proposal_hash)
+            }
+            NativeValidationPhase::Executed { carrier, .. } => {
+                carrier.matches_validation_candidate(context, body)
+            }
+            NativeValidationPhase::Published { carrier, .. } => {
+                carrier.artifact().height_context == *context
+                    && carrier.block().canonical_proposal_wire_hash().ok() == body.canonical_proposal_wire_hash().ok()
+            }
+        }
+    }""",
+    "NativeValidationCandidate::ready_commitment": """{
+        match self.phase.as_ref().as_ref().expect("original Native validation phase") {
+            NativeValidationPhase::AwaitingSource(_) | NativeValidationPhase::Stopped { .. } => { None }
+            NativeValidationPhase::Executed { carrier, evidence_ready, } => evidence_ready.then(|| carrier.ready_commitment()).flatten(),
+            NativeValidationPhase::Published { carrier, .. } => {
+                Some(carrier.artifact().commit_qc.execution_commitment)
+            }
+        }
+    }""",
+}
+NATIVE_CURRENT_OWNER_BINDINGS = (
+    (SERVICE_QUEUE, "method", "OriginalCarrierQueue::from_service", (
+        "pub(super) fn from_service(service: &'service super::V2ApplyService) -> Self",
+        'Self {\n            state: &service.state,\n            queue: &service.queue,\n        }',
+    )),
+    (NATIVE_VALIDATION, "struct", "NativeValidationCandidate", (
+        "pub(crate) struct NativeValidationCandidate", "phase: Box<Option<NativeValidationPhase>>",
+        "_container_admission: AllocationCharge",
+    )),
+    (NATIVE_VALIDATION, "enum", "NativeValidationPhase", (
+        "enum NativeValidationPhase", "AwaitingSource(AwaitingNativeSource)",
+        "carrier: RetainedCarrier<CarrierShellAdmission>", "carrier: PublishedNativeCarrier",
+    )),
+    (NATIVE_VALIDATION, "struct", "AwaitingNativeSource", (
+        "context: VerifiedHeightContext", "proposal: SignedBlock",
+        "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
+        "pending: Option<PendingNativeSource>", "shell_admission: CarrierShellAdmission",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::matches_candidate", (
+        "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",
+        "carrier.matches_validation_candidate(context, body)",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::ready_commitment", (
+        "fn ready_commitment(&self) -> Option<wire::ExecutionCommitment>",
+        "evidence_ready.then(|| carrier.ready_commitment()).flatten()",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::try_publish", (
+        'NativeValidationPhase::Executed {\n                carrier,\n                evidence_ready: true,\n            }',
+        'let queue = super::carrier_queue_retirement::OriginalCarrierQueue::from_service(\n                    &validator.service,\n                );',
+        'match carrier.try_publish(\n                    &validator.service.state,\n                    &queue,\n                    finality,\n                    validator.service.queue.sumeragi_waker(),\n                )',
+        '*self.phase = Some(NativeValidationPhase::Executed {\n                            carrier,\n                            evidence_ready: true,\n                        });\n                        return Err((self, refusal));',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += NATIVE_CURRENT_OWNER_BINDINGS
+
+
+# Reviewed Native substitutions for retired lane transport declarations. These
+# bindings retain the same physical process, original source and guarded Apply
+# completion already checked by the successor-production consumer.
+NATIVE_CURRENT_RUNNER_OWNER_BODIES = {
+    "LifecycleProducerClaimDispositionV1::blocks_runtime": """{
+        matches!(self, Self::AwaitingNativeSource | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled)
+    }""",
+    "LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner": """{
+        let owner = &mut self.owner;
+        let executor = &mut self.executor;
+        if matches!(completion.result(), LifecycleDecisionApplyWorkerResultV1::Deferred { .. }) {
+            return Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(
+                RetainedLifecycleDecisionApplyDeferredV1 { completion },
+            ));
+        }
+        settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
+    }""",
+}
+
+NATIVE_CURRENT_RUNNER_BINDINGS = (
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs', 'method', 'LifecycleProducerClaimDispositionV1::blocks_runtime', (
+        'Self::AwaitingApplyCompletion',
+        'Self::ApplyTerminalSettled',
+        'Self::AwaitingNativeSource',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs', 'method', 'LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner', (
+        'ProductionLifecycleDecisionApplyCompletionV1::Deferred(',
+        'settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)',
+        'LifecycleDecisionApplyWorkerResultV1::Deferred { .. }',
+        'RetainedLifecycleDecisionApplyDeferredV1 { completion }',
+        'let owner = &mut self.owner;',
+        'let executor = &mut self.executor;',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs', 'fn', 'run_lifecycle_active_height', (
+        'let lane_only_completion_barrier = producer_claim.blocks_runtime();',
+        'if lane_only_completion_barrier {',
+        'drain_lane_relay_ingress(',
+        'let discovery_was_outstanding = if terminal_finalization_fenced {',
+        '.terminal_settlement_stops_runtime()',
+        'AdvanceExecutorSliceOutcomeV1::Idle',
+        'let terminal_planning_fenced =',
+        'producer_claim.apply_terminal_settled();',
+        'if terminal_planning_fenced && !ready_to_finish {',
+        'let producer_turn = if terminal_planning_fenced {',
+        'if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {',
+        'if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {',
+        'if ready_to_finish && !finalization_ready {',
+        'if finalization_ready && !rollover_ready {',
+        'deadline_after(now, retransmit_interval)',
+        'native.take_service_publication(services);',
+        'native.service_sources(services, now)?;',
+        'native.poll(native_global, native_network, now, receiver)?;',
+        'let ingress_snapshot = receiver.snapshot_at(now);',
+        'producer_claim.native_source_pacemaker_escape_permit()',
+        'producer_claim.decided_native_source_recovery_permit(',
+        'native.next_deadline().map_or(IDLE_POLL, |deadline| {',
+        'wake_rx.recv_timeout(native_wait)',
+        'native.take_service_publication(services);\n                native.service_sources(services, now)?;\n                Ok::<_, V2RunnerError>(())\n            },\n        )?;\n        native.poll(native_global, native_network, now, receiver)?;',
+    )),
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs', 'fn', 'run_pending_active_height', (
+        'native.take_service_publication(services);',
+        'native.service_sources(services, Instant::now())',
+        'native.poll(native_global, native_network, Instant::now(), receiver)?;',
+        'dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)',
+        'activated.settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)',
+        'native.take_service_publication(services);\n            native.service_sources(services, Instant::now())\n        })?;\n        native.poll(native_global, native_network, Instant::now(), receiver)?;',
+    )),
+)
+PREPARATION_OWNER_BINDINGS += NATIVE_CURRENT_RUNNER_BINDINGS
+
 # Binding owners are authoritative inputs; mutation fixtures must copy every
 # referenced owner without a second manually synchronized Rust path inventory.
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(dict.fromkeys((
@@ -2214,6 +2617,8 @@ def validate_native_preparation_contract(
     raw_items = {}
     scoped_items = {}
     for path, kind, symbol, tokens in bindings:
+        if (path, kind, symbol) in SINGLE_LEASE_OWNER_KEYS:
+            continue
         matches = [r for r in rows if isinstance(r, dict)
                    and (r.get("path"), r.get("kind"), r.get("symbol")) == (path, kind, symbol)]
         if len(matches) != 1:
@@ -2228,6 +2633,10 @@ def validate_native_preparation_contract(
             for token in tokens:
                 if _code(token) not in items[symbol]:
                     errors.append(f"Native preparation {symbol} missing executable relation {token!r}")
+
+    items.update(_validate_single_lease_publication_contract(
+        root, rows, errors, rust_binding_item,
+    ))
 
     # Both concrete guard types must use the reviewed physical-only Drop kernel.
     _, deferred_source = _read_reviewed_rust_source(
@@ -2358,8 +2767,8 @@ def validate_native_preparation_contract(
         "RetainedCarrier": """{
             Capturing(Box<super::StagedCarrierCapture<Admission>>),
             Validated(PreparedCarrierJournals<Admission>),
-            Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
-            Checkpointed(DecisionBoundCarrierJournals<Admission, BindingAdmission,
+            Decided(DecisionBoundCarrierJournals<Admission>),
+            Checkpointed(DecisionBoundCarrierJournals<Admission,
                 super::DetachedCarrierComponents, crate::kura::KuraWsvCheckpointReceipt>),
         }""",
         "Candidate": "{ subject: wire::BlockSubject, owner: Option<O> }",
@@ -2478,6 +2887,7 @@ def validate_native_preparation_contract(
         "CarrierQueueRetirement": "{ state_owner: NativeLaneStateOwner, header: BlockHeader, routes: Vec<(LaneId, DataSpaceId, Hash)>, _cut: QueueLaneRetirementCut<'queue>, }",
         "OriginalCarrierQueue": "{ state: &'service State, queue: &'service Queue }",
         "OriginalCarrierQueue::new": "{ Self { state, queue } }",
+        "OriginalCarrierQueue::from_service": "{ Self { state: &service.state, queue: &service.queue, } }",
         "OriginalCarrierQueue::belongs_to": "{ core::ptr::eq(self.state, state) }",
         "OriginalCarrierQueue::owns_cut": "{ cut.belongs_to(self.queue) }",
         "CarrierQueueRetirement::ensure_available": """{
@@ -2499,6 +2909,8 @@ def validate_native_preparation_contract(
             Ok(Self { validator, identity, candidates, markers, limit, _descriptor_admission: descriptor_admission, })
         }""",
     })
+    retained_bodies.update(NATIVE_VALIDATION_OWNER_BODIES)
+    retained_bodies.update(NATIVE_CURRENT_RUNNER_OWNER_BODIES)
     for symbol, body in retained_bodies.items():
         if symbol in items and items[symbol].partition("{")[2] != _code(body)[1:]:
             errors.append(f"Native preparation retained carrier {symbol} replaces or duplicates original custody")
@@ -2570,8 +2982,8 @@ def validate_native_preparation_contract(
     if custody_source is not None:
         custody = _code(custody_source)
         phase_impl = _code("""
-            impl<A: Send + 'static, B: Send + 'static> RetainedValidationOwner
-                for crate::state::RetainedCarrier<A, B> {
+            impl<A: Send + 'static> RetainedValidationOwner
+                for crate::state::RetainedCarrier<A> {
                 fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
                     self.matches_validation_candidate(context, body)
                 }
@@ -2597,11 +3009,23 @@ def validate_native_preparation_contract(
             errors.append("Native preparation retained carrier exposes the fixture owner in production")
         for trait in ("sealed::Owner", "RetainedValidationOwner"):
             implementations = list(re.finditer(r"impl(?:<[^{}]*?>)?" + re.escape(trait) + r"for([^{}]+)\{", custody))
-            if sorted(m[1] for m in implementations) != ["TrackedOwner", "crate::state::RetainedCarrier<A,B>"]:
+            expected = ["TrackedOwner", "crate::state::RetainedCarrier<A>"]
+            if trait == "sealed::Owner":
+                expected.append("super::native_validation::NativeValidationCandidate")
+            if sorted(m[1] for m in implementations) != sorted(expected):
                 errors.append(f"Native preparation retained carrier allows another {trait} implementation")
             if any(m[1] == "TrackedOwner" and not fixture_start < m.start() < fixture_end
                    for m in implementations):
                 errors.append("Native preparation retained carrier fixture implementation escapes its test gate")
+
+    # The Native candidate is the only additional production delegate; it retains
+    # the exact preallocated phase through recovery, execution and publication.
+    _, native_source = _read_reviewed_rust_source(root, NATIVE_VALIDATION, "Native preparation", errors)
+    if native_source is not None:
+        native_code = _code(native_source)
+        implementations = re.findall(r"impl(?:<[^{}]*?>)?RetainedValidationOwnerfor([^{}]+)\{", native_code)
+        if implementations != ["NativeValidationCandidate"]:
+            errors.append("Native preparation retained carrier changes its sole Native delegate")
 
     # Close the production constructor surface, including the real fixture's gate.
     # Private fields alone do not prevent an added public constructor in this module.
@@ -2609,20 +3033,34 @@ def validate_native_preparation_contract(
     if queue_source is not None:
         masked = _mask_rust_comments(queue_source)
         methods = re.findall(r"\bfn\s+(\w+)\s*(?:<[^{}]*>)?\s*\(", masked)
-        if sorted(methods) != sorted(("new", "belongs_to", "try_observe", "owns_cut", "for_test")):
+        if sorted(methods) != sorted(("new", "from_service", "belongs_to", "try_observe", "owns_cut", "for_test")):
             errors.append("Native preparation original Queue source changes closed constructor executable relation")
         fixture_constructor = _code("""#[cfg(test)]
             pub(crate) fn for_test(state: &'service State, queue: &'service Queue) -> Self {
                 Self::new(state, queue)
             }""")
+        constructor = _code("""#[cfg(test)]
+            pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self {
+                Self { state, queue }
+            }""")
+        if constructor not in _code(queue_source):
+            errors.append("Native preparation original Queue constructor escapes its test-gated executable relation")
         if fixture_constructor not in _code(queue_source):
             errors.append("Native preparation original Queue fixture constructor escapes its test-gated executable relation")
+
+    _, apply_source = _read_reviewed_rust_source(root, APPLY, "Native preparation", errors)
+    if apply_source is not None and _code("""#[cfg(test)]
+        pub(crate) fn carrier_queue_source(&self) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {
+            carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)
+        }""") not in _code(apply_source):
+        errors.append("Native preparation original Queue service fixture escapes its test-gated executable relation")
 
     # The service capability and move-only proof cannot expose a public arbitrary
     # Queue constructor, retain only a scalar observation, or reorder release.
     for symbol, body in {
         "OriginalCarrierQueue": "{ state: &'service State, queue: &'service Queue, }",
         "OriginalCarrierQueue::new": "{ Self { state, queue } }",
+        "OriginalCarrierQueue::from_service": "{ Self { state: &service.state, queue: &service.queue, } }",
         "OriginalCarrierQueue::belongs_to": "{ core::ptr::eq(self.state, state) }",
         "OriginalCarrierQueue::owns_cut": "{ cut.belongs_to(self.queue) }",
         "OriginalCarrierQueue::try_observe": "{ self.queue.try_lock_lane_retirement_observer() }",
@@ -2661,7 +3099,7 @@ def validate_native_preparation_contract(
     for symbol in ("CarrierQueueRetirement::try_new", "CarrierQueueRetirement::authenticates",
                    "CarrierQueueRetirement::ensure_available", "OriginalCarrierQueue::try_observe",
                    "QueueLaneRetirementCut::lane_pending_work_release", "StateFences::try_acquire",
-                   "try_prepare_physical"):
+                   "try_prepare_physical", "SourceAuthenticatedCarrier::try_prepare"):
         body = items.get(symbol, "")
         for forbidden in (".await", ".lock()", "mem::forget", "ManuallyDrop", "block_on(",
                           "Queue::new", "State::new"):
@@ -2798,49 +3236,6 @@ def validate_native_preparation_contract(
             if forbidden in body:
                 errors.append(f"Native preparation retained geometry {owner} reconstructs original custody: {forbidden}")
 
-    ordered("publish_execution_witness",
-            "try_publication_lease()", "reauthenticate_checkpoint(", "drop(lease)",
-            "stage_kagemusha_finality_sidecar(", "promote_kagemusha_finality_sidecar(")
-    ordered("KuraPublicationLease::reauthenticate_execution_witness",
-            "decode_kagemusha_finality_sidecar(&path)", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)",
-            "regular_sidecar_metadata(&path, &directory)", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())")
-    ordered("publish_archives",
-            "try_publication_lease()", "reauthenticate_checkpoint(",
-            "provider.publish_under_publication_lease(&lease, receipt)",
-            "reputation.publish_under_publication_lease(&lease, receipt)", "drop(lease)")
-    archive_publication = items.get("publish_archives", "")
-    if archive_publication and archive_publication.count(_code("drop(lease)")) != 1:
-        errors.append("Native preparation publish_archives loses its single final lease-release executable relation")
-    ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
-            "original.journals.source_prefix.authenticate_durable_carrier(",
-            "original.journals.provider_capture.as_ref()",
-            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
-            ".map_err(CarrierPhysicalPreparationError::Provider)?;",
-            "original.journals.reputation_capture.as_ref()",
-            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
-            ".map_err(CarrierPhysicalPreparationError::Reputation)?;")
-    ordered("try_prepare_physical",
-            "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
-            "if !original.journals.geometry.matches_publication_target(target, original.block().header())",
-            "drop(installation);", "return Err((original, CarrierPhysicalPreparationError::ForeignTarget));",
-            "if original.journals.geometry.requires_queue_custody()",
-            "None => Some(CarrierQueueRetirementError::Missing)",
-            "Some(source) if !source.belongs_to(target)",
-            "Some(CarrierQueueRetirementError::ForeignState)",
-            "return Err((original, CarrierPhysicalPreparationError::Queue(error)))",
-            "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
-            "original.publish_execution_witness()", "original.publish_archives()", "target.kura.try_publication_lease()",
-            "SourceAuthenticatedCarrier::try_new(original, kura)",
-            "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
-            "let queue_observer = if authenticated.decision.journals.geometry.requires_queue_custody()",
-            "source.try_observe()", "StateFences::try_acquire(target)",
-            "observer.try_into_cut()", "CarrierQueueRetirement::try_new(target, &authenticated.decision.journals.geometry, authenticated.decision.block().header(), source, cut,)",
-            "let fences = CarrierFences { _state: state, _queue: queue, _kura: kura, }",
-            "journals.try_map_components(")
-    physical = items.get("try_prepare_physical", "")
-    for operation in ("source.try_observe()", "StateFences::try_acquire(target)", "observer.try_into_cut()", "journals.try_map_components("):
-        if physical and physical.count(_code(operation)) != 1:
-            errors.append(f"Native preparation Queue acquisition repeats or omits executable relation {operation}")
     ordered("CarrierFences::release_for_completion", "write.release_deferred()", "lifecycle.release_deferred()",
             "queue.map(CarrierQueueRetirement::release_deferred)", "kura.release_deferred()", "CompletionFences {")
     ordered("CarrierQueueRetirement::try_new", "!source.belongs_to(target)",
@@ -2950,7 +3345,7 @@ def validate_native_preparation_contract(
             "self.complete = true")
     ordered("CarrierPreparation::drop", "world.release_writers()", "runtime.release_writers()",
             "transactions.release_writers()", "self.block_hashes.release_writers()", "indexes.release_writers()", "self.release_fences()")
-    ordered("CarrierPreparation::new", "world.publication_slot(&target.world)",
+    ordered("CarrierPreparation::new", "world.publication_slot(&target.world, None)",
             "runtime.publication_slot(target)", "transactions.publication_slot(&target.transactions)",
             "RetainedHashSlot::new(block_hashes, &target.block_hashes)", "StateEffectLocks::new(", "fences: Some(fences)")
     ordered("CarrierPreparation::try_prepare", "self.retryable = false;", "self.prepare_inner()",
@@ -2966,23 +3361,29 @@ def validate_native_preparation_contract(
     ordered("WorldPublicationSlot::try_prepare", "self.retryable = false;", "admit(self.original(), self.target)",
             "self.installation = Some(installation)", "Vec::with_capacity(self.original().fields.len())",
             "self.phase.take()", "self.phase = Some(Phase::Fields(", "fields.retry.reverse()",
-            "original.publication_slot(self.target)", "for field in fields.fields.iter_mut()", "field.try_prepare()",
+            "original.publication_slot(self.target, self.scope)", "for field in fields.fields.iter_mut()", "field.try_prepare()",
             "self.complete = true;")
     ordered("WorldPublicationSlot::recover_original", "self.retryable && !self.released", "self.released = true;",
             "fields.fields.recover_all()", "fields.fields.iter_mut().map(|field| field.abort())", "std::mem::take(&mut fields.retry)")
     ordered("PreparedWorld::abort", "fields.recover_all()", "retry.extend(fields.iter_mut().map(|field| field.abort()))")
     for owner in ("PreparedStorage", "PreparedCell", "PreparedTriggers"):
+        recover = "M::recover_original(slot)" if owner == "PreparedStorage" else "slot.recover_original()"
+        abort = "M::abort(journal)" if owner == "PreparedStorage" else "journal.abort()"
         attached_order("crates/iroha_core/src/state/world_publication.rs", owner + "::release_for_recovery",
-                       "!self.released", "if self.normal_recovery", "slot.recover_original()", "journal.abort()",
+                       "!self.released", "if self.normal_recovery", recover, abort,
                        "self.aborted = Some(retirement)", "self.normal_recovery = true;")
         attached_order("crates/iroha_core/src/state/world_publication.rs", owner + "::abort",
                        "self.release_for_recovery()", "self.released = true;", "self.original.take()")
     ordered("WorldPublicationSlot::into_prepared", "self.complete && !self.released", "self.phase.take()", "PreparedWorld {")
     for owner in ("PreparedStorage", "PreparedCell", "PreparedTriggers"):
+        prepare = "M::try_prepare(slot)" if owner == "PreparedStorage" else "slot.try_prepare("
+        prepared = "M::into_prepared(slot)" if owner == "PreparedStorage" else "slot.into_prepared()"
+        release = "M::release_writers(slot)" if owner == "PreparedStorage" else "slot.release_writers()"
+        abort = "M::abort(journal)" if owner == "PreparedStorage" else "journal.abort()"
         attached_order("crates/iroha_core/src/state/world_publication.rs", owner + "::try_prepare",
-                       "&mut self.phase", "slot.try_prepare(", "std::mem::replace(&mut self.phase", "slot.into_prepared()")
+                       "&mut self.phase", prepare, "std::mem::replace(&mut self.phase", prepared)
         attached_order("crates/iroha_core/src/state/world_publication.rs", owner + "::release",
-                       "self.released = true;", "slot.release_writers()", "journal.abort()", "self.aborted = Some(retirement)")
+                       "self.released = true;", release, abort, "self.aborted = Some(retirement)")
 
     ordered("RetainedHashSlot::take_prepared", "self.complete && !self.released", "self.phase.take()",
             "slot.into_prepared()", "preflight_release: self.preflight_release.take()")
@@ -3091,7 +3492,27 @@ def validate_native_preparation_contract(
             "self.construct_acquired_block(acquired, curr_block, core::convert::identity)",
             "state_block.freeze_fastpq_source_context()", "state_block.freeze_axt_block_start()", "Ok(state_block)")
     ordered("schedule_local_proposal", "proposal_state.reconcile(LocalProposalOwner::from(directive))",
-            "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "lane_work.schedule_autonomous_lane_production(")
+            "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "let Some(assembly) = native.assemble_candidate(")
+    ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
+            "let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;",
+            "native.retain_candidate_source(source);", "let assembly = outcome?;")
+    scheduler = items.get("schedule_local_proposal", "")
+    for operation in ("native.assemble_candidate(", "native.retain_candidate_source(source);", "let assembly = outcome?;"):
+        if scheduler.count(_code(operation)) != 1:
+            errors.append("Native preparation scheduler loses original source executable relation: " + operation)
+    if _code("lane_work.schedule_autonomous_lane_production(") in scheduler:
+        errors.append("Native preparation scheduler reintroduces retired lane production executable relation")
+    for symbol in ("run_lifecycle_active_height", "run_pending_active_height"):
+        ordered(symbol, "native.take_service_publication(services);", "native.service_sources(services,",
+                "native.poll(native_global, native_network,", "dispatch_queue_plan_admission_effects(")
+        flow = tuple(_code(token) for token in ("native.take_service_publication(services);", "native.service_sources(services,", "native.poll(native_global, native_network,"))
+        body = items.get(symbol, "")
+        if all(token in body for token in flow) and not (body.index(flow[0]) < body.index(flow[1]) < body.index(flow[2])):
+            errors.append(f"Native preparation {symbol} reorders original service executable relation")
+        for retired in ("lane_work.schedule_retransmission(", "dispatch_lane_work_effects(",
+                        "schedule_autonomous_new_view_timeouts("):
+            if _code(retired) in items.get(symbol, ""):
+                errors.append(f"Native preparation {symbol} revives retired transport executable relation {retired}")
     ordered("refresh_merge_candidates", "if let Some((view, pending)) = &mut self.merge_history_wait",
             "if *view == active_view && !pending.is_ready(&wake)", "self.merge_history_wait = None",
             "let refresh_generation = self.state.state_view_generation()", "self.build_and_memoize_merge_execution_candidate(",
@@ -3236,15 +3657,15 @@ def validate_native_preparation_contract(
     require("PreparedCarrier::prepare", "execution_prefix::prepare(input)")
     require("PrefixPreparation::capture",
             "let block = valid.as_ref();",
-            "let witness = state.exec_witness.as_ref().ok_or(",
-            "let manifest = exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, None,)?;",
-            "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(str::to_owned)?;",
-            "let inventory = state.fastpq_source_inventory.take().ok_or(",
-            "let witness = state.exec_witness.take().ok_or(",
+            "let witness = state.exec_witness.as_ref().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
+            "let manifest = exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, None,).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
+            "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(|error| MergeLedgerCommitError::ExecutionBatchInvalid(error.to_owned()))?;",
+            "let inventory = state.fastpq_source_inventory.take().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
+            "let witness = state.exec_witness.take().ok_or_else(|| { MergeLedgerCommitError::ExecutionBatchInvalid(",
             "let prefix = ValidatedExecutionPrefix { sealed, authority, _inventory: inventory, witness, _fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
     ordered("PrefixPreparation::capture", "let authority = match native",
-            "state.verify_execution_output_seal(block)?;",
-            "state.verify_cached_ordinary_witness_content(&verified_inventory)?;",
+            "state.verify_execution_output_seal(block).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
+            "state.verify_cached_ordinary_witness_content(&verified_inventory).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
             "let manifest =", "let commitment =", ".replace(output_capacity::ExecutionOutputPlanState::Captured)",
             "let inventory =", "let witness = state.exec_witness.take()", "let prefix =")
     ordered("prepare", "let (valid, state, context, native) = input.into_parts();",
@@ -3339,7 +3760,7 @@ def validate_native_preparation_contract(
     # reservations. Keep the original post-WSV obligation at its actual sum owner.
     terminal = "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked"
     require(terminal,
-            'let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+            'let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;',
             'let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;',
             'let required = self.kura_disk_usage_bytes()?.checked_add(pending_canonical_bytes).and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes)).and_then(|bytes| bytes.checked_add(physical_and_transient)).and_then(|bytes| bytes.checked_add(stable_terminal_reservations)).and_then(|bytes| bytes.checked_add(lane_publication_reservations)).and_then(|bytes| bytes.checked_add(certified_bundle_reservations)).and_then(|bytes| { bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes()) }).ok_or_else(|| { Self::invalid_lane_artifact_error(path.to_path_buf(), "autonomous mutation configured disk accounting overflowed",) })?;',
             'if required > self.max_disk_usage_bytes { return Err(Self::invalid_lane_artifact_error(path.to_path_buf(), "autonomous mutation would consume globally reserved terminal or carrier capacity",)); } Ok(())',
@@ -3352,6 +3773,6 @@ def validate_native_preparation_contract(
     ):
         errors.append("Native preparation terminal capacity has an early success or replaced total")
     ordinary = items.get("lane_artifact_required_bytes_for_block", "")
-    for forbidden in ("native_amx", "NativeAmx", "lane_publication_budget_reserved_bytes"):
+    for forbidden in ("native_amx", "NativeAmx", "lane_publication_budget_reserved_bytes", "all_publication_budget_reserved_bytes"):
         if forbidden in ordinary:
             errors.append(f"Native preparation ordinary accounting duplicates Native reservation via {forbidden}")

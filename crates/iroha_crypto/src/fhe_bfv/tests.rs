@@ -12952,6 +12952,82 @@ fn rns_centered_target_limb_scale_round_bridge_matches_scalar_boundary() {
     assert_eq_row! { target_scaled_sum, scale_round_raw_product_polynomial(&params, &scalar_sum) .expect("scalar scale-round product sum") };
 }
 #[test]
+fn rns_centered_product_sum_rejects_source_coefficients_that_alias_after_basis_extension() {
+    let params = rns_exact_params();
+    let source_chain = rns_exact_chain();
+    let target_chain = BfvRnsModulusChain {
+        moduli: vec![97, 101],
+    };
+    let source_product = source_chain.product().expect("source product");
+    let target_product = target_chain.product().expect("target product");
+    let single_product_bound =
+        exact_ciphertext_modulus_negacyclic_product_sum_abs_bound(&params, 1)
+            .expect("single-product centered bound");
+    let aliased_coefficient = target_product + 1;
+    assert!(aliased_coefficient > single_product_bound);
+    assert!(aliased_coefficient < source_product / 2);
+
+    let source_polynomial = |coefficient: u128| BfvRnsPolynomial {
+        residues_by_limb: source_chain
+            .moduli
+            .iter()
+            .map(|&modulus| {
+                vec![
+                    u64::try_from(coefficient % u128::from(modulus)).expect("residue fits u64"),
+                    0,
+                ]
+            })
+            .collect(),
+    };
+    let zero = source_polynomial(0);
+    let positive_alias = source_polynomial(aliased_coefficient);
+    let negative_alias = source_polynomial(source_product - aliased_coefficient);
+    for (label, left, right, expected_leg) in [
+        ("positive", &positive_alias, &zero, "left product"),
+        ("negative", &negative_alias, &zero, "left product"),
+        ("right", &zero, &positive_alias, "right product"),
+        (
+            "cancelling",
+            &positive_alias,
+            &negative_alias,
+            "left product",
+        ),
+    ] {
+        let target_alias = source_chain
+            .basis_extend_centered_polynomial_target_limbs(&params, left, &target_chain)
+            .expect("unbounded target-limb conversion is lossy");
+        let reconstructed = target_chain
+            .reconstruct_polynomial(&params, &target_alias)
+            .expect("reconstruct target alias");
+        if label == "positive" {
+            assert_eq!(reconstructed[0], 1);
+        }
+        let error = source_chain
+            .scale_round_add_centered_product_polynomials_target_limbs_exact(
+                &params,
+                left,
+                right,
+                &target_chain,
+            )
+            .expect_err("source coefficient outside the centered bound must not alias");
+        assert!(
+            error.to_string().contains(&format!(
+                "{expected_leg} coefficient[0] exceeds source-chain centered bound"
+            )),
+            "{label}: {error}"
+        );
+        let error = source_chain
+            .scale_round_add_centered_product_polynomials_exact(&params, left, right)
+            .expect_err("source product outside the centered bound must not cancel");
+        assert!(
+            error.to_string().contains(&format!(
+                "{expected_leg} coefficient[0] exceeds source-chain centered bound"
+            )),
+            "{label}: {error}"
+        );
+    }
+}
+#[test]
 fn rns_key_switch_digit_polynomials_survive_basis_extension() {
     let params = rns_exact_params();
     let_row! { source_chain = BfvRnsModulusChain { moduli: vec![73, 89], } };

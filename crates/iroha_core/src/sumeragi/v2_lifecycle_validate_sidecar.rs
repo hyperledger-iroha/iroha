@@ -8,10 +8,6 @@ use super::{
     concrete_admission::LifecycleWorkRegistryHolder,
     ledger::{LifecycleLedgerError, LifecycleLedgerStoreV1},
 };
-use crate::sumeragi::{
-    v2_lane_work::{MergeSidecarDeferralDisposition, V2LaneWorkAdapter},
-    v2_worker::PreparedDeferredLifecycleValidateCompletionV1,
-};
 use iroha_crypto::HashOf;
 use iroha_data_model::block::{CertifiedMergeLedgerReference, consensus_v2 as wire};
 use norito::codec::{Decode, Encode};
@@ -130,11 +126,6 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarRegistrationErrorV1 {
     Service(String),
 }
 
-enum LifecycleValidateSidecarCustodyV1 {
-    Live(PreparedDeferredLifecycleValidateCompletionV1),
-    Recovered,
-}
-
 /// Exact executor cleanup authority minted after an unwoken sidecar wait is
 /// durably cancelled.
 ///
@@ -152,17 +143,6 @@ pub(in crate::sumeragi) struct CancelledLifecycleValidateSidecarV1 {
 }
 
 impl CancelledLifecycleValidateSidecarV1 {
-    fn after_durable_cancellation(
-        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
-    ) -> Self {
-        debug_assert!(identity.is_structurally_exact());
-        Self {
-            dispatch_key: identity.dispatch_key(),
-            round: identity.round(),
-            subject: identity.subject(),
-        }
-    }
-
     /// Return the exact cancelled lifecycle dispatch key.
     pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleValidateDispatchKeyV1 {
         self.dispatch_key
@@ -195,63 +175,15 @@ impl CancelledLifecycleValidateSidecarV1 {
     }
 }
 
-/// One fsynced sidecar registration retaining its live move-only dispatch, or
-/// the equivalent cold-open registration before the exact body is retried.
-#[must_use = "a registered Validate sidecar wait must remain parked or wake its exact row"]
+/// Test-only recovery model for exact durable registration and generation checks.
+#[cfg(test)]
+#[must_use]
 pub(in crate::sumeragi) struct RegisteredLifecycleValidateSidecarWaitV1 {
-    identity: LifecycleValidateSidecarRegistrationIdentityV1,
-    custody: LifecycleValidateSidecarCustodyV1,
+    _identity: LifecycleValidateSidecarRegistrationIdentityV1,
 }
 
-/// Result of polling one registered lifecycle Validate sidecar dependency.
-#[must_use = "sidecar progress must remain parked or update the lifecycle driver"]
-pub(in crate::sumeragi) enum LifecycleValidateSidecarDriveV1 {
-    /// The exact dependency is still fetching or awaiting bounded capacity.
-    Waiting(RegisteredLifecycleValidateSidecarWaitV1),
-    /// The exact dependency became durable and the same row is Ready.
-    Woken(ReadyValidateSuccessorV1),
-    /// A certified newer view cancelled this unprotected losing proposal.
-    Superseded(CancelledLifecycleValidateSidecarV1),
-    /// The owner failed closed; dropping it arms the existing restart guard.
-    RestartRequired(LifecycleValidateSidecarRegistrationErrorV1),
-}
-
+#[cfg(test)]
 impl RegisteredLifecycleValidateSidecarWaitV1 {
-    /// Fsync a live deferred dispatch before any sidecar transport ownership is
-    /// acquired. Failure returns the complete guarded completion unchanged.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn register_live(
-        coordinator: &LifecycleCoordinator,
-        registry: &LifecycleWorkRegistryHolder,
-        completion: PreparedDeferredLifecycleValidateCompletionV1,
-    ) -> Result<
-        Self,
-        (
-            LifecycleValidateSidecarRegistrationErrorV1,
-            PreparedDeferredLifecycleValidateCompletionV1,
-        ),
-    > {
-        let Some(identity) = completion.sidecar_registration_identity() else {
-            return Err((
-                LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
-                completion,
-            ));
-        };
-        if !coordinator.validate_sidecar_wait_matches(&identity, registry) {
-            return Err((
-                LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
-                completion,
-            ));
-        }
-        if let Err(error) = coordinator.persist_validate_sidecar_registration(&identity) {
-            return Err((error, completion));
-        }
-        Ok(Self {
-            identity,
-            custody: LifecycleValidateSidecarCustodyV1::Live(completion),
-        })
-    }
-
     /// Reconstruct an fsynced registration and its exact Waiting generation
     /// before the live runner can select any Ready work.
     pub(in crate::sumeragi) fn recover_at_launch(
@@ -273,98 +205,8 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
         }
         coordinator.restore_validate_sidecar_wait(&identity, registry)?;
         Ok(Some(Self {
-            identity,
-            custody: LifecycleValidateSidecarCustodyV1::Recovered,
+            _identity: identity,
         }))
-    }
-
-    /// Poll only the exact stored reference. Availability is reauthenticated
-    /// against Kura by lane work before the lifecycle registration can wake.
-    pub(in crate::sumeragi) fn drive(
-        self,
-        coordinator: &mut LifecycleCoordinator,
-        registry: &mut LifecycleWorkRegistryHolder,
-        lane_work: &mut V2LaneWorkAdapter,
-    ) -> LifecycleValidateSidecarDriveV1 {
-        if !coordinator.validate_sidecar_wait_matches(&self.identity, registry) {
-            return LifecycleValidateSidecarDriveV1::RestartRequired(
-                LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
-            );
-        }
-        if lane_work
-            .lifecycle_validate_sidecar_is_superseded(self.identity.round, self.identity.subject)
-        {
-            let ordinal = self.identity.dispatch_key().lifecycle_ordinal();
-            if let Err(error) =
-                coordinator.cancel_validate_sidecar_registration(&self.identity, registry)
-            {
-                return LifecycleValidateSidecarDriveV1::RestartRequired(error);
-            }
-            let cancellation =
-                CancelledLifecycleValidateSidecarV1::after_durable_cancellation(&self.identity);
-            if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
-                let (dispatch, ack) = completion.into_sidecar_wake_parts();
-                debug_assert!(dispatch.matches_dispatch_key(self.identity.dispatch_key()));
-                drop(dispatch);
-                ack.acknowledge_after_publication();
-            }
-            debug_assert_eq!(cancellation.dispatch_key().lifecycle_ordinal(), ordinal);
-            return LifecycleValidateSidecarDriveV1::Superseded(cancellation);
-        }
-        let disposition = lane_work.defer_missing_lifecycle_validate_sidecar(
-            self.identity.round,
-            self.identity.subject,
-            self.identity.reference.clone(),
-        );
-        match disposition {
-            Ok(
-                MergeSidecarDeferralDisposition::Fetching
-                | MergeSidecarDeferralDisposition::RetryLater,
-            ) => LifecycleValidateSidecarDriveV1::Waiting(self),
-            Ok(MergeSidecarDeferralDisposition::Available) => {
-                if let Err(error) =
-                    coordinator.wake_validate_sidecar_registration(&self.identity, registry)
-                {
-                    return LifecycleValidateSidecarDriveV1::RestartRequired(error);
-                }
-                let dispatch_key = self.identity.dispatch_key();
-                let attestation = match coordinator
-                    .attest_ready_validate_demand(registry, dispatch_key.lifecycle_ordinal())
-                {
-                    Ok(attestation) => attestation,
-                    Err(_) => {
-                        return LifecycleValidateSidecarDriveV1::RestartRequired(
-                            LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
-                        );
-                    }
-                };
-                let Some(successor) = ReadyValidateSuccessorV1::from_sidecar_wake(
-                    dispatch_key,
-                    self.identity.round(),
-                    self.identity.subject(),
-                    attestation,
-                ) else {
-                    return LifecycleValidateSidecarDriveV1::RestartRequired(
-                        LifecycleValidateSidecarRegistrationErrorV1::InvalidIdentity,
-                    );
-                };
-                if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
-                    let (dispatch, ack) = completion.into_sidecar_wake_parts();
-                    debug_assert!(dispatch.matches_dispatch_key(dispatch_key));
-                    drop(dispatch);
-                    ack.acknowledge_after_publication();
-                }
-                LifecycleValidateSidecarDriveV1::Woken(successor)
-            }
-            Ok(MergeSidecarDeferralDisposition::Rejected(reason)) => {
-                LifecycleValidateSidecarDriveV1::RestartRequired(
-                    LifecycleValidateSidecarRegistrationErrorV1::Service(reason),
-                )
-            }
-            Err(error) => LifecycleValidateSidecarDriveV1::RestartRequired(
-                LifecycleValidateSidecarRegistrationErrorV1::Service(error.to_string()),
-            ),
-        }
     }
 }
 

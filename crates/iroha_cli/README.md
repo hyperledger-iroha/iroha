@@ -53,8 +53,8 @@ current runtime bindings and durable deployment history.
 Reset input validation checks the complete action timeout budget before scanning
 artifacts or reading signing custody. The install budget counts every required
 artifact upload, including `kagami`, plus each validator's stage and install
-actions. All four beacon providers activate before the epoch supervisor starts;
-restart qualification follows that required barrier. Prepared Inrou stage files
+actions. All four beacon providers activate before restart qualification.
+Prepared Inrou stage files
 use mode0600; retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 
@@ -79,6 +79,68 @@ peer lifecycle after the node has synchronized; it does not use a parallel
 off-chain token format. The command and bundle are not shipped yet. The
 disposable four-validator devnet is qualification tooling, not a way to join
 the public testnet.
+
+### Public-lane staking commands
+
+`iroha staking register-candidate` atomically registers a fresh consensus peer
+and bonds the validator's initial stake on an independent stake-elected lane.
+Fresh global lane-0 candidates remain blocked until an authenticated beacon
+and mint-key committee transition is prepared; that transition workflow is
+not implemented. A signed binding to an existing current global committee peer
+is supported. The command signs the complete registration
+against the genesis-derived `--network-id` with the key from
+`--peer-private-key-file`. That runtime file must use an absolute path, contain
+one canonical BLS-normal private key, and be owned by the caller with exact
+mode `0600`; the CLI checks that it matches `--peer-id`. Keep it outside the
+repository. The transaction is submitted by the validator account. Admission
+schedules future eligibility; it does not change the current committee.
+
+```sh
+iroha --config validator.toml staking register-candidate \
+  --lane-id "$STAKE_ELECTED_LANE_ID" --validator "$VALIDATOR" --peer-id "$PEER_ID" \
+  --initial-stake 25000 --network-id "$NETWORK_ID" --activation-height "$ACTIVATION_HEIGHT" \
+  --peer-private-key-file /run/iroha/peer.key
+iroha --config staker.toml staking bond \
+  --lane-id 0 --validator "$VALIDATOR" --amount 10.000000001
+iroha --config staker.toml staking schedule-unbond \
+  --lane-id 0 --validator "$VALIDATOR" --amount 5 \
+  --request-id "$WITHDRAWAL_HASH" --release-at-ms "$RELEASE_AT_MS"
+iroha --config staker.toml staking finalize-unbond \
+  --lane-id 0 --validator "$VALIDATOR" --request-id "$WITHDRAWAL_HASH"
+iroha --config recipient.toml staking claim-rewards --lane-id 0 --upto-epoch 12
+iroha --config treasury.toml staking record-rewards --file epoch-rewards.json
+```
+
+`bond` supports self stake and delegation. `--staker` defaults to the configured
+transaction authority for bond and both unbond commands; `claim-rewards`
+similarly defaults `--account` to that authority. The chain requires the stake
+owner or reward recipient to authorize their respective operations. Amounts
+are exact decimal quantities. Bond metadata accepts a Norito JSON object via
+`--metadata` and replaces the stake share's metadata.
+
+Candidate `--activation-height` must be the exact next unfrozen election boundary
+after the new key's activation lead. The signature is restricted to that tenure;
+if the planned boundary passes before inclusion, prepare a new authorization.
+
+Choose and retain a unique canonical hash for `--request-id`; use that exact
+value when finalizing. `--release-at-ms` must respect the network's configured
+unbonding delay. Finalization additionally waits for consensus liability and
+pending evidence checks. Omitting `--upto-epoch` claims all available epochs;
+an explicit bound is inclusive.
+
+`record-rewards` reads a Norito JSON `RecordPublicLaneRewards` object with
+`lane_id`, `epoch`, `reward_asset`, `total_reward`, `shares`, and `metadata`.
+Each share contains `account`, `role` (`"Validator"` or `"Nominator"`), and an
+exact `amount`. The configured fee-sink authority submits the distribution;
+the chain verifies its funding and allocation totals. This command does not
+mint rewards. The existing `register`, `rebind`, `activate`, and `exit`
+commands remain available for their corresponding validator transitions.
+For a replacement peer distinct from the validator account key, `rebind`
+accepts `--network-id`, `--peer-private-key-file`, `--activation-height`, and
+`--previous-peer-id` together to sign consent for the exact stored pending
+tenure and binding. Without that consent, binding a distinct peer
+requires peer-management authority. The replacement peer must already have a
+valid registered consensus key.
 
 ### Scaling load terminal handoff
 

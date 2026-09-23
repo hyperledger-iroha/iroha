@@ -547,6 +547,7 @@ pub(crate) mod v2_lane_body_store;
 )]
 pub(crate) mod v2_lane_driver;
 pub(crate) mod v2_lane_frame_bounds;
+mod v2_queue_plan_admission;
 // TODO: connect this process-owned fanout and the sole native ingress consumer
 // in the same cutover that retires the legacy fresh lane signer.
 #[cfg_attr(
@@ -2350,7 +2351,13 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
         let encoded = match message {
             BlockMessage::V2(message) => message.encode(),
-            message if message.is_lane_local() || message.is_live_auxiliary() => message.encode(),
+            message
+                if message.is_lane_local()
+                    || message.is_native_lane()
+                    || message.is_live_auxiliary() =>
+            {
+                message.encode()
+            }
             _ => return false,
         };
         self.first.encoded_bytes.as_ref() == encoded.as_slice()
@@ -3910,6 +3917,8 @@ pub(crate) enum FairV2IngressDequeueDisposition {
 enum FairV2IngressCheckedSelectionScope {
     /// Preserve the productive leader-wire barrier and ordinary dependency ordering.
     Ordinary,
+    /// Only process-owned Native traffic and exact retained source responses.
+    NativeProcess,
     /// Admit only independent lane-local traffic under an authenticated lifecycle barrier.
     LifecycleLaneLocal {
         _permit: v2_runner::LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
@@ -5407,19 +5416,10 @@ impl FairV2Ingress {
         inbound: InboundBlockMessage,
         enqueued_at: Instant,
     ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
-        // TODO: admit native evidence only when its sole process-lifetime
-        // consumer is installed and the legacy fresh signer is retired.
-        // Classification is not permission to route it into the old lane path.
-        if inbound.message().is_native_lane() {
-            return Err(FairV2IngressPushError::rejected(
-                inbound,
-                FairV2IngressRejectReason::UnsupportedEnvelope,
-            ));
-        }
+        // One process-lifetime Native consumer owns these exact occurrences.
         self.try_push_owned_at(inbound, enqueued_at)
     }
-    // One bounded physical admission path. Native remains unreachable from the
-    // production entrypoint until its process-lived consumer replaces the signer.
+    // One bounded physical admission path shared by independently owned consumers.
     fn try_push_owned_at(
         &self,
         mut inbound: InboundBlockMessage,
@@ -6316,6 +6316,23 @@ impl FairV2Ingress {
     ) -> Result<Option<InboundBlockMessage>, String> {
         self.try_recv_if_at_checked(Instant::now(), predicate)
     }
+    /// Service one exact Native process dependency independently of a global barrier.
+    /// The original fair queue, durable census and physical handoff remain authoritative.
+    pub(in crate::sumeragi) fn try_recv_native_process_checked(
+        &self,
+        native: &v2_runner::native_process::NativeRunnerProcess,
+    ) -> Result<Option<InboundBlockMessage>, String> {
+        self.try_recv_if_at_checked_classified(
+            Instant::now(),
+            false,
+            FairV2IngressCheckedSelectionScope::NativeProcess,
+            |inbound| {
+                (!native.has_pending_ingress() && inbound.message().is_native_lane())
+                    || native.admits_source_response(inbound.message())
+            },
+        )
+        .map(|selected| selected.map(|(inbound, _)| inbound))
+    }
     /// Dequeue one exact lane-local occurrence while lifecycle ownership blocks ordinary ingress.
     ///
     /// The sealed permit grants no global leader-wire authority. This path still validates the
@@ -6409,7 +6426,29 @@ impl FairV2Ingress {
                         .into_iter()
                         .flat_map(|lane| {
                             lane.entries.iter().enumerate().map(|(index, entry)| {
-                                let verdict = if selection_scope.is_lifecycle_lane_local() {
+                                let verdict = if matches!(
+                                    selection_scope,
+                                    FairV2IngressCheckedSelectionScope::NativeProcess
+                                ) {
+                                    // The caller's exact process source predicate is applied after
+                                    // this closed family gate; no productive global wire can pass.
+                                    if matches!(
+                                        entry.inbound.message(),
+                                        BlockMessage::NativeLane(_)
+                                            | BlockMessage::NativeLaneDecision(_)
+                                    ) || matches!(
+                                        entry.inbound.message(),
+                                        BlockMessage::V2(ConsensusMessageV2 {
+                                            payload:
+                                                ConsensusMessageV2Payload::CertifiedBodyResponse(_),
+                                            ..
+                                        })
+                                    ) {
+                                        FairV2IngressQueueGateVerdict::Dependency
+                                    } else {
+                                        FairV2IngressQueueGateVerdict::Blocked
+                                    }
+                                } else if selection_scope.is_lifecycle_lane_local() {
                                     if entry.inbound.message().is_lane_local() {
                                         FairV2IngressQueueGateVerdict::Dependency
                                     } else {
@@ -7098,6 +7137,15 @@ impl SumeragiHandle {
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
         }
+        // QueuePlan has the sole live owner for this channel. Returning the
+        // original message prevents an obsolete relay producer from treating
+        // a successful enqueue as durable protocol admission.
+        if !matches!(
+            &message,
+            LaneRelayMessage::QueuePlanAdmissionCertificate { .. }
+        ) {
+            return SumeragiIngressDisposition::Rejected(message);
+        }
         if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
             && (certificate.is_empty()
                 || certificate.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES)
@@ -7105,47 +7153,6 @@ impl SumeragiHandle {
             iroha_logger::debug!(
                 bytes = certificate.len(),
                 "rejecting malformed QueuePlan admission certificate before lane ingress"
-            );
-            return SumeragiIngressDisposition::Rejected(message);
-        }
-        if let LaneRelayMessage::CertifiedMergeSidecar {
-            sender,
-            reply_route,
-            message: sidecar,
-        } = &message
-        {
-            let allocating_requester = match sidecar {
-                CertifiedMergeSidecarMessage::Request(request) => Some(&request.requester),
-                CertifiedMergeSidecarMessage::Close(close) => Some(&close.requester),
-                CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-                | CertifiedMergeSidecarMessage::Chunk(_) => None,
-            };
-            // The handle can authenticate only the semantic transport
-            // identity and reply capability. A removed validator's exact
-            // Kura/finality authority is verified by the serialized lane
-            // adapter before it may allocate responder state; the sync
-            // channel below remains the bounded handoff corridor.
-            if allocating_requester.is_some_and(|requester| {
-                requester != sender
-                    || !reply_route
-                        .as_ref()
-                        .is_some_and(|route| route.is_active() && route.semantic_target() == sender)
-            }) {
-                iroha_logger::debug!(
-                    %sender,
-                    "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"
-                );
-                return SumeragiIngressDisposition::Rejected(message);
-            }
-        }
-        if let LaneRelayMessage::DrainVote { sender, vote } = &message
-            && (sender != &vote.signer || vote.validate_ingress().is_err())
-        {
-            iroha_logger::debug!(
-                %sender,
-                signer = %vote.signer,
-                "rejecting unauthenticated or invalid lane-drain vote before bounded ingress"
             );
             return SumeragiIngressDisposition::Rejected(message);
         }

@@ -1555,12 +1555,21 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         BTreeSet::from([retired_request_hash]),
         "completion publishes one exact cancellation identity"
     );
+    // This component's original owner publishes cancellation explicitly; the
+    // Native runner does not poll or reactivate the retired lane adapter.
+    assert!(
+        crate::sumeragi::v2_runner::apply_retired_historical_recovery_requests(
+            &mut adapter,
+            &services,
+        )
+        .expect("consume the completed historical request")
+            > 0
+    );
     assert!(
         !reconcile_terminal_lane_output_handoffs(
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
                 .decided_lane_recovery_permit()
                 .expect("settled Apply mints terminal handoff authority"),
-            &mut adapter,
             &services,
             1,
         )
@@ -2361,11 +2370,22 @@ fn merge_sidecar_carrier_block(
         u64::try_from(leader).expect("historical carrier leader index fits u64"),
         keys[leader].private_key(),
     );
-    block.set_execution_outputs(
-        Vec::new(), entry.lane_snapshots.len().try_into().expect("fixture fragments fit u64"),
-        Default::default(), Vec::new(), Default::default(), Default::default(), Vec::new(),
-        &crate::execution_output_test_support::structural_output_limits(),
-    ).expect("historical sidecar carrier retains complete structural result metadata");
+    block
+        .set_execution_outputs(
+            Vec::new(),
+            entry
+                .lane_snapshots
+                .len()
+                .try_into()
+                .expect("fixture fragments fit u64"),
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("historical sidecar carrier retains complete structural result metadata");
     block
 }
 fn verified_finality_for_context(
@@ -2560,11 +2580,12 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
         }
     }
     (
-        finality_context.kagemusha_mint_finality_epoch_id,
-        finality_context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        finality_context.kagemusha_mint_finality_authorization,
+        finality_context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         finality_context.network_id,
         finality_context.epoch,
+        finality_context.epoch_end_height,
         &finality_context.roster,
     );
     let finality = verified_finality_for_context(&finality_context, &finality_keys, &block);
@@ -3398,11 +3419,15 @@ fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
-        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        fixture
+            .adapter
+            .context
+            .kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         fixture.adapter.context.network_id,
         fixture.adapter.context.epoch,
+        fixture.adapter.context.epoch_end_height,
         &fixture.adapter.context.roster,
     );
     fixture
@@ -3481,11 +3506,15 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture.adapter.context.kagemusha_mint_finality_epoch_id,
-        fixture.adapter.context.kagemusha_mint_finality_epoch_roster,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        fixture
+            .adapter
+            .context
+            .kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authority,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
         fixture.adapter.context.network_id,
         fixture.adapter.context.epoch,
+        fixture.adapter.context.epoch_end_height,
         &fixture.adapter.context.roster,
     );
     fixture
@@ -4037,15 +4066,26 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
     );
     let _ = successor.drain_effects(usize::MAX);
     let mut executed_successor_block = successor_block.clone();
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&executed_successor_block, &[entrypoint_hash], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-executed_successor_block.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach canonical successor transaction result");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &executed_successor_block,
+            &[entrypoint_hash],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        executed_successor_block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach canonical successor transaction result");
     assert_eq!(
         executed_successor_block.canonical_resultless_proposal(),
         successor_block,
@@ -4291,11 +4331,18 @@ fn finalized_carrier_malformed_cross_kind_fail_stops_proposal_and_payload_ingres
             u64::try_from(leader).expect("global leader index fits u64"),
             keys[leader].private_key(),
         );
-        carrier.set_execution_outputs(
-            Vec::new(), 0, Default::default(), Vec::new(), Default::default(),
-            Default::default(), Vec::new(),
-            &crate::execution_output_test_support::structural_output_limits(),
-        ).expect("cross-kind evidence fixture retains complete result metadata");
+        carrier
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .expect("cross-kind evidence fixture retains complete result metadata");
         adapter
             .kura
             .store_block(carrier.clone())
@@ -4449,15 +4496,26 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         )
         .canonical_resultless_proposal();
     let axt_policy_snapshot = state.block(second_block.header()).axt_policy_snapshot();
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&second_block, &[entrypoint_hash], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-second_block.set_execution_outputs(outputs, fragments, BTreeMap::new(),
-Vec::new(),
-axt_policy_snapshot,
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach the executed second-link result and required AXT snapshot");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &second_block,
+            &[entrypoint_hash],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        second_block.set_execution_outputs(
+            outputs,
+            fragments,
+            BTreeMap::new(),
+            Vec::new(),
+            axt_policy_snapshot,
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach the executed second-link result and required AXT snapshot");
     let signature = SignatureOf::try_from_hash(
         keys[leader_index].private_key(),
         second_block.header().hash(),
@@ -4664,7 +4722,8 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
             &block,
             adapter.state.as_ref(),
             false,
-        ).unwrap()
+        )
+        .unwrap()
     );
     let (round_zero, subject) = global_lock_for_block(&adapter, &block);
     assert_eq!(round_zero.view, 0);

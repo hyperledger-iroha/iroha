@@ -370,7 +370,7 @@ fn inbound_two_field_struct(
             fields.get(middle..end).ok_or(Error::LengthMismatch)?,
         ));
     }
-    // `ConsensusMessageV2` has a fixed-width u16 followed by one dynamic enum.
+    // Both consensus envelopes have a fixed-width u16 followed by one dynamic enum.
     const EXPECTED_FIELD_BITSET: u8 = 0b0000_0010;
     let (&bitset, size_header) = payload.split_first().ok_or(Error::LengthMismatch)?;
     if bitset != EXPECTED_FIELD_BITSET {
@@ -650,7 +650,7 @@ fn enforce_inbound_consensus_v2_payload_limits(
         _ => Ok(()),
     }
 }
-fn inbound_consensus_v2_parts(
+fn inbound_versioned_consensus_parts(
     payload: &[u8],
     flags: u8,
 ) -> Result<(u16, u32, &[u8]), norito::core::Error> {
@@ -662,13 +662,55 @@ fn inbound_consensus_v2_parts(
     let field = inbound_enum_field(remaining, flags)?;
     Ok((u16::from_le_bytes(version), tag, field))
 }
+fn inbound_native_lane_topic(
+    payload: &[u8],
+    flags: u8,
+) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
+    use iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1;
+    use iroha_p2p::network::message::Topic;
+    let (version, tag, _) = inbound_versioned_consensus_parts(payload, flags)?;
+    if version != LANE_MESSAGE_VERSION_V1 {
+        return Ok(Topic::Other);
+    }
+    // All five Native variants are bounded control evidence. Their exact
+    // frozen committee, signatures and current instance are checked after
+    // transport admission by the original Native ingress owner.
+    match tag {
+        0..=4 => Ok(Topic::Consensus),
+        _ => Err(norito::core::Error::Message(
+            "unknown Native lane payload discriminant".to_owned(),
+        )),
+    }
+}
+fn inbound_native_lane_decode_limits(
+    framed_len: usize,
+) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
+    // Native controls carry no executable payload. The complete nested TC
+    // geometry fits the existing control frame, and every dynamic sequence
+    // is either at most 2f+1 shares/votes or one 96-byte BLS signature.
+    let frame_limit = MAX_SUMERAGI_V2_CONTROL_NETWORK_FRAME_BYTES;
+    if framed_len > frame_limit {
+        return Err(norito::core::Error::ArchiveLengthExceeded {
+            length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+            limit: u64::try_from(frame_limit).unwrap_or(u64::MAX),
+        });
+    }
+    let canonical = norito::canonical_decode_limits(frame_limit);
+    Ok(Some(norito::DecodeLimits::new(
+        lane_consensus::LANE_BLS_PROOF_BYTES,
+        frame_limit,
+        canonical.max_total_elements(),
+        canonical.max_total_allocated_bytes(),
+        MAX_SUMERAGI_V2_DECODE_DEPTH,
+    )))
+}
 fn inbound_consensus_v2_topic(
     payload: &[u8],
     flags: u8,
 ) -> Result<iroha_p2p::network::message::Topic, norito::core::Error> {
     use iroha_data_model::block::consensus_v2 as wire;
     use iroha_p2p::network::message::Topic;
-    let (version, tag, _) = inbound_consensus_v2_parts(payload, flags)?;
+    let (version, tag, _) = inbound_versioned_consensus_parts(payload, flags)?;
     if version != wire::PROTOCOL_VERSION {
         return Ok(Topic::Other);
     }
@@ -697,7 +739,7 @@ fn inbound_consensus_v2_decode_limits(
     flags: u8,
 ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
     use iroha_data_model::block::consensus_v2 as wire;
-    let (version, tag, payload_field) = inbound_consensus_v2_parts(payload, flags)?;
+    let (version, tag, payload_field) = inbound_versioned_consensus_parts(payload, flags)?;
     if version != wire::PROTOCOL_VERSION {
         // The raw topic classifier routes another protocol revision through
         // the much smaller `Other` cap before this hook is reached.
@@ -784,6 +826,8 @@ fn inbound_sumeragi_topic(
         0 | 1 | 3..=8 => Ok(Topic::Consensus),
         2 | 9 => Ok(Topic::ConsensusPayload),
         10 => inbound_consensus_v2_topic(field, flags),
+        11 => inbound_native_lane_topic(field, flags),
+        12 => Ok(Topic::Consensus),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi block discriminant".to_owned(),
         )),
@@ -1155,6 +1199,15 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 if block_tag == 10 {
                     return inbound_consensus_v2_decode_limits(block, framed_len, block_flags);
                 }
+                if matches!(block_tag, 11 | 12) {
+                    if block_tag == 11
+                        && inbound_native_lane_topic(block, block_flags)?
+                            == iroha_p2p::network::message::Topic::Other
+                    {
+                        return Ok(None);
+                    }
+                    return inbound_native_lane_decode_limits(framed_len);
+                }
                 if block_tag == 0 {
                     if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
                         return Err(norito::core::Error::ArchiveLengthExceeded {
@@ -1287,8 +1340,8 @@ pub mod role {
     use core::{fmt, str::FromStr};
     use derive_more::Constructor;
     use iroha_primitives::impl_as_dyn_key;
-    use mv::json::JsonKeyCodec;
     use norito::json;
+    use norito::json::JsonKeyCodec;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_core::role::RoleIdWithOwner")]
@@ -1803,7 +1856,7 @@ mod tests {
             "global-v2 discriminant must preserve its inner protocol topic"
         );
         assert!(
-            raw_sumeragi_topic_for_synthetic_tag(11).is_err(),
+            raw_sumeragi_topic_for_synthetic_tag(13).is_err(),
             "the first tag after the compact block-message range must fail closed"
         );
     }
@@ -2596,6 +2649,7 @@ mod tests {
     }
     include!("tests/queue_plan_admission_handoff.rs");
     include!("tests/sumeragi_v2_decode_limits.rs");
+    include!("tests/native_lane_network_ingress.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
         #[derive(norito::NoritoSchema)]

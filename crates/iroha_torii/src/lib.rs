@@ -20612,6 +20612,23 @@ fn torii_authorize_signed_query_routes(
             }
         }
         SignedQueryScope::TargetAccount(target) => {
+            let state_view = app.state.view();
+            let exact_account_permission: Permission =
+                iroha_executor_data_model::permission::query::CanReadAccountData {
+                    account: target.clone(),
+                }
+                .into();
+            if torii_account_has_permission(
+                state_view.world(),
+                authority,
+                &exact_account_permission,
+            ) {
+                // The signed query's exact target is already classified above.
+                // Honor its account-scoped read grant across that account's
+                // routes without granting any broader dataspace or alias read.
+                // The native executor still validates the exact query itself.
+                return Ok(routes);
+            }
             let readable_routes = if torii_same_account_read_identity(app, authority, target) {
                 torii_visible_account_read_routes(app, Some(authority))
             } else {
@@ -44550,22 +44567,21 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, data_availability;
             PROOF_POLICIES => public_get(da::commitments::handler_list_proof_policies);
-            PROOF_POLICY_SNAPSHOT => public_get(da::commitments::handler_proof_policy_bundle);
-            COMMITMENTS => limited_public_post(da::commitments::handler_list_commitments, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            COMMITMENTS_PROVE => limited_canonical_account_post(da::commitments::handler_prove_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            COMMITMENTS_VERIFY => limited_canonical_account_post(da::commitments::handler_verify_commitment, app_state, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES, da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES);
-            PIN_INTENTS => limited_public_post(da::pin_intents::handler_list_pin_intents, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
-            PIN_INTENTS_PROVE => limited_canonical_account_post(da::pin_intents::handler_prove_pin_intent, app_state, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES, da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES);
+            COMMITMENTS => limited_public_post(da::commitments::handler_list_commitments, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            COMMITMENTS_PROVE => limited_canonical_account_post(da::commitments::handler_prove_commitment, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            COMMITMENTS_VERIFY => limited_canonical_account_post(da::commitments::handler_verify_commitment, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            PIN_INTENTS => limited_public_post(da::pin_intents::handler_list_pin_intents, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
+            PIN_INTENTS_PROVE => limited_canonical_account_post(da::pin_intents::handler_prove_pin_intent, app_state, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES, iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES);
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_VERIFY,
             catalog_post(da::pin_intents::handler_verify_pin_intent)
                 .layer(DefaultBodyLimit::max(
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                    iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES,
                 ))
                 .authenticated_canonical_account_body(
                     app_state,
-                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                    iroha_torii_shared::da::DA_QUERY_REQUEST_MAX_BYTES,
                 ),
         );
     }

@@ -15,3 +15,38 @@ this archival operation only; it is not a signed release or a runtime test recei
 The historical target-local receipts cited by these sections were not present
 when reassessed. See [current readiness](../../../../specs/kagemusha_v1_production_readiness.md)
 for the remaining release gates.
+
+The guarded-inner update separately preserves the immediately preceding
+[active section](inner-predecessor-active.md),
+[current validation section](inner-predecessor-validation.md) and
+[status row](inner-predecessor-status-row.md), with exact hashes in
+[its manifest](inner-predecessor-manifest.json). The
+[inner validation note](inner-validation.md) records implemented source, all three
+unsuccessful windows and the final 27-function pass in each build mode; it does not
+assert production qualification.
+
+The final scoped-evidence update preserves its immediately preceding
+[active section](inner-final-predecessor-active.md),
+[current validation section](inner-final-predecessor-validation.md),
+[status row](inner-final-predecessor-status-row.md),
+[validation note](inner-final-predecessor-validation-note.md) and
+[archive introduction](inner-final-predecessor-readme.md) byte-for-byte, with hashes
+in [the final predecessor manifest](inner-final-predecessor-manifest.json).
+
+The later [indexed-reader validation](indexed-reader-validation.md) records four
+new direct-interval reader tests and fourteen codec regressions in both modes,
+with its own captured candidate. The immediately preceding [active section](indexed-reader-predecessor-active.md),
+[validation section](indexed-reader-predecessor-validation.md),
+[status row](indexed-reader-predecessor-status-row.md) and
+[archive introduction](indexed-reader-predecessor-readme.md) are retained exactly;
+see [their manifest](indexed-reader-predecessor-manifest.json).
+
+The [Kotlin protocol validation note](kotlin-core-validation.md) records the fresh
+57-test SDK run: 33 passed and 24 failed at unavailable ABI-23 native address
+validation. Its SDK source snapshot does not qualify the Rust native graph or
+physical devices; a current-source bridge rebuild and rerun remain required.
+
+The [indexed-key batch](indexed-key-batch-validation.md) records 79 passing functions
+in both modes, installed coefficient/snapshot/role work and the cross-coset test.
+Its preceding active/validation sections, status row and archive introduction are
+preserved byte-for-byte in the [batch predecessor manifest](indexed-batch-predecessor-manifest.json).

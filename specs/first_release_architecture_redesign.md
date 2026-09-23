@@ -416,7 +416,7 @@ require lookup rejection; registered canonical cross-family checks remain.
 Shared test-helper ownership is checked per consumer instead of by aggregate
 call totals. The wire-ID digest refresh was reviewed against commit
 `7035517653`: only the already-committed KAGEMUSHA top-up and redemption names
-replace the retired offline-cash names; all 349 other assignments are exact.
+replace the retired monetary instruction names; all 349 other assignments are exact.
 Both previous golden digests were reproduced from the parent source before
 computing the replacement digests. Production registry and codec logic are
 unchanged by these fixture repairs.

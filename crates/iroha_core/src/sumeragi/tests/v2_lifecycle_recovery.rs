@@ -114,6 +114,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -406,8 +407,12 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         })
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("lifecycle-recovery-test");
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id,
+            u64::MAX,
+            &roster,
+        );
     wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -420,8 +425,8 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"lifecycle-empty-nexus"),
         execution_policy_hash: Hash::new(b"lifecycle-empty-policy"),
         da_layout: wire::recommended_data_availability_layout(),

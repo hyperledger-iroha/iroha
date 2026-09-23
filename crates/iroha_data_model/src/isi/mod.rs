@@ -357,6 +357,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MatchSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::MaintainSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt);
@@ -478,6 +479,7 @@ impl_direct_instruction_box!(crate::isi::soradns::AddReleaseSigner);
 impl_direct_instruction_box!(crate::isi::soradns::RemoveReleaseSigner);
 impl_direct_instruction_box!(crate::isi::soradns::SetDirectoryRotationPolicy);
 // Allow direct boxing of public lane staking instructions.
+impl_direct_instruction_box!(crate::isi::staking::RegisterPublicLaneCandidate);
 impl_direct_instruction_box!(crate::isi::staking::RegisterPublicLaneValidator);
 impl_direct_instruction_box!(crate::isi::staking::BondPublicLaneStake);
 impl_direct_instruction_box!(crate::isi::staking::SchedulePublicLaneUnbond);
@@ -2773,6 +2775,7 @@ pub mod prelude {
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
             MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
+            MutateSorafsReleaseManifestAuthority,
             MutateSorafsStreamTokenCustody, PublishSorafsPopRevocationList,
             RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
             RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
@@ -2794,8 +2797,8 @@ pub mod prelude {
         staking::{
             ActivatePublicLaneValidator, BondPublicLaneStake, CancelConsensusEvidencePenalty,
             ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
-            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneValidator,
-            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
+            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };

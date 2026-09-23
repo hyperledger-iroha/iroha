@@ -296,7 +296,7 @@ fn membership_publication_retains_original_cleanup_until_outer_unlock() {
         for unwind in [false, true] {
             let storage = Arc::new(TransactionsStorage::new());
             stage(&storage, 1, &[1]).commit().unwrap();
-            let tip = Arc::downgrade(storage.latest_block.load().as_ref().unwrap());
+            let tip = tip_weak_for_tests(storage.latest_block.load().as_ref().unwrap());
             let identity = storage.write_lock.lock().observe_retirement_for_tests();
             let prepared = stage(&storage, 2, &[2]).prepare_commit().unwrap();
             // Detachment also releases its writer: observe only the final owner.

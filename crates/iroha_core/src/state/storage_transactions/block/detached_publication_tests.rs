@@ -198,19 +198,16 @@ fn detached_membership_slots_recover_exact_original_action_and_identity() {
         for refuses in [false, true] {
             let targets = targets();
             let journal = stage(&targets[0], replace, 7);
-            let current = Arc::as_ptr(&journal.current);
-            let predecessor = Arc::as_ptr(journal.predecessor.as_ref().unwrap());
+            let current = tip_ptr(&journal.current);
+            let predecessor = tip_ptr(journal.predecessor.as_ref().unwrap());
             let identity = std::ptr::from_ref(&*journal.predecessor_identity);
             let next = std::ptr::from_ref(&*journal.next_identity);
             let mut slot = journal.publication_slot::<()>(&targets[0]);
             let result = slot.try_prepare(|_, _| if refuses { Err("capacity") } else { Ok(()) });
             assert_eq!(result.is_err(), refuses);
             let original = slot.recover_original();
-            assert_eq!(Arc::as_ptr(&original.current), current);
-            assert_eq!(
-                Arc::as_ptr(original.predecessor.as_ref().unwrap()),
-                predecessor
-            );
+            assert_eq!(tip_ptr(&original.current), current);
+            assert_eq!(tip_ptr(original.predecessor.as_ref().unwrap()), predecessor);
             assert_eq!(
                 std::ptr::from_ref(&*original.predecessor_identity),
                 identity
@@ -218,7 +215,7 @@ fn detached_membership_slots_recover_exact_original_action_and_identity() {
             assert_eq!(std::ptr::from_ref(&*original.next_identity), next);
             match (&original.publication, replace) {
                 (MembershipPublication::Replace { current: row }, true) => {
-                    assert_eq!(Arc::as_ptr(row), current)
+                    assert_eq!(tip_ptr(row), current)
                 }
                 (
                     MembershipPublication::Advance {
@@ -227,8 +224,8 @@ fn detached_membership_slots_recover_exact_original_action_and_identity() {
                     },
                     false,
                 ) => {
-                    assert_eq!(Arc::as_ptr(row), current);
-                    assert_eq!(Arc::as_ptr(previous.as_ref().unwrap()), predecessor);
+                    assert_eq!(tip_ptr(row), current);
+                    assert_eq!(tip_ptr(previous.as_ref().unwrap()), predecessor);
                 }
                 _ => panic!("original pre-admitted action"),
             }
@@ -238,7 +235,7 @@ fn detached_membership_slots_recover_exact_original_action_and_identity() {
             retry.try_prepare(|_, _| Ok::<_, ()>(())).unwrap();
             retry.into_prepared().publish();
             assert_eq!(
-                Arc::as_ptr(&targets[0].latest_block.load_full().unwrap()),
+                tip_ptr(&targets[0].latest_block.load_full().unwrap()),
                 current
             );
             assert_eq!(std::ptr::from_ref(&**targets[0].write_lock.lock()), next);

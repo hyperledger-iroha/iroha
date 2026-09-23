@@ -1,30 +1,54 @@
 #[test]
 fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
-    let (mut adapter, keys) =
-        super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
-    let (services, _) = super::super::v2_worker::tests::fixture();
+    let (_adapter, keys, mut queue_plan, _) =
+        super::super::v2_lane_work::tests::queue_plan_owner_fixture(2);
     let sender = PeerId::new(keys[1].public_key().clone());
-    let (lane_relay_tx, lane_relay_rx) = std::sync::mpsc::sync_channel(2);
+    let (handle, _ingress, lane_relay_rx) = super::super::test_sumeragi_handle(2);
+    handle
+        .ingress_ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    let retired = iroha_data_model::merge::MergeCommitteeSignature {
+        version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
+        epoch_id: 7,
+        view: 9,
+        signer: 0,
+        message_digest: Hash::new(b"retired runner ingress"),
+        bls_sig: vec![0xA5],
+        leader_candidate_body: None,
+    };
+    let super::super::SumeragiIngressDisposition::Rejected(LaneRelayMessage::MergeSignature(
+        returned,
+    )) = handle.try_incoming_lane_relay_owned(LaneRelayMessage::MergeSignature(retired))
+    else {
+        panic!("retired relay must retain its exact caller before runner dequeue");
+    };
+    assert_eq!(returned.view, 9);
+    assert_eq!(returned.bls_sig, vec![0xA5]);
+    assert!(
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+            .expect("rejected relay cannot enter the runner queue")
+    );
     for certificate in [vec![0_u8], vec![1_u8]] {
-        lane_relay_tx
-            .try_send(LaneRelayMessage::QueuePlanAdmissionCertificate {
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(LaneRelayMessage::QueuePlanAdmissionCertificate {
                 sender: sender.clone(),
                 certificate: Arc::new(certificate),
-            })
-            .expect("queue one authenticated relay occurrence");
+            }),
+            super::super::SumeragiIngressDisposition::Accepted
+        ));
     }
 
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("service the first open-height relay occurrence")
     );
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("service the second open-height relay occurrence"),
         "the first open-height turn must leave the second relay queued"
     );
     assert!(
-        !drain_lane_relay_ingress(&lane_relay_rx, &mut adapter, &services, 0)
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
             .expect("observe the exhausted open-height relay queue")
     );
 }
@@ -381,10 +405,71 @@ fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
             .expect("inspect live sibling ownership")
     );
 }
-macro_rules! queue_plan_batch_case { ($($tokens:tt)*) => {{ $($tokens)* }}; }
 #[test]
 fn queue_plan_batch_scans_once_and_reuses_exact_sources() {
-    queue_plan_batch_case! { let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture(); let mut lane_work = fixture.adapter; let mut services = super::super::v2_worker::tests::service_for_history_context_with_local_validator(Arc::clone(&fixture.kura), fixture.context, &fixture.validators, fixture.local_validator); let keys = fixture.validators; services.set_exact_output_admission_hook(|_, _| Ok(())); let view = 0; let (_, peer) = services.queue_plan_test_route(view); super::super::v2_lane_work::tests::prepare_queue_plan_test(&mut lane_work, &keys); let mut effects = Vec::new(); for tag in [0x61, 0x62] { let (_, bytes) = super::super::v2_lane_work::tests::queue_plan_test_certificate(&lane_work, &keys, tag); services.queue_plan_test_kura().persist_pending_queue_plan_admission_certificate(&bytes).unwrap(); let effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { peer: peer.clone(), view, certificate: Arc::new(bytes) }; assert!(lane_work.requeue_effect(effect.clone())); effects.push(effect); } let counters = || { let kura = services.queue_plan_test_kura(); (kura.pending_queue_plan_admission_inventory_scans.load(Ordering::Relaxed), kura.pending_queue_plan_admission_exact_reads.load(Ordering::Relaxed), kura.pending_queue_plan_admission_batch_validations.load(Ordering::Relaxed)) }; let before = counters(); dispatch_lane_work_effects_with_progress(&mut lane_work, &services, 2).unwrap(); assert_eq!(counters(), (before.0 + 1, before.1 + 2, before.2 + 2)); let mut missing_sources = services.queue_plan_admission_batch_sources().unwrap(); let missing = &effects[0]; let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = missing else { unreachable!() }; services.queue_plan_test_kura().remove_pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice())).unwrap(); assert!(services.can_retain_lane_work_effect_from_snapshot(missing, Some(&mut missing_sources)).is_err()); let mut tampered_sources = services.queue_plan_admission_batch_sources().unwrap(); let tampered = &effects[1]; let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = tampered else { unreachable!() }; tampered_sources.corrupt_for_test(Hash::new(certificate.as_slice())); assert!(services.can_retain_lane_work_effect_from_snapshot(tampered, Some(&mut tampered_sources)).is_err()); }
+    use super::super::v2_lane_work::tests::{
+        queue_plan_owner_fixture, queue_plan_owner_services_for_test,
+        queue_plan_remote_leader_view, queue_plan_test_certificate,
+    };
+    let (adapter, keys, mut owner, _) = queue_plan_owner_fixture(2);
+    let mut services = queue_plan_owner_services_for_test(&adapter, &keys);
+    services.set_exact_output_admission_hook(|_, _| Ok(()));
+    let view = queue_plan_remote_leader_view(&adapter);
+    for tag in [0x61, 0x62] {
+        let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, tag);
+        services
+            .queue_plan_test_kura()
+            .persist_pending_queue_plan_admission_certificate(&bytes)
+            .unwrap();
+    }
+    assert!(owner.refresh(view).unwrap());
+    let first = owner.next_effect().unwrap();
+    assert!(owner.rotate_next_effect());
+    let second = owner.next_effect().unwrap();
+    assert!(owner.rotate_next_effect());
+    let effects = [first, second];
+    let counters = || {
+        let kura = services.queue_plan_test_kura();
+        (
+            kura.pending_queue_plan_admission_inventory_scans
+                .load(Ordering::Relaxed),
+            kura.pending_queue_plan_admission_exact_reads
+                .load(Ordering::Relaxed),
+            kura.pending_queue_plan_admission_batch_validations
+                .load(Ordering::Relaxed),
+        )
+    };
+    let before = counters();
+    assert_eq!(
+        dispatch_queue_plan_admission_effects(&mut owner, &services, 2).unwrap(),
+        2
+    );
+    assert_eq!(counters(), (before.0 + 1, before.1 + 2, before.2 + 2));
+    let mut missing_sources = services.queue_plan_admission_batch_sources().unwrap();
+    let missing = &effects[0];
+    let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = missing else {
+        unreachable!()
+    };
+    services
+        .queue_plan_test_kura()
+        .remove_pending_queue_plan_admission_certificate(Hash::new(certificate.as_slice()))
+        .unwrap();
+    assert!(
+        services
+            .can_retain_lane_work_effect_from_snapshot(missing, Some(&mut missing_sources))
+            .is_err()
+    );
+    let mut tampered_sources = services.queue_plan_admission_batch_sources().unwrap();
+    let tampered = &effects[1];
+    let V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } = tampered else {
+        unreachable!()
+    };
+    tampered_sources.corrupt_for_test(Hash::new(certificate.as_slice()));
+    assert!(
+        services
+            .can_retain_lane_work_effect_from_snapshot(tampered, Some(&mut tampered_sources))
+            .is_err()
+    );
 }
 #[test]
 fn runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens() {

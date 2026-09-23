@@ -208,7 +208,7 @@ pub use sorafs::{
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
     visit_activate_public_lane_validator, visit_exit_public_lane_validator,
-    visit_register_public_lane_validator,
+    visit_register_public_lane_candidate, visit_register_public_lane_validator,
 };
 /// Re-export trigger visitor helpers used by the default executor.
 pub use trigger::{
@@ -592,6 +592,52 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<RemoveAssetKeyValue>() {
             visit_remove_asset_key_value(executor, isi);
             return;
+        }
+        // These instructions have exact account ownership and stateful custody
+        // checks in Core, and must remain reachable without peer administration.
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::RegisterPublicLaneCandidate>()
+        {
+            visit_register_public_lane_candidate(executor, isi);
+            return;
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::RebindPublicLaneValidatorPeer>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::BondPublicLaneStake>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::SchedulePublicLaneUnbond>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::FinalizePublicLaneUnbond>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::ClaimPublicLaneRewards>()
+        {
+            execute!(executor, isi);
+        }
+        if let Some(isi) =
+            any.downcast_ref::<crate::data_model::isi::staking::RecordPublicLaneRewards>()
+        {
+            if executor.context().curr_block.is_genesis()
+                || isi.reward_asset.account() == &executor.context().authority
+            {
+                execute!(executor, isi);
+            }
+            deny!(
+                executor,
+                "Public lane rewards require the reward treasury account authority"
+            );
         }
         if let Some(isi) = any.downcast_ref::<RegisterPublicLaneValidator>() {
             visit_register_public_lane_validator(executor, isi);
@@ -1280,7 +1326,19 @@ pub mod peer {
 /// Permission-checked visitors for public-lane validator lifecycle instructions.
 pub mod staking {
     use super::*;
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
+    /// Admit a fresh candidate only with its stake-owning account's authorization.
+    pub fn visit_register_public_lane_candidate<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &crate::data_model::isi::staking::RegisterPublicLaneCandidate,
+    ) {
+        if executor.context().authority == isi.registration.validator {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Candidate registration requires the validator account authority"
+        );
+    }
     /// Register a public-lane validator when the caller is authorised or during genesis.
     pub fn visit_register_public_lane_validator<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1289,7 +1347,7 @@ pub mod staking {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+        if &executor.context().authority == isi.validator() {
             execute!(executor, isi);
         }
         deny!(executor, "Can't register public-lane validator");
@@ -1302,7 +1360,7 @@ pub mod staking {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+        if &executor.context().authority == isi.validator() {
             execute!(executor, isi);
         }
         deny!(executor, "Can't activate public-lane validator");
@@ -1315,7 +1373,7 @@ pub mod staking {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+        if &executor.context().authority == isi.validator() {
             execute!(executor, isi);
         }
         deny!(executor, "Can't exit public-lane validator");
@@ -3662,9 +3720,219 @@ pub mod asset {
             );
         }
         #[test]
+        fn public_staking_lifecycle_and_custody_reach_core_for_ordinary_accounts() {
+            use crate::data_model::{
+                NetworkId,
+                isi::staking::*,
+                nexus::{
+                    PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1,
+                    PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
+                    PublicLaneMonetaryScopeV1, PublicLaneMonetaryUnbondV1,
+                    PublicLaneRewardClaimPlanV1, PublicLaneRewardClaimSourceV1,
+                    PublicLaneRewardRecord, PublicLaneRewardRecordRefV1, PublicLaneRewardRole,
+                    PublicLaneRewardShare, PublicLaneUnbonding,
+                    public_lane_reward_record_commitment, public_lane_unbonding_commitment,
+                },
+            };
+            let (_, asset) = StubExecutor::new(2);
+            let owner = asset.account().clone();
+            let peer = PeerId::new(owner.expect_single_signatory().clone());
+            let request_id = iroha_crypto::Hash::new(b"staking-withdrawal");
+            // The host stub checks permission dispatch, not admission against a ledger.
+            // Nevertheless these plans bind a network, complete retained records and exact assets.
+            let network_scope = PublicLaneMonetaryScopeV1::Network(NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"executor-staking-dispatch-fixture",
+                )),
+            ));
+            let custody = AssetId::new(
+                asset.definition().clone(),
+                AccountId::new(fixture_key_pair(0x51).public_key().clone()),
+            );
+            assert_ne!(custody.account(), &owner);
+            let transfer = |source_asset, destination_asset, precondition| {
+                let plan = PublicLaneMonetaryPlanV1 {
+                    network_scope,
+                    valid_until_height: 2,
+                    source_asset,
+                    destination_asset,
+                    amount: Quantity::from(1_u64),
+                    precondition,
+                };
+                assert!(plan.has_canonical_shape());
+                plan
+            };
+            let pending = PublicLaneUnbonding {
+                request_id,
+                amount: Quantity::from(1_u64),
+                release_at_ms: 1,
+                slashable_through_height: 1,
+                liability_release_height: 2,
+            };
+            let pending_hash = public_lane_unbonding_commitment(&pending).unwrap();
+            let mut changed_pending = pending.clone();
+            changed_pending.liability_release_height += 1;
+            assert_ne!(
+                pending_hash,
+                public_lane_unbonding_commitment(&changed_pending).unwrap()
+            );
+            let reward = PublicLaneRewardRecord {
+                lane_id: LaneId::SINGLE,
+                epoch: 0,
+                asset: custody.clone(),
+                total_reward: Quantity::from(1_u64),
+                shares: vec![PublicLaneRewardShare {
+                    account: owner.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Quantity::from(1_u64),
+                }],
+                metadata: Metadata::default(),
+            };
+            let reward_hash = public_lane_reward_record_commitment(&reward).unwrap();
+            let mut changed_reward = reward.clone();
+            changed_reward.asset = asset.clone();
+            assert_ne!(
+                reward_hash,
+                public_lane_reward_record_commitment(&changed_reward).unwrap()
+            );
+            let claim_plan = PublicLaneRewardClaimPlanV1 {
+                network_scope,
+                valid_until_height: 2,
+                expected_state: None,
+                records: vec![PublicLaneRewardRecordRefV1 {
+                    epoch: 0,
+                    record_hash: reward_hash,
+                }],
+                sources: vec![PublicLaneRewardClaimSourceV1 {
+                    source_asset: custody.clone(),
+                    destination_asset: asset.clone(),
+                    expected_accrued: None,
+                    payout: Quantity::from(1_u64),
+                }],
+            };
+            assert!(claim_plan.has_canonical_shape(&owner));
+            let instructions: Vec<InstructionBox> = vec![
+                RegisterPublicLaneValidator::new(
+                    LaneId::SINGLE,
+                    owner.clone(),
+                    peer.clone(),
+                    owner.clone(),
+                    Quantity::from(1_u64),
+                    Metadata::default(),
+                    transfer(
+                        asset.clone(),
+                        custody.clone(),
+                        PublicLaneMonetaryPreconditionV1::Registration(
+                            PublicLaneMonetaryRegistrationV1 {
+                                activation_height: 2,
+                            },
+                        ),
+                    ),
+                )
+                .into(),
+                ActivatePublicLaneValidator::new(LaneId::SINGLE, owner.clone()).into(),
+                ExitPublicLaneValidator {
+                    lane_id: LaneId::SINGLE,
+                    validator: owner.clone(),
+                    release_at_ms: 1,
+                }
+                .into(),
+                RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, owner.clone(), peer.clone())
+                    .into(),
+                BondPublicLaneStake {
+                    lane_id: LaneId::SINGLE,
+                    validator: owner.clone(),
+                    staker: owner.clone(),
+                    amount: Quantity::from(1_u64),
+                    metadata: Metadata::default(),
+                    monetary_plan: transfer(
+                        asset.clone(),
+                        custody.clone(),
+                        PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                            activation_height: 1,
+                            peer_id: peer.clone(),
+                        }),
+                    ),
+                }
+                .into(),
+                SchedulePublicLaneUnbond {
+                    lane_id: LaneId::SINGLE,
+                    validator: owner.clone(),
+                    staker: owner.clone(),
+                    request_id,
+                    amount: Quantity::from(1_u64),
+                    release_at_ms: 1,
+                }
+                .into(),
+                FinalizePublicLaneUnbond {
+                    lane_id: LaneId::SINGLE,
+                    validator: owner.clone(),
+                    staker: owner.clone(),
+                    request_id,
+                    monetary_plan: transfer(
+                        custody.clone(),
+                        asset.clone(),
+                        PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneMonetaryUnbondV1 {
+                            activation_height: 1,
+                            request_hash: pending_hash,
+                        }),
+                    ),
+                }
+                .into(),
+                ClaimPublicLaneRewards {
+                    lane_id: LaneId::SINGLE,
+                    account: owner.clone(),
+                    claim_plan,
+                }
+                .into(),
+                RecordPublicLaneRewards {
+                    lane_id: LaneId::SINGLE,
+                    epoch: 0,
+                    reward_asset: asset,
+                    total_reward: Quantity::from(1_u64),
+                    shares: Vec::new(),
+                    metadata: Metadata::default(),
+                }
+                .into(),
+            ];
+            for instruction in instructions {
+                let (mut executor, _) = StubExecutor::new(2);
+                visit_instruction(&mut executor, &instruction);
+                assert!(
+                    executor.verdict().is_ok(),
+                    "{} must reach Core's exact stateful checks: {:?}",
+                    instruction.id(),
+                    executor.verdict()
+                );
+            }
+        }
+        #[test]
+        fn public_validator_lifecycle_rejects_foreign_account() {
+            let (mut executor, _) = StubExecutor::new(2);
+            let foreign = AccountId::new(fixture_key_pair(0x41).public_key().clone());
+            let instruction: InstructionBox =
+                ActivatePublicLaneValidator::new(LaneId::SINGLE, foreign).into();
+            visit_instruction(&mut executor, &instruction);
+            assert!(matches!(
+                executor.verdict(),
+                Err(ValidationFail::NotPermitted(_))
+            ));
+        }
+        #[test]
         fn visit_instruction_dispatches_register_public_lane_validator() {
             let (mut executor, asset) = StubExecutor::new(1);
             let validator = asset.account().clone();
+            let custody = AssetId::new(
+                asset.definition().clone(),
+                AccountId::new(fixture_key_pair(0x51).public_key().clone()),
+            );
+            let plan = crate::data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                asset.clone(),
+                custody.clone(),
+                Quantity::from(1_u64),
+            );
+            assert!(plan.has_canonical_shape());
+            assert_ne!(plan.source_asset, plan.destination_asset);
             let instruction = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator.clone(),
@@ -3672,7 +3940,9 @@ pub mod asset {
                 validator,
                 Quantity::from(1_u64),
                 Metadata::default(),
+                plan.clone(),
             );
+            assert_eq!(instruction.monetary_plan, plan);
             let instruction_box: InstructionBox = instruction.into();
             visit_instruction(&mut executor, &instruction_box);
             assert!(

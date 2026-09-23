@@ -6,6 +6,7 @@ mod fastpq_artifact_store;
 mod kagemusha_finality_decode;
 mod lane_geometry;
 mod lane_storage;
+mod membership_storage;
 mod snapshot_hash_journal;
 use crate::lane_consensus::{
     CommittedLaneBlockSession, DurableLaneBlockNewViewCertificateV1,
@@ -166,6 +167,10 @@ pub(crate) use lane_geometry::{
 };
 use lane_storage::LaneStorageEntry;
 pub use lane_storage::LaneStorageIdentity;
+pub(crate) use membership_storage::MEMBERSHIP_RECORD_BYTES;
+pub use membership_storage::{
+    MembershipAppendCleanup, MembershipAppendRange, MembershipStorageError,
+};
 #[cfg(test)]
 use norito::core::{Header, MAGIC};
 use norito::{
@@ -639,6 +644,7 @@ pub struct Kura {
     block_hash_history_budget: mv::allocation::AllocationBudget,
     /// One finite pool shared by every State transaction-membership generation using this store.
     transaction_history_budget: mv::allocation::AllocationBudget,
+    membership_storage: membership_storage::MembershipStorage,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
@@ -688,6 +694,8 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: PublicationMutex,
+    /// Opaque permission for audited immutable reads of this exact sidecar fence.
+    sidecar_read_permit: crate::publication_lock::PublicationReadPermit,
     /// Serializes the one durable process-generation claim for this Kura instance.
     autonomous_lifecycle_process_generation_lock: Mutex<()>,
     /// Process-local cache of the exact durable generation claimed after peer binding.
@@ -745,6 +753,8 @@ pub struct Kura {
     /// Restart-empty proof that the exact pair completed its strict barriers;
     /// artifact, pair metadata and every directory generation gate fsync reuse.
     certified_pair_durability: ResidentMutex<BTreeMap<LaneId, CertifiedPairDurabilityAttestation>>,
+    /// Bounded original directory handles; never cached canonical/application authority.
+    lane_receipt_namespace_durability: ResidentMutex<LaneReceiptNamespaceDurability>,
     /// Bounded restart-empty proof that exact stable frontier bytes completed
     /// full certificate validation and subsequent pair repair/readback.
     certified_frontier_artifact_validation:
@@ -2621,6 +2631,15 @@ impl Kura {
                     configured_store_dir.clone(),
                 )
             })?;
+        let membership_storage = membership_storage::MembershipStorage::new(
+            config.membership_storage,
+        )
+        .map_err(|error| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, error),
+                configured_store_dir.clone(),
+            )
+        })?;
         config.fastpq_artifacts.validate().map_err(|error| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
@@ -3040,11 +3059,13 @@ impl Kura {
             merge_log.truncate_to_len(block_count)?;
         }
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
+        let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         let kura = Arc::new(Self {
             block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
             transaction_history_budget: mv::allocation::AllocationBudget::new(
                 transaction_history_bytes,
             ),
+            membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3071,7 +3092,8 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
-            sidecar_lock: PublicationMutex::default(),
+            sidecar_lock,
+            sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3115,6 +3137,10 @@ impl Kura {
                 config.init_mode == InitMode::Fast && !provisional_open,
             ),
             certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
+            lane_receipt_namespace_durability: ResidentMutex::new(
+                LaneReceiptNamespaceDurability::default(),
+                &resource_inventory,
+            ),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -3447,7 +3473,12 @@ impl Kura {
             )
             .expect("default Native AMX prune-intent bound is valid");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
+        let (sidecar_lock, sidecar_read_permit) = PublicationMutex::with_read_permit();
         Arc::new(Self {
+            membership_storage: membership_storage::MembershipStorage::new(
+                iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
+            )
+            .expect("default finite membership control fits its original pool"),
             block_hash_history_budget: mv::allocation::AllocationBudget::new(
                 usize::try_from(
                     iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
@@ -3486,7 +3517,8 @@ impl Kura {
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
-            sidecar_lock: PublicationMutex::default(),
+            sidecar_lock,
+            sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
@@ -3525,6 +3557,10 @@ impl Kura {
             committed_lane_status_revision: AtomicU64::new(0),
             latest_certified_frontier_storage_unknown: AtomicBool::new(false),
             certified_pair_durability: ResidentMutex::new(BTreeMap::new(), &resource_inventory),
+            lane_receipt_namespace_durability: ResidentMutex::new(
+                LaneReceiptNamespaceDurability::default(),
+                &resource_inventory,
+            ),
             certified_frontier_artifact_validation: ResidentMutex::new(
                 BTreeMap::new(),
                 &resource_inventory,
@@ -15663,6 +15699,7 @@ impl Kura {
             if let Some(prepared) = prepared_retained_record.as_ref() {
                 self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
             }
+            self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;
             self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
                 height,
                 canonical_hash,
@@ -15724,6 +15761,7 @@ impl Kura {
                 return Err(Error::ConflictingV2FinalityArtifact { height });
             }
             self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;
+            self.resync_verified_v2_finality_record(&path, &dir, &read_identity)?;
             self.publish_merge_carrier_after_v2_finality_under_prune_and_canonical_guards(
                 height,
                 canonical_hash,
@@ -15741,6 +15779,52 @@ impl Kura {
         )?;
         self.record_durable_v2_finality_telemetry(artifact);
         Ok(v2_commit_receipt(artifact))
+    }
+    // Caller holds the original prune and canonical-chain guards and has
+    // authenticated these exact record bytes. A previous writer may have
+    // renamed successfully and failed its later durability barrier; presence
+    // alone cannot grant the receipt. Keep the exact file and each ancestor
+    // open while repeating synchronization, then recheck their original identity.
+    fn resync_verified_v2_finality_record(
+        &self,
+        path: &Path,
+        directory: &Path,
+        verified: &StableSidecarRead,
+    ) -> Result<()> {
+        let namespace = self.open_bound_progress_namespace(path, path)?;
+        let file = Self::open_bound_progress_file(&namespace, path, &verified.metadata)?;
+        file.sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        let readback = self
+            .read_regular_sidecar_snapshot(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "verified v2 finality disappeared during durability retry",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+        let opened = secure_file_metadata::from_file(&file)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if readback.bytes != verified.bytes
+            || readback.bytes_hash != verified.bytes_hash
+            || !Self::stable_sidecar_file_binding_unchanged(&verified.metadata, &readback.metadata)
+            || !Self::sidecar_file_metadata_unchanged(&verified.metadata.file, &opened)
+            || !self.bound_progress_namespace_unchanged(&namespace)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "verified v2 finality changed during durability retry",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(())
     }
     fn decode_v2_finality_record_at(
         &self,
@@ -16203,6 +16287,25 @@ impl Kura {
         parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
+        let staged = Self::prepare_kagemusha_finality_sidecar(
+            height,
+            block_hash,
+            witness,
+            expected,
+            parliament_timed_ovn_casting_bindings,
+        )?;
+        let _guard = self.sidecar_lock.lock();
+        self.stage_kagemusha_finality_sidecar_under_sidecar_guard(&staged)
+    }
+    /// Derive the complete proof projection before any durable namespace mutation.
+    /// Both standalone staging and the original joint publication lease use this core.
+    fn prepare_kagemusha_finality_sidecar(
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        witness: &ExecWitness,
+        expected: ExecutionCommitment,
+        parliament_timed_ovn_casting_bindings: &[ParliamentTimedOvnCastingContextBindingV1],
+    ) -> Result<StagedKagemushaFinalitySidecarV1> {
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
                 .map_err(Error::KagemushaFinalitySidecar)?;
@@ -16267,6 +16370,16 @@ impl Kura {
             parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
             kagemusha_reserve_receipts,
         };
+        Ok(staged)
+    }
+    /// Persist the exact projection while the caller owns this Kura's sidecar fence.
+    /// No publication mutex is reacquired; all no-clobber, readback and accounting
+    /// obligations remain with the same writer used by standalone staging.
+    fn stage_kagemusha_finality_sidecar_under_sidecar_guard(
+        &self,
+        staged: &StagedKagemushaFinalitySidecarV1,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let bytes = staged.encode();
         if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
             return Err(Error::KagemushaFinalitySidecarTooLarge {
@@ -16274,15 +16387,14 @@ impl Kura {
                 max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
-        let _guard = self.sidecar_lock.lock();
         let directory = self.kagemusha_finality_staging_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        let path = self.kagemusha_finality_staging_path(height);
+        let path = self.kagemusha_finality_staging_path(staged.height);
         if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {
-            if existing == staged
+            if &existing == staged
                 && identity.bytes == bytes
                 && identity.bytes_hash == Hash::new(&bytes)
             {
@@ -16301,7 +16413,7 @@ impl Kura {
                     "staged Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
-            if existing != staged {
+            if &existing != staged {
                 return Err(Error::KagemushaFinalitySidecar(
                     "no-clobber race published a conflicting Kagemusha V1 stage".to_owned(),
                 ));
@@ -16312,7 +16424,7 @@ impl Kura {
                 "staged Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
-        if persisted != staged
+        if &persisted != staged
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
@@ -16345,12 +16457,13 @@ impl Kura {
         resource_mutation.finish_resources_before_disk_rescan();
         Ok(())
     }
-    pub(crate) fn promote_kagemusha_finality_sidecar(
+    /// Join every receipt field and the actual durable artifact under the caller's
+    /// original prune/canonical fences before any stage or promotion mutation.
+    fn authenticate_kagemusha_finality_receipt_under_publication_guards(
         &self,
         artifact: &V2FinalityArtifact,
         receipt: &KuraV2CommitReceipt,
     ) -> Result<()> {
-        self.durable_mutation_authorized()?;
         if receipt.height != artifact.height
             || receipt.block_hash != artifact.block_hash
             || receipt.context_id != artifact.context_id()
@@ -16362,17 +16475,30 @@ impl Kura {
                 "finality receipt does not identify the Kagemusha V1 artifact".to_owned(),
             ));
         }
-        let durable = self.v2_finality_artifact(artifact.height)?.ok_or_else(|| {
-            Error::KagemushaFinalitySidecar(
-                "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
-            )
-        })?;
+        let durable = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?
+            .map(|(_, artifact, _)| artifact)
+            .ok_or_else(|| {
+                Error::KagemushaFinalitySidecar(
+                    "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
+                )
+            })?;
         if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {
             return Err(Error::KagemushaFinalitySidecar(
                 "durable finality differs from Kagemusha V1 promotion receipt".to_owned(),
             ));
         }
-        let _guard = self.sidecar_lock.lock();
+        Ok(())
+    }
+    /// Promote only after receipt authentication under the enclosing original
+    /// prune/canonical guards; this caller also retains the sidecar fence.
+    /// These guards stay held through final readback and exact stage retirement.
+    fn promote_kagemusha_finality_sidecar_under_sidecar_guard(
+        &self,
+        artifact: &V2FinalityArtifact,
+        receipt: &KuraV2CommitReceipt,
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let final_path = self.kagemusha_finality_sidecar_path(artifact.height);
         let staged_path = self.kagemusha_finality_staging_path(artifact.height);
         if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {
@@ -17222,9 +17348,10 @@ impl Kura {
     }
     /// Persist the durable commit manifest for a committed block height.
     ///
-    /// Manifests are written after the block body is durable and WSV commit succeeds. They are the
-    /// mandatory replay-integrity join point between Kura's canonical block log, the memory-only
-    /// WSV surface, and authenticated v2 finality. Only the sole interrupted pending tip may lack
+    /// Manifests are written after the block body and original captured WSV checkpoint are
+    /// durable, before finality grants restart commit authority or live State is published.
+    /// They join Kura's canonical block log, the memory-only WSV surface and authenticated
+    /// v2 finality for mandatory replay integrity. Only the sole interrupted pending tip may lack
     /// one until startup completes it; authenticated hash-only snapshot prefixes are exempt.
     ///
     /// # Errors
@@ -17255,6 +17382,7 @@ impl Kura {
         let dir = self.commit_manifest_dir();
         create_dir_all_with_context(&dir)?;
         let path = self.commit_manifest_path(manifest.height);
+        let namespace = self.open_bound_progress_namespace(&path, &path)?;
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = manifest.encode();
         Self::ensure_sidecar_encoding_within_limit(
@@ -17275,7 +17403,20 @@ impl Kura {
             file.sync_data()
         })?;
         std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        sync_dir(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
+        // The newly created manifest directory itself must survive before the
+        // checkpoint can name it. A later finality writer cannot close this
+        // pre-finality crash window on our behalf.
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, dir.clone()))?;
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "commit manifest namespace changed during durability publication",
+                ),
+                dir,
+            ));
+        }
         // Publish the external checkpoint binding only after the complete manifest is durable.
         // Recovery can therefore trust a matching digest without ever observing a checkpoint that
         // points at absent or partially promoted manifest bytes.
@@ -18437,6 +18578,9 @@ impl Kura {
         let retired_geometry_root = retired_root.join("lane_geometry");
         let mut used = 0u64;
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &self.store_root.join(membership_storage::SEGMENT_NAME),
+        )?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
@@ -18823,7 +18967,7 @@ impl Kura {
             })?;
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, merge_entry)?;
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -18926,7 +19070,7 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
         let pending_current = pending_raw.saturating_sub(unindexed_bytes);
-        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminal_reservations =
             self.autonomous_global_terminal_outcome_reserved_bytes()?;
@@ -26683,7 +26827,7 @@ impl Kura {
         self.active_lane_incarnation_marker(&entry)?;
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
-        let _sidecar_guard = self.sidecar_lock.lock();
+        let _sidecar_guard = self.lock_consensus_sidecar_read()?;
         self.ensure_prune_recovery_not_required()?;
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             return Ok(None);
@@ -36082,7 +36226,7 @@ impl Kura {
         let mut recovered = Vec::new();
         for (lane_id, entry) in entries {
             let candidate = {
-                let _guard = self.sidecar_lock.lock();
+                let _guard = self.lock_consensus_sidecar_read()?;
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
@@ -36101,10 +36245,11 @@ impl Kura {
                 }
             })?;
             let record = {
-                let _guard = self.sidecar_lock.lock();
+                let _guard = self.lock_consensus_sidecar_read()?;
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
+                // MainOnly: no temporary promotion or namespace mutation.
                 self.read_autonomous_lane_block_attempt_record_with_current_locked(
                     &entry,
                     lane_id,
@@ -39465,7 +39610,10 @@ impl Kura {
             &entry,
             &self.store_root,
         );
-        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
+        let sidecar = lease
+            .is_none()
+            .then(|| self.lock_consensus_sidecar_read())
+            .transpose()?;
         if self.bound_progress_sidecar_directory_is_absent(&manifest_anchor, &receipt_anchor)? {
             return Ok(NativeAmxParticipantApplicationHistory::default());
         }
@@ -39621,7 +39769,10 @@ impl Kura {
         }
         let geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         let current = self.lane_storage_entry(lane_id)?;
-        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
+        let sidecar = lease
+            .is_none()
+            .then(|| self.lock_consensus_sidecar_read())
+            .transpose()?;
         self.ensure_prune_recovery_not_required()?;
         if Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &current,
@@ -42094,7 +42245,11 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let (data_path, index_path) = Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
-        let _guard = self.sidecar_lock.lock();
+        let _guard = if recover {
+            self.sidecar_lock.lock()
+        } else {
+            self.lock_consensus_sidecar_read().ok()?
+        };
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -42797,6 +42952,7 @@ impl Kura {
 include!("kura/autonomous_application_evidence.rs");
 include!("kura/sidecar_physical_resource_accounting.rs");
 include!("kura/indexed_sidecar_io.rs");
+include!("kura/receipt_namespace_durability.rs");
 include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
@@ -47396,6 +47552,7 @@ pub(crate) mod tests {
     include!("kura/tests/07m_canonical_autonomous_replica_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/08a_certified_lane_block_read_tests.rs");
+    include!("kura/tests/08b_receipt_namespace_durability_tests.rs");
     include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");
     include!("kura/tests/09_lane_artifacts_and_fastpq.rs");
     include!("kura/tests/10_native_amx_and_roster.rs");

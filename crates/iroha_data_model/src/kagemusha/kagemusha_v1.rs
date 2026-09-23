@@ -2048,12 +2048,12 @@ pub struct KagemushaMintCreditV1 {
     /// Exact cross-parity finality-certificate binding exposed by both helper proofs.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finality_certificate_binding: [u8; 32],
-    /// Recursively authenticated finality-roster identifier used by this mint.
+    /// Recursively authenticated scheduling-authorization identifier used by this mint.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finality_authority_head: [u8; 32],
-    /// Release-pinned genesis finality-roster identifier carried by the authority chain.
+    /// Release-pinned genesis scheduling-authorization identifier carried by the authority chain.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub finality_genesis_roster_id: [u8; 32],
+    pub finality_genesis_authorization_id: [u8; 32],
     /// Canonical inner Eq deferred-audit commitment to the paired authority transcript.
     ///
     /// Both inner parities constrain this audit and its exact semantic, protocol, history, and

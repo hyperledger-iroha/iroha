@@ -1344,6 +1344,10 @@ fn verify_successor_bridge_finality_proof(
         .map_or_else(
             || {
                 context.epoch == parent.height_context.epoch
+                    && context.kagemusha_mint_finality_authorization
+                        == parent.height_context.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == parent.height_context.kagemusha_mint_finality_authority
                     && context.epoch_end_height == parent.height_context.epoch_end_height
                     && context.roster == parent.height_context.roster
                     && context.quorum == parent.height_context.quorum
@@ -1352,6 +1356,10 @@ fn verify_successor_bridge_finality_proof(
             },
             |snapshot| {
                 context.epoch == snapshot.epoch
+                    && context.kagemusha_mint_finality_authorization
+                        == snapshot.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == snapshot.kagemusha_mint_finality_authority
                     && context.epoch_end_height == snapshot.epoch_end_height
                     && context.mode == snapshot.mode
                     && context.roster == snapshot.roster
@@ -1383,33 +1391,6 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             Hash::new(seed.as_bytes()),
         ))
-    }
-    fn mint_finality_roster(
-        network_id: NetworkId,
-        epoch: u64,
-        roster: &[wire::ValidatorPower],
-    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
-        use crate::isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-            KagemushaMintFinalityValidatorKeysV1,
-        };
-
-        KagemushaMintFinalityEpochRosterV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch,
-            validators: roster
-                .iter()
-                .enumerate()
-                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                })
-                .collect(),
-        }
     }
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
@@ -1542,10 +1523,17 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = test_network_id(network_seed);
-        let current_mint_finality_roster = mint_finality_roster(network_id, 0, &roster);
-        let mint_finality_epoch_id = current_mint_finality_roster
-            .finality_epoch_id()
-            .expect("valid fixture mint-finality roster");
+        use crate::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+        let current_authority =
+            wire::test_kagemusha_mint_finality_authority(network_id, 0, &roster);
+        let current_authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &current_authority,
+            if boundary { 1 } else { 10 },
+        )
+        .expect("valid bridge fixture genesis authorization");
         let mut header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -1585,16 +1573,37 @@ mod tests {
                         .expect("derive next-epoch validator proof of possession")
                 })
                 .collect();
-            let next_mint_finality_roster = mint_finality_roster(network_id, 1, &next_roster);
-            let next_mint_finality_epoch_id = next_mint_finality_roster
-                .finality_epoch_id()
-                .expect("valid next-epoch fixture mint-finality roster");
+            // This boundary changes the validator/key roster, so it activates
+            // generation one instead of relabeling an incumbent generation.
+            let next_authority =
+                wire::test_kagemusha_mint_finality_authority(network_id, 1, &next_roster);
+            let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                epoch: 1,
+                first_height: 2,
+                last_height: 11,
+                authority_generation: next_authority.generation,
+                authority_id: next_authority.authority_id().unwrap(),
+                beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [7; 32],
+                    transcript_hash: [8; 32],
+                }),
+                previous_authorization_id: current_authorization.authorization_id().unwrap(),
+                transition_id: [9; 32],
+                decision: KagemushaMintFinalityEpochDecisionV1::Activate,
+                ..current_authorization
+            };
+            next_authorization
+                .validate_against_authority(&next_authority)
+                .unwrap();
+            next_authorization
+                .validate_successor(&current_authorization)
+                .unwrap();
             (
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
                         epoch: 1,
-                        kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
-                        kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
+                        kagemusha_mint_finality_authorization: next_authorization,
+                        kagemusha_mint_finality_authority: next_authority,
                         epoch_end_height: 11,
                         mode: ConsensusMode::Npos,
                         quorum: DualQuorum::from_roster(&next_roster)
@@ -1614,8 +1623,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
+            kagemusha_mint_finality_authorization: current_authorization,
+            kagemusha_mint_finality_authority: current_authority,
             epoch_end_height: if boundary { 1 } else { 10 },
             next_epoch_snapshot,
             mode: ConsensusMode::Npos,
@@ -1713,8 +1722,8 @@ mod tests {
         let parent_artifact = &parent.proof.finality_artifact;
         let (
             epoch,
-            mint_finality_epoch_id,
-            mint_finality_roster,
+            mint_finality_authorization,
+            mint_finality_authority,
             epoch_end_height,
             mode,
             roster,
@@ -1731,10 +1740,10 @@ mod tests {
                         parent_artifact.height_context.epoch,
                         parent_artifact
                             .height_context
-                            .kagemusha_mint_finality_epoch_id,
+                            .kagemusha_mint_finality_authorization,
                         parent_artifact
                             .height_context
-                            .kagemusha_mint_finality_epoch_roster
+                            .kagemusha_mint_finality_authority
                             .clone(),
                         parent_artifact.height_context.epoch_end_height,
                         parent_artifact.height_context.mode,
@@ -1747,8 +1756,8 @@ mod tests {
                 |snapshot| {
                     (
                         snapshot.epoch,
-                        snapshot.kagemusha_mint_finality_epoch_id,
-                        snapshot.kagemusha_mint_finality_epoch_roster.clone(),
+                        snapshot.kagemusha_mint_finality_authorization,
+                        snapshot.kagemusha_mint_finality_authority.clone(),
                         snapshot.epoch_end_height,
                         snapshot.mode,
                         snapshot.roster.clone(),
@@ -1775,8 +1784,8 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch,
-            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_authorization: mint_finality_authorization,
+            kagemusha_mint_finality_authority: mint_finality_authority,
             epoch_end_height,
             next_epoch_snapshot: None,
             mode,
@@ -3190,6 +3199,11 @@ mod tests {
             .finality_artifact
             .height_context
             .epoch_end_height += 1;
+        substituted
+            .finality_artifact
+            .height_context
+            .kagemusha_mint_finality_authorization
+            .last_height += 1;
         resign_v2_proof(
             &mut substituted,
             parent
@@ -3209,6 +3223,89 @@ mod tests {
             Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
             "cheap authenticated-schedule rejection must precede hostile BLS work"
         );
+    }
+    #[test]
+    fn successor_rejects_resigned_mint_authority_and_authorization_substitutions() {
+        use crate::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+
+        for boundary in [false, true] {
+            let initial = make_boundary_v2_fixture("mint-authority-substitution");
+            let parent = if boundary {
+                initial
+            } else {
+                V2Fixture {
+                    proof: make_successor_v2_proof(&initial),
+                    keys: initial.successor_keys.expect("activated successor keys"),
+                    successor_keys: None,
+                }
+            };
+            let child = make_successor_v2_proof(&parent);
+            let network_id = parent.proof.finality_artifact.height_context.network_id;
+            let context_anchor = parent.proof.finality_artifact.context_id();
+            let signing_keys = parent.successor_keys.as_deref().unwrap_or(&parent.keys);
+            for substitution in 0..7 {
+                let mut substituted = child.clone();
+                let context = &mut substituted.finality_artifact.height_context;
+                let authority = &mut context.kagemusha_mint_finality_authority;
+                let authorization = &mut context.kagemusha_mint_finality_authorization;
+                match substitution {
+                    0 => {
+                        let first = authority.validators[0].eq_proof_public_key;
+                        authority.validators[0].eq_proof_public_key =
+                            authority.validators[1].eq_proof_public_key;
+                        authority.validators[1].eq_proof_public_key = first;
+                        authorization.authority_id = authority.authority_id().unwrap();
+                    }
+                    1 => {
+                        authority.generation += 1;
+                        authorization.authority_generation = authority.generation;
+                        authorization.authority_id = authority.authority_id().unwrap();
+                    }
+                    2 | 3 => {
+                        let BeaconEpochBindingV1::Installed(binding) = &mut authorization.beacon
+                        else {
+                            panic!("successor fixture requires the installed beacon binding");
+                        };
+                        if substitution == 2 {
+                            binding.session_id[0] ^= 0x80;
+                        } else {
+                            binding.transcript_hash[0] ^= 0x80;
+                        }
+                    }
+                    4 => authorization.previous_authorization_id[0] ^= 0x80,
+                    5 => authorization.transition_id[0] ^= 0x80,
+                    6 => {
+                        authorization.decision =
+                            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+                    }
+                    _ => unreachable!(),
+                }
+                resign_v2_proof(&mut substituted, signing_keys);
+                verify_bridge_finality_proof(&substituted, &network_id)
+                    .expect("substitution remains internally consistent with real BLS signatures");
+
+                let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
+                verifier
+                    .verify(&parent.proof)
+                    .expect("authenticated parent");
+                assert_eq!(
+                    verifier.verify(&substituted),
+                    Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
+                    "boundary={boundary}, substitution={substitution}",
+                );
+                substituted.finality_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
+                assert_eq!(
+                    verifier.verify(&substituted),
+                    Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
+                    "authenticated authority rejection must precede hostile child BLS work",
+                );
+                verifier
+                    .verify(&child)
+                    .expect("rejected substitution leaves progress unchanged");
+            }
+        }
     }
     #[test]
     fn rotated_boundary_rejects_old_permuted_pops_and_old_key_signatures() {

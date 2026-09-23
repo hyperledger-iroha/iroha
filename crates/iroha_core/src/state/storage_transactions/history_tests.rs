@@ -108,7 +108,7 @@ fn initial_successor_reserves_batch_identity_and_cursor_before_work() {
         let pending = storage.pending.lock();
         let pending = pending.as_ref().expect("original refusal stays pending");
         assert!(Identity::ptr_eq(&pending.predecessor, &original_identity));
-        assert!(Arc::ptr_eq(pending.latest.as_ref().unwrap(), &original_tip));
+        assert!(Tip::ptr_eq(pending.latest.as_ref().unwrap(), &original_tip));
         assert!(pending.batch.is_none());
         assert!(pending.next_identity.is_none());
         assert!(pending.work.is_none());
@@ -121,7 +121,7 @@ fn initial_successor_reserves_batch_identity_and_cursor_before_work() {
     assert!(future.as_mut().poll(&mut context).is_ready());
     let ready = storage.prepare_next_block(false).unwrap();
     assert!(Identity::ptr_eq(&ready.predecessor, &original_identity));
-    assert!(Arc::ptr_eq(ready.latest.as_ref().unwrap(), &original_tip));
+    assert!(Tip::ptr_eq(ready.latest.as_ref().unwrap(), &original_tip));
     assert!(ready.batch.is_some() && ready.next_identity.is_some() && ready.work.is_some());
     assert_eq!(ready.next, keys.len());
     assert!(

@@ -647,7 +647,10 @@ where
                 | StoredPolynomialRoleV1::VanishingRandom
                 | StoredPolynomialRoleV1::QuotientNumerator
                 | StoredPolynomialRoleV1::QuotientAliasedPart { .. }
-                | StoredPolynomialRoleV1::QuotientPiece { .. } => u32::MAX,
+                | StoredPolynomialRoleV1::QuotientPiece { .. }
+                | StoredPolynomialRoleV1::KeyFixed { .. }
+                | StoredPolynomialRoleV1::KeyPermutation { .. }
+                | StoredPolynomialRoleV1::KeyMask { .. } => u32::MAX,
             });
         if session
             .columns

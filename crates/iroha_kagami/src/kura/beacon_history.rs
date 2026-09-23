@@ -19,11 +19,10 @@ use iroha_data_model::{
         lane_admission::LaneAdmittedInputV1,
     },
     isi::{
-        InstructionBox, SetParameter,
+        InstructionBox,
         consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1},
     },
     merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-    parameter::system::{KagemushaMintFinalityNextEpochParameterV1, Parameter},
     transaction::{Executable, ExecutableBatchItem, signed::TransactionEntrypoint},
 };
 use norito::json::{self, Value};
@@ -144,24 +143,6 @@ impl Projection {
                 "public_state_hash": (Hash::new(&cert.public_state).to_string()),
                 "public_record": public_record, "certificate_authority_verified": false
             }))?;
-        } else if let Some(isi) = instruction.as_any().downcast_ref::<SetParameter>() {
-            if let Parameter::Custom(custom) = isi.inner()
-                && custom.id() == &KagemushaMintFinalityNextEpochParameterV1::parameter_id()
-            {
-                let parsed =
-                    KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom);
-                let roster = parsed.map(|parameter| {
-                    norito::json!({
-                        "epoch": (parameter.roster.epoch),
-                        "roster": (parameter.roster)
-                    })
-                });
-                self.record(norito::json!({
-                    "kind": "mint_finality_next_roster_candidate", "occurrence": (occurrence.clone()),
-                    "instruction_path": path, "parameter_id": (custom.id().to_string()),
-                    "typed_valid_roster": roster
-                }))?;
-            }
         }
         Ok(())
     }
@@ -657,7 +638,8 @@ mod tests {
             time::{TimeEvent, TimeInterval},
             trigger_completed::TriggerCompletedOutcome,
         },
-        isi::{Log, consensus_keys::ThresholdKeyLifecycleCertificateV1},
+        isi::{Log, SetParameter, consensus_keys::ThresholdKeyLifecycleCertificateV1},
+        parameter::system::Parameter,
         transaction::{
             ExecutionStep, FeePaymentIntent, IvmBytecode, TransactionBuilder,
             signed::TransactionResult,
@@ -1275,12 +1257,14 @@ mod tests {
             projection.records[0]["public_record"]["decoded"].as_bool(),
             Some(false)
         );
-        let unrelated = SetParameter::new(Parameter::Custom(
-            iroha_data_model::parameter::CustomParameter::new(
-                "unrelated_parameter".parse().expect("parameter ID"),
-                iroha_primitives::json::Json::new("unrelated-private-sentinel"),
+        let unrelated = iroha_data_model::isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Custom(
+                iroha_data_model::parameter::CustomParameter::new(
+                    "unrelated_parameter".parse().expect("parameter ID"),
+                    iroha_primitives::json::Json::new("unrelated-private-sentinel"),
+                ),
             ),
-        ));
+        );
         projection
             .instruction(&unrelated.into(), &Value::Null, "instructions/1".to_owned())
             .expect("ignore unrelated parameter");

@@ -225,7 +225,7 @@ fn repeated_identical_publication_preserves_history_for_later_replacement() {
         assert!(changes(&transition, false).is_empty());
         drop(transition);
         block.commit().unwrap();
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             &original_latest,
             &storage.latest_block.load_full().unwrap()
         ));

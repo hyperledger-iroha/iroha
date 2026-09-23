@@ -78,7 +78,7 @@ fn retained_hash_admission_and_preflight_cleanup_follow_all_original_carrier_fen
                 .is_pending()
         );
         let fences = CarrierFences {
-            _state: StateFences::try_acquire::<Infallible>(&state)
+            _state: StateFences::try_acquire(&state)
                 .unwrap_or_else(|_| panic!("original State fences")),
             _queue: Some(queue_owner),
             _kura: state.kura.try_publication_lease().unwrap(),
@@ -249,6 +249,9 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
             transactions: membership.prepare_commit().unwrap().detach(),
             block_hashes: state.block_hashes.block().detach(),
         };
+        // Four original runtime cells and the transaction membership writer
+        // accompany every captured World field; hash ownership is probed above.
+        let expected_participants = probes.world.field_count() + 5;
         let callback = Arc::new(AggregateProbe {
             fences: Probe {
                 state: Arc::clone(&state),
@@ -281,21 +284,19 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
         )
         .unwrap_or_else(|_| panic!("original Queue cut"));
         let fences = CarrierFences {
-            _state: StateFences::try_acquire::<Infallible>(&state)
+            _state: StateFences::try_acquire(&state)
                 .unwrap_or_else(|_| panic!("original State fences")),
             _queue: Some(queue_owner),
             _kura: state.kura.try_publication_lease().unwrap(),
         };
         let mut owner = CarrierPreparation::new(decision.journals.components, &state, fences);
         if unwind_owner {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                owner.try_prepare::<Infallible>()
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || owner.try_prepare()));
             assert!(result.is_err());
         } else {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                owner.try_prepare::<Infallible>()
-            }));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.try_prepare()));
             assert!(result.is_err());
             assert_eq!(callback.fences.wakes.load(Ordering::SeqCst), 0);
             assert!(state.state_commit_lock.try_lock().is_none());
@@ -318,9 +319,9 @@ fn complete_carrier_late_world_panic_releases_every_participant_before_any_callb
             counts[1], 0,
             "no original writer survives its first callback"
         );
-        assert_eq!(counts.iter().sum::<usize>(), 283);
+        assert_eq!(counts.iter().sum::<usize>(), expected_participants);
         if !unwind_owner {
-            assert_eq!(counts, [283, 0, 0]);
+            assert_eq!(counts, [expected_participants, 0, 0]);
         }
         let mut wait = future.lock().unwrap().take().unwrap();
         assert!(

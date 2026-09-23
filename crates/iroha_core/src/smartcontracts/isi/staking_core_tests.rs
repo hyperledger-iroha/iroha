@@ -152,6 +152,23 @@ fn seed_validator_consensus_key(
         seed_consensus_key_for_role_with_heights(stx, peer, role, status, activation_height, None);
     }
 }
+fn seed_participant_consensus_key(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &iroha_model_base::peer::PeerId,
+) {
+    // Peer-binding fixtures exercise an independent lane committee. They must
+    // not accidentally add a candidate to the global election pool.
+    clear_consensus_keys_for_peer(stx, peer);
+    let activation_height = stx.block_height();
+    seed_consensus_key_for_role_with_heights(
+        stx,
+        peer,
+        ConsensusKeyRole::Committee,
+        ConsensusKeyStatus::Active,
+        activation_height,
+        None,
+    );
+}
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
     peer: &iroha_model_base::peer::PeerId,
@@ -271,6 +288,10 @@ fn configure_reward_fixture(
         .unwrap();
     let (sink, _) = gen_account_in("wonderland");
     let (validator, _) = gen_account_in("wonderland");
+    let (escrow, _) = gen_account_in("wonderland");
+    Register::account(Account::new(escrow.clone()))
+        .execute(&ALICE_ID, stx)
+        .unwrap();
     Register::account(Account::new(sink.clone()))
         .execute(&ALICE_ID, stx)
         .unwrap();
@@ -321,10 +342,11 @@ fn configure_reward_fixture(
     stx.nexus.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
     stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
-    stx.nexus.staking.stake_escrow_account_id = sink.to_string();
+    stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(&stx, &validator, (initial_stake.clone()).clone()),
         lane_id,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -416,6 +438,7 @@ fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneI
         .execute(&ALICE_ID, stx)
         .expect("fund committee stake");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(1_000_u64)),
             lane_id,
             peer_id,
             validator: validator.clone(),
@@ -459,4 +482,188 @@ fn insert_validator_record_for_key(
             last_reward_epoch: None,
         },
     );
+}
+
+#[test]
+fn genesis_monetary_context_requires_initial_height_and_exact_expiry() {
+    use iroha_data_model::nexus::PublicLaneMonetaryScopeV1;
+    let state = setup_state();
+    let genesis = new_block();
+    let mut block = state.block(genesis.as_ref().header());
+    let mut stx = block.transaction();
+    effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1)
+        .expect("NPoS genesis uses the same exact genesis lifetime");
+    stx.world
+        .parameters
+        .get_mut()
+        .custom
+        .remove(&SumeragiNposParameters::parameter_id());
+    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1)
+        .expect("initial genesis is its own exact one-height monetary authority");
+    for expiry in [0, 2, u64::MAX] {
+        assert!(
+            effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, expiry)
+                .is_err(),
+            "genesis authority cannot authenticate expiry {expiry}"
+        );
+    }
+    assert!(
+        effects::validate_plan_context(
+            &stx,
+            &PublicLaneMonetaryScopeV1::Network(*stx.network_id()),
+            1,
+        )
+        .is_err(),
+        "network scope must not inherit the separate genesis lifetime authority"
+    );
+    drop(stx);
+    block.block_hashes.push(genesis.as_ref().hash());
+    let stx = block.transaction();
+    assert!(
+        effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1).is_err(),
+        "the height-one scope cannot replay after a block is already committed"
+    );
+    drop(stx);
+    drop(block);
+    let mut successor = state.block(block_header_with_height(2));
+    let stx = successor.transaction();
+    assert!(
+        effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 2).is_err(),
+        "a non-genesis block cannot use genesis scope even with a current expiry"
+    );
+}
+
+#[test]
+fn network_monetary_context_keeps_the_committed_epoch_window() {
+    use iroha_data_model::nexus::PublicLaneMonetaryScopeV1;
+    let mut state = setup_state();
+    set_epoch_length(&mut state, 6);
+    let mut block = state.block(block_header_with_height(2));
+    let stx = block.transaction();
+    let scope = PublicLaneMonetaryScopeV1::Network(*stx.network_id());
+    for expiry in [2, 8] {
+        effects::validate_plan_context(&stx, &scope, expiry)
+            .expect("current height through the committed epoch-length bound is valid");
+    }
+    for expiry in [0, 1, 9, u64::MAX] {
+        assert!(effects::validate_plan_context(&stx, &scope, expiry).is_err());
+    }
+}
+
+#[test]
+fn genesis_staking_without_npos_preserves_exact_transfer_and_custody() {
+    let state = setup_state();
+    let mut block = state.block(block_header_with_height(1));
+    let mut stx = block.transaction();
+    stx.world
+        .parameters
+        .get_mut()
+        .custom
+        .remove(&SumeragiNposParameters::parameter_id());
+    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    let (validator, _, escrow, definition) = prepare_accounts(&mut stx);
+    let lane = LaneId::SINGLE;
+    let source = AssetId::new(definition.clone(), validator.clone());
+    let destination = AssetId::new(definition, escrow);
+    let amount = Quantity::from(1_000_u64);
+    let registration = RegisterPublicLaneValidator {
+        lane_id: lane,
+        validator: validator.clone(),
+        peer_id: validator_peer_id(&validator),
+        stake_account: validator.clone(),
+        initial_stake: amount.clone(),
+        metadata: Metadata::default(),
+        monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+            source.clone(),
+            destination.clone(),
+            amount.clone(),
+        ),
+    };
+    let mut invalid_expiry = registration.clone();
+    invalid_expiry.monetary_plan.valid_until_height = 2;
+    let mut invalid_amount = registration.clone();
+    invalid_amount.monetary_plan.amount = Quantity::from(999_u64);
+    let mut invalid_custody = registration.clone();
+    invalid_custody.monetary_plan.destination_asset = source.clone();
+    let mut invalid_precondition = registration.clone();
+    invalid_precondition.monetary_plan.precondition =
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
+            activation_height: 2,
+        });
+    for invalid in [
+        invalid_expiry,
+        invalid_amount,
+        invalid_custody,
+        invalid_precondition,
+    ] {
+        assert!(invalid.execute(&ALICE_ID, &mut stx).is_err());
+        assert_eq!(
+            stx.world.assets.get(&source).unwrap().as_ref(),
+            &Quantity::from(10_000_u64)
+        );
+        assert!(stx.world.assets.get(&destination).is_none());
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(lane, validator.clone()))
+                .is_none()
+        );
+        assert!(
+            stx.world
+                .public_lane_stake_custody
+                .get(&(lane, validator.clone()))
+                .is_none()
+        );
+        assert!(
+            stx.world
+                .public_lane_stake_reserves
+                .get(&destination)
+                .is_none()
+        );
+    }
+    registration
+        .execute(&ALICE_ID, &mut stx)
+        .expect("exact prefunded genesis registration needs no NPoS election schedule");
+    ActivatePublicLaneValidator {
+        lane_id: lane,
+        validator: validator.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("the actual genesis-funded validator can activate");
+    assert_eq!(
+        stx.world.assets.get(&source).unwrap().as_ref(),
+        &Quantity::from(9_000_u64)
+    );
+    assert_eq!(
+        stx.world.assets.get(&destination).unwrap().as_ref(),
+        &amount
+    );
+    assert_eq!(
+        stx.world
+            .public_lane_stake_custody
+            .get(&(lane, validator.clone())),
+        Some(&(destination.clone(), amount.clone()))
+    );
+    assert_eq!(
+        stx.world.public_lane_stake_reserves.get(&destination),
+        Some(&amount)
+    );
+    let record = stx
+        .world
+        .public_lane_validators
+        .get(&(lane, validator.clone()))
+        .unwrap();
+    assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
+    assert_eq!(record.activation_height, 1);
+    assert_eq!(record.self_stake, amount);
+    assert_eq!(
+        stx.world
+            .public_lane_stake_shares
+            .get(&stake_key(lane, &validator, &validator))
+            .unwrap()
+            .bonded,
+        amount
+    );
+    assert!(stx.world.sumeragi_npos_parameters().is_none());
 }

@@ -144,6 +144,12 @@ material and rejects a self-consistent proof with an unselected blind-rotation
 coefficient drift; the focused Soracloud test passes. Neither result supplies
 hidden-trace low-degree soundness, a full relation, eight-party behavior or the
 audited parameter/noise/qROM evidence; production qualification stays closed.
+The [BFV source-bound target-limb check](../docs/history/2026-09-23/bfv-rns-source-bound-before-target-limbs.md)
+now rejects out-of-bound caller-supplied product residues before exact scale-round
+or narrowing into target RNS limbs. Positive, negative, right-hand, and
+cancelling aliases passed the focused regression, alongside the existing
+positive scalar-boundary control. This closes only the source-bound admission
+gap; it does not prove those residues came from the claimed BFV operands.
 
 The compiled-profile owner is
 [`privacy_profiles.rs`](../crates/iroha_core/src/privacy_profiles.rs). Engine

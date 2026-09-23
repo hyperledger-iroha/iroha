@@ -17,8 +17,6 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 /** Typed HTTP client for DA proof-policy, commitment, and pin-intent routes. */
 public final class DaToriiClient {
   private static final String PROOF_POLICIES_PATH = "/v1/da/proof-policies";
-  private static final String PROOF_POLICY_SNAPSHOT_PATH =
-      "/v1/da/proof-policies/snapshot";
   private static final String COMMITMENTS_PATH = "/v1/da/commitments";
   private static final String COMMITMENTS_PROVE_PATH = "/v1/da/commitments/prove";
   private static final String COMMITMENTS_VERIFY_PATH = "/v1/da/commitments/verify";
@@ -56,15 +54,6 @@ public final class DaToriiClient {
   public CompletableFuture<DaModels.ProofPolicyBundle> getProofPolicies() {
     return executeGet(
         PROOF_POLICIES_PATH,
-        bytes ->
-            DaJson.parsePolicyBundle(
-                DaJson.parse(bytes, "DA proof-policy response"), "response"));
-  }
-
-  /** Fetches the deterministic proof-policy snapshot. */
-  public CompletableFuture<DaModels.ProofPolicyBundle> getProofPolicySnapshot() {
-    return executeGet(
-        PROOF_POLICY_SNAPSHOT_PATH,
         bytes ->
             DaJson.parsePolicyBundle(
                 DaJson.parse(bytes, "DA proof-policy response"), "response"));

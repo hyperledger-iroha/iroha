@@ -126,8 +126,8 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
         let second_identity = (*second.write_lock.lock()).clone();
         let first_block = staged(&first, replace, 6);
         let second_block = staged(&second, replace, 8);
-        let first_payload = Arc::downgrade(first_block.current_block.as_ref().unwrap());
-        let second_payload = Arc::downgrade(second_block.current_block.as_ref().unwrap());
+        let first_payload = tip_weak_for_tests(first_block.current_block.as_ref().unwrap());
+        let second_payload = tip_weak_for_tests(second_block.current_block.as_ref().unwrap());
         let mut pair = Pair {
             first: Some(first_block.capture_slot()),
             second: Some(second_block.capture_slot()),
@@ -141,7 +141,7 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
             MembershipCapturePhase::Prepared(prepared) => {
                 match (&prepared.publication, replace) {
                     (MembershipPublication::Replace { current }, true) => {
-                        assert_eq!(Arc::as_ptr(current), first_payload.as_ptr());
+                        assert_eq!(tip_ptr(current), first_payload.as_ptr());
                     }
                     (
                         MembershipPublication::Advance {
@@ -150,8 +150,8 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
                         },
                         false,
                     ) => {
-                        assert!(Arc::ptr_eq(previous.as_ref().unwrap(), &first_tip));
-                        assert_eq!(Arc::as_ptr(current), first_payload.as_ptr());
+                        assert!(Tip::ptr_eq(previous.as_ref().unwrap(), &first_tip));
+                        assert_eq!(tip_ptr(current), first_payload.as_ptr());
                     }
                     _ => panic!("exact original membership action"),
                 }
@@ -182,24 +182,21 @@ fn membership_capture_retains_original_ordinary_and_replacement_journals_and_rel
             &second_journal.predecessor_identity,
             &second_identity
         ));
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             first_journal.predecessor.as_ref().unwrap(),
             &first_tip
         ));
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             second_journal.predecessor.as_ref().unwrap(),
             &second_tip
         ));
-        assert_eq!(Arc::as_ptr(&first_journal.current), first_payload.as_ptr());
-        assert_eq!(
-            Arc::as_ptr(&second_journal.current),
-            second_payload.as_ptr()
-        );
-        assert!(Arc::ptr_eq(
+        assert_eq!(tip_ptr(&first_journal.current), first_payload.as_ptr());
+        assert_eq!(tip_ptr(&second_journal.current), second_payload.as_ptr());
+        assert!(Tip::ptr_eq(
             &first.latest_block.load_full().unwrap(),
             &first_tip
         ));
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             &second.latest_block.load_full().unwrap(),
             &second_tip
         ));
@@ -222,7 +219,7 @@ fn membership_capture_real_refusal_keeps_original_writer_until_joint_release() {
         let first_tip = first.latest_block.load_full().unwrap();
         let second_tip = second.latest_block.load_full().unwrap();
         let first_block = staged(&first, false, 6);
-        let first_payload = Arc::downgrade(first_block.current_block.as_ref().unwrap());
+        let first_payload = tip_weak_for_tests(first_block.current_block.as_ref().unwrap());
         let mut second_block = second.block();
         if wrong_height {
             second_block.insert_block(HashSet::from([key(8)]), height(3));
@@ -257,11 +254,11 @@ fn membership_capture_real_refusal_keeps_original_writer_until_joint_release() {
         assert_released(&mut first_wait, &first_probe);
         assert_released(&mut second_wait, &second_probe);
         assert!(first_payload.upgrade().is_none());
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             &first.latest_block.load_full().unwrap(),
             &first_tip
         ));
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             &second.latest_block.load_full().unwrap(),
             &second_tip
         ));
@@ -325,7 +322,7 @@ fn membership_terminal_release_rejects_read_mutation_preparation_and_publication
     let mut prepared = staged(&storage, false, 8).prepare_commit().unwrap();
     prepared.block.release_writers();
     assert!(catch_unwind(AssertUnwindSafe(|| prepared.publish())).is_err());
-    assert!(Arc::ptr_eq(
+    assert!(Tip::ptr_eq(
         &storage.latest_block.load_full().unwrap(),
         &tip
     ));
@@ -339,7 +336,7 @@ fn membership_terminal_release_rejects_read_mutation_preparation_and_publication
     slot.try_capture().unwrap();
     slot.release();
     assert!(catch_unwind(AssertUnwindSafe(|| slot.into_detached())).is_err());
-    assert!(Arc::ptr_eq(
+    assert!(Tip::ptr_eq(
         &storage.latest_block.load_full().unwrap(),
         &tip
     ));
@@ -394,7 +391,7 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
         let mut expected_json = String::new();
         JsonSerializeTrait::json_serialize(&first_block, &mut expected_json);
         let expected_bounded_json = json::to_json_bounded(&first_block, usize::MAX);
-        let staged_pointer = Arc::as_ptr(first_block.current_block.as_ref().unwrap());
+        let staged_pointer = tip_ptr(first_block.current_block.as_ref().unwrap());
         let mut pair = PublicationPair {
             first: TransactionsBlockField::new(first_block),
             second: TransactionsBlockField::new(staged(&second, replace, 8)),
@@ -433,7 +430,7 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
         assert!(second.write_lock.try_lock().is_none());
         assert_eq!(first_probe.calls.load(Ordering::SeqCst), 0);
         assert_eq!(
-            Arc::as_ptr(&first.latest_block.load_full().unwrap()),
+            tip_ptr(&first.latest_block.load_full().unwrap()),
             staged_pointer
         );
         assert!(Identity::ptr_eq(&first.write_lock.lock(), &next));
@@ -443,7 +440,7 @@ fn membership_attached_publication_retains_original_actions_and_defers_both_wake
                     &prepared.next_identity,
                     &first_original_identity
                 ));
-                assert!(Arc::ptr_eq(
+                assert!(Tip::ptr_eq(
                     prepared.retired_tip.as_ref().unwrap(),
                     &original_tip
                 ));
@@ -526,14 +523,14 @@ fn membership_attached_refusal_and_panic_keep_original_sibling_until_joint_drop(
         assert_released(&mut first_wait, &first_probe);
         assert_released(&mut second_wait, &second_probe);
         if failure != 2 {
-            assert!(Arc::ptr_eq(
+            assert!(Tip::ptr_eq(
                 &first.latest_block.load_full().unwrap(),
                 &first_tip
             ));
         } else {
             assert_eq!(first.view().get(&key(6)), Some(height(2)));
         }
-        assert!(Arc::ptr_eq(
+        assert!(Tip::ptr_eq(
             &second.latest_block.load_full().unwrap(),
             &second_tip
         ));
@@ -550,10 +547,10 @@ fn membership_attached_execution_transfer_and_repeated_commit_preserve_identity(
     let original_tip = storage.latest_block.load_full().unwrap();
     let mut block = TransactionsBlockField::new(storage.block());
     block.insert_block(HashSet::from([key(2)]), height(1));
-    let original_staged = Arc::as_ptr(block.current_block.as_ref().unwrap());
+    let original_staged = tip_ptr(block.current_block.as_ref().unwrap());
     let block = block.into_executing();
     assert_eq!(
-        Arc::as_ptr(block.current_block.as_ref().unwrap()),
+        tip_ptr(block.current_block.as_ref().unwrap()),
         original_staged
     );
     let capture = TransactionsBlockField::new(block).into_capture();
@@ -564,7 +561,7 @@ fn membership_attached_execution_transfer_and_repeated_commit_preserve_identity(
         &storage.write_lock.lock(),
         &original_identity
     ));
-    assert!(Arc::ptr_eq(
+    assert!(Tip::ptr_eq(
         &storage.latest_block.load_full().unwrap(),
         &original_tip
     ));

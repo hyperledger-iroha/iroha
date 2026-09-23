@@ -171,13 +171,15 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
+            );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
-            epoch: 1,
+            epoch: 0,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
@@ -185,8 +187,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).unwrap(),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"nexus"),
             execution_policy_hash: Hash::new(b"policy"),
             da_layout: layout,

@@ -79,6 +79,14 @@ catalog it uses the stock local-broker client and fails before subsystem
 startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
 
+For an installed global-beacon session, startup also authenticates the public
+transcript against the committed network and ordered roster, then asks the
+resolved signer for a non-signing custody attestation for the local session and
+one-based seat. A provider for a different seat or a retired session cannot
+pass startup. Fresh-network bootstrap can start before installation; height-bound
+production readiness remains unavailable until the committed key and exact
+runtime custody are present.
+
 An enabled Musubi provider-attestation journal projects its combined durability
 seal, approval-only signer, and authenticated coordinator inventory as three
 independent public bindings in exact slots 57, 58, and 59. Slot 57 exposes

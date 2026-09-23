@@ -383,6 +383,12 @@ fn stake_genesis_post_topology_transactions(
                 stake_account: validator_id.clone(),
                 initial_stake: iroha_primitives::numeric::Quantity::from(stake),
                 metadata,
+                monetary_plan:
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                        iroha_primitives::numeric::Quantity::from(stake),
+                    ),
             }
             .into(),
         );
@@ -832,4 +838,61 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     }
     network.shutdown().await;
     Ok(())
+}
+
+#[test]
+fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
+    iroha_test_network::init_instruction_registry();
+    let topology = (0..4)
+        .map(|index| {
+            let key = iroha_crypto::KeyPair::try_from_seed(
+                vec![index + 1; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("deterministic genesis staking validator");
+            iroha_model_base::peer::PeerId::new(key.public_key().clone())
+        })
+        .collect::<Vec<_>>();
+    let transactions =
+        stake_genesis_post_topology_transactions(&topology, StakeActivationProfile::MinStakeFilter);
+    let registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(registrations.len(), 4);
+    for registration in registrations {
+        assert_eq!(
+            registration.monetary_plan.network_scope,
+            iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Genesis
+        );
+        assert_eq!(registration.monetary_plan.valid_until_height, 1);
+        assert_eq!(
+            registration.monetary_plan.source_asset,
+            iroha_data_model::asset::AssetId::new(
+                stake_asset_definition_id(),
+                registration.validator.clone()
+            )
+        );
+        assert_eq!(
+            registration.monetary_plan.destination_asset,
+            iroha_data_model::asset::AssetId::new(stake_asset_definition_id(), ALICE_ID.clone())
+        );
+        assert_eq!(
+            registration.monetary_plan.amount,
+            registration.initial_stake
+        );
+        assert_eq!(
+            registration.monetary_plan.precondition,
+            iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 {
+                    activation_height: 1
+                }
+            )
+        );
+    }
 }

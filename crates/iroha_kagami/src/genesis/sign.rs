@@ -29,6 +29,7 @@ use iroha_data_model::{
     },
     da::commitment::DaProofPolicyBundle,
     isi::RegisterPublicLaneValidator,
+    nexus::PublicLaneMonetaryPlanV1,
     parameter::system::SumeragiConsensusMode,
     prelude::*,
 };
@@ -734,6 +735,11 @@ fn append_npos_bootstrap(
                 DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
             ),
             metadata: Metadata::default(),
+            monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
+                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT.into(),
+            ),
         });
         builder = builder.append_instruction(ActivatePublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -1300,6 +1306,7 @@ fn staged_default_kura() -> actual::Kura {
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         transaction_history_bytes:
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -1412,7 +1419,7 @@ pub(super) fn prepare_genesis_for_signing(
     let topology_entries = topology_override
         .map(|topology| build_topology_entries(topology, peer_pops))
         .transpose()?;
-    super::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+    super::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
         &genesis,
         &final_topology,
     )?;
@@ -3858,7 +3865,37 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                     if let Some(register) =
                         instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
                     {
+                        assert_eq!(
+                            register.monetary_plan,
+                            PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    register.validator.clone(),
+                                ),
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_escrow.clone(),
+                                ),
+                                register.initial_stake.clone(),
+                            ),
+                            "signed bootstrap must bind its configured stake custody",
+                        );
                         validators.insert(register.validator.clone());
+                        assert_eq!(
+                            register.monetary_plan,
+                            PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    register.stake_account.clone(),
+                                ),
+                                AssetId::new(
+                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_escrow.clone(),
+                                ),
+                                register.initial_stake.clone(),
+                            ),
+                            "bootstrap consent must bind the configured custody transfer",
+                        );
                     }
                     if let Some(mint) = instr.as_any().downcast_ref::<MintBox>()
                         && let MintBox::Asset(mint_asset) = mint
@@ -4088,6 +4125,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             with_test_authority_for_topology(alias_backed_npos_genesis_file(), &peers);
         let (_config_directory, config_path) =
             nexus_profile_with_stake_asset_id(&genesis_file, "xor#universal");
+        let manifest = RawGenesisTransaction::from_path(&genesis_file)
+            .expect("parse alias-backed NPoS genesis fixture");
+        let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
+        let config = load_peer_config(&config_path).expect("load staking configuration");
+        let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, Some(&config))
+            .expect("resolve configured staking escrow");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -4119,6 +4162,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                         instr.as_any().downcast_ref::<RegisterBox>()
                     {
                         registered_asset_ids.insert(register.object.id.clone());
+                    }
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        assert_eq!(
+                            register.monetary_plan,
+                            PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(
+                                    configured_asset_id.clone(),
+                                    register.stake_account.clone()
+                                ),
+                                AssetId::new(configured_asset_id.clone(), expected_escrow.clone()),
+                                register.initial_stake.clone(),
+                            ),
+                        );
                     }
                 }
             }

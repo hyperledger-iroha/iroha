@@ -1123,6 +1123,31 @@ pub mod sorafs {
         }
     }
     permission! {
+        /// Permission to configure, enroll or revoke release-manifest custody for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanManageSorafsReleaseManifestCustody {
+            /// Stable role-13 deployment governed by this permission.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission to reserve, complete or expire release-manifest operations for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanOperateSorafsReleaseManifest {
+            /// Stable role-13 deployment governed by this permission.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission for an independent observer to Check release-manifest authority.
+        /// This grants no protected-key operation or custody mutation.
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsReleaseManifest {
+            /// Stable role-13 deployment observed by this permission.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
         /// Permission to operate `SoraFS` repair tickets for a provider.
         #[derive(Copy)]
         pub struct CanOperateSorafsRepair {
@@ -1526,3 +1551,6 @@ mod tests {
 #[cfg(test)]
 #[path = "final_promotion_permission_tests.rs"]
 mod final_promotion_permission_tests;
+#[cfg(test)]
+#[path = "release_manifest_permission_tests.rs"]
+mod release_manifest_permission_tests;

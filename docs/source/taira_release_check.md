@@ -10,8 +10,7 @@ fault or advanced product qualification.
 
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux additionally selects OpenSSH descriptor custody, native worker
-identity, and generation controls. The runner's selected regression census is
+production. Linux additionally selects OpenSSH descriptor custody. The runner's selected regression census is
 authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
@@ -31,21 +30,13 @@ Before the four-peer fixture, both scopes check that paid lane authorities come
 from registered and activated accounts bound to peers in signed genesis, and
 that failure summaries retain public phase status without transaction payloads.
 
-Both scopes select the seven native single-epoch derivation controls and four
-bounded public epoch-schedule controls. They cover exact network, epoch and
-validator binding, range and fee bounds, explicit public CLI inputs, one private
-pipe consumption, descriptor closure, wiped inputs and complete public output.
-These producer controls do not establish committed maintenance or authorize a
-live transaction; the operator workflow requires its separate lifecycle checks.
-
-Both scopes require the native epoch-maintenance controls for authenticated
-current-height observation, bounded roster schedules, actual-epoch and carrier
-deadlines, fee and lifetime binding, durable single dispatch across renewal, and
-staking admission. The two fixture controls reject unsafe seed-pipe custody and
-noncontiguous or incorrectly bound public schedules before peer startup. The
-complete four-peer network selector remains unchanged. These gate selections do
-not claim operational maintainer startup or supervision; those remain deployment
-prerequisites.
+Both scopes reject the retired Kagami epoch-key derivation commands and verify
+authenticated current-height observations. Before starting peers, retention
+fixtures require exact compiled source identity and reject changed authority
+generations, beacon bindings, predecessor authorizations and height intervals.
+The same real four-peer scenario runs on every platform. Its four independently
+genesis-anchored finality chains verify that certified scheduling transitions
+retain the original validator keys and authenticated beacon session.
 
 Both scopes qualify production beacon capability against the exact public session
 and validator seat, consumed runtime credentials, genesis-bound bootstrap and
@@ -590,3 +581,16 @@ exits, including failure. Unchanged counts mean no new completed artifacts have
 been observed; they do not imply a stalled compiler. Shipping binaries retain their separate
 feature graph, excluding test-only fixtures; shared source changes can require
 both graphs to rebuild in the same warm target directory.
+
+### Mutable focused source changes
+
+Focused development diagnostics observe Git HEAD, the binary tracked diff and
+content hashes of nonignored untracked files before work begins. They recheck that
+observation before each subsequent source-check, metadata, codegen, configuration,
+focused-runtime and network phase, and before final success. A change stops the
+diagnostic at that boundary; a running child finishes normally, and no child is
+killed or restarted. Start a new explicit check against the intended source.
+Unchanged tracked files are represented by Git HEAD and its diff, rather than
+rehashing the entire tree. This is a race detector, not proof of the source consumed
+by Cargo; it provides no release qualification. Immutable `prepare` retains its
+existing authenticated source and complete gates.

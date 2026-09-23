@@ -106,7 +106,7 @@ the stated ideal field-product model; no uniform-byte argument applies.
 ## Shared openings and checked equations
 
 The sole compact wire DTO is
-`fastpq_prover::compact_v1::SharedProofV1`. Its fields, in order, are `row_root`,
+`fastpq_prover::compact_v1::FixedRowSharedProofV1`. Its fields, in order, are `row_root`,
 `mixed_root`, `quotient_root`, `fri_roots`, `rows`, `queries`, `row_siblings`,
 `mixed_siblings`, `quotient_siblings`, `rounds`, `terminal_values`. Ordinary and AXT
 bundles have distinct `compact_v1::OrdinaryTransferBundleV1` and
@@ -121,6 +121,12 @@ For the sorted transcript set `I`, verification derives all supplied indices:
 - At round length `L_r`, group indices reduced modulo `L_r/2` and deduplicated.
   Group `j` contains positions `j` and `j+L_r/2`, not neighboring evaluations.
 - Exactly one complete terminal vector in natural order.
+
+Every row stores its index followed by one exact 2,736-byte field containing
+342 canonical little-endian u64 values. There is no nested sequence count or
+per-value length prefix. Decoding retains one native `[u64; 342]` array, rejects
+noncanonical scalars and wrong field spans, and charges the complete enclosing
+row vector allocation. Prior variable-row frames have no accepted decoder.
 
 Each table and minimal sibling frontier must equal the caller-derived plan.
 The wire supplies neither node coordinates nor unused siblings. Every value
@@ -160,7 +166,7 @@ payload/frame limits are separate policies and do not admit this compact profile
 
 Normal-library quantity producers use the same sole compact V1 owner. Before
 private columns or transforms, they require exact public context and geometry,
-per-segment output capacity of 4,279,877 framed bytes, and explicit trace,
+per-segment output capacity of 4,017,376 framed bytes, and explicit trace,
 private-tree and decode budgets. The temporary repeated-opening representation
 has a separate 7,791,716-byte bound. Row and AIR evaluation partitions own at most
 32 independent workspaces, with deterministic row and error order. Segments run

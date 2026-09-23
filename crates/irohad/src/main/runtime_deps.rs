@@ -168,6 +168,28 @@ fn require_global_beacon_signer_for_local_seat_v1(
     Ok(())
 }
 
+fn require_global_beacon_capability_for_local_seat_v1(
+    local_signer_index: Option<u16>,
+    signer: Option<&dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+) -> Result<(), &'static str> {
+    require_global_beacon_signer_for_local_seat_v1(local_signer_index.is_some(), signer.is_some())?;
+    let (Some(signer_index), Some(signer)) = (local_signer_index, signer) else {
+        return Ok(());
+    };
+    let attestation = signer
+        .attest_partial_signing_capability(session, signer_index)
+        .map_err(
+            |_| "local global-beacon committee seat has no exact runtime custody attestation",
+        )?;
+    if !attestation.matches(session, signer_index) {
+        return Err(
+            "local global-beacon committee seat returned a mismatched runtime custody attestation",
+        );
+    }
+    Ok(())
+}
+
 fn require_parliament_tle_signer_for_local_seat_v1(
     local_has_committee_seat: bool,
     signer_is_resolved: bool,
@@ -243,9 +265,9 @@ fn require_parliament_tle_capability_for_local_seat_v1(
 /// Validate runtime custody for every active or deadline-retained threshold session assigned to
 /// the local peer.
 ///
-/// Private timed-OVN ballots have no plaintext or manual-opening fallback, so a local seat in the
-/// frozen roster of any required Parliament TLE session is not operational without an exact live
-/// capability lookup in its runtime partial-release signer.
+/// A local seat is operational only after an exact live capability lookup in
+/// the provider that owns its session and signer index. Presence of a provider
+/// alone does not establish custody after committee or key rotation.
 fn validate_threshold_signer_startup_readiness_v1(
     state: &iroha_core::state::State,
     local_peer: &PeerId,
@@ -276,9 +298,30 @@ fn validate_threshold_signer_startup_readiness_v1(
         {
             return Err("active global-beacon key session is not bound to the startup roster");
         }
-        require_global_beacon_signer_for_local_seat_v1(
-            topology.iter().any(|peer| peer == local_peer),
-            runtime_deps.sumeragi_global_beacon_partial_signer.is_some(),
+        let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
+            record.session.clone(),
+            &iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+                network_id: *state.network_id_ref(),
+                session_id: active_session_id,
+                roster_hash: topology_roster_hash,
+                transcript_hash: record.session.transcript_hash,
+            },
+        )
+        .map_err(|_| "active global-beacon key session is invalid")?;
+        let local_signer_index = topology
+            .iter()
+            .position(|peer| peer == local_peer)
+            .map(|index| {
+                u16::try_from(index + 1)
+                    .map_err(|_| "global-beacon key-session signer index exceeds u16")
+            })
+            .transpose()?;
+        require_global_beacon_capability_for_local_seat_v1(
+            local_signer_index,
+            runtime_deps
+                .sumeragi_global_beacon_partial_signer
+                .as_deref(),
+            &session,
         )?;
     }
 
@@ -859,6 +902,57 @@ mod parliament_tle_release_tests {
         sign_calls: AtomicUsize,
     }
 
+    struct BeaconCapabilityProbeSigner {
+        mode: CapabilityMode,
+        attestation_calls: Mutex<Vec<([u8; 32], u16)>>,
+        sign_calls: AtomicUsize,
+    }
+
+    impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for BeaconCapabilityProbeSigner {
+        fn attest_partial_signing_capability(
+            &self,
+            session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+            expected_signer_index: u16,
+        ) -> Result<
+            iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+            iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1,
+        > {
+            self.attestation_calls
+                .lock()
+                .expect("beacon capability call journal lock")
+                .push((session.record().session_id, expected_signer_index));
+            let signer_index = match self.mode {
+                CapabilityMode::Exact => expected_signer_index,
+                CapabilityMode::MismatchedSeat => {
+                    if expected_signer_index == 1 {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                CapabilityMode::Rejected => {
+                    return Err(
+                        iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::NotOwned,
+                    );
+                }
+            };
+            iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+                session,
+                signer_index,
+            )
+        }
+
+        fn sign_partial(
+            &self,
+            _session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+            _payload: &[u8],
+        ) -> Result<iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1, String>
+        {
+            self.sign_calls.fetch_add(1, Ordering::AcqRel);
+            Err("the readiness path must never invoke signing".to_owned())
+        }
+    }
+
     impl CapabilityProbeSigner {
         fn new(mode: CapabilityMode) -> Self {
             Self {
@@ -1263,6 +1357,67 @@ mod parliament_tle_release_tests {
                 7,
             ),
             Err("active Parliament TLE key session is not bound to the startup roster")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_beacon_startup_requires_exact_non_signing_custody_attestation() {
+        let fixture =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let session = fixture.session;
+        for (mode, expected) in [
+            (CapabilityMode::Exact, Ok(())),
+            (
+                CapabilityMode::MismatchedSeat,
+                Err(
+                    "local global-beacon committee seat returned a mismatched runtime custody attestation",
+                ),
+            ),
+            (
+                CapabilityMode::Rejected,
+                Err("local global-beacon committee seat has no exact runtime custody attestation"),
+            ),
+        ] {
+            let signer = BeaconCapabilityProbeSigner {
+                mode,
+                attestation_calls: Mutex::new(Vec::new()),
+                sign_calls: AtomicUsize::new(0),
+            };
+            assert_eq!(
+                require_global_beacon_capability_for_local_seat_v1(
+                    Some(3),
+                    Some(&signer),
+                    &session
+                ),
+                expected,
+            );
+            assert_eq!(
+                *signer.attestation_calls.lock().expect("capability journal"),
+                vec![(session.record().session_id, 3)],
+            );
+            assert_eq!(signer.sign_calls.load(Ordering::Acquire), 0);
+            assert_eq!(
+                require_global_beacon_capability_for_local_seat_v1(None, Some(&signer), &session),
+                Ok(()),
+                "observers do not query another validator's custody",
+            );
+            assert_eq!(
+                signer
+                    .attestation_calls
+                    .lock()
+                    .expect("capability journal")
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(
+            require_global_beacon_capability_for_local_seat_v1(Some(1), None, &session),
+            Err("local global-beacon committee seat has no resolved partial signer"),
+        );
+        assert_eq!(
+            require_global_beacon_capability_for_local_seat_v1(None, None, &session),
+            Ok(()),
         );
     }
 

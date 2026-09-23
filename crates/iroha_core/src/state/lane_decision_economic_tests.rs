@@ -4,6 +4,7 @@
 #[derive(Clone, Copy)]
 enum NativeEconomicCase {
     Transfer(u32),
+    TransferAfterParent(u32, u64),
     AtomicBatchTransfer,
     IndependentBatchTransfer,
     RegisterAssetDefinition,
@@ -70,6 +71,8 @@ struct NativeEconomicStateSetup {
     fee_asset: AssetId,
     // Fixture input consumed before transaction signing and first admission.
     fee_intent: Option<iroha_data_model::transaction::FeePaymentIntent>,
+    // Real governed policy instructions, executed before first admission.
+    genesis_instructions: Vec<InstructionBox>,
 }
 
 // Do not inline the large constructor into a caller that acquires WorldBlock.
@@ -191,6 +194,7 @@ fn native_economic_state_setup(
         destination,
         fee_asset,
         fee_intent: None,
+        genesis_instructions: Vec::new(),
     }
 }
 
@@ -254,6 +258,35 @@ fn native_economic_fixture_from_state(
     )
 }
 
+// Keep policy execution and its transaction frame out of the large admission
+// constructor. Every instruction uses the actual ISI implementation, including
+// permission checks and canonical authority-policy history creation.
+#[inline(never)]
+fn native_economic_commit_genesis_overlay(
+    state: &State,
+    genesis: &SignedBlock,
+    instructions: Vec<InstructionBox>,
+) {
+    use crate::smartcontracts::Execute as _;
+
+    let mut block = state.block(genesis.header());
+    if !instructions.is_empty() {
+        let mut transaction = block.transaction();
+        for instruction in instructions {
+            instruction
+                .execute(
+                    &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+                    &mut transaction,
+                )
+                .expect("execute governed archive prerequisites before Native admission");
+        }
+        transaction.apply();
+    }
+    block
+        .commit_world_overlay_for_testing()
+        .expect("seed actual genesis policies and asset incarnations before metadata publication");
+}
+
 // Only pointer-sized State custody remains live while the actual genesis,
 // admission and finality producers acquire their original nested writers.
 #[inline(never)]
@@ -283,6 +316,7 @@ fn native_economic_fixture_from_state_with_initializer(
         destination,
         fee_asset,
         fee_intent,
+        genesis_instructions,
     } = setup;
     // Convenience State fixtures install default markers eagerly. Follow the
     // actual startup order here, then apply only the usual test runtime limits.
@@ -313,10 +347,7 @@ fn native_economic_fixture_from_state_with_initializer(
     // is still empty, using the production finalizer at this exact header.
     // The generic metadata helper publishes the hash before commit, so it cannot
     // retrospectively supply this genesis-only authority.
-    state
-        .block(genesis.header())
-        .commit_world_overlay_for_testing()
-        .expect("seed actual genesis asset incarnations before metadata publication");
+    native_economic_commit_genesis_overlay(&state, &genesis, genesis_instructions);
     let expected_incarnation = AxtAssetIncarnationV1::derive(
         &state.network_id,
         source.definition(),
@@ -384,6 +415,7 @@ fn native_economic_fixture_from_state_with_initializer(
     let mut first_binding = None;
     let mut shared_commitment = None;
     let mut first_ordered_reveal = None;
+    let mut first_timed_entrypoint = None;
     let fee_intent = fee_intent.unwrap_or_else(|| {
         direct_fee.map_or_else(
             || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -402,12 +434,20 @@ fn native_economic_fixture_from_state_with_initializer(
     for (index, case) in cases.iter().enumerate() {
         let mut builder =
             TransactionBuilder::new(state.network_id, source_account.clone(), fee_intent.clone());
-        builder.set_creation_time(Duration::from_millis(1 + index as u64));
+        let creation_time_ms = match case {
+            NativeEconomicCase::TransferAfterParent(_, milliseconds) => parent
+                .header()
+                .creation_time_ms
+                .checked_add(*milliseconds)
+                .unwrap(),
+            _ => 1 + index as u64,
+        };
+        builder.set_creation_time(Duration::from_millis(creation_time_ms));
         builder.set_ttl(Duration::from_secs(1));
         let amount = match case {
-            NativeEconomicCase::Transfer(amount) | NativeEconomicCase::OrderedReveal(amount) => {
-                *amount
-            }
+            NativeEconomicCase::Transfer(amount)
+            | NativeEconomicCase::TransferAfterParent(amount, _)
+            | NativeEconomicCase::OrderedReveal(amount) => *amount,
             NativeEconomicCase::Reveal(variant) => 25 + u32::from(*variant),
             _ => 25,
         };
@@ -467,12 +507,39 @@ fn native_economic_fixture_from_state_with_initializer(
                         .into(),
                 ]
             };
-        let mut transaction = builder
+        let signed_builder = builder
             .with_instructions(instructions)
             .with_admission_intent(
                 iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
-            .sign(source_key.private_key());
+            );
+        let mut transaction = signed_builder.clone().sign(source_key.private_key());
+        if matches!(case, NativeEconomicCase::TransferAfterParent(..)) {
+            if let Some(first) = first_timed_entrypoint {
+                transaction = (1..=256)
+                    .find_map(|nonce| {
+                        let mut builder = signed_builder.clone();
+                        builder.set_nonce(std::num::NonZeroU32::new(nonce).unwrap());
+                        let signed = builder.sign(source_key.private_key());
+                        (first < TransactionEntrypoint::External(signed.clone()).hash())
+                            .then_some(signed)
+                    })
+                    .expect("bounded canonical hash order for the clock-prefix fixture");
+            } else {
+                // Select a deterministic small first identity before admission;
+                // a fixed unsearched hash can leave no greater second identity
+                // inside the bounded fixture nonce range.
+                transaction = (1..=256)
+                    .map(|nonce| {
+                        let mut builder = signed_builder.clone();
+                        builder.set_nonce(std::num::NonZeroU32::new(nonce).unwrap());
+                        builder.sign(source_key.private_key())
+                    })
+                    .min_by_key(|signed| signed.hash())
+                    .unwrap();
+                first_timed_entrypoint =
+                    Some(TransactionEntrypoint::External(transaction.clone()).hash());
+            }
+        }
         if matches!(case, NativeEconomicCase::BadSignature) {
             // A well-formed Ed25519 signature over another message reaches the
             // real stateless signature owner; it is not a decoder-shape failure.
@@ -631,14 +698,31 @@ fn native_economic_fixture_from_state_with_initializer(
         } else {
             crate::queue::RoutingPlan::single(if index == 0 { primary } else { secondary })
         };
-        let (binding, control) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        let (mut binding, mut control) = queue_plan_admission_certificate_for_entrypoint_state_test(
             &state,
-            plan,
+            plan.clone(),
             &validators,
             parent.header().height().get(),
             0x81 + index as u8,
             &entrypoint,
         );
+        if matches!(case, NativeEconomicCase::TransferAfterParent(..)) {
+            // Authenticate the actual fresh admission time before the first
+            // carrier, instead of changing an already verified input.
+            binding = crate::torii_proxy::new_queue_plan_admission_binding(
+                &state.network_id,
+                &entrypoint,
+                &plan,
+                binding.admission_context.clone(),
+                creation_time_ms,
+            )
+            .unwrap();
+            control = queue_plan_admission_certificate_bytes_for_state_test(
+                &entrypoint,
+                &binding,
+                &validators,
+            );
+        }
         first_binding.get_or_insert(binding);
         controls.push(control);
     }

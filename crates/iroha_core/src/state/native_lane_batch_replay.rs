@@ -92,7 +92,10 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         genesis_account: &iroha_data_model::account::AccountId,
         time_source: &iroha_primitives::time::TimeSource,
         block_cadence: std::time::Duration,
-    ) -> Result<Option<super::PreparedCarrier<'state>>, MergeLedgerCommitError> {
+    ) -> Result<
+        Option<super::PreparedCarrier<'state>>,
+        crate::block::valid::NativeCandidatePreparationError,
+    > {
         crate::block::ValidBlock::prepare_native_candidate(
             self,
             context,

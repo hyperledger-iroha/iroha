@@ -23,6 +23,8 @@ use iroha_data_model::block::{
 };
 
 use super::{
+    InboundBlockMessage,
+    message::BlockMessage,
     output_guard::ConsensusOutputGuard,
     v2_core as core,
     v2_lane_instance::{
@@ -44,6 +46,8 @@ type Result<T> = std::result::Result<T, String>;
 #[derive(Clone, Copy)]
 pub(crate) struct NativeLaneDriverLimits {
     pub(crate) process: LaneProcessLimits,
+    /// Immutable node role; committee membership alone never enables an observer to sign.
+    pub(crate) voting_enabled: bool,
     pub(crate) ingress: NonZeroUsize,
     pub(crate) outbound: NonZeroUsize,
     pub(crate) maximum_message_bytes: NonZeroUsize,
@@ -57,8 +61,14 @@ pub(crate) enum NativeLaneInput {
     Decision(LaneDecisionV1),
 }
 
-impl NativeLaneInput {
-    fn instance(&self) -> HeightContextId {
+#[derive(Clone, Copy)]
+enum NativeLaneInputRef<'a> {
+    Control(&'a LaneMessageEnvelopeV1),
+    Decision(&'a LaneDecisionV1),
+}
+
+impl NativeLaneInputRef<'_> {
+    fn instance(self) -> HeightContextId {
         let hash = match self {
             Self::Control(envelope) => message_instance(&envelope.message),
             Self::Decision(decision) => decision.value().instance_id,
@@ -67,8 +77,16 @@ impl NativeLaneInput {
     }
 }
 
-/// Admission never discards a full-queue or stale-observation input. The caller
-/// retains that exact occurrence until its transport owner can retry or retire it.
+impl NativeLaneInput {
+    fn as_ref(&self) -> NativeLaneInputRef<'_> {
+        match self {
+            Self::Control(envelope) => NativeLaneInputRef::Control(envelope),
+            Self::Decision(decision) => NativeLaneInputRef::Decision(decision),
+        }
+    }
+}
+
+/// Admission never discards a full-queue or stale-observation input.
 #[derive(Debug)]
 pub(crate) enum NativeLaneAdmission {
     Accepted,
@@ -77,6 +95,25 @@ pub(crate) enum NativeLaneAdmission {
         input: NativeLaneInput,
         reason: String,
     },
+}
+
+/// The exact fair-ingress occurrence returns intact when admission cannot progress.
+/// Accepted means its original payload moved into the process owner; no replay,
+/// decode, clone or new physical admission ordinal stands in for that transfer.
+pub(crate) enum NativeLaneOwnedAdmission {
+    Accepted,
+    Retry(InboundBlockMessage),
+    Rejected {
+        inbound: InboundBlockMessage,
+        reason: String,
+    },
+}
+
+enum NativeLaneAdmissionCheck {
+    Ready { id: HeightContextId, local: bool },
+    Duplicate,
+    Retry,
+    Rejected(String),
 }
 
 pub(super) fn message_instance(message: &LaneMessageV1) -> Hash {
@@ -104,6 +141,7 @@ pub(crate) struct NativeLaneDriver {
     send: mpsc::SyncSender<LaneOutbound>,
     receive: mpsc::Receiver<LaneOutbound>,
     last_serviced: Option<HeightContextId>,
+    last_retirement: Option<HeightContextId>,
     #[cfg(test)]
     held_body: Option<(HeightContextId, Box<dyn FnOnce() + Send>)>,
 }
@@ -133,20 +171,20 @@ impl NativeLaneDriver {
             send,
             receive,
             last_serviced: None,
+            last_retirement: None,
             #[cfg(test)]
             held_body: None,
         })
     }
 
-    /// Admit only bounded, cryptographically authenticated evidence for an exact
-    /// current instance. Bad peer input does not poison the local output guard.
-    pub(crate) fn admit(
-        &mut self,
+    /// Authenticate and inspect capacity before moving any physical payload.
+    fn check_admission(
+        &self,
         observed: &VerifiedLaneContexts,
-        input: NativeLaneInput,
-    ) -> NativeLaneAdmission {
-        if !observed.is_current(&self.state) {
-            return NativeLaneAdmission::Retry(input);
+        input: NativeLaneInputRef<'_>,
+    ) -> NativeLaneAdmissionCheck {
+        if self.guard.restart_required() || !observed.is_current(&self.state) {
+            return NativeLaneAdmissionCheck::Retry;
         }
         let id = input.instance();
         let Some(lane) = observed
@@ -154,21 +192,23 @@ impl NativeLaneDriver {
             .iter()
             .find(|lane| lane.instance_id() == id)
         else {
-            return NativeLaneAdmission::Rejected {
-                input,
-                reason: "native ingress has no exact current opening".into(),
-            };
+            return NativeLaneAdmissionCheck::Rejected(
+                "native ingress has no exact current opening".into(),
+            );
         };
-        let local = lane
-            .frozen()
-            .committee
-            .iter()
-            .any(|peer| peer.public_key() == self.key.public_key());
+        let local = self.limits.voting_enabled
+            && lane
+                .frozen()
+                .committee
+                .iter()
+                .any(|peer| peer.public_key() == self.key.public_key());
         let authenticate = || -> Result<()> {
-            let bytes = match &input {
-                NativeLaneInput::Control(envelope) => {
+            let bytes = match input {
+                NativeLaneInputRef::Control(envelope) => {
                     if !local {
-                        return Err("native control targets a committee without this signer".into());
+                        return Err(
+                            "native control targets a committee without this voting signer".into(),
+                        );
                     }
                     if envelope.version != LANE_MESSAGE_VERSION_V1 {
                         return Err("unsupported native lane envelope revision".into());
@@ -177,9 +217,6 @@ impl NativeLaneDriver {
                         .message
                         .validate_shape(lane.frozen().committee.len())
                         .map_err(|error| error.to_string())?;
-                    // Authentication does not require a payload or an open WAL.
-                    // This tag is only the read-only event wrapper; the actual
-                    // reducer chooses its own current tag when consuming ingress.
                     let context = lane.reducer_context();
                     let tag = core::EventTag::new(context.height(), 0, core::Generation::INITIAL);
                     LaneAuthenticator::new(lane)
@@ -187,7 +224,7 @@ impl NativeLaneDriver {
                         .map_err(|error| error.to_string())?;
                     norito::encode_canonical(envelope).map_err(|error| error.to_string())?
                 }
-                NativeLaneInput::Decision(decision) => {
+                NativeLaneInputRef::Decision(decision) => {
                     LaneAuthenticator::new(lane)
                         .decision_certificate(decision)
                         .map_err(|error| error.to_string())?;
@@ -200,39 +237,38 @@ impl NativeLaneDriver {
             Ok(())
         };
         if let Err(reason) = authenticate() {
-            return NativeLaneAdmission::Rejected { input, reason };
-        }
-        let _lease = self.state.consensus_publication_lease();
-        if !observed.is_current(&self.state) {
-            return NativeLaneAdmission::Retry(input);
+            return NativeLaneAdmissionCheck::Rejected(reason);
         }
         match input {
-            NativeLaneInput::Control(envelope) => {
-                if self.ingress.len() == self.limits.ingress.get() {
-                    return NativeLaneAdmission::Retry(NativeLaneInput::Control(envelope));
-                }
-                self.ingress.push_back((id, envelope));
+            NativeLaneInputRef::Control(_) if self.ingress.len() == self.limits.ingress.get() => {
+                return NativeLaneAdmissionCheck::Retry;
             }
-            NativeLaneInput::Decision(decision) => {
+            NativeLaneInputRef::Decision(decision) => {
                 if let Some(previous) = self.decisions.get(&id) {
                     if previous.manifest != decision.manifest
                         || previous.commit_qc.statement.value != decision.commit_qc.statement.value
                     {
-                        return NativeLaneAdmission::Rejected {
-                            input: NativeLaneInput::Decision(decision),
-                            reason: "native instance already retains a different Commit value"
-                                .into(),
-                        };
+                        return NativeLaneAdmissionCheck::Rejected(
+                            "native instance already retains a different Commit value".into(),
+                        );
                     }
-                    // A different valid exact quorum for the same immutable value
-                    // cannot replace the already retained evidence or consume space.
-                    return NativeLaneAdmission::Accepted;
+                    return NativeLaneAdmissionCheck::Duplicate;
                 }
                 if self.decisions.len() == self.limits.process.instances.get()
                     || (local && self.ingress.len() == self.limits.ingress.get())
                 {
-                    return NativeLaneAdmission::Retry(NativeLaneInput::Decision(decision));
+                    return NativeLaneAdmissionCheck::Retry;
                 }
+            }
+            _ => {}
+        }
+        NativeLaneAdmissionCheck::Ready { id, local }
+    }
+
+    fn insert_admitted(&mut self, id: HeightContextId, local: bool, input: NativeLaneInput) {
+        match input {
+            NativeLaneInput::Control(envelope) => self.ingress.push_back((id, envelope)),
+            NativeLaneInput::Decision(decision) => {
                 if local {
                     self.ingress.push_back((
                         id,
@@ -245,7 +281,101 @@ impl NativeLaneDriver {
                 self.decisions.insert(id, decision);
             }
         }
+    }
+
+    /// Admit authenticated evidence for the original current instance.
+    pub(crate) fn admit(
+        &mut self,
+        observed: &VerifiedLaneContexts,
+        input: NativeLaneInput,
+    ) -> NativeLaneAdmission {
+        let checked = self.check_admission(observed, input.as_ref());
+        let state = Arc::clone(&self.state);
+        let _lease = state.consensus_publication_lease();
+        if !observed.is_current(&state) {
+            return NativeLaneAdmission::Retry(input);
+        }
+        match checked {
+            NativeLaneAdmissionCheck::Ready { id, local } => self.insert_admitted(id, local, input),
+            NativeLaneAdmissionCheck::Duplicate => {}
+            NativeLaneAdmissionCheck::Retry => return NativeLaneAdmission::Retry(input),
+            NativeLaneAdmissionCheck::Rejected(reason) => {
+                return NativeLaneAdmission::Rejected { input, reason };
+            }
+        }
         NativeLaneAdmission::Accepted
+    }
+
+    /// Transfer one exact dequeued fair-ingress carrier without replacing its payload.
+    pub(crate) fn admit_owned(
+        &mut self,
+        inbound: InboundBlockMessage,
+    ) -> Result<NativeLaneOwnedAdmission> {
+        let Some(ownership) = inbound.ingress_ownership() else {
+            self.guard.close_admission_for_restart();
+            return Err("native ingress lost its original fair ownership".into());
+        };
+        if !ownership.validate_exact()
+            || !ownership.matches_message(inbound.message())
+            || !ownership.matches_semantic_origin(inbound.sender())
+            || !ownership.matches_reply_routes(inbound.reply_routes())
+        {
+            self.guard.close_admission_for_restart();
+            return Err("native ingress changed its original fair ownership".into());
+        }
+        let Some(observed) = self.state.verified_lane_consensus_contexts()? else {
+            return Ok(NativeLaneOwnedAdmission::Retry(inbound));
+        };
+        let input = match inbound.message() {
+            BlockMessage::NativeLane(envelope) => NativeLaneInputRef::Control(envelope),
+            BlockMessage::NativeLaneDecision(decision) => NativeLaneInputRef::Decision(decision),
+            _ => {
+                self.guard.close_admission_for_restart();
+                return Err("native ingress consumer received another message family".into());
+            }
+        };
+        let checked = self.check_admission(&observed, input);
+        let state = Arc::clone(&self.state);
+        let _lease = state.consensus_publication_lease();
+        if !observed.is_current(&state) {
+            return Ok(NativeLaneOwnedAdmission::Retry(inbound));
+        }
+        match checked {
+            NativeLaneAdmissionCheck::Ready { id, local } => {
+                let (message, _, _) = inbound.into_message_sender_and_reply_routes();
+                let input = match message {
+                    BlockMessage::NativeLane(envelope) => NativeLaneInput::Control(envelope),
+                    BlockMessage::NativeLaneDecision(decision) => {
+                        NativeLaneInput::Decision(*decision)
+                    }
+                    _ => {
+                        self.guard.close_admission_for_restart();
+                        return Err("native carrier changed family after admission".into());
+                    }
+                };
+                self.insert_admitted(id, local, input);
+            }
+            NativeLaneAdmissionCheck::Duplicate => {}
+            NativeLaneAdmissionCheck::Retry => return Ok(NativeLaneOwnedAdmission::Retry(inbound)),
+            NativeLaneAdmissionCheck::Rejected(reason) => {
+                return Ok(NativeLaneOwnedAdmission::Rejected { inbound, reason });
+            }
+        }
+        Ok(NativeLaneOwnedAdmission::Accepted)
+    }
+
+    /// Require the original output barrier when a retained fair row is retried.
+    pub(crate) fn matches_output_guard(&self, guard: &Arc<ConsensusOutputGuard>) -> bool {
+        Arc::ptr_eq(&self.guard, guard)
+    }
+
+    /// Match actual runner resources before it transfers ingress or publication custody.
+    pub(crate) fn matches_dependencies(
+        &self,
+        state: &Arc<State>,
+        guard: &Arc<ConsensusOutputGuard>,
+    ) -> bool {
+        Arc::ptr_eq(&self.state, state) && Arc::ptr_eq(&self.guard, guard)
     }
 
     /// One bounded fair turn: completion, opening, one instance's timer/control,
@@ -274,7 +404,8 @@ impl NativeLaneDriver {
                 .map_err(|(error, _retained)| error.to_string())?;
         }
         let known = self.process.instance_ids().collect::<BTreeSet<_>>();
-        if self.process.occupancy().instances < self.limits.process.instances.get()
+        if self.limits.voting_enabled
+            && self.process.occupancy().instances < self.limits.process.instances.get()
             && let Some(lane) = observed.contexts().iter().find(|lane| {
                 !known.contains(&lane.instance_id())
                     && lane
@@ -397,6 +528,23 @@ impl NativeLaneDriver {
             .restrict_effect_capacity_to_retained_for_test(id);
     }
 
+    /// One production cleanup turn preserves original capacity until the existing
+    /// physical worker returns. Round-robin selection never waits for cleanup.
+    pub(crate) fn prepare_one_retirement(&mut self) -> Result<bool> {
+        let id = self
+            .process
+            .instance_ids()
+            .find(|id| self.last_retirement.is_none_or(|last| *id > last))
+            .or_else(|| self.process.instance_ids().next());
+        let Some(id) = id else {
+            return Ok(false);
+        };
+        self.last_retirement = Some(id);
+        self.process
+            .prepare_retirement(id)
+            .map_err(|error| error.to_string())
+    }
+
     /// Deadline belongs to native instances, independently of global view changes.
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
         self.process.next_deadline()
@@ -485,6 +633,7 @@ impl NativeLaneDriver {
         Ok(Some(NativeLaneDecisionHandoff {
             state: Arc::clone(&self.state),
             decisions,
+            recovered_sources: BTreeMap::new(),
         }))
     }
 
@@ -500,6 +649,48 @@ impl NativeLaneDriver {
             .map_err(|error| error.to_string())
     }
 
+    /// Hold the original published carrier until every matching local instance
+    /// has settled its original Apply and completed physical retirement.
+    pub(crate) fn settle_published_carrier(
+        &mut self,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<bool> {
+        let mut complete = true;
+        for id in published.instance_ids() {
+            complete &= self
+                .process
+                .settle_and_retire_published(id, published)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(complete)
+    }
+
+    /// One authenticated local Decision for relay to the current global roster.
+    /// The original reducer Apply and Decision remain inside this driver.
+    pub(crate) fn next_unrelayed_decision(
+        &self,
+        observed: &VerifiedLaneContexts,
+        relayed: &std::collections::BTreeSet<HeightContextId>,
+    ) -> Result<Option<LaneDecisionV1>> {
+        if !observed.is_current(&self.state) {
+            return Ok(None);
+        }
+        for lane in observed.contexts() {
+            let id = lane.instance_id();
+            if relayed.contains(&id) {
+                continue;
+            }
+            if let Some(instance) = self.process.instance(id)
+                && let Some(decision) = instance
+                    .native_decision()
+                    .map_err(|error| error.to_string())?
+            {
+                return Ok(Some(decision));
+            }
+        }
+        Ok(None)
+    }
+
     /// Stop physical admission; the returned join owner belongs on a blocking
     /// shutdown worker. Original process custody remains fail-stop on drop.
     pub(crate) fn shutdown(self) -> LanePhysicalShutdown {
@@ -512,6 +703,7 @@ impl NativeLaneDriver {
 pub(crate) struct NativeLaneDecisionHandoff {
     state: Arc<State>,
     decisions: BTreeMap<HeightContextId, LaneDecisionV1>,
+    recovered_sources: BTreeMap<Hash, Arc<crate::state::VerifiedFirstLaneAdmittedInputV1>>,
 }
 
 /// Complete groups and exact waits retain canonical input order. The candidate
@@ -522,6 +714,20 @@ pub(crate) struct NativeLaneDecisionPreparation {
 }
 
 impl NativeLaneDecisionHandoff {
+    /// Retain authenticated source evidence; current route readiness is still rechecked.
+    pub(crate) fn with_recovered_sources(
+        mut self,
+        recovered: BTreeMap<Hash, Arc<crate::state::VerifiedFirstLaneAdmittedInputV1>>,
+    ) -> Self {
+        self.recovered_sources = recovered;
+        self
+    }
+
+    /// Match this immutable handoff to the original committed State owner.
+    pub(crate) fn belongs_to(&self, state: &State) -> bool {
+        std::ptr::eq(self.state.as_ref(), state)
+    }
+
     /// Prepare candidate input on a worker while preserving original reducer
     /// Decisions and Apply effects. The proof retains the exact observed State;
     /// global assembly rechecks it under the publication lease before signing.
@@ -593,23 +799,30 @@ impl NativeLaneDecisionHandoff {
             {
                 continue;
             }
-            let source = match self.state.first_lane_admitted_input(&observed, lane)? {
-                FirstLaneAdmittedInputReadV1::Ready(source) => source,
-                FirstLaneAdmittedInputReadV1::CanonicalBodyRecoveryRequired(source) => {
-                    waits.push(
-                        LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source),
-                    );
-                    continue;
-                }
-                FirstLaneAdmittedInputReadV1::ObservationChanged => {
-                    return Ok(NativeLaneDecisionPreparation {
-                        groups: Vec::new(),
-                        waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
-                    });
-                }
-                FirstLaneAdmittedInputReadV1::InstanceNotCurrent => {
-                    waits.push(LaneDecisionGroupPreparationV1::InstanceNotCurrent);
-                    continue;
+            let source = if let Some(source) = self
+                .recovered_sources
+                .get(&lane.frozen().admitted_binding_hash)
+            {
+                Arc::clone(source)
+            } else {
+                match self.state.first_lane_admitted_input(&observed, lane)? {
+                    FirstLaneAdmittedInputReadV1::Ready(source) => Arc::new(source),
+                    FirstLaneAdmittedInputReadV1::CanonicalBodyRecoveryRequired(source) => {
+                        waits.push(
+                            LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source),
+                        );
+                        continue;
+                    }
+                    FirstLaneAdmittedInputReadV1::ObservationChanged => {
+                        return Ok(NativeLaneDecisionPreparation {
+                            groups: Vec::new(),
+                            waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+                        });
+                    }
+                    FirstLaneAdmittedInputReadV1::InstanceNotCurrent => {
+                        waits.push(LaneDecisionGroupPreparationV1::InstanceNotCurrent);
+                        continue;
+                    }
                 }
             };
             let decisions = self
@@ -730,4 +943,26 @@ impl super::v2_candidate::CandidateWorkProvider for &NativeLaneCandidateBatch {
             ..PreparedCandidateWork::default()
         })
     }
+}
+
+/// Exercise the original bounded physical ingress path without opening the
+/// production Native entrypoint before the complete signer cutover.
+#[cfg(test)]
+pub(crate) fn native_driver_owned_ingress_for_test(
+    message: BlockMessage,
+    sender: iroha_model_base::peer::PeerId,
+) -> InboundBlockMessage {
+    let ingress = super::FairV2Ingress::new(8, 8 * 1_048_576, 8 * 1_048_576, 0, 0);
+    ingress.configure_roster([sender.clone()]).unwrap();
+    ingress.open().unwrap();
+    ingress
+        .try_push_owned_at(
+            InboundBlockMessage::from_authenticated_peer(message, sender),
+            Instant::now(),
+        )
+        .unwrap();
+    let inbound = ingress.try_recv_if(|_| true).unwrap();
+    ingress.close();
+    ingress.ensure_closed_drained_cut().unwrap();
+    inbound
 }

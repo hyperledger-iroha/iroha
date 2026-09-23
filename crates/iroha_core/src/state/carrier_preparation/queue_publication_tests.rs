@@ -71,7 +71,7 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
 #[inline(never)]
 fn assert_signed_retirement_publication(
     replacement: bool,
-    (boxed, decision, queue): (Box<State>, CheckpointDecision<(), ()>, Arc<Queue>),
+    (boxed, decision, queue): (Box<State>, CheckpointDecision<()>, Arc<Queue>),
 ) {
     let state: Arc<State> = boxed.into();
     let (events, _) = tokio::sync::broadcast::channel(8);
@@ -93,7 +93,7 @@ fn assert_signed_retirement_publication(
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     assert_eq!(state.committed_height(), 1);
     let (decision, error) = decision
-        .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, None)
         .err()
         .expect("actual retirement needs the original service Queue");
     assert!(matches!(
@@ -121,11 +121,7 @@ fn assert_signed_retirement_publication(
     assert!(foreign_source.belongs_to(&foreign));
     assert!(!foreign_source.belongs_to(&state));
     let (decision, error) = decision
-        .try_prepare_physical(
-            &state,
-            Some(&foreign_source),
-            |_, _| Ok::<_, Infallible>(()),
-        )
+        .try_prepare_physical(&state, Some(&foreign_source))
         .err()
         .expect("another service State cannot substitute custody");
     assert!(matches!(
@@ -141,7 +137,7 @@ fn assert_signed_retirement_publication(
     let source = service.carrier_queue_source();
     let held = queue.try_lock_lane_retirement_observer().unwrap();
     let (decision, error) = decision
-        .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, Some(&source))
         .err()
         .expect("the actual original Queue owner must defer publication");
     let CarrierPhysicalPreparationError::Queue(CarrierQueueRetirementError::Busy { field, wait }) =
@@ -165,7 +161,7 @@ fn assert_signed_retirement_publication(
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut retry, &wakes).is_ready());
     let physical = decision
-        .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(&state, Some(&source))
         .unwrap_or_else(|(_, error)| panic!("original service physical acquisition: {error:?}"));
     let mut release = queue
         .try_lock_lane_retirement_observer()
@@ -283,7 +279,7 @@ fn state_fence_refusal_defers_callbacks_through_original_queue_and_kura() {
         );
         let held = hold(&state, blocked);
         let (retry, error) = decision
-            .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_physical(&state, Some(&source))
             .err()
             .expect("exact State owner is busy");
         let CarrierPhysicalPreparationError::Fence {
@@ -314,7 +310,7 @@ fn state_fence_refusal_defers_callbacks_through_original_queue_and_kura() {
     }
     drop(
         decision
-            .try_prepare_physical(&state, Some(&source), |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_physical(&state, Some(&source))
             .unwrap_or_else(|(_, error)| panic!("same original retry: {error:?}")),
     );
 }

@@ -8,11 +8,27 @@ Node installation, a package, a candidate, a runtime pin or mapped execution.
 The APIs are:
 
 ```python
+manifest = produce_node_runtime_manifest(
+    version="24.21.0", selected_executable=selected_path,
+    executable=original_executable_path,
+    original_images={path: (original_bytes, original_mode) for path in image_paths},
+    aliases={alias_path: literal_target for alias_path in alias_paths},
+)
 manifest = parse_node_runtime_manifest(raw, expected_sha256=independent_pin)
 bundle = parse_node_runtime_bundle(original_bytes,
                                    expected_manifest_sha256=independent_pin)
 original_member = bundle.member_bytes(canonical_original_path)
 ```
+
+The producer accepts only caller-supplied original byte strings, mode claims and
+literal alias targets. It sorts image and alias names, derives alias resolutions,
+projects each image through the same bounded Mach-O decoder, and uses the
+verifier's shared graph derivation for every direct and inherited candidate
+slot. Serialization is capped at 4 MiB while streaming JSON chunks, then
+compared with the canonical serializer and parsed again. A changed image
+command therefore produces a changed complete manifest; an old partial edge
+list is never an input to the producer. It does no path I/O and does not frame,
+approve or sign a bundle. Its returned SHA-256 is a content identifier only.
 
 Both parsers require exact `bytes` and compare the independently supplied digest
 before parsing the manifest. The caller remains responsible for that digest's
@@ -106,7 +122,7 @@ unloadable and an already-loaded matching install ID can override another own
 candidate. Thus **this relation cannot establish actual loadability, cached
 selection or mapped bytes**. It confers no runtime approval or process authority.
 
-The current local Homebrew Node24 20-image manifest omits four original
+The recorded local Homebrew Node24 20-image manifest omits four original
 executable-ancestor slots across its two Brotli shared `@rpath` edges. It
 remains rejected by the exact command/candidate relation. The independently
 pinned complete original namespace, physical absent-slot/alias custody and
@@ -120,7 +136,10 @@ absent `node@24/24.21.0/bin/libbrotlicommon.1.dylib` and
 manifest amended with all four null-resolved slots satisfies this pure content
 relation against the unchanged 20 image byte strings; its manifest digest is
 `8a5f68d1ca035abf3de72010cdd6d906f2eec05b5047af43723535cfd9e7e51b`.
-That digest is an observation, not an independent approval pin. The recorded
+The pure producer re-derives that same diagnostic digest from the supplied
+20 original byte strings, original modes and literal aliases; reframing those
+bytes with its output passes the pure parser (20 images, 74 edges). That digest
+is an observation, not an independent approval pin. The recorded
 manifest and bundle remain rejected, and the amended null claims still require
 physical absence custody. Accepting the recorded bundle by skipping derived
 slots would weaken the exact original command/candidate relation.
@@ -153,8 +172,9 @@ absence.
 TODO: extend beyond the restricted direct-ancestry profile only with a reviewed
 complete inherited/cached candidate relation. Preserve original slots and
 installed-name identity; do not infer loadability or runtime selection from a
-successful library-list observation. Capture the missing local Brotli slots
-against independently retained originals before reconsidering its profile.
+successful library-list observation. Obtain an independent approval pin and
+physical absence/alias custody for a freshly captured complete original bundle
+before reconsidering the local Node profile.
 
 TODO: apply the bounded physical owner to independently pinned actual Node
 originals, complete the declared-symlink-to-canonical-target join, and retain

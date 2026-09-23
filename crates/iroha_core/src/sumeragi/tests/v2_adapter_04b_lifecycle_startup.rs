@@ -1,4 +1,54 @@
 #[cfg(feature = "bls")]
+struct LifecycleNativeProcessFixture(
+    Option<super::super::v2_runner::native_process::NativeRunnerProcess>,
+);
+#[cfg(feature = "bls")]
+impl std::ops::Deref for LifecycleNativeProcessFixture {
+    type Target = super::super::v2_runner::native_process::NativeRunnerProcess;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("original fixture Native process")
+    }
+}
+#[cfg(feature = "bls")]
+impl std::ops::DerefMut for LifecycleNativeProcessFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("original fixture Native process")
+    }
+}
+#[cfg(feature = "bls")]
+impl Drop for LifecycleNativeProcessFixture {
+    fn drop(&mut self) {
+        if let Some(native) = self.0.take() {
+            native
+                .shutdown()
+                .join()
+                .expect("join actual fixture Native physical workers");
+        }
+    }
+}
+#[cfg(feature = "bls")]
+fn lifecycle_native_process_fixture(
+    state: &Arc<State>,
+    key: &KeyPair,
+    guard: &Arc<super::super::output_guard::ConsensusOutputGuard>,
+) -> LifecycleNativeProcessFixture {
+    LifecycleNativeProcessFixture(Some(
+        super::super::v2_runner::native_process::NativeRunnerProcess::new(
+            Arc::clone(state),
+            Arc::clone(guard),
+            PeerId::new(key.public_key().clone()),
+            key.clone(),
+            true,
+            &lifecycle_owner_config(),
+            32 * 1024 * 1024,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        )
+        .expect("construct original process Native driver for lifecycle fixture"),
+    ))
+}
+
+#[cfg(feature = "bls")]
 use crate::{BlockMessage, state::State};
 
 #[test]
@@ -680,19 +730,9 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         )
         .expect("bind CompleteTip H+1 Kura advert source"),
     );
-    let (exact_output_handoff_owner, transport_owner) =
+    let (exact_output_handoff_owner, _transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
-    let mut lane_work =
-        super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(
-            context.clone(),
-            local_peer.clone(),
-            local_signer.clone(),
-            Arc::clone(&state),
-            Arc::clone(&kura),
-            Arc::clone(&output_guard),
-            transport_owner,
-        )
-        .expect("open exact CompleteTip lifecycle lane/output owner");
+    let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard);
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
@@ -745,7 +785,7 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         &mut activated,
         &mut active_runner,
         &ingress,
-        &mut lane_work,
+        &mut native,
         kura.as_ref(),
         &local_signer,
         &mut block_sync_server,
@@ -780,7 +820,7 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
             &mut activated,
             &mut active_runner,
             &ingress,
-            &mut lane_work,
+            &mut native,
             kura.as_ref(),
             &local_signer,
             &mut block_sync_server,
@@ -1113,7 +1153,7 @@ fn exercise_pending_kura_production_lifecycle(
         )
         .expect("bind pending Kura advert source"),
     );
-    let (exact_output_handoff_owner, transport_owner) =
+    let (exact_output_handoff_owner, _transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
     let remote_peers = context
         .roster
@@ -1295,26 +1335,10 @@ fn exercise_pending_kura_production_lifecycle(
         expected.block_hash()
     );
 
+    let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard);
     let prepared = pending
-        .prepare_lane_recovery(
-            &mut setup_runner,
-            &queue,
-            |installed, _executor, _services| {
-                assert_eq!(installed, expected);
-                super::super::v2_lane_work::V2LaneWorkAdapter::pending_kura_lifecycle_fixture_for_test(
-                    verified.context().clone(),
-                    local_peer,
-                    local_signer,
-                    Arc::clone(&state),
-                    Arc::clone(&kura),
-                    installed,
-                    Arc::clone(&output_guard),
-                    transport_owner,
-                )
-                .map_err(super::super::v2_runner::V2RunnerError::from)
-            },
-        )
-        .unwrap_or_else(|error| panic!("prepare affine pending Kura lane recovery: {error}"));
+        .prepare_lane_recovery::<super::super::v2_runner::V2RunnerError>(&mut setup_runner)
+        .unwrap_or_else(|error| panic!("prepare affine pending Kura recovery: {error}"));
     let mut activated = prepared
         .activate_no_clock(activation)
         .unwrap_or_else(|error| panic!("activate exact pending Kura no-clock lifecycle: {error}"));
@@ -1329,11 +1353,18 @@ fn exercise_pending_kura_production_lifecycle(
     );
     let mut active_runner =
         super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-    activated.with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+    activated.with_runner_runtime(&mut active_runner, |executor, services| {
         assert!(executor.lifecycle_live_clocks_are_unarmed());
         assert!(executor.ready_to_finish());
         assert!(services.matches_installed_pending_kura_tip(expected));
-        assert!(services.matches_lifecycle_lane_work(lane_work));
+        let (receipt, artifact) = executor
+            .durable_finality()
+            .expect("actual published pending tip");
+        assert!(
+            native
+                .preflight_publication(services, receipt, artifact)
+                .expect("settle genuine pending-tip publication")
+        );
     });
     if let Some((before, _)) = retained_incident {
         assert_eq!(
@@ -1361,20 +1392,13 @@ fn exercise_pending_kura_production_lifecycle(
         return;
     }
 
-    let (finalized, mut lane_work) = activated
+    let finalized = activated
         .into_finalized_rollover(&mut active_runner)
         .unwrap_or_else(|error| panic!("finalize pending Kura lifecycle owner: {error}"));
     assert_safety_wal_retention(&safety_wal_path, true);
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     let (_, artifact) = finalized.finality();
-    lane_work
-        .retain_merge_sidecars_for_global_view(
-            artifact.commit_qc.round.view,
-            None,
-            Some(artifact.subject),
-        )
-        .unwrap_or_else(|error| panic!("retain pending Kura Decision sidecar: {error}"));
     let mut successor = context;
     successor.height = successor
         .height
@@ -1384,8 +1408,8 @@ fn exercise_pending_kura_production_lifecycle(
     successor
         .validate()
         .expect("pending Kura successor context is valid");
-    let (post_output, retained_sidecars) = finalized
-        .rollover_outputs(&mut active_runner, lane_work, &successor, 64)
+    let post_output = finalized
+        .rollover_outputs(&mut active_runner, &mut native, &successor, 64)
         .unwrap_or_else(|error| panic!("roll over pending Kura lifecycle outputs: {error}"));
     assert_safety_wal_retention(&safety_wal_path, false);
     let cleanup_ready = post_output
@@ -1393,7 +1417,6 @@ fn exercise_pending_kura_production_lifecycle(
         .unwrap_or_else(|error| panic!("retire pending Kura lifecycle stores: {error}"));
     let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
     let outcome = cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor);
-    drop(retained_sidecars);
     assert!(outcome.cleanup().warnings().is_empty());
     assert!(outcome.wal_retirement_warning().is_none());
     assert!(!output_guard.restart_required());
@@ -1404,7 +1427,7 @@ fn exercise_pending_kura_production_lifecycle(
 fn settle_terminal_fixture_runner_handoff(
     activated: &mut super::super::v2_lifecycle_coordinator::ActivatedProductionLifecycleV1,
     runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-    lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
+    native: &mut super::super::v2_runner::native_process::NativeRunnerProcess,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
     let permit = activated
@@ -1420,10 +1443,12 @@ fn settle_terminal_fixture_runner_handoff(
                     executor,
                     services,
                     local_proposal,
-                    lane_work,
                     output_guard,
                     &permit,
-                )
+                )?;
+                let (receipt, artifact) = executor.durable_finality().expect("actual published fixture tip");
+                assert!(native.preflight_publication(services, receipt, artifact)?);
+                Ok::<_, super::super::v2_runner::V2RunnerError>(())
             },
         )
         .expect("retire the terminal fixture's exact runner Decision handoff");
@@ -2279,19 +2304,9 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 )
                 .expect("bind recovered-Apply Kura advert source"),
             );
-            let (exact_output_handoff_owner, transport_owner) =
+            let (exact_output_handoff_owner, _transport_owner) =
                 super::super::v2_worker::durable_exact_output_handoff_owner_pair();
-            let mut lane_work =
-                super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(
-                    recovered_context.clone(),
-                    local_peer.clone(),
-                    local_signer.clone(),
-                    Arc::clone(&state),
-                    Arc::clone(&kura),
-                    Arc::clone(&output_guard),
-                    transport_owner,
-                )
-                .expect("open exact lifecycle lane/output owner");
+            let mut native = lifecycle_native_process_fixture(&state, &local_signer, &output_guard);
             let launch_inputs =
                 super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
                     launched_at,
@@ -2366,7 +2381,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             let ((), after_ingress_pass_through) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
-                |runner| match launched.drive_ingress_turn(runner) {
+                |runner| match launched.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         assert_eq!(runner.target(), LifecycleRunnerRankTarget::Ingress);
                         drop(runner);
@@ -2387,7 +2402,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             let ((), after_wrong_class_pass_through) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Runtime,
-                |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
+                |runner| match launched.drive_completion_turn_for_test(runner) {
                     ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                         assert_eq!(runner.target(), LifecycleRunnerRankTarget::Runtime);
                         drop(runner);
@@ -2411,7 +2426,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 with_lifecycle_current_runner_turn_for_test(
                     &foreign_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
+                    |runner| match launched.drive_completion_turn_for_test(runner) {
                         ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
                             assert_eq!(runner.target(), LifecycleRunnerRankTarget::Completion);
                             drop(runner);
@@ -2444,7 +2459,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Completion,
-                |runner| match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
+                |runner| match launched.drive_completion_turn_for_test(runner) {
                     ProductionLifecycleCompletionTurnV1::Selected(
                         ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result),
                     ) => {
@@ -2470,7 +2485,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
                     |runner| {
-                        match launched.drive_completion_turn_for_test(runner, &mut lane_work) {
+                        match launched.drive_completion_turn_for_test(runner) {
                             ProductionLifecycleCompletionTurnV1::Selected(
                                 ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied,
                             ) => true,
@@ -2514,8 +2529,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match activated.drive_completion_turn_for_test(runner, &mut lane_work)
-                    {
+                    |runner| match activated.drive_completion_turn_for_test(runner) {
                         ProductionLifecycleCompletionTurnV1::PassThrough(runner) => drop(runner),
                         ProductionLifecycleCompletionTurnV1::Selected(_) => {
                             panic!("quiescent activated lifecycle Completion must pass through")
@@ -2528,6 +2542,12 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             );
             let mut terminal_serve_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut terminal_serve_runner,
+                &mut native,
+                output_guard.as_ref(),
+            );
             assert!(
                 activated
                     .ready_for_finalized_rollover(&mut terminal_serve_runner)
@@ -2569,7 +2589,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     LifecycleRunnerRankTarget::Ingress,
                     |runner| {
                         matches!(
-                            activated.drive_ingress_turn(runner),
+                            activated.drive_ingress_turn(runner, false),
                             ProductionLifecycleIngressTurnV1::Selected(
                                 super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
                             )
@@ -2635,8 +2655,8 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     super::super::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
                         &leader_wire_ingress,
                         executor,
+                        &mut native,
                         services,
-                        &mut lane_work,
                         kura.as_ref(),
                         &mut terminal_block_sync_server,
                     )
@@ -2772,7 +2792,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Ingress,
-                    |runner| match activated.drive_ingress_turn(runner) {
+                    |runner| match activated.drive_ingress_turn(runner, false) {
                         ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                             drop(runner);
@@ -2820,14 +2840,13 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     .consume_prepared_ordinary_ingress_turn(
                         &mut ordinary_runner,
                         ordinary_turn,
-                        &mut lane_work,
+                        &mut native,
                         kura.as_ref(),
                         &local_signer,
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_beacon,
-                        16,
                     )
                     .expect("consume the exact ordinary runner handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2836,13 +2855,13 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             settle_terminal_fixture_runner_handoff(
                 &mut activated,
                 &mut ordinary_runner,
-                &mut lane_work,
+                &mut native,
                 output_guard.as_ref(),
             );
             let (invalid_turn, after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
-                |runner| match activated.drive_ingress_turn(runner) {
+                |runner| match activated.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
@@ -2865,14 +2884,13 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     .consume_prepared_ordinary_ingress_turn(
                         &mut invalid_runner,
                         invalid_turn,
-                        &mut lane_work,
+                        &mut native,
                         kura.as_ref(),
                         &local_signer,
                         &mut block_sync_server,
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_beacon,
-                        16,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2882,7 +2900,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             settle_terminal_fixture_runner_handoff(
                 &mut activated,
                 &mut invalid_runner,
-                &mut lane_work,
+                &mut native,
                 output_guard.as_ref(),
             );
             let batch_message = orphan_chunk_message();
@@ -2902,7 +2920,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &mut activated,
                 &mut batch_runner,
                 &leader_wire_ingress,
-                &mut lane_work,
+                &mut native,
                 kura.as_ref(),
                 &local_signer,
                 &mut block_sync_server,
@@ -2936,7 +2954,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             settle_terminal_fixture_runner_handoff(
                 &mut activated,
                 &mut batch_runner,
-                &mut lane_work,
+                &mut native,
                 output_guard.as_ref(),
             );
             // The ordinary batch must preserve the terminal fence. Its bounded
@@ -2948,8 +2966,8 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                     super::super::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
                         &leader_wire_ingress,
                         executor,
+                        &mut native,
                         services,
-                        &mut lane_work,
                         kura.as_ref(),
                         &mut block_sync_server,
                         1,
@@ -2999,7 +3017,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             let (rejected_turn, after_rejected_serve) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
-                |runner| match activated.drive_ingress_turn(runner) {
+                |runner| match activated.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
@@ -3035,7 +3053,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| {
-                    match activated.drive_ingress_turn(runner) {
+                    match activated.drive_ingress_turn(runner, false) {
                         ProductionLifecycleIngressTurnV1::Selected(
                             super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
                         ) => true,
@@ -3067,7 +3085,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| {
-                    match activated.drive_ingress_turn(runner) {
+                    match activated.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::Selected(
                         super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,
                     ) => {}
@@ -3128,7 +3146,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| {
-                    match activated.drive_ingress_turn(runner) {
+                    match activated.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::Selected(
                         super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady,
                     ) => {}
@@ -3169,7 +3187,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
                 |runner| {
-                    match activated.drive_ingress_turn(runner) {
+                    match activated.drive_ingress_turn(runner, false) {
                     ProductionLifecycleIngressTurnV1::Selected(
                         super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued,
                     ) => {}
@@ -3197,8 +3215,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 let (completed, _) = with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match activated.drive_completion_turn_for_test(runner, &mut lane_work)
-                    {
+                    |runner| match activated.drive_completion_turn_for_test(runner) {
                         ProductionLifecycleCompletionTurnV1::Selected(
                             ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted,
                         ) => true,
@@ -3227,7 +3244,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Ingress,
-                    |runner| match activated.drive_ingress_turn(runner) {
+                    |runner| match activated.drive_ingress_turn(runner, false) {
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => drop(runner),
                         ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
                             drop(turn);
@@ -3264,30 +3281,21 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             settle_terminal_fixture_runner_handoff(
                 &mut activated,
                 &mut runner,
-                &mut lane_work,
+                &mut native,
                 output_guard.as_ref(),
             );
             let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
-            let ((), retained_sidecars, outcome) =
+            let ((), outcome) =
                 super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(
                     activated,
                     &mut runner,
-                    lane_work,
+                    &mut native,
                     64,
                     &mut cleanup_supervisor,
-                    |receipt, artifact, lane_work| {
+                    |receipt, artifact| {
                         assert_eq!(receipt.context_id(), recovered_context.id());
                         assert_eq!(receipt.block_hash(), subject.block_hash);
                         assert_eq!(artifact.subject, subject);
-                        lane_work
-                            .retain_merge_sidecars_for_global_view(
-                                artifact.commit_qc.round.view,
-                                None,
-                                Some(artifact.subject),
-                            )
-                            .unwrap_or_else(|error| {
-                                panic!("retain exact recovered-Apply Decision carrier: {error}")
-                            });
                         let mut successor = recovered_context.clone();
                         successor.height = successor
                             .height
@@ -3303,7 +3311,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 .unwrap_or_else(|error| {
                     panic!("finalize recovered-Apply lifecycle owner: {error}")
                 });
-            drop(retained_sidecars);
             assert!(outcome.cleanup().warnings().is_empty());
             assert!(outcome.wal_retirement_warning().is_none());
             assert!(!ingress_ready.load(Ordering::Acquire));

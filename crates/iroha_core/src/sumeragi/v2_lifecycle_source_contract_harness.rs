@@ -16,12 +16,12 @@ fn missing_or_moved_post_dispatch_retry_is_rejected() {
     let dispatch = readiness
         + source_token_position(
             &source[readiness..],
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
         );
     let retry = dispatch
         + source_token_position(
             &source[dispatch..],
-            "                let _ = retry_exact_output_and_apply_sidecar_admissions(",
+            "                let _ = services\n                    .retry_pending_exact_output()",
         );
     let ready = retry
         + source_token_position(
@@ -52,12 +52,12 @@ fn post_dispatch_remote_wait_is_rejected() {
     let dispatch = readiness
         + source_token_position(
             &source[readiness..],
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
         );
     let retry = dispatch
         + source_token_position(
             &source[dispatch..],
-            "                let _ = retry_exact_output_and_apply_sidecar_admissions(",
+            "                let _ = services\n                    .retry_pending_exact_output()",
         );
     let mut gated = source.to_owned();
     gated.insert_str(

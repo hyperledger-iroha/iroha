@@ -89,7 +89,6 @@ mod host;
 #[path = "taira_public_reset_validator_config.rs"]
 mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
-pub(crate) use host::{epoch_worker_process_identity, epoch_worker_process_identity_for};
 #[path = "taira_public_reset_deployment_profile.rs"]
 mod deployment_profile;
 #[path = "taira_public_reset_inputs.rs"]
@@ -131,6 +130,10 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
     DispatcherTransition(host::dispatcher_transition::DispatcherTransition),
+    /// Capture the stopped installed runtime into a private typed transition input.
+    CaptureDispatcherCurrentRuntime(
+        host::dispatcher_transition::prepare::capture::CaptureDispatcherCurrentRuntime,
+    ),
     /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
     PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
@@ -153,12 +156,6 @@ enum PublicResetCommand {
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
     Authorize(inputs::Authorize),
-    /// Produce the complete public supervisor plan from typed reset inputs and explicit owner intent.
-    PrepareEpochSupervisorPlan(host::epoch_reset_inputs::PrepareEpochSupervisorPlan),
-    /// Produce a complete public updater generation preparation from explicit typed intent.
-    PrepareEpochUpdate(host::epoch_update_inputs::PrepareEpochUpdate),
-    /// Native single-service generation admission/materialization and read-only observation.
-    EpochSupervisorHost(host::epoch_generation::EpochSupervisorHost),
     /// Verify signed inputs and read-only readiness of all four validators and the edge host.
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
@@ -232,12 +229,6 @@ struct PublicResetApply {
     /// Owner-private signing config for forward work or read-only mutation recovery.
     #[arg(long, value_name = "PATH")]
     runtime_client_config: Option<PathBuf>,
-    /// Separately authorized owner-private maintenance administrator; never the canary config.
-    #[arg(long, value_name = "PATH")]
-    maintenance_admin_config: Option<PathBuf>,
-    /// Four original mint-finality seeds, ordered by the signed sorted validator mapping.
-    #[arg(long, value_name = "PATH", num_args = 4)]
-    epoch_seed_source: Vec<PathBuf>,
     /// Four ordered validator read configs for forward work, Canary or RestartProof recovery;
     /// other recovery steps ignore these paths.
     #[arg(long, value_name = "PATH", num_args = 4)]
@@ -335,17 +326,7 @@ impl PublicResetApply {
             .qualification_scope
             .validate_stage_argument(self.inrou_stage_dir.as_deref())?;
         let inrou_stage_dir = self.inrou_stage_dir.clone();
-        if self.epoch_seed_source.len() != 4 {
-            return Err(eyre!(
-                "forward execution requires four --epoch-seed-source paths"
-            ));
-        }
         Ok(host::RuntimeCanaryInputs {
-            epoch_seed_sources: self.epoch_seed_source.clone(),
-            maintenance_admin_config: self
-                .maintenance_admin_config
-                .clone()
-                .ok_or_else(|| eyre!("forward execution requires --maintenance-admin-config"))?,
             client_config,
             validator_client_configs: self.validator_client_config.clone(),
             validator_operator_key: self
@@ -364,17 +345,10 @@ impl PublicReset {
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
             PublicResetCommand::DispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::CaptureDispatcherCurrentRuntime(args) => {
+                return args.run(&mut output);
+            }
             PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
-            PublicResetCommand::PrepareEpochSupervisorPlan(args) => {
-                host::epoch_reset_inputs::prepare(args)?;
-                return Ok(());
-            }
-            PublicResetCommand::PrepareEpochUpdate(args) => {
-                return args.run(&mut output);
-            }
-            PublicResetCommand::EpochSupervisorHost(args) => {
-                return args.run(&mut output);
-            }
             PublicResetCommand::SourceManifest(args) => {
                 source::export_manifest(&args.source_root, &mut output)?;
                 return Ok(());
@@ -762,7 +736,6 @@ impl QualificationScopeV1 {
                 "beacon_provider_2",
                 "beacon_provider_3",
                 "beacon_provider_4",
-                "epoch_supervisor_start",
             ],
             Self::FullInrou => &[
                 "onboarding",
@@ -773,7 +746,6 @@ impl QualificationScopeV1 {
                 "beacon_provider_2",
                 "beacon_provider_3",
                 "beacon_provider_4",
-                "epoch_supervisor_start",
                 "inrou_bundle_pin",
                 "inrou_guest_pin",
                 "inrou_discovery_pin",
@@ -833,9 +805,6 @@ struct InventoryV1 {
     /// Exact fresh ceremony and final provider units authorized before execution.
     beacon_bootstrap: host::beacon::BeaconBootstrapPlanV1,
     /// One separately authorized ongoing maintenance service; no default or optional shape.
-    epoch_supervisor: host::epoch_supervisor::EpochSupervisorPlanV1,
-    maintenance_admin_config_sha256: String,
-    maintenance_admin_identity: MaintenanceAdminIdentityV1,
     cleanup: CleanupV1,
     timeouts: TimeoutsV1,
     artifact_closure_sha256: String,
@@ -877,55 +846,6 @@ impl InventoryV1 {
             .as_ref()
             .ok_or_else(|| eyre!("full_inrou canary closure is absent"))
     }
-}
-
-/// Public identity derived through native held-config custody and authenticated genesis.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct MaintenanceAdminIdentityV1 {
-    account_id: String,
-    public_key: String,
-    network_id: String,
-    genesis_hash: String,
-    chain_discriminant: u16,
-    torii_origin: String,
-}
-
-fn validate_maintenance_admin_identity(inventory: &InventoryV1) -> Result<()> {
-    let _chain_guard = enter_inventory_chain_discriminant(inventory)?;
-    let identity = &inventory.maintenance_admin_identity;
-    let account = AccountId::parse_encoded(&identity.account_id)?;
-    let key: PublicKey = identity.public_key.parse()?;
-    let network: iroha_data_model::NetworkId = identity.network_id.parse()?;
-    if account.to_string() != identity.account_id
-        || key.to_string() != identity.public_key
-        || key.try_algorithm()? != Algorithm::Ed25519
-        || account != AccountId::new(key.clone())
-        || network.to_string() != identity.network_id
-        || Hash::from(network.into_genesis_hash()).to_string() != inventory.next_genesis_hash
-        || identity.genesis_hash != inventory.next_genesis_hash
-        || identity.chain_discriminant != inventory.chain_discriminant
-        || !inventory.validator_clients.iter().any(|client| {
-            identity.torii_origin == client.torii_origin
-                || identity.torii_origin == client.probe_origin
-        })
-        || identity.account_id == inventory.canary_onboarding_request.account_id
-        || identity.public_key == inventory.operator_public_key
-        || inventory
-            .validator_clients
-            .iter()
-            .any(|client| client.account_id == identity.account_id)
-        || inventory.maintenance_admin_config_sha256 == inventory.runtime_client_config_sha256
-    {
-        return Err(eyre!(
-            "maintenance administrator must be a separate exact native account/config bound to this genesis and an admitted origin"
-        ));
-    }
-    validate_lower_hex(
-        "maintenance administrator config SHA-256",
-        &inventory.maintenance_admin_config_sha256,
-        64,
-    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -1262,8 +1182,6 @@ struct CleanupV1 {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct TimeoutsV1 {
-    epoch_supervisor_pause_secs: u64,
-    epoch_supervisor_start_secs: u64,
     stop_secs: u64,
     install_secs: u64,
     reset_secs: u64,
@@ -1290,10 +1208,6 @@ struct AuthorizationEnvelopeV1 {
 struct AuthorizationClaimsV1 {
     action: String,
     /// Separately signed ongoing intent; independent of the finite reset execution lease.
-    epoch_supervisor_authorization: String,
-    epoch_supervisor_policy_sha256: String,
-    maintenance_admin_config_sha256: String,
-    maintenance_admin_identity: MaintenanceAdminIdentityV1,
     qualification_scope: QualificationScopeV1,
     deployment_id: String,
     inventory_sha256: String,
@@ -1662,10 +1576,6 @@ fn verify_authorization_window(
     if claims.action != "reset_and_deploy"
         || claims.qualification_scope != inventory.qualification_scope
         || claims.deployment_id != inventory.deployment_id
-        || claims.epoch_supervisor_authorization != "until_stopped"
-        || claims.epoch_supervisor_policy_sha256 != inventory.epoch_supervisor.policy_sha256
-        || claims.maintenance_admin_config_sha256 != inventory.maintenance_admin_config_sha256
-        || claims.maintenance_admin_identity != inventory.maintenance_admin_identity
         || claims.inventory_sha256 != inventory_sha256
         || claims.artifact_closure_sha256 != inventory.artifact_closure_sha256
         || claims.runtime_client_config_sha256 != inventory.runtime_client_config_sha256
@@ -1794,8 +1704,6 @@ where
     let seconds = timeouts
         .install_secs
         .checked_mul(install_action_count)
-        .and_then(|value| value.checked_add(timeouts.epoch_supervisor_pause_secs))
-        .and_then(|value| value.checked_add(timeouts.epoch_supervisor_start_secs))
         .and_then(|value| value.checked_add(timeouts.stop_secs.checked_mul(4)?))
         // State reset is an atomic rename. Offline ingest and the carrier's
         // before-start verification each traverse every store on that host.
@@ -1818,7 +1726,7 @@ where
         .and_then(|value| value.checked_add(timeouts.canary_secs.checked_mul(37)?))
         .and_then(|value| value.checked_add(timeouts.restart_secs.checked_mul(4)?))
         .and_then(|value| value.checked_add(timeouts.cleanup_secs.checked_mul(5)?))
-        .and_then(|value| value.checked_add(timeouts.rollback_secs.checked_mul(7)?))
+        .and_then(|value| value.checked_add(timeouts.rollback_secs.checked_mul(5)?))
         .ok_or_else(|| eyre!("bounded execution timeout sum overflow"))?;
     let lifetime_ms = seconds
         .checked_mul(1_000)
@@ -1894,7 +1802,6 @@ fn validate_inventory_with_revision(
     }
     inventory.validate_inrou_scope()?;
     host::beacon::validate_plan(inventory)?;
-    validate_maintenance_admin_identity(inventory)?;
     for (label, value) in [
         (
             "previous genesis hash",
@@ -2025,7 +1932,6 @@ fn validate_inventory_with_revision(
         ));
     }
     // Admit the complete host topology before checking its supervisor policy.
-    host::epoch_supervisor::validate_plan(inventory)?;
     validate_lower_hex(
         "artifact closure SHA-256",
         &inventory.artifact_closure_sha256,
@@ -3365,14 +3271,6 @@ fn validate_timeout_policy(inventory: &InventoryV1) -> Result<()> {
 
 fn validate_timeouts(timeouts: &TimeoutsV1) -> Result<()> {
     for (name, value) in [
-        (
-            "epoch supervisor pause",
-            timeouts.epoch_supervisor_pause_secs,
-        ),
-        (
-            "epoch supervisor start",
-            timeouts.epoch_supervisor_start_secs,
-        ),
         ("stop", timeouts.stop_secs),
         ("install", timeouts.install_secs),
         ("reset", timeouts.reset_secs),
@@ -5181,7 +5079,6 @@ mod executor_model {
     pub(super) enum ExecutionStep {
         Preflight,
         Stage,
-        EpochSupervisorPause,
         Stop,
         Install,
         Reset,
@@ -5197,10 +5094,9 @@ mod executor_model {
         Cleanup,
     }
 
-    const FULL_INROU_EXECUTION_STEPS: [ExecutionStep; 16] = [
+    const FULL_INROU_EXECUTION_STEPS: [ExecutionStep; 15] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
-        ExecutionStep::EpochSupervisorPause,
         ExecutionStep::Stop,
         ExecutionStep::Install,
         ExecutionStep::Reset,
@@ -5216,10 +5112,9 @@ mod executor_model {
         ExecutionStep::Cleanup,
     ];
 
-    const CORE_TESTNET_EXECUTION_STEPS: [ExecutionStep; 15] = [
+    const CORE_TESTNET_EXECUTION_STEPS: [ExecutionStep; 14] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
-        ExecutionStep::EpochSupervisorPause,
         ExecutionStep::Stop,
         ExecutionStep::Install,
         ExecutionStep::Reset,
@@ -5246,7 +5141,6 @@ mod executor_model {
             match self {
                 Self::Preflight => "preflight",
                 Self::Stage => "stage",
-                Self::EpochSupervisorPause => "epoch_supervisor_pause",
                 Self::Stop => "stop",
                 Self::Install => "install",
                 Self::Reset => "reset",
@@ -5267,7 +5161,6 @@ mod executor_model {
             match self {
                 Self::Preflight => timeouts.install_secs,
                 Self::Stage => timeouts.install_secs,
-                Self::EpochSupervisorPause => timeouts.epoch_supervisor_pause_secs,
                 Self::Stop => timeouts.stop_secs,
                 Self::Install => timeouts.install_secs,
                 Self::Reset => timeouts.reset_secs,
@@ -5307,10 +5200,7 @@ mod executor_model {
         }
 
         pub(super) const fn supports_recovery(self) -> bool {
-            matches!(
-                self,
-                Self::EpochSupervisorPause | Self::Canary | Self::RestartProof | Self::EdgeVerify
-            )
+            matches!(self, Self::Canary | Self::RestartProof | Self::EdgeVerify)
         }
     }
 
@@ -5386,24 +5276,6 @@ mod executor_model {
             timeout_secs: u64,
         ) -> Result<()>;
         fn rollback_edge(&mut self, inventory: &InventoryV1, timeout_secs: u64) -> Result<()>;
-        /// Quiesce the candidate once, retaining original supervisor intent before any rollback.
-        fn rollback_epoch_supervisor_pause(
-            &mut self,
-            _inventory: &InventoryV1,
-            _timeout_secs: u64,
-        ) -> Result<()> {
-            Err(eyre!("transport has no admitted supervisor rollback pause"))
-        }
-        /// Restore original running/stopped/absent intent only after predecessor qualification.
-        fn rollback_epoch_supervisor_restore(
-            &mut self,
-            _inventory: &InventoryV1,
-            _timeout_secs: u64,
-        ) -> Result<()> {
-            Err(eyre!(
-                "transport has no admitted supervisor rollback restoration"
-            ))
-        }
     }
 
     pub(super) fn execute_plan<T: ResetTransport, J: JournalStore>(
@@ -5946,7 +5818,6 @@ mod executor_model {
         journal: &mut J,
     ) -> Result<()> {
         let timeout = inventory.timeouts.rollback_secs;
-        transport.rollback_epoch_supervisor_pause(inventory, timeout)?;
         if journal.state().edge_touched && !journal.state().edge_rollback_complete {
             if let Err(error) = transport.rollback_edge(inventory, timeout) {
                 record_rollback_failure(journal, "edge", &error)?;
@@ -5976,7 +5847,6 @@ mod executor_model {
             state.rollback_next_validator += 1;
             journal.replace(state)?;
         }
-        transport.rollback_epoch_supervisor_restore(inventory, timeout)?;
         journal.finish_rollback(journal.state().clone())
     }
 
@@ -6020,8 +5890,6 @@ mod executor_model {
                 known_hosts: unavailable.join("known-hosts"),
                 validator_operator_key: Some(unavailable.join("operator.key")),
                 runtime_client_config: Some(unavailable.join("runtime.toml")),
-                maintenance_admin_config: Some(unavailable.join("maintenance.toml")),
-                epoch_seed_source: Vec::new(),
                 validator_client_config: validator_configs.clone(),
                 onboarding_token: Some(unavailable.join("onboarding-token")),
                 inrou_stage_dir: Some(unavailable.join("inrou-stage")),
@@ -6294,20 +6162,6 @@ mod executor_model {
                 _timeout_secs: u64,
             ) -> Result<()> {
                 self.record("rollback:edge".to_owned())
-            }
-            fn rollback_epoch_supervisor_pause(
-                &mut self,
-                _inventory: &InventoryV1,
-                _timeout_secs: u64,
-            ) -> Result<()> {
-                Ok(())
-            }
-            fn rollback_epoch_supervisor_restore(
-                &mut self,
-                _inventory: &InventoryV1,
-                _timeout_secs: u64,
-            ) -> Result<()> {
-                Ok(())
             }
         }
 
@@ -7547,8 +7401,6 @@ mod executor_model {
             let base = execution_lifetime_ms(&inventory).expect("base lifetime");
             let timeouts = &inventory.timeouts;
             let action_seconds = 46 * timeouts.install_secs
-                + timeouts.epoch_supervisor_pause_secs
-                + timeouts.epoch_supervisor_start_secs
                 + 4 * timeouts.stop_secs
                 + 4 * timeouts.reset_secs
                 + 2 * timeouts.preseed_secs
@@ -7558,7 +7410,7 @@ mod executor_model {
                 + 37 * timeouts.canary_secs
                 + 4 * timeouts.restart_secs
                 + 5 * timeouts.cleanup_secs
-                + 7 * timeouts.rollback_secs;
+                + 5 * timeouts.rollback_secs;
             assert_eq!(
                 base,
                 action_seconds * 1_000 + MAX_AUTHORIZATION_LIFETIME_MS + EXECUTION_SAFETY_MARGIN_MS
@@ -7576,8 +7428,6 @@ mod executor_model {
                 }};
             }
             assert_delta!(install_secs, 46);
-            assert_delta!(epoch_supervisor_pause_secs, 1);
-            assert_delta!(epoch_supervisor_start_secs, 1);
             assert_delta!(stop_secs, 4);
             assert_delta!(reset_secs, 4);
             assert_delta!(preseed_secs, 2);
@@ -7587,13 +7437,11 @@ mod executor_model {
             assert_delta!(canary_secs, 37);
             assert_delta!(restart_secs, 4);
             assert_delta!(cleanup_secs, 5);
-            assert_delta!(rollback_secs, 7);
+            assert_delta!(rollback_secs, 5);
             let additional_host_seconds = timeouts.install_secs + 2 * timeouts.preseed_secs;
 
             let mut boundary = inventory.clone();
             boundary.timeouts = TimeoutsV1 {
-                epoch_supervisor_pause_secs: 1,
-                epoch_supervisor_start_secs: 1,
                 stop_secs: 1,
                 install_secs: 600,
                 reset_secs: 1,
@@ -7608,7 +7456,7 @@ mod executor_model {
             };
             assert_eq!(
                 execution_lifetime_ms(&boundary).expect("last bounded lifetime"),
-                43_187_000
+                43_183_000
             );
             boundary.timeouts.canary_secs = 194;
             let _ = execution_lifetime_ms(&boundary)
@@ -7950,8 +7798,14 @@ mod executor_model {
         #[test]
         fn crash_recovery_resumes_at_recorded_step() {
             let (inventory, mut journal) = journal(sample_inventory());
-            journal.state.next_step = 4;
-            journal.state.phase = "install".to_owned();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|step| *step == ExecutionStep::Install)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.phase = ExecutionStep::Install.label().to_owned();
             journal.state.touched_validators = VALIDATOR_SLUGS
                 .iter()
                 .map(|slug| (*slug).to_owned())
@@ -7985,8 +7839,14 @@ mod executor_model {
         #[test]
         fn missing_forward_inputs_use_rollback_only_path_for_recorded_hosts() {
             let (inventory, mut journal) = journal(sample_inventory());
-            journal.state.next_step = 4;
-            journal.state.phase = "install".to_owned();
+            journal.state.next_step = u16::try_from(
+                execution_steps(inventory.qualification_scope)
+                    .iter()
+                    .position(|step| *step == ExecutionStep::Install)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.phase = ExecutionStep::Install.label().to_owned();
             journal.state.touched_validators = VALIDATOR_SLUGS[..2]
                 .iter()
                 .map(|slug| (*slug).to_owned())
@@ -8894,7 +8754,7 @@ mod executor_model {
 
             let mut jumped = initial.clone();
             jumped.next_step = 2;
-            jumped.phase = "epoch_supervisor_pause".to_owned();
+            jumped.phase = "stop".to_owned();
             validate_resumable_journal(&jumped, &initial).expect("state is independently valid");
             assert!(
                 !valid_journal_successor(&initial, &jumped),
@@ -8905,10 +8765,6 @@ mod executor_model {
         fn sample_claims(inventory: &InventoryV1, inventory_sha256: &str) -> AuthorizationClaimsV1 {
             AuthorizationClaimsV1 {
                 action: "reset_and_deploy".to_owned(),
-                epoch_supervisor_authorization: "until_stopped".to_owned(),
-                epoch_supervisor_policy_sha256: inventory.epoch_supervisor.policy_sha256.clone(),
-                maintenance_admin_config_sha256: inventory.maintenance_admin_config_sha256.clone(),
-                maintenance_admin_identity: inventory.maintenance_admin_identity.clone(),
                 qualification_scope: inventory.qualification_scope,
                 deployment_id: inventory.deployment_id.clone(),
                 inventory_sha256: inventory_sha256.to_owned(),
@@ -9646,92 +9502,99 @@ mod executor_model {
         }
 
         #[test]
-        fn epoch_supervisor_pause_and_start_are_explicit_ordered_barriers() {
+        fn reset_execution_preserves_beacon_and_service_order_without_epoch_writer() {
             for scope in [
                 QualificationScopeV1::CoreTestnet,
                 QualificationScopeV1::FullInrou,
             ] {
                 let steps = execution_steps(scope);
-                let pause = steps
-                    .iter()
-                    .position(|step| *step == ExecutionStep::EpochSupervisorPause)
-                    .unwrap();
-                let stop = steps
-                    .iter()
-                    .position(|step| *step == ExecutionStep::Stop)
-                    .unwrap();
-                assert_eq!(pause + 1, stop);
-                assert!(ExecutionStep::EpochSupervisorPause.supports_recovery());
-                assert!(!ExecutionStep::EpochSupervisorPause.is_validator_step());
+                assert_eq!(
+                    &steps[..3],
+                    &[
+                        ExecutionStep::Preflight,
+                        ExecutionStep::Stage,
+                        ExecutionStep::Stop
+                    ]
+                );
+                assert!(ExecutionStep::Canary.supports_recovery());
                 let kinds = scope.canary_kinds();
                 assert_eq!(
-                    &kinds[4..8],
+                    &kinds[..8],
                     &[
+                        "onboarding",
+                        "faucet",
+                        "write_canary",
+                        "beacon_install",
                         "beacon_provider_1",
                         "beacon_provider_2",
                         "beacon_provider_3",
                         "beacon_provider_4"
                     ]
                 );
-                assert_eq!(kinds[8], "epoch_supervisor_start");
-                assert_eq!(
-                    kinds
-                        .iter()
-                        .filter(|kind| **kind == "epoch_supervisor_start")
-                        .count(),
-                    1
-                );
-                assert_eq!(kinds.len(), if scope.includes_inrou() { 13 } else { 9 });
+                assert_eq!(kinds.len(), if scope.includes_inrou() { 12 } else { 8 });
+                assert!(!kinds.iter().any(|kind| kind.contains("epoch_supervisor")));
             }
         }
 
         #[test]
-        fn epoch_supervisor_pause_failure_prevents_validator_stop() {
-            let (inventory, mut journal) = journal(sample_inventory());
-            let mut transport = MockTransport {
-                fail: Some("epoch_supervisor_pause".to_owned()),
-                ..MockTransport::default()
-            };
-            let error = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("pause is mandatory");
-            assert!(
-                format!("{error:#}").contains("injected failure at epoch_supervisor_pause"),
-                "{error:#}"
-            );
-            assert!(
-                !transport
-                    .events
-                    .iter()
-                    .any(|event| event.starts_with("stop:"))
-            );
+        fn retired_epoch_supervisor_commands_and_inputs_are_rejected() {
+            let command = <PublicReset as clap::Args>::augment_args(clap::Command::new("reset"));
+            for retired in [
+                "prepare-epoch-supervisor-plan",
+                "prepare-epoch-update",
+                "epoch-supervisor-host",
+            ] {
+                let error = command
+                    .clone()
+                    .try_get_matches_from(["reset", retired])
+                    .unwrap_err();
+                assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+            }
+            for selected in ["assemble", "authorize", "apply"] {
+                let subcommand = command.find_subcommand(selected).unwrap();
+                for retired in [
+                    "maintenance-admin-config",
+                    "epoch-seed-source",
+                    "epoch-seed-sources",
+                    "epoch-supervisor-plan",
+                ] {
+                    assert!(
+                        !subcommand
+                            .get_arguments()
+                            .any(|arg| arg.get_long() == Some(retired)),
+                        "{selected}: {retired}"
+                    );
+                }
+            }
         }
 
         #[test]
-        fn maintenance_admin_admission_rejects_canary_operator_and_network_substitution() {
-            let inventory = sample_inventory();
-            validate_maintenance_admin_identity(&inventory).expect("separate administrator");
-            let mut wrong = inventory.clone();
-            wrong.maintenance_admin_config_sha256 = wrong.runtime_client_config_sha256.clone();
-            assert!(validate_maintenance_admin_identity(&wrong).is_err());
-            let mut wrong = inventory.clone();
-            wrong.maintenance_admin_identity.account_id =
-                wrong.canary_onboarding_request.account_id.clone();
-            assert!(validate_maintenance_admin_identity(&wrong).is_err());
-            let mut wrong = inventory.clone();
-            wrong.maintenance_admin_identity.public_key = wrong.operator_public_key.clone();
-            assert!(validate_maintenance_admin_identity(&wrong).is_err());
-            let mut wrong = inventory;
-            wrong.maintenance_admin_identity.genesis_hash = wrong.previous_genesis_hash.clone();
-            assert!(validate_maintenance_admin_identity(&wrong).is_err());
-        }
-
-        #[test]
-        fn old_inventory_shape_and_seven_artifact_closure_are_rejected() {
+        fn retired_inventory_fields_and_seven_artifact_closure_are_rejected() {
             let inventory = sample_inventory();
             validate_inventory_structure(&inventory).expect("complete current role fixture");
-            let mut value = json::to_value(&inventory).unwrap();
-            value.as_object_mut().unwrap().remove("epoch_supervisor");
-            assert!(json::from_value::<InventoryV1>(value).is_err());
+            let canonical = json::to_value(&inventory).unwrap();
+            for field in [
+                "epoch_supervisor",
+                "maintenance_admin_identity",
+                "maintenance_admin_config_sha256",
+            ] {
+                assert!(canonical.get(field).is_none());
+                let mut value = canonical.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), json::Value::Null);
+                assert!(json::from_value::<InventoryV1>(value).is_err(), "{field}");
+            }
+            let canonical_timeouts = json::to_value(&inventory.timeouts).unwrap();
+            for field in ["epoch_supervisor_pause_secs", "epoch_supervisor_start_secs"] {
+                let mut value = canonical_timeouts.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), json::Value::from(60_u64));
+                assert!(json::from_value::<TimeoutsV1>(value).is_err(), "{field}");
+            }
             let mut wrong = inventory;
             for validator in &mut wrong.validators {
                 validator.artifacts.retain(|entry| entry.role != "kagami");
@@ -9879,22 +9742,6 @@ mod executor_model {
                     peer_id: client.peer_id.clone(),
                 })
                 .collect();
-            let admin_key = iroha_crypto::KeyPair::from_seed(
-                b"fixture separate maintenance owner".to_vec(),
-                Algorithm::Ed25519,
-            );
-            let next_genesis_hash = Hash::new(b"fixture next Taira genesis");
-            let maintenance_admin_identity = MaintenanceAdminIdentityV1 {
-                account_id: AccountId::new(admin_key.public_key().clone()).to_string(),
-                public_key: admin_key.public_key().to_string(),
-                network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                    iroha_crypto::HashOf::from_untyped_unchecked(next_genesis_hash),
-                )
-                .to_string(),
-                genesis_hash: next_genesis_hash.to_string(),
-                chain_discriminant: CHAIN_DISCRIMINANT,
-                torii_origin: validator_clients[0].probe_origin.clone(),
-            };
             let edge_root = "/srv/taira/edge";
             let mut inventory = InventoryV1 {
                 schema: INVENTORY_SCHEMA_V1.to_owned(),
@@ -9907,14 +9754,6 @@ mod executor_model {
                 authorization_nonce: "abcdefghijklmnopqrstuvwx12345678".to_owned(),
                 revision: revision.clone(),
                 beacon_bootstrap: host::beacon::fixture_plan(&validators, &validator_clients),
-                epoch_supervisor: host::epoch_supervisor::fixture_plan(
-                    &validators,
-                    &validator_clients,
-                    &revision,
-                    &maintenance_admin_identity,
-                ),
-                maintenance_admin_config_sha256: "5".repeat(64),
-                maintenance_admin_identity,
                 validators,
                 validator_clients,
                 operator_public_key: iroha_crypto::KeyPair::from_seed(
@@ -10018,8 +9857,6 @@ mod executor_model {
                     preserve_rollback_release: true,
                 },
                 timeouts: TimeoutsV1 {
-                    epoch_supervisor_pause_secs: 30,
-                    epoch_supervisor_start_secs: 60,
                     stop_secs: 30,
                     install_secs: 60,
                     reset_secs: 60,

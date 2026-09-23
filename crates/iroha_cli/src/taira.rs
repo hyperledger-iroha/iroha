@@ -166,9 +166,6 @@ pub enum Command {
     /// Plan, apply, resume, or inspect an exact dataspace and namespace deployment.
     #[command(subcommand)]
     DataspaceDeploy(crate::taira_dataspace_deploy::Command),
-    /// Maintain the independently provisioned public mint-finality roster for each epoch.
-    #[command(subcommand)]
-    EpochMaintenance(crate::taira_dataspace_deploy::epoch_maintenance::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
@@ -191,7 +188,6 @@ impl Run for Command {
         match self {
             Self::Account(cmd) => cmd.run(context),
             Self::DataspaceDeploy(cmd) => cmd.run(context),
-            Self::EpochMaintenance(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
@@ -8000,6 +7996,15 @@ mod tests {
     }
 
     #[test]
+    fn retired_epoch_maintenance_commands_are_rejected() {
+        for retired in ["epoch-maintenance", "epoch-supervisor"] {
+            let error = TestTairaCli::try_parse_from(["taira-test", retired])
+                .expect_err("retired authority writers must not remain CLI commands");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
     fn write_canary_parser_accepts_only_one_exact_child_action() {
         let nonce = "n".repeat(32);
         let phase = "pre_edge";
@@ -9834,7 +9839,10 @@ mod tests {
         for end in 0..raw.len() {
             let request = read_mock_request(&mut std::io::Cursor::new(&raw[..end]))
                 .expect("read truncated fixture");
-            assert!(request.is_none(), "accepted truncated request at byte {end}");
+            assert!(
+                request.is_none(),
+                "accepted truncated request at byte {end}"
+            );
         }
         let request = read_mock_request(&mut std::io::Cursor::new(raw))
             .expect("read complete fixture")
@@ -9905,7 +9913,9 @@ mod tests {
             .write_all(b"GET /retry HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .expect("send complete retry");
         let mut response = String::new();
-        retry.read_to_string(&mut response).expect("read retry response");
+        retry
+            .read_to_string(&mut response)
+            .expect("read retry response");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(response.ends_with("\r\n\r\nok"));
         let requests = finish_mock(server);
@@ -12437,8 +12447,18 @@ mod tests {
             ("unknown field", 200, Some(extended), false),
             ("unsupported schema", 200, Some(unsupported_schema), false),
             ("zero issuance", 200, Some(zero_amount), false),
-            ("disabled body with success status", 200, Some(disabled), false),
-            ("enabled body with unavailable status", 503, Some(policy), false),
+            (
+                "disabled body with success status",
+                200,
+                Some(disabled),
+                false,
+            ),
+            (
+                "enabled body with unavailable status",
+                503,
+                Some(policy),
+                false,
+            ),
         ];
         for scope in [DoctorScope::Basic, DoctorScope::Full] {
             for (label, status, body, accepted) in &cases {
@@ -12490,14 +12510,24 @@ mod tests {
                     .iter()
                     .find(|check| check["name"].as_str() == Some("account_faucet_policy"))
                     .expect("faucet policy check");
-                let observed_status = if status == 200 && !*accepted { 0 } else { status };
-                assert_eq!(check["http_status"].as_u64(), Some(u64::from(observed_status)));
+                let observed_status = if status == 200 && !*accepted {
+                    0
+                } else {
+                    status
+                };
+                assert_eq!(
+                    check["http_status"].as_u64(),
+                    Some(u64::from(observed_status))
+                );
                 assert_eq!(check["ok"].as_bool(), Some(*accepted));
                 assert_eq!(
                     report["failures"].as_array().unwrap().len(),
                     usize::from(!*accepted)
                 );
-                assert!(report["warnings"].as_array().unwrap().is_empty(), "{scope:?}: {label}");
+                assert!(
+                    report["warnings"].as_array().unwrap().is_empty(),
+                    "{scope:?}: {label}"
+                );
             }
             let expected = doctor_expected_checks(scope);
             let (_, status, detail) = expected

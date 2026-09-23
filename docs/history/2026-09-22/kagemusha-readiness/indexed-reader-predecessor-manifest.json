@@ -1,0 +1,14 @@
+{
+  "description": "Exact readiness sections, status row and archive introduction preceding the bounded indexed-reader scoped evidence update. Historical prose, not a signed release or runtime receipt.",
+  "original_files": {
+    "specs/kagemusha_v1_production_readiness.md": "150076920f5f359760f350db3cebd0f4b00f7ecaf59f02aa4cd25bb7eb1918ad",
+    "status.md": "021fa590bd76ad6b982a7e6544fd927f94cfd5b8d32a6eded209e62b4f2584ba",
+    "docs/history/2026-09-22/kagemusha-readiness/README.md": "28953767f715c5d459c98b3bba3a780b1f2b619f992d074ffd4a8702dd962d7b"
+  },
+  "sections": {
+    "indexed-reader-predecessor-active.md": "2a6c4676c8f9797f984de9c342ec774e1f09c1f657f3ee5d2c64314daa7fd664",
+    "indexed-reader-predecessor-validation.md": "db2d0dcd61451802093ace1709386f5946fbe3b09180e53c6db630662eec47d7",
+    "indexed-reader-predecessor-status-row.md": "4debc3d9aaf99ccf5caa90b2488c44e443ddcf63eab35f9d4223a4ea672763ef",
+    "indexed-reader-predecessor-readme.md": "28953767f715c5d459c98b3bba3a780b1f2b619f992d074ffd4a8702dd962d7b"
+  }
+}

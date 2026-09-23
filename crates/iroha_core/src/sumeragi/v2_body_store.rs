@@ -167,8 +167,9 @@ impl V2BodyStoreCapacity {
         })
     }
 
+    /// Construct actual bounded fixture geometry using the production checks.
     #[cfg(test)]
-    fn for_test(
+    pub(crate) fn for_test(
         max_body_entries: usize,
         max_body_frame_bytes: u64,
     ) -> Result<Self, V2BodyStoreError> {
@@ -1184,10 +1185,24 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             return None;
         }
         let validated = self.selected_validated.get(&key)?.clone();
+        // This successful terminal leaves the vote-authorizing catalog, but
+        // its exact decided body remains needed for a later recovered Apply.
+        // Bind an Apply-only readback seal before consuming the marker.
+        if self.store.recovered_terminal_apply_receipt.is_some()
+            || self.store.entries.get(&key) != Some(validated.durable())
+            || self
+                .store
+                .load_validation_envelope(validated.durable(), validated.durable().manifest_hash())
+                .is_err()
+        {
+            return None;
+        }
         let authority =
             AuthenticatedRecoveredReleasedValidateNoSuccessorV1::from_consumed_body_store_success(
-                claim, validated,
+                claim,
+                validated.clone(),
             )?;
+        self.store.recovered_terminal_apply_receipt = Some(validated);
         self.selected_validated.remove(&key);
         self.publish_retained_terminal();
         self.restore_unselected();
@@ -1327,6 +1342,18 @@ pub(crate) enum LocalValidationRefusal {
         /// Release observed while holding the original Queue ownership cut.
         wait: concread::release::ReleaseWait,
         /// Original runner wake destination, also used for worker capacity.
+        wake: std::task::Waker,
+    },
+    /// The original candidate awaits its authenticated first-admission body.
+    #[error(
+        "proposal validation awaits Native first-admission source at execution {execution_index}"
+    )]
+    NativeSourceRecovery {
+        /// Original applying-carrier execution index.
+        execution_index: usize,
+        /// Exact authenticated historical source, shared without replacing its owner.
+        authenticated_source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        /// Original service wake destination after authenticated source completion.
         wake: std::task::Waker,
     },
     /// Local evidence or configuration requires repair followed by Strict restart.
@@ -2412,6 +2439,10 @@ pub(crate) struct V2BodyStore {
         (wire::ConsensusRound, wire::BlockSubject),
         Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
     >,
+    /// Exact decided receipt released by a cold terminal Validate. This is
+    /// worker Apply authority only; it never enters the vote-authorizing
+    /// validated catalog or the runtime recovery catalog.
+    recovered_terminal_apply_receipt: Option<ValidatedBodyReceipt>,
 }
 /// Move-only same-store input accepted by unified production lifecycle startup.
 ///
@@ -2449,19 +2480,20 @@ impl QuarantinedV2BodyStore {
     /// store before semantic replay is sealed.
     pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(
         mut self,
-        apply_service: &V2ApplyService,
-        context: &wire::HeightContext,
+        apply_service: V2ApplyService,
+        context: super::v2::VerifiedHeightContext,
         validation_authority: RecoveredValidationAuthority,
-    ) -> Result<RevalidatedV2BodyStore, V2ApplyError> {
-        if let Some(subject) = apply_service.recovered_finality_subject(context)? {
+    ) -> Result<(RevalidatedV2BodyStore, super::v2_apply::NativeApplyService), V2ApplyError> {
+        if let Some(subject) = apply_service.recovered_finality_subject(context.context())? {
             self.0.retain_recovered_markers_for_subject(subject)?;
         }
         self.0
             .retain_recovered_markers_for_authority(validation_authority)?;
-        self.0.revalidate_recovered_markers(|body| {
-            apply_service.revalidate_recovered_candidate(context, body)
-        })?;
-        self.0.into_revalidated_startup().map_err(Into::into)
+        let mut service =
+            super::v2_apply::NativeApplyService::new(apply_service, &self.0, context)?;
+        service.revalidate_recovered_markers(&mut self.0)?;
+        let store = self.0.into_revalidated_startup()?;
+        Ok((store, service))
     }
 }
 impl RevalidatedV2BodyStore {
@@ -2848,6 +2880,7 @@ impl V2BodyStore {
             || !self.rejected.is_empty()
             || !self.retired_revalidation.is_empty()
             || !self.retired_terminal_frontier.is_empty()
+            || self.recovered_terminal_apply_receipt.is_some()
         {
             return Err(V2BodyStoreError::RecoveredMarkersAlreadyPromoted);
         }
@@ -3127,6 +3160,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         };
         let mut body_frame_bytes = 0_u64;
         let mut body_leaves = Vec::new();
@@ -3325,6 +3359,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         })
     }
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
@@ -3361,6 +3396,7 @@ impl V2BodyStore {
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
             recovered_terminal_results: BTreeMap::new(),
+            recovered_terminal_apply_receipt: None,
         })
     }
     /// Recover the durable receipt indexed by an exact round and subject.
@@ -3436,6 +3472,7 @@ impl V2BodyStore {
     /// because validation consumes the signed body and immutable height
     /// context, not the manifest round; every round-local marker remains
     /// checked against that result.
+    #[cfg(test)]
     pub(crate) fn revalidate_recovered_markers<F, E>(
         &mut self,
         mut validator: F,
@@ -3934,7 +3971,7 @@ impl V2BodyStore {
     /// and decoded. A success or deterministic rejection result is minted only
     /// after its closed outcome marker has crossed the file-and-directory
     /// durability boundary. Missing-sidecar deferrals are never persisted.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn execute_durable_validation<F, E>(
         &mut self,
         durable: DurableBodyReceipt,

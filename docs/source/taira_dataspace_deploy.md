@@ -10,31 +10,14 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
-## Validator epoch maintenance
+## Validator epoch authorization
 
-The network operator must provision and commit the next mint-finality roster
-before each NPoS boundary. The native `iroha taira epoch-maintenance` workflow
-uses independently selected public genesis/peer trust and a bounded public
-schedule produced by `kagami kagemusha derive-mint-finality-epoch-schedule-v1`.
-Run its `maintain` command alongside application traffic with a separate ledger
-owner holding `CanSetParameters`; an HTTP operator credential alone cannot
-submit the maintenance transaction. The DPN deployment receives no validator
-seed material and does not manage validator epochs.
-
-For boundary height B, the next roster must have executed by B−1. Queued
-maintenance needs three canonical carrier heights, so preparation rejects a
-parent later than B−4. These carriers contain actual admission, availability and
-parameter execution work. A public API listener or one successful deployment
-phase does not establish that the next epoch has been prepared.
-
-The maintainer retains one exact signed transaction per network and target epoch,
-observes uncertain submissions, and verifies its successful authenticated
-execution on all four validators. It stages the following roster only after an
-actual epoch transition. Its finite schedule and invocation budget require
-explicit renewal and supervision; it does not create empty blocks to reach a
-future epoch. Provisioning public keys does not prove future election membership.
-The workflow supports the selected fixed four-validator configuration and
-rejects observed membership changes. The consensus boundary remains authoritative.
+Scheduling epochs advance through certified authorizations that retain the
+incumbent authority generation and its original signing keys. The consensus
+boundary binds the contiguous height interval and authenticated beacon session.
+Application deployment requires no key-renewal transaction or validator seed
+material. Prepared authority activation is not yet implemented; the current
+production boundary retains the incumbent authority.
 
 ## Commands
 

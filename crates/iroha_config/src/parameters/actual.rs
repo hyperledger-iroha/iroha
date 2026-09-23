@@ -2856,6 +2856,9 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
+    /// Finite shared pool for retained carrier World shells, effects and service descriptors.
+    /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
+    pub retained_carrier_shell_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
     pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
@@ -2886,6 +2889,10 @@ impl fmt::Debug for NexusStorage {
                 &self.budget_enforce_interval_blocks,
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
+            .field(
+                "retained_carrier_shell_bytes",
+                &self.retained_carrier_shell_bytes,
+            )
             .field("disk_budget_weights", &self.disk_budget_weights)
             .finish()
     }
@@ -2897,6 +2904,7 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
             configured_component_caps: None,
         }
@@ -5949,6 +5957,8 @@ pub struct Kura {
     /// Finite requested-allocation limit for State's transaction-membership generations.
     /// Includes unpublished successors and generations retained by readers.
     pub transaction_history_bytes: Bytes,
+    /// Finite physical and requested-allocation limits for the retained membership segment.
+    pub membership_storage: KuraMembershipStoragePolicy,
     /// Number of recent lane-history entries retained alongside the block store.
     pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.
@@ -5963,6 +5973,14 @@ pub struct Kura {
     pub fsync_mode: FsyncMode,
     /// Interval used when batching fsync calls.
     pub fsync_interval: Duration,
+}
+/// Finite limits for one retained membership generation; exhaustion requires real reclamation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KuraMembershipStoragePolicy {
+    /// Maximum segment extent, including incomplete or abandoned reservations.
+    pub max_bytes: NonZeroU64,
+    /// Requested allocation bytes for original segment controls and append workspaces.
+    pub memory_bytes: NonZeroUsize,
 }
 /// Immutable storage limits for opaque FASTPQ artifacts; these limits confer no proof authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

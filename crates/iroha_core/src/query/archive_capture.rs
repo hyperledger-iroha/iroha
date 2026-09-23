@@ -4,12 +4,15 @@
 //! archive index writer. Every index mutation must either observe no reservation
 //! or present this exact move-only owner. Committed readers remain independent.
 //! Both candidate captures retain this owner after releasing their physical
-//! writers. TODO: carry its typed wait through actual pre-vote admission.
+//! writers. Admission forwards the same release to the original runner waker.
 
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
+use concread::release::{ReleaseNotification, ReleaseWait};
 use parking_lot::Mutex;
-use tokio::sync::watch;
 
 /// A local archive reservation's release, never a consensus verdict or deadline.
 ///
@@ -18,35 +21,37 @@ use tokio::sync::watch;
 /// dropping a ticket neither prolongs nor releases the underlying reservation.
 #[derive(Clone, Debug)]
 pub struct ArchiveCaptureWait {
-    released: watch::Receiver<bool>,
+    signal: Arc<ReleaseSignal>,
+    released: ReleaseWait,
 }
 
 impl ArchiveCaptureWait {
     /// Return whether this particular owner has released its reservation.
     #[must_use]
     pub fn is_released(&self) -> bool {
-        *self.released.borrow()
+        self.signal.released.load(Ordering::Acquire)
     }
 
     /// Wait until this particular reservation is released, without polling.
     ///
-    /// Release before registration remains visible through the retained watch
-    /// value. The caller must drop all State and archive writers before awaiting
+    /// Release before registration remains visible through the original sequence
+    /// observation. The caller must drop all State and archive writers before awaiting
     /// this event, then retry admission; release is not a grant of capacity.
     pub async fn wait_for_release(&mut self) {
-        while !*self.released.borrow_and_update() {
-            if self.released.changed().await.is_err() {
-                // Only the reservation owns the sender. Its disappearance also
-                // means that exact owner cannot retain the archive reservation.
-                return;
-            }
-        }
+        self.released.clone().wait_for_release().await;
+    }
+
+    /// Borrow the original one-shot release for the existing validation retry path.
+    /// Cloning this observation neither owns nor cancels the archive reservation.
+    pub(crate) fn release_wait(&self) -> &ReleaseWait {
+        &self.released
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ReleaseSignal {
-    released: watch::Sender<bool>,
+    released: AtomicBool,
+    notification: ReleaseNotification,
 }
 
 #[derive(Debug, Default)]
@@ -70,16 +75,15 @@ impl ArchiveCaptureGate {
     /// capacity checks, and remain held until this reservation is installed.
     /// Only one candidate can own that predecessor; losing admission returns
     /// the exact release event needed to retry after dropping those writers.
-    #[cfg(test)]
     pub(crate) fn try_reserve(&self) -> Result<ArchiveCaptureReservation, ArchiveCaptureWait> {
         let mut state = self.state.lock();
         if let Some(active) = state.active.upgrade() {
             return Err(ArchiveCaptureWait {
-                released: active.released.subscribe(),
+                released: active.notification.observe(),
+                signal: active,
             });
         }
-        let (released, _) = watch::channel(false);
-        let signal = Arc::new(ReleaseSignal { released });
+        let signal = Arc::new(ReleaseSignal::default());
         state.active = Arc::downgrade(&signal);
         Ok(ArchiveCaptureReservation {
             state: Arc::clone(&self.state),
@@ -95,7 +99,8 @@ impl ArchiveCaptureGate {
         let state = self.state.lock();
         match state.active.upgrade() {
             Some(active) => Err(ArchiveCaptureWait {
-                released: active.released.subscribe(),
+                released: active.notification.observe(),
+                signal: active,
             }),
             None => Ok(()),
         }
@@ -126,12 +131,12 @@ impl ArchiveCaptureReservation {
 
 impl Drop for ArchiveCaptureReservation {
     fn drop(&mut self) {
-        let mut state = self.state.lock();
+        // Release the actual gate guard before invoking any runner callbacks.
+        let mut state = self.signal.notification.guard(self.state.lock());
         if state.active.ptr_eq(&Arc::downgrade(&self.signal)) {
             state.active = Weak::new();
         }
-        drop(state);
-        self.signal.released.send_replace(true);
+        self.signal.released.store(true, Ordering::Release);
     }
 }
 

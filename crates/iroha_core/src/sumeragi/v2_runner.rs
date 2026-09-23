@@ -5,6 +5,13 @@
 //! authenticated control and body messages, schedules bounded proposal work,
 //! and performs an explicit Kura-authorized rollover after application.
 
+mod native_candidate;
+pub(in crate::sumeragi) mod native_process;
+mod native_source;
+pub(in crate::sumeragi) use native_process::NativeRunnerProcess;
+#[cfg(test)]
+pub(crate) use native_source::NativeSourceRequestTestProbe;
+
 use std::{
     num::{NonZeroU64, NonZeroUsize},
     sync::{
@@ -78,6 +85,7 @@ use super::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
         reconcile_pending_autonomous_lifecycle_terminal_outcomes,
     },
+    v2_queue_plan_admission::QueuePlanAdmissionOwner,
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         RecoveredSuccessorActivationAuthority, RecoveredV2Startup,
@@ -130,8 +138,8 @@ pub(in crate::sumeragi) mod ordinary_ingress_consumer;
 mod preactivation_ingress;
 pub(in crate::sumeragi) use lifecycle_height_driver::{
     LifecycleApplyTerminalReadyBroadcastPermitV1, LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
-    LifecycleDecidedLaneRecoveryPermitV1, LifecycleProducerClaimDispositionV1,
-    LifecycleReadyProposalSignPreemptionPermitV1, LifecycleValidateSidecarPacemakerEscapePermitV1,
+    LifecycleDecidedLaneRecoveryPermitV1, LifecycleNativeSourcePacemakerEscapePermitV1,
+    LifecycleProducerClaimDispositionV1, LifecycleReadyProposalSignPreemptionPermitV1,
     drain_lifecycle_v2_ingress,
 };
 #[cfg(test)]
@@ -542,11 +550,18 @@ struct PendingLocalEvents {
 /// The ordinary transaction remains in the queue while this process-local fence prevents the
 /// autonomous lane producer from reserving the same hash. The fence follows only the first exact
 /// lock for this proposal subject and is released on every replacement, rejection, or decision.
-#[derive(Debug)]
 struct PendingGlobalSelection {
     owner: LocalProposalOwner,
     subject: wire::BlockSubject,
     _lease: GlobalQueueSelectionLease,
+}
+impl std::fmt::Debug for PendingGlobalSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingGlobalSelection")
+            .field("owner", &self.owner)
+            .field("subject", &self.subject)
+            .finish_non_exhaustive()
+    }
 }
 #[derive(Clone, Copy, Debug)]
 struct CandidateWorkWait {
@@ -1189,12 +1204,36 @@ fn run_inner(
     };
     let liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
-    let retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
     let kura_replica_advert_refresh = Arc::new(
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
-    match pending_kura_apply {
+    // QueuePlan admission is a global ordering service, independent of any lane
+    // signer. Retain this exact State/Kura/Queue owner across the height loop and
+    // interrupted-tip recovery; only authenticated context authority rolls over.
+    let queue_plan = QueuePlanAdmissionOwner::new(
+        &verified_context,
+        local_peer.clone(),
+        config.role == NodeRole::Validator,
+        Arc::clone(&state),
+        Arc::clone(&kura),
+        Arc::clone(&queue),
+        Arc::clone(&output_guard),
+        NonZeroUsize::new(usize::try_from(shared_config.limits.effect_work_capacity)?)
+            .ok_or(V2RunnerError::InvalidLimits)?,
+    )?;
+    let mut native = native_process::NativeRunnerProcess::new(
+        Arc::clone(&state),
+        Arc::clone(&output_guard),
+        local_peer.clone(),
+        common_config.key_pair.clone(),
+        config.role == NodeRole::Validator,
+        &shared_config,
+        consensus_frame_byte_capacity,
+        round_timeout,
+        retransmit_interval,
+    )?;
+    let result = match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
             build_identity,
             config,
@@ -1212,6 +1251,8 @@ fn run_inner(
             block_rx,
             lane_relay_rx,
             Arc::clone(&pending_queue_plan_admission_dirty),
+            queue_plan,
+            &mut native,
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -1236,7 +1277,6 @@ fn run_inner(
             cleanup_supervisor,
             liveness_watchdog,
             deferred_admission_ordinals,
-            retained_merge_sidecars,
             kura_replica_advert_refresh,
             block_sync_server,
             Some(startup_recovery),
@@ -1258,6 +1298,8 @@ fn run_inner(
             block_rx,
             lane_relay_rx,
             pending_queue_plan_admission_dirty,
+            queue_plan,
+            &mut native,
             wake_rx,
             shutdown_signal,
             ingress_ready,
@@ -1283,11 +1325,17 @@ fn run_inner(
             cleanup_supervisor,
             liveness_watchdog,
             deferred_admission_ordinals,
-            retained_merge_sidecars,
             kura_replica_advert_refresh,
             block_sync_server,
             startup_recovery,
         ),
+    };
+    // The consensus loops have ended on every Result path. Move all physical
+    // workers to their blocking shutdown owner before the process returns.
+    let shutdown = native.shutdown().join();
+    match (result, shutdown) {
+        (Err(error), _) => Err(error),
+        (Ok(()), result) => result,
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1360,7 +1408,8 @@ fn schedule_local_proposal(
     proposal_state: &mut LocalProposalState,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
+    native: &mut native_process::NativeRunnerProcess,
+    queue_plan: &mut QueuePlanAdmissionOwner,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
@@ -1369,13 +1418,6 @@ fn schedule_local_proposal(
     let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
     if proposal_state.history_admission_pending(owner, &queue.sumeragi_waker()) {
         return Ok(());
-    }
-    // Lane authority is frozen independently from the successor global
-    // roster. A configured validator removed from that roster must still
-    // produce a lane payload when the exact current lane descriptor selects
-    // it as author. The adapter rechecks voting role, route, and slot author.
-    if let Some(active_view) = duties.autonomous_lane_view {
-        lane_work.schedule_autonomous_lane_production(active_view, candidate_limits)?;
     }
     let Some(local_validator) = duties.global_validator else {
         return Ok(());
@@ -1452,15 +1494,6 @@ fn schedule_local_proposal(
         };
         if !has_work {
             return Err(V2RunnerError::EmptyProposalWork);
-        }
-        let lane_binding = if context.height == 1 {
-            let authenticated_genesis = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
-            lane_work.bind_locked_genesis_body(&block, authenticated_genesis)
-        } else {
-            lane_work.bind_locked_global_body(&block)
-        };
-        if lane_binding == V2LaneIngressOutcome::Rejected {
-            return Err(V2RunnerError::LaneCandidateBinding);
         }
         let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
         let can_admit_local_proposal = executor.can_admit_local_proposal();
@@ -1598,8 +1631,20 @@ fn schedule_local_proposal(
                 }
                 _ => return Err(V2RunnerError::InvalidSnapshotBootstrapParent),
             };
-        let carrier_context_header =
-            lane_work.merge_carrier_context_header(directive.tag().view())?;
+        let (_, header_clock) = iroha_primitives::time::TimeSource::new_mock(logical_time);
+        let builder = crate::block::BlockBuilder::new_with_time_source(Vec::new(), header_clock);
+        let carrier_context_header = match parent {
+            CandidateParent::Block(parent) => builder
+                .chain(directive.tag().view(), Some(parent))
+                .carrier_context_header(),
+            CandidateParent::Snapshot(anchor) => builder
+                .chain_with_parent_hash(
+                    directive.tag().view(),
+                    anchor.snapshot_height,
+                    anchor.snapshot_block_hash,
+                )
+                .carrier_context_header(),
+        };
         if carrier_context_header.creation_time() != logical_time {
             return Err(V2RunnerError::Candidate(
                 "shared merge carrier timestamp differs from the frozen height cadence".to_owned(),
@@ -1608,19 +1653,7 @@ fn schedule_local_proposal(
         let (_, time_source) =
             iroha_primitives::time::TimeSource::new_mock(carrier_context_header.creation_time());
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
-        // Merge refresh may add the local signature which completes and durably
-        // publishes the exact-round certificate. Do that before freezing candidate
-        // attachments so the same producer turn can carry the newly certified entry;
-        // waiting for `CandidateWorkProvider::prepare` would miss it until a later
-        // turn, which may already be fenced by timeout/view-change control work.
-        if lane_work.refresh_merge_candidates(directive.tag().view())?
-            == super::v2_lane_work::MergeRefreshOutcome::Deferred
-        {
-            proposal_state.defer_candidate_snapshot(owner, Instant::now());
-            return Ok(());
-        }
-        let queue_plan_admissions =
-            lane_work.reconcile_pending_queue_plan_admissions(directive.tag().view())?;
+        let queue_plan_admissions = queue_plan.reconcile(directive.tag().view())?;
         let attachments = candidate_attachments(
             context,
             state,
@@ -1644,18 +1677,20 @@ fn schedule_local_proposal(
             }
             Err(error) => return Err(error),
         };
-        let assembly = assembler.assemble(CandidateRequest {
+        let Some(assembly) = native.assemble_candidate(
+            owner,
+            assembler,
             context,
             directive,
             local_validator,
             parent,
-            state,
             queue,
-            key_pair,
-            output_guard,
             attachments,
-            work_provider: &mut *lane_work,
-        });
+        )?
+        else {
+            proposal_state.defer_candidate_snapshot(owner, Instant::now());
+            return Ok(());
+        };
         let assembly = match assembly {
             Ok(assembly) => assembly,
             Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))
@@ -1669,6 +1704,9 @@ fn schedule_local_proposal(
             }
             Err(error) => return Err(error.into()),
         };
+        let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;
+        native.retain_candidate_source(source);
+        let assembly = outcome?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
@@ -1735,27 +1773,6 @@ fn schedule_local_proposal(
             return Ok(());
         }
         proposal_state.candidate_work_wait = None;
-        if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
-            == V2LaneIngressOutcome::Rejected
-        {
-            // Binding happens before body storage and reducer submission.
-            // Drop the abandoned candidate first so its ordinary queue lease
-            // is available to a later-height reproposal.
-            drop(candidate);
-            match proposal_state.handle_candidate_binding_rejection(owner) {
-                LocalValidationDisposition::RetryNonEmpty => {
-                    iroha_logger::warn!(
-                        height = tag.height(),
-                        view = tag.view(),
-                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying with non-empty work only"
-                    );
-                    return Ok(());
-                }
-                LocalValidationDisposition::FatalNonEmpty => {
-                    return Err(V2RunnerError::LaneCandidateBinding);
-                }
-            }
-        }
         let (_block, canonical_wire, encoded_payload, events, report, selection_lease) =
             candidate.into_parts();
         let subject = encoded_payload.manifest().subject;
@@ -2932,76 +2949,9 @@ fn candidate_attachments(
             .attach_candidate_effects(view, &mut effects)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    // The same height-derived opportunity used by the exact carrier fitter
-    // applies to certified execution. Defer optional evidence only for an
-    // actual eligible merge; mandatory penalties still require ControlOnly.
-    let preferred_merge_entry =
-        if super::v2_candidate::candidate_economic_work_first(context.height)
-            && effects.penalty_actions.is_empty()
-            && queue_plan_admissions.is_empty()
-        {
-            state
-                .select_pending_certified_merge_entry_for_round(
-                    round_header,
-                    expected_merge_epoch,
-                    PendingCertifiedMergeSelection::Any,
-                    context.mode,
-                )
-                .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-                .filter(|(_, entry, _)| entry.execution_batch.is_some())
-        } else {
-            None
-        };
-    if preferred_merge_entry.is_some() {
-        effects.v2_evidence_admissions.clear();
-    }
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-    // A pulse (including a pending mandatory one) can accompany real merge work
-    // through the block validator's two-stage native authorization. Other NPoS
-    // effects retain the control-only boundary and never borrow that authority.
-    let merge_selection = certified_merge_selection_for_npos(
-        npos_consensus_effects.as_ref().is_some_and(|effects| {
-            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()
-        }),
-    );
-    if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
-        iroha_logger::debug!(
-            height = context.height,
-            view,
-            "prioritizing deterministic NPoS effects before a certified execution carrier"
-        );
-    }
-    let selected_merge_entry = if preferred_merge_entry.is_some() {
-        preferred_merge_entry
-    } else if queue_plan_admissions.is_empty() {
-        state
-            .select_pending_certified_merge_entry_for_round(
-                round_header,
-                expected_merge_epoch,
-                merge_selection,
-                context.mode,
-            )
-            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-    } else {
-        // QueuePlan registry writes are ordered by the global Sumeragi QC.
-        // Keep them out of an execution-bearing merge carrier so that the
-        // independent merge write-set remains exact and uncontaminated.
-        None
-    };
-    let certified_merge_entry = selected_merge_entry
-        .map(|(_, entry, _)| entry)
-        .map(|entry| {
-            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
-                .map(|()| entry)
-                .map_err(V2RunnerError::Candidate)
-        })
-        .transpose()?;
     let parent_creation_time = match parent {
         CandidateParent::Block(parent) => parent.header().creation_time(),
         CandidateParent::Snapshot(anchor) => {
@@ -3013,11 +2963,6 @@ fn candidate_attachments(
             .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects,
         required_beacon_pulse_pending,
-        certified_merge_carrier_header: certified_merge_entry
-            .as_ref()
-            .and_then(|entry| entry.execution_batch.as_ref())
-            .map(|batch| batch.application_block_header.clone()),
-        certified_merge_entry,
         queue_plan_admissions,
         ..CandidateAttachments::default()
     })
@@ -3221,6 +3166,62 @@ fn require_peeked_lane_work_effect(
     drained.ok_or(V2RunnerError::RestartRequired)
 }
 include!("v2_runner/canonical_recovery_ingress.rs");
+/// Transfer bounded QueuePlan output from its original independent owner.
+/// A worker capacity refusal rotates the exact occurrence without acknowledging it.
+pub(in crate::sumeragi) fn dispatch_queue_plan_admission_effects(
+    queue_plan: &mut QueuePlanAdmissionOwner,
+    services: &ProductionV2Services,
+    limit: usize,
+) -> Result<usize, V2RunnerError> {
+    if !services.matches_queue_plan_admission_owner(queue_plan) {
+        services
+            .lifecycle_output_guard()
+            .close_admission_for_restart();
+        return Err(V2RunnerError::Service(
+            "QueuePlan output changed its original State/Kura/context/output owner".to_owned(),
+        ));
+    }
+    let scan_limit = queue_plan.effect_count();
+    if scan_limit == 0 || limit == 0 {
+        return Ok(0);
+    }
+    let mut sources = services
+        .queue_plan_admission_batch_sources()
+        .map_err(V2RunnerError::Service)?;
+    let mut dispatched = 0;
+    for _ in 0..scan_limit {
+        if dispatched == limit {
+            break;
+        }
+        let effect = queue_plan
+            .next_effect()
+            .ok_or(V2RunnerError::RestartRequired)?;
+        if !services
+            .can_retain_lane_work_effect_from_snapshot(&effect, Some(&mut sources))
+            .map_err(V2RunnerError::Service)?
+        {
+            if !queue_plan.rotate_next_effect() {
+                return Err(V2RunnerError::RestartRequired);
+            }
+            continue;
+        }
+        match dispatch_lane_work_effect_from_snapshot(services, effect.clone(), Some(&mut sources))?
+        {
+            LaneWorkEffectDispatch::Complete => {
+                if !queue_plan.acknowledge_effect(&effect) {
+                    return Err(V2RunnerError::RestartRequired);
+                }
+                dispatched += 1;
+            }
+            LaneWorkEffectDispatch::SourceRetained(_) => {
+                if !queue_plan.rotate_next_effect() {
+                    return Err(V2RunnerError::RestartRequired);
+                }
+            }
+        }
+    }
+    Ok(dispatched)
+}
 pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3461,68 +3462,63 @@ include!("v2_runner/merge_sidecar_recovery.rs");
 // turn prevents an expensive authenticated backlog from starving those owners.
 const OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST: usize = 1;
 
+/// The only relay authority retained by the Native runner is QueuePlan admission.
+/// Legacy lane certificates cannot construct another lane safety owner.
 fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
-    lane_work: &mut V2LaneWorkAdapter,
+    queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
-) -> bool {
+) -> Result<bool, V2LaneWorkError> {
     let mut drained_any = false;
     for _ in 0..limit.max(1) {
-        let mut drained = false;
-        if let Ok(message) = lane_relay_rx.try_recv() {
-            let _ = lane_work.accept_relay_message(message, active_view);
-            drained = true;
-            drained_any = true;
-        }
-        if !drained {
+        let Ok(message) = lane_relay_rx.try_recv() else {
             break;
+        };
+        if let super::LaneRelayMessage::QueuePlanAdmissionCertificate {
+            sender,
+            certificate,
+        } = message
+        {
+            queue_plan.accept_certificate(sender, certificate, active_view)?;
+        } else {
+            iroha_logger::debug!("retired legacy lane relay envelope");
         }
-    }
-    drained_any
-}
-fn drain_lane_relay_ingress(
-    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
-    lane_work: &mut V2LaneWorkAdapter,
-    services: &ProductionV2Services,
-    active_view: wire::View,
-) -> std::result::Result<bool, V2LaneWorkError> {
-    let drained_any = drain_lane_relay_prefix(
-        lane_relay_rx,
-        lane_work,
-        active_view,
-        OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
-    );
-    if drained_any {
-        let current_archive_targets = services.current_archive_targets();
-        let _ = lane_work
-            .service_next_historical_recovery_with_archive_targets(&current_archive_targets)?;
+        drained_any = true;
     }
     Ok(drained_any)
 }
-/// Drain the already-admitted relay prefix after shared runner ingress closes.
-///
-/// Decision-pending lane admission rejects ordinary relay work. Unlike the
-/// open-height drain, this terminal helper never starts a historical recovery
-/// tick; it only lets the finite serialized prefix publish its monotonic
-/// sidecar cancellation/admission handoffs.
+
+fn drain_lane_relay_ingress(
+    lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
+    queue_plan: &mut QueuePlanAdmissionOwner,
+    active_view: wire::View,
+) -> Result<bool, V2LaneWorkError> {
+    drain_lane_relay_prefix(
+        lane_relay_rx,
+        queue_plan,
+        active_view,
+        OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
+    )
+}
+
 fn drain_finalized_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
-    lane_work: &mut V2LaneWorkAdapter,
+    queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
-) -> bool {
-    drain_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
+) -> Result<bool, V2LaneWorkError> {
+    drain_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
 }
+
 #[cfg(test)]
-/// Exercise the terminal relay-prefix drain from sibling stateful regressions.
 pub(in crate::sumeragi) fn drain_finalized_lane_relay_prefix_for_test(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
-    lane_work: &mut V2LaneWorkAdapter,
+    queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
-) -> bool {
-    drain_finalized_lane_relay_prefix(lane_relay_rx, lane_work, active_view, limit)
+) -> Result<bool, V2LaneWorkError> {
+    drain_finalized_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
 }
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]

@@ -102,8 +102,12 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            network_id,
+            u64::MAX,
+            &roster,
+        );
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -117,8 +121,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         quorum: wire_v2::DualQuorum::from_roster(&roster)
             .expect("equal-power snapshot evidence quorum"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
         execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
         da_layout: wire_v2::DataAvailabilityLayout {
@@ -299,8 +303,12 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             1,
             Hash::new(b"snapshot eviction executed block wire placeholder"),
         );
-    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
+    let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+            *network_id,
+            100,
+            &roster,
+        );
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -317,8 +325,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority: kagemusha_mint_finality_authority.clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1056,8 +1064,11 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: REPLICA_ADVERT_POLICY,
     }

@@ -16,8 +16,8 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-type CheckpointDecision<A, B> =
-    DecisionBoundCarrierJournals<A, B, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
+type CheckpointDecision<A> =
+    DecisionBoundCarrierJournals<A, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
 
 struct PhaseReservation(Arc<AtomicUsize>);
 
@@ -27,7 +27,7 @@ impl Drop for PhaseReservation {
     }
 }
 
-type RetainedPhase = crate::state::RetainedCarrier<PhaseReservation, PhaseReservation>;
+type RetainedPhase = crate::state::RetainedCarrier<PhaseReservation>;
 
 struct ActualPhaseValidator {
     state: Arc<State>,
@@ -131,9 +131,9 @@ fn consume_retained_phase<R, E>(
     service.select(receipt).unwrap().try_consume(publish)
 }
 
-fn phase_allocations(phase: &RetainedPhase) -> [*const (); 6] {
-    fn allocations<B>(
-        journals: &super::super::super::PreparedCarrierJournals<PhaseReservation, B>,
+fn phase_allocations<A>(phase: &crate::state::RetainedCarrier<A>) -> [*const (); 6] {
+    fn allocations<A, B>(
+        journals: &super::super::super::PreparedCarrierJournals<A, B>,
     ) -> [*const (); 6] {
         [
             journals
@@ -150,10 +150,10 @@ fn phase_allocations(phase: &RetainedPhase) -> [*const (); 6] {
         ]
     }
     match phase {
-        RetainedPhase::Capturing(capture) => allocations(&capture.journals),
-        RetainedPhase::Validated(journals) => allocations(journals),
-        RetainedPhase::Decided(decision) => allocations(&decision.journals),
-        RetainedPhase::Checkpointed(decision) => allocations(&decision.journals),
+        crate::state::RetainedCarrier::Capturing(capture) => allocations(&capture.journals),
+        crate::state::RetainedCarrier::Validated(journals) => allocations(journals),
+        crate::state::RetainedCarrier::Decided(decision) => allocations(&decision.journals),
+        crate::state::RetainedCarrier::Checkpointed(decision) => allocations(&decision.journals),
     }
 }
 
@@ -324,9 +324,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
             panic!("first selection owns the original validation");
         };
         let decision = journals
-            .bind_decision(finality, |_| {
-                Ok::<_, Infallible>(PhaseReservation(Arc::clone(&producer.releases)))
-            })
+            .bind_decision(finality)
             .unwrap_or_else(|refusal| panic!("real signed decision: {:?}", refusal.error));
         Err::<(), _>((RetainedPhase::Decided(decision), "await exact durability"))
     });
@@ -422,7 +420,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
         let RetainedPhase::Checkpointed(decision) = phase else {
             panic!("physical acquisition must receive the original checkpoint");
         };
-        match decision.try_prepare_physical(&producer.state, None, |_, _| Ok::<_, Infallible>(())) {
+        match decision.try_prepare_physical(&producer.state, None) {
             Ok(_) => panic!("original account writer must defer publication"),
             Err((decision, error)) => Err::<(), _>((RetainedPhase::Checkpointed(decision), error)),
         }
@@ -513,7 +511,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(published);
-    assert_eq!(releases.load(Ordering::SeqCst), 2);
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -740,12 +738,7 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
             let RetainedPhase::Validated(journals) = owner else {
                 panic!("only completed capture may receive a success marker");
             };
-            let decision = bind_and_persist(
-                &producer.state,
-                &context,
-                journals,
-                PhaseReservation(Arc::clone(&producer.releases)),
-            );
+            let decision = bind_and_persist(&producer.state, &context, journals);
             acquire(decision, &producer.state)
                 .publish()
                 .map_err(|(owner, error)| (RetainedPhase::Checkpointed(owner), error))
@@ -771,7 +764,7 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(published);
-    assert_eq!(releases.load(Ordering::SeqCst), 2);
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -785,9 +778,7 @@ fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
     };
 
     for error in [
-        CarrierPhysicalPreparationError::<Infallible>::Checkpoint(
-            crate::kura::Error::CanonicalStoragePoisoned,
-        ),
+        CarrierPhysicalPreparationError::Checkpoint(crate::kura::Error::CanonicalStoragePoisoned),
         CarrierPhysicalPreparationError::ExecutionWitness(
             crate::kura::Error::CanonicalStoragePoisoned,
         ),
@@ -802,11 +793,9 @@ fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
 
     for (error, expected) in [
         (
-            CarrierPhysicalPreparationError::<Infallible>::Source(
-                CarrierSourceAuthenticationError::Storage(
-                    crate::kura::Error::CanonicalStoragePoisoned,
-                ),
-            ),
+            CarrierPhysicalPreparationError::Source(CarrierSourceAuthenticationError::Storage(
+                crate::kura::Error::CanonicalStoragePoisoned,
+            )),
             "Source(Storage(CanonicalStoragePoisoned))",
         ),
         (
@@ -831,7 +820,7 @@ fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
         .try_lock_or_wait()
         .err()
         .expect("original owner is held");
-    let error = CarrierPhysicalPreparationError::<Infallible>::Fence {
+    let error = CarrierPhysicalPreparationError::Fence {
         field: "state_write_lock",
         wait,
     };
@@ -841,27 +830,25 @@ fn physical_preparation_diagnostics_retain_storage_cause_and_busy_owner() {
     drop(held);
 }
 
-fn decided<A, B>(
+fn decided<A>(
     state: &State,
     proposal: SignedBlock,
     topology: &Topology,
     context: &HeightContext,
     admission: A,
-    binding: B,
-) -> CheckpointDecision<A, B> {
+) -> CheckpointDecision<A> {
     let journals = prepare(state, proposal, topology, context)
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
         .prepare_journals(None, None, |_| Ok::<_, Infallible>(admission))
         .unwrap();
-    bind_and_persist(state, context, journals, binding)
+    bind_and_persist(state, context, journals)
 }
 
-fn bind_and_persist<A, B>(
+fn bind_and_persist<A>(
     state: &State,
     context: &HeightContext,
     journals: super::super::super::PreparedCarrierJournals<A>,
-    binding: B,
-) -> CheckpointDecision<A, B> {
+) -> CheckpointDecision<A> {
     let finality = signed_finality(
         context.clone(),
         subject(journals.valid.as_ref()),
@@ -869,7 +856,7 @@ fn bind_and_persist<A, B>(
         0,
     );
     let decision = journals
-        .bind_decision(finality, |_| Ok::<_, Infallible>(binding))
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("exact decision: {:?}", refusal.error));
     state.kura.store_block(decision.block().clone()).unwrap();
     let finality = state
@@ -889,7 +876,7 @@ type ReputationArchive = crate::query::reputation_finalized::ReputationFinalized
 fn fixture_archive_decision() -> (
     tempfile::TempDir,
     Box<State>,
-    CheckpointDecision<(), ()>,
+    CheckpointDecision<()>,
     Arc<ProviderArchive>,
     Arc<ReputationArchive>,
 ) {
@@ -947,7 +934,7 @@ fn fixture_archive_decision() -> (
             Ok::<_, Infallible>(())
         })
         .unwrap();
-    let decision = bind_and_persist(&state, &context, journals, ());
+    let decision = bind_and_persist(&state, &context, journals);
     (directory, state, decision, provider, reputation)
 }
 
@@ -987,15 +974,12 @@ fn original_state_and_header_are_required_before_witness_or_archive_writes() {
             .map_or(std::ptr::null(), std::ptr::from_ref);
         let witness = decision.journals.source_prefix.witness().writes.as_ptr();
         let inventory = Arc::clone(decision.journals.source_prefix.inventory());
-        let releases = Arc::new(AtomicUsize::new(0));
         for occupied in [true, false] {
             // Identity refusal precedes the first Kura and State probes. Repeat
             // without contention to prove that no derived artifact is written.
             let kura = occupied.then(|| state.kura.canonical_publication_lease());
             let held = occupied.then(|| target.state_commit_lock.lock());
-            let (retry, error) = match decision.try_prepare_physical(target, None, |_, _| {
-                Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases)))
-            }) {
+            let (retry, error) = match decision.try_prepare_physical(target, None) {
                 Ok(_) => panic!("foreign State/header must refuse before publication I/O"),
                 Err(refusal) => refusal,
             };
@@ -1050,7 +1034,6 @@ fn original_state_and_header_are_required_before_witness_or_archive_writes() {
             }
             decision = retry;
         }
-        assert_eq!(releases.load(Ordering::SeqCst), 2);
         assert_eq!(state.state_view_generation(), generation);
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
@@ -1148,11 +1131,10 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
             );
         }
         let held = state.state_commit_lock.lock();
-        let (mut retry, error) =
-            match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-                Ok(_) => panic!("foreign archive may not substitute for the captured original"),
-                Err(refusal) => refusal,
-            };
+        let (mut retry, error) = match decision.try_prepare_physical(&state, None) {
+            Ok(_) => panic!("foreign archive may not substitute for the captured original"),
+            Err(refusal) => refusal,
+        };
         if provider_case {
             assert!(matches!(
                 error,
@@ -1199,14 +1181,14 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
     );
 }
 
-pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
+pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<()>) {
     let (state, proposal, topology, context) = fixture();
-    let decision = decided(&state, proposal, &topology, &context, (), ());
+    let decision = decided(&state, proposal, &topology, &context, ());
     (state, decision)
 }
 
 /// Execute a signed lane addition after publishing its actual genesis predecessor.
-fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
+fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<()>) {
     let (state, decision, _queue) = fixture_lifecycle_decision_with_retirement(None);
     (state, decision)
 }
@@ -1214,7 +1196,7 @@ fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
 /// Execute real signed lifecycle instructions against the configured original lanes.
 fn fixture_lifecycle_decision_with_retirement(
     retirement: Option<bool>,
-) -> (Box<State>, CheckpointDecision<(), ()>, Arc<Queue>) {
+) -> (Box<State>, CheckpointDecision<()>, Arc<Queue>) {
     use crate::queue::{Queue, execution_context_for_routing_plan};
     use crate::tx::AcceptedTransaction;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -1305,7 +1287,7 @@ fn fixture_lifecycle_decision_with_retirement(
             )]),
         ),
     ));
-    let genesis = decided(&state, proposal, &topology, &context, (), ());
+    let genesis = decided(&state, proposal, &topology, &context, ());
     let parent = genesis.block().clone();
     context.height = 2;
     context.parent_commit_qc = Some(genesis.finality().commit_qc.clone());
@@ -1410,7 +1392,7 @@ fn fixture_lifecycle_decision_with_retirement(
         .try_build_with_signature(u64::from(leader), signer.private_key())
         .unwrap()
         .canonical_resultless_proposal();
-    let decision = decided(&state, proposal, &topology, &context, (), ());
+    let decision = decided(&state, proposal, &topology, &context, ());
     assert!(
         decision.block().output_error(0).is_none(),
         "signed lifecycle execution failed: {:?}",
@@ -1425,12 +1407,12 @@ fn fixture_lifecycle_decision_with_retirement(
     (state, decision, queue)
 }
 
-pub(super) fn acquire<'target, A, B>(
-    decision: CheckpointDecision<A, B>,
+pub(super) fn acquire<'target, A>(
+    decision: CheckpointDecision<A>,
     state: &'target State,
-) -> PhysicallyPreparedCarrier<'target, A, B, ()> {
+) -> PhysicallyPreparedCarrier<'target, A> {
     decision
-        .try_prepare_physical(state, None, |_, _| Ok::<_, Infallible>(()))
+        .try_prepare_physical(state, None)
         .unwrap_or_else(|(_, error)| panic!("joint acquisition: {error:?}"))
 }
 
@@ -1466,11 +1448,10 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
         &mut foreign.source_prefix,
     );
     let held = state.state_commit_lock.lock();
-    let (mut retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("foreign executed prefix must refuse before State writers"),
-            Err(refusal) => refusal,
-        };
+    let (mut retry, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("foreign executed prefix must refuse before State writers"),
+        Err(refusal) => refusal,
+    };
     assert!(
         matches!(error, CarrierPhysicalPreparationError::Source(_)),
         "wrong refusal: {error:?}"
@@ -1561,11 +1542,10 @@ fn changed_carrier_wire_refuses_source_join_and_restored_owner_reauthenticates()
     let substituted_wire = decision.block().encode_wire().unwrap();
     assert_ne!(substituted_wire, wire);
     let held = state.state_commit_lock.lock();
-    let (mut retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("changed retained wire must refuse source authentication"),
-            Err(refusal) => refusal,
-        };
+    let (mut retry, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("changed retained wire must refuse source authentication"),
+        Err(refusal) => refusal,
+    };
     assert!(
         matches!(error, CarrierPhysicalPreparationError::Source(_)),
         "wrong refusal: {error:?}"
@@ -1615,7 +1595,7 @@ fn poll(wait: &mut concread::release::ReleaseFuture, wakes: &Arc<WakeCount>) -> 
     Pin::new(wait).poll(&mut Context::from_waker(&Waker::from(Arc::clone(wakes))))
 }
 
-fn busy_wait(error: CarrierPhysicalPreparationError<Infallible>) -> concread::release::ReleaseWait {
+fn busy_wait(error: CarrierPhysicalPreparationError) -> concread::release::ReleaseWait {
     match error {
         CarrierPhysicalPreparationError::Fence { wait, .. }
         | CarrierPhysicalPreparationError::Kura(KuraPublicationPreparationError::Busy {
@@ -1758,11 +1738,10 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
         "effects.sccp_registry_cache",
     ] {
         let held = hold(&state, name);
-        let (retry, error) =
-            match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-                Ok(_) => panic!("held {name} must defer"),
-                Err(refusal) => refusal,
-            };
+        let (retry, error) = match decision.try_prepare_physical(&state, None) {
+            Ok(_) => panic!("held {name} must defer"),
+            Err(refusal) => refusal,
+        };
         assert_fences_free_except(&state, name);
         drop(
             state
@@ -1865,7 +1844,7 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
-        world_probe.try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(())),
+        world_probe.try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(())),
         Err((_, WorldPublicationError::Field(_), _))
     ));
     assert!(matches!(
@@ -2098,25 +2077,51 @@ fn lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry() {
 }
 
 #[test]
-fn installation_refusal_precedes_all_fences_and_returns_the_decided_carrier() {
-    let (state, decision) = fixture_decision();
-    let original = decision.block().encode_wire().unwrap();
+fn original_capture_reservation_survives_physical_refusal_and_exact_retry() {
+    use mv::allocation::{AllocationBudget, AllocationRefusal};
+    let (state, proposal, topology, context) = fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let budget = AllocationBudget::new(64 << 20);
+    let journals = prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
+        .prepare_journals(None, None, |inputs| {
+            let bytes = inputs
+                .world_journal_shell_bytes()?
+                .checked_add(inputs.retained_effects_layout.size())
+                .ok_or(AllocationRefusal::DemandOverflow)?;
+            budget.try_reserve_bytes(bytes)
+        })
+        .unwrap();
+    let reserved = budget.reserved_bytes();
+    assert!(reserved > 0);
+    let decision = bind_and_persist(&state, &context, journals);
+    let wire = decision.block().encode_wire().unwrap();
+    let events = decision.journals.publication_events.as_ptr();
+    let effects = std::ptr::from_ref(decision.journals.effects.as_ref());
     let held = state.state_commit_lock.lock();
-    let canonical = state.kura.canonical_publication_lease();
-    let (retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Err::<(), _>("capacity")) {
-            Ok(_) => panic!("capacity refused"),
-            Err(refusal) => refusal,
-        };
-    assert!(matches!(
-        error,
-        CarrierPhysicalPreparationError::Admission("capacity")
-    ));
+    let (retry, error) = decision
+        .try_prepare_physical(&state, None)
+        .err()
+        .expect("original State writer is occupied");
+    let mut wait = busy_wait(error).wait_for_release();
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_eq!(retry.block().encode_wire().unwrap(), wire);
+    assert_eq!(retry.journals.publication_events.as_ptr(), events);
+    assert_eq!(std::ptr::from_ref(retry.journals.effects.as_ref()), effects);
     drop(held);
-    drop(canonical);
-    assert_eq!(retry.block().encode_wire().unwrap(), original);
-    drop(acquire(retry, &state));
+    assert!(poll(&mut wait, &wakes).is_ready());
+    let retry = acquire(retry, &state).abort();
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_eq!(retry.block().encode_wire().unwrap(), wire);
+    drop(retry);
+    assert_eq!(budget.reserved_bytes(), 0);
     assert_fences_free_except(&state, "");
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -2131,11 +2136,10 @@ fn changed_world_predecessor_releases_all_earlier_families_without_rebinding() {
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    let (retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("equal bytes cannot rebind an original owner"),
-            Err(refusal) => refusal,
-        };
+    let (retry, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("equal bytes cannot rebind an original owner"),
+        Err(refusal) => refusal,
+    };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::World(WorldPublicationError::Field(
@@ -2166,6 +2170,7 @@ struct Reservation<'state> {
     state: &'state State,
     name: &'static str,
     released: Arc<Mutex<Vec<&'static str>>>,
+    _allocation: mv::allocation::AllocationReservation,
 }
 
 #[test]
@@ -2173,11 +2178,10 @@ fn actual_validation_overlay_releases_hash_before_retaining_membership_writers()
     let (state, decision) = fixture_decision();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let validating = state.block(decision.block().header());
-    let (retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("the real validation overlay owns the original cut"),
-            Err(refusal) => refusal,
-        };
+    let (retry, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("the real validation overlay owns the original cut"),
+        Err(refusal) => refusal,
+    };
     assert!(matches!(
         &error,
         CarrierPhysicalPreparationError::Component {
@@ -2209,25 +2213,9 @@ fn identical_foreign_state_cannot_replace_the_original_physical_owners() {
         crate::snapshot::canonical_state_snapshot_hash(&foreign).unwrap()
     );
     let wire = decision.block().encode_wire().unwrap();
-    let calls = AtomicUsize::new(0);
-    // Capacity refusal wins even when the target Kura identity is foreign.
-    let (decision, error) = match decision.try_prepare_physical(&foreign, None, |_, _| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        Err::<(), _>("installation capacity")
-    }) {
-        Ok(_) => panic!("capacity refused"),
-        Err(refusal) => refusal,
-    };
-    assert!(matches!(
-        error,
-        CarrierPhysicalPreparationError::Admission("installation capacity")
-    ));
     let held = foreign.state_commit_lock.lock();
     let canonical = foreign.kura.canonical_publication_lease();
-    let (decision, error) = match decision.try_prepare_physical(&foreign, None, |_, _| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        Ok::<_, Infallible>(())
-    }) {
+    let (decision, error) = match decision.try_prepare_physical(&foreign, None) {
         Ok(_) => panic!("equal storage bytes cannot replace original Kura"),
         Err(refusal) => refusal,
     };
@@ -2235,7 +2223,6 @@ fn identical_foreign_state_cannot_replace_the_original_physical_owners() {
         error,
         CarrierPhysicalPreparationError::ForeignKura
     ));
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(decision.block().encode_wire().unwrap(), wire);
     drop(canonical);
     drop(held);
@@ -2251,11 +2238,10 @@ fn identical_foreign_state_cannot_replace_the_original_physical_owners() {
     foreign.kura = Arc::clone(&state.kura);
     let canonical = state.kura.canonical_publication_lease();
     let held = foreign.state_commit_lock.lock();
-    let (retry, error) =
-        match decision.try_prepare_physical(&foreign, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("equal State bytes cannot replace original journals"),
-            Err(refusal) => refusal,
-        };
+    let (retry, error) = match decision.try_prepare_physical(&foreign, None) {
+        Ok(_) => panic!("equal State bytes cannot replace original journals"),
+        Err(refusal) => refusal,
+    };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::ForeignTarget
@@ -2286,45 +2272,159 @@ impl Drop for Reservation<'_> {
 }
 
 #[test]
-fn all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort() {
+fn original_reservation_outlives_component_writers_and_state_fences_on_drop_and_abort() {
     for abort in [false, true] {
         let (state, proposal, topology, context) = fixture();
         let released = Arc::new(Mutex::new(Vec::new()));
-        let guard = |name| Reservation {
-            state: &state,
-            name,
-            released: Arc::clone(&released),
-        };
+        let budget = mv::allocation::AllocationBudget::new(64 << 20);
+        let journals = prepare(&state, proposal, &topology, &context)
+            .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
+            .prepare_journals(None, None, |inputs| {
+                let bytes = inputs
+                    .world_journal_shell_bytes()?
+                    .checked_add(inputs.retained_effects_layout.size())
+                    .ok_or(mv::allocation::AllocationRefusal::DemandOverflow)?;
+                Ok::<_, mv::allocation::AllocationRefusal>(Reservation {
+                    state: &state,
+                    name: "capture",
+                    released: Arc::clone(&released),
+                    _allocation: budget.try_reserve_bytes(bytes)?,
+                })
+            })
+            .unwrap();
+        let reserved = budget.reserved_bytes();
+        assert!(reserved > 0);
+        let decision = bind_and_persist(&state, &context, journals);
+        let prepared = decision
+            .try_prepare_physical(&state, None)
+            .unwrap_or_else(|(_, error)| panic!("physical preparation: {error:?}"));
+        assert!(released.lock().unwrap().is_empty());
+        if abort {
+            let retry = prepared.abort();
+            assert!(released.lock().unwrap().is_empty());
+            assert_eq!(budget.reserved_bytes(), reserved);
+            drop(retry);
+            assert_eq!(*released.lock().unwrap(), ["capture"]);
+        } else {
+            drop(prepared);
+            assert_eq!(*released.lock().unwrap(), ["capture"]);
+        }
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn source_authenticated_carrier_unlocks_before_admission_drop_and_unwind() {
+    struct AdmissionProbe<'state> {
+        state: &'state State,
+        drops: &'state AtomicUsize,
+        busy: &'state AtomicUsize,
+    }
+    impl Drop for AdmissionProbe<'_> {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            if self.state.kura.try_publication_lease().is_err() {
+                self.busy.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+    for unwind in [false, true] {
+        let (state, proposal, topology, context) = fixture();
+        let drops = AtomicUsize::new(0);
+        let busy = AtomicUsize::new(0);
         let decision = decided(
             &state,
             proposal,
             &topology,
             &context,
-            guard("capture"),
-            guard("binding"),
+            AdmissionProbe {
+                state: &state,
+                drops: &drops,
+                busy: &busy,
+            },
         );
-        let prepared = decision
-            .try_prepare_physical(&state, None, |_, _| {
-                Ok::<_, Infallible>(guard("installation"))
-            })
-            .unwrap_or_else(|(_, error)| panic!("physical preparation: {error:?}"));
-        assert!(released.lock().unwrap().is_empty());
-        if abort {
-            let retry = prepared.abort();
-            assert_eq!(*released.lock().unwrap(), ["installation"]);
-            drop(retry);
-            assert_eq!(
-                *released.lock().unwrap(),
-                ["installation", "capture", "binding"]
+        let lease = state.kura.try_publication_lease().unwrap();
+        let owner = SourceAuthenticatedCarrier::try_new(decision, lease)
+            .unwrap_or_else(|(_, error)| panic!("original source authentication: {error:?}"));
+        if unwind {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _original = owner;
+                    panic!("durable continuation unwinds before State acquisition");
+                }))
+                .is_err()
             );
         } else {
-            drop(prepared);
-            assert_eq!(
-                *released.lock().unwrap(),
-                ["capture", "binding", "installation"]
-            );
+            drop(owner);
         }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(busy.load(Ordering::SeqCst), 0);
+        assert_eq!(state.committed_height(), 0);
+        assert_fences_free_except(&state, "");
     }
+}
+
+#[test]
+fn queued_advert_reader_cannot_split_original_apply_publication_lease() {
+    let (state, decision) = fixture_decision();
+    let expected_tip = (decision.finality().height, decision.finality().block_hash);
+    let lease = state.kura.try_publication_lease().unwrap();
+    let authenticated = SourceAuthenticatedCarrier::try_new(decision, lease)
+        .unwrap_or_else(|(_, error)| panic!("original source authentication: {error:?}"));
+    let wakes = Arc::new(WakeCount::default());
+    std::thread::scope(|scope| {
+        let (contended, contention) = std::sync::mpsc::channel();
+        let (finished, completion) = std::sync::mpsc::channel();
+        let kura = &state.kura;
+        let reader = scope.spawn(move || {
+            // Prove contention on the actual original owner before entering the
+            // same blocking advert-tip read used by the Native runner.
+            let wait = match kura.try_publication_lease() {
+                Err(KuraPublicationPreparationError::Busy {
+                    field: "prune_lock",
+                    wait,
+                }) => wait,
+                Err(error) => panic!("wrong original dependency: {error:?}"),
+                Ok(_) => panic!("Apply must retain its original prune fence"),
+            };
+            contended.send(wait).unwrap();
+            let tip = kura.exact_kura_replica_advert_tip();
+            finished.send(tip).unwrap();
+        });
+        let mut wait = contention
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reader proves original lock contention")
+            .wait_for_release();
+        assert!(poll(&mut wait, &wakes).is_pending());
+        let prepared = authenticated
+            .try_prepare(&state, None)
+            .unwrap_or_else(|(_, error)| panic!("one-lease durable preparation: {error:?}"));
+        // Even an immediately reacquired fence would have released this exact
+        // observation. Assert continuity across witness, archives and State.
+        assert!(poll(&mut wait, &wakes).is_pending());
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+        assert!(completion.try_recv().is_err());
+        drop(
+            prepared
+                .publish()
+                .unwrap_or_else(|(_, error)| panic!("original Apply publication: {error:?}")),
+        );
+        assert!(poll(&mut wait, &wakes).is_ready());
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            completion
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("reader completes after publication")
+                .unwrap(),
+            Some(expected_tip)
+        );
+        reader.join().unwrap();
+    });
+    assert_eq!(
+        state.committed_height(),
+        usize::try_from(expected_tip.0).unwrap()
+    );
+    assert_fences_free_except(&state, "");
 }
 
 #[test]
@@ -2361,11 +2461,10 @@ fn original_kura_contention_returns_exact_decided_carrier_and_release_driven_ret
         };
         // Kura refusal must win without entering any State fence.
         let state_held = state.state_commit_lock.lock();
-        let (retry, error) =
-            match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-                Ok(_) => panic!("original canonical owner is held"),
-                Err(refusal) => refusal,
-            };
+        let (retry, error) = match decision.try_prepare_physical(&state, None) {
+            Ok(_) => panic!("original canonical owner is held"),
+            Err(refusal) => refusal,
+        };
         assert!(matches!(
             &error,
             CarrierPhysicalPreparationError::Kura(KuraPublicationPreparationError::Busy {
@@ -2429,11 +2528,10 @@ fn original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owner
     let generation = state.state_view_generation();
     state.kura.poison_canonical_storage_for_tests();
     let state_held = state.state_commit_lock.lock();
-    let (retry, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("poison requires actual storage repair"),
-            Err(refusal) => refusal,
-        };
+    let (retry, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("poison requires actual storage repair"),
+        Err(refusal) => refusal,
+    };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::Kura(KuraPublicationPreparationError::Storage(
@@ -2516,11 +2614,10 @@ fn checkpoint_storage_refusal_precedes_state_and_retains_exact_originals() {
                 .unwrap();
         }
         let held = state.state_commit_lock.lock();
-        let (retry, error) =
-            match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-                Ok(_) => panic!("missing or replaced checkpoint is not the retained original"),
-                Err(refusal) => refusal,
-            };
+        let (retry, error) = match decision.try_prepare_physical(&state, None) {
+            Ok(_) => panic!("missing or replaced checkpoint is not the retained original"),
+            Err(refusal) => refusal,
+        };
         assert!(matches!(
             error,
             CarrierPhysicalPreparationError::Checkpoint(_)
@@ -2600,11 +2697,10 @@ fn attached_foreign_checkpoint_never_grants_state_acquisition() {
         foreign.block().encode_wire().unwrap()
     );
     let held = state.state_commit_lock.lock();
-    let (decision, error) =
-        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
-            Ok(_) => panic!("attachment is custody, not authority"),
-            Err(refusal) => refusal,
-        };
+    let (decision, error) = match decision.try_prepare_physical(&state, None) {
+        Ok(_) => panic!("attachment is custody, not authority"),
+        Err(refusal) => refusal,
+    };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::Checkpoint(_)
@@ -2736,7 +2832,7 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
             .unwrap();
         let prepared = acquire(decision, &state);
         let (competitor, error, _cleanup) = competitor
-            .try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(()))
             .err()
             .unwrap();
         drop(_cleanup);
@@ -2788,3 +2884,310 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
 
 #[path = "hash_preparation_tests.rs"]
 mod hash_preparation_tests;
+
+#[test]
+fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint()
+{
+    use crate::state::RetainedCarrier;
+    use crate::sumeragi::v2_apply::V2ApplyService;
+    use crate::sumeragi::v2_body_store::LocalValidationRefusal;
+    use mv::allocation::{AllocationBudget, AllocationRefusal};
+    fn file_image(
+        root: &std::path::Path,
+    ) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        fn visit(
+            root: &std::path::Path,
+            path: &std::path::Path,
+            output: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+        ) {
+            if !path.exists() {
+                return;
+            }
+            for entry in std::fs::read_dir(path).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(root, &path, output);
+                } else {
+                    output.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(path).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut output = std::collections::BTreeMap::new();
+        visit(root, root, &mut output);
+        output
+    }
+    let (state, proposal, topology, context) = fixture();
+    let state: Arc<State> = state.into();
+    let foreign = phase_foreign_state(&state);
+    let queue = phase_queue();
+    let (events, _) = tokio::sync::broadcast::channel(8);
+    let service = V2ApplyService::new(
+        Arc::clone(&state),
+        queue,
+        Arc::clone(&state.kura),
+        None,
+        None,
+        state.sumeragi_block_cadence(),
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        events,
+        Vec::new(),
+    );
+    let source = service.carrier_queue_source();
+    let budget = AllocationBudget::new(64 << 20);
+    let journals = prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
+        .prepare_journals(None, None, |inputs| {
+            let bytes = inputs
+                .world_journal_shell_bytes()?
+                .checked_add(inputs.retained_effects_layout.size())
+                .ok_or(AllocationRefusal::DemandOverflow)?;
+            budget.try_reserve_bytes(bytes)
+        })
+        .unwrap();
+    let reserved = budget.reserved_bytes();
+    assert!(reserved > 0);
+    let finality = signed_finality(
+        context.clone(),
+        subject(journals.valid.as_ref()),
+        journals.execution_prefix,
+        0,
+    );
+    let mut other_context = context.clone();
+    other_context.execution_policy_hash =
+        iroha_crypto::Hash::new(b"other authenticated publication policy");
+    let other_finality = signed_finality(
+        other_context,
+        subject(journals.valid.as_ref()),
+        journals.execution_prefix,
+        0,
+    );
+    let checkpoint = journals.checkpoint;
+    let commitment = journals.execution_prefix;
+    let wire = journals.valid.as_ref().encode_wire().unwrap();
+    let owner = RetainedCarrier::Validated(journals);
+    let allocations = phase_allocations(&owner);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let generation = state.state_view_generation();
+    let storage_before = file_image(&state.kura.store_root());
+    let (owner, refusal) = owner
+        .try_publish(&foreign, &source, finality.clone(), Waker::noop().clone())
+        .err()
+        .expect("byte-identical foreign State is not the original target");
+    assert!(matches!(
+        refusal,
+        LocalValidationRefusal::RecoveryRequired(_)
+    ));
+    assert!(matches!(&owner, RetainedCarrier::Validated(_)));
+    assert_eq!(phase_allocations(&owner), allocations);
+    assert_eq!(file_image(&state.kura.store_root()), storage_before);
+    let (owner, refusal) = owner
+        .try_publish(
+            &state,
+            &source,
+            other_finality.clone(),
+            Waker::noop().clone(),
+        )
+        .err()
+        .expect("foreign signed context cannot bind the original carrier");
+    assert!(matches!(
+        refusal,
+        LocalValidationRefusal::RecoveryRequired(_)
+    ));
+    assert!(matches!(&owner, RetainedCarrier::Validated(_)));
+    assert_eq!(phase_allocations(&owner), allocations);
+    assert_eq!(file_image(&state.kura.store_root()), storage_before);
+    assert_eq!(state.kura.blocks_count(), 0);
+    assert!(state.kura.v2_finality_artifact(1).unwrap().is_none());
+    let held = state.state_commit_lock.lock();
+    let wakes = Arc::new(WakeCount::default());
+    let wake = Waker::from(Arc::clone(&wakes));
+    let (owner, refusal) = owner
+        .try_publish(&state, &source, finality.clone(), wake)
+        .err()
+        .expect("original State physical fence is held");
+    let LocalValidationRefusal::PhysicalBusy(busy) = refusal else {
+        panic!("original writer must return its release observation: {refusal:?}");
+    };
+    let mut wait = busy.wait.wait_for_release();
+    assert!(poll(&mut wait, &wakes).is_pending());
+    assert!(matches!(&owner, RetainedCarrier::Checkpointed(_)));
+    assert_eq!(phase_allocations(&owner), allocations);
+    assert_eq!(owner.ready_commitment(), Some(commitment));
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+    drop(held);
+    assert!(poll(&mut wait, &wakes).is_ready());
+    let stored = file_image(&state.kura.store_root());
+    let (owner, refusal) = owner
+        .try_publish(&state, &source, other_finality, Waker::noop().clone())
+        .err()
+        .expect("checkpointed retry cannot replace its original decision");
+    assert!(matches!(
+        refusal,
+        LocalValidationRefusal::RecoveryRequired(_)
+    ));
+    assert!(matches!(&owner, RetainedCarrier::Checkpointed(_)));
+    assert_eq!(phase_allocations(&owner), allocations);
+    assert_eq!(file_image(&state.kura.store_root()), stored);
+    let published = owner
+        .try_publish(&state, &source, finality.clone(), Waker::noop().clone())
+        .unwrap_or_else(|(_, refusal)| panic!("retry original carrier: {refusal:?}"));
+    let published = std::thread::spawn(move || published).join().unwrap();
+    assert_eq!(published.block().encode_wire().unwrap(), wire);
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.state_view_generation(), generation + 2);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        checkpoint
+    );
+    assert_eq!(
+        state.kura.v2_finality_artifact(1).unwrap().as_ref(),
+        Some(finality.artifact())
+    );
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_fences_free_except(&state, "");
+    drop(published);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_publication_orders_replay_metadata_before_finality_at_each_durable_cut() {
+    use crate::state::RetainedCarrier;
+    use crate::sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal};
+
+    let (state, proposal, topology, context) = fixture();
+    let state: Arc<State> = state.into();
+    let (events, _) = tokio::sync::broadcast::channel(8);
+    let service = V2ApplyService::new(
+        Arc::clone(&state),
+        phase_queue(),
+        Arc::clone(&state.kura),
+        None,
+        None,
+        state.sumeragi_block_cadence(),
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        events,
+        Vec::new(),
+    );
+    let source = service.carrier_queue_source();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let journals = prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("original execution: {error}"))
+        .prepare_journals(None, None, |_| {
+            Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases)))
+        })
+        .unwrap();
+    let finality = signed_finality(
+        context,
+        subject(journals.valid.as_ref()),
+        journals.execution_prefix,
+        0,
+    );
+    let checkpoint = journals.checkpoint;
+    let mut owner = RetainedCarrier::Validated(journals);
+    let allocations = phase_allocations(&owner);
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let generation = state.state_view_generation();
+
+    for cut in 0..3 {
+        match cut {
+            0 => state.kura.fail_next_wsv_checkpoint_write_for_tests(),
+            1 => state.kura.fail_next_commit_manifest_write_for_tests(),
+            _ => state.kura.fail_next_v2_finality_write_for_tests(),
+        }
+        let (retained, refusal) = owner
+            .try_publish(&state, &source, finality.clone(), Waker::noop().clone())
+            .err()
+            .expect("injected durability cut must retain the decided owner");
+        owner = retained;
+        assert!(matches!(
+            refusal,
+            LocalValidationRefusal::RecoveryRequired(_)
+        ));
+        assert!(matches!(&owner, RetainedCarrier::Decided(_)));
+        assert_eq!(phase_allocations(&owner), allocations);
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        assert_eq!(state.committed_height(), 0);
+        assert_eq!(state.state_view_generation(), generation);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            before
+        );
+        assert!(state.kura.v2_finality_artifact(1).unwrap().is_none());
+        assert_eq!(state.kura.wsv_checkpoint(1).unwrap().is_some(), cut >= 1);
+        let manifest = state.kura.commit_manifest(1).unwrap();
+        assert_eq!(manifest.is_some(), cut >= 2);
+        if let Some(manifest) = manifest {
+            assert!(manifest.binds_authenticated_v2_commit_authority(finality.artifact()));
+            assert!(
+                state
+                    .kura
+                    .commit_manifest_has_wsv_binding(&manifest)
+                    .unwrap()
+            );
+        }
+        let plan = crate::sumeragi::v2_recovery::plan_v2_startup_replay(&state.kura)
+            .unwrap_or_else(|error| panic!("durable cut {cut} must be restartable: {error}"));
+        assert_eq!(plan.durable_height(), 1);
+        assert_eq!(plan.complete_prefix_height(), 0);
+        assert_eq!(plan.pending_tip_height(), Some(1));
+        drop(plan);
+        state.kura.finish_v2_startup_finality_verification();
+    }
+
+    let held = state.state_commit_lock.lock();
+    let (owner, refusal) = owner
+        .try_publish(&state, &source, finality.clone(), Waker::noop().clone())
+        .err()
+        .expect("durability precedes the held physical publication fence");
+    assert!(matches!(refusal, LocalValidationRefusal::PhysicalBusy(_)));
+    assert!(matches!(&owner, RetainedCarrier::Checkpointed(_)));
+    assert_eq!(phase_allocations(&owner), allocations);
+    assert_eq!(state.committed_height(), 0);
+    let manifest = state
+        .kura
+        .commit_manifest(1)
+        .unwrap()
+        .expect("finality requires manifest");
+    assert!(manifest.binds_authenticated_v2_commit_authority(finality.artifact()));
+    assert!(
+        state
+            .kura
+            .commit_manifest_has_wsv_binding(&manifest)
+            .unwrap()
+    );
+    assert_eq!(
+        state.kura.v2_finality_artifact(1).unwrap().as_ref(),
+        Some(finality.artifact())
+    );
+    let plan = crate::sumeragi::v2_recovery::plan_v2_startup_replay(&state.kura)
+        .expect("finality cut must have complete replay metadata");
+    assert_eq!(plan.complete_prefix_height(), 1);
+    assert_eq!(plan.pending_tip_height(), None);
+    drop(plan);
+    state.kura.finish_v2_startup_finality_verification();
+    drop(held);
+    let published = owner
+        .try_publish(&state, &source, finality, Waker::noop().clone())
+        .unwrap_or_else(|(_, refusal)| panic!("retry original execution: {refusal:?}"));
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.state_view_generation(), generation + 2);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        checkpoint
+    );
+    assert_eq!(releases.load(Ordering::SeqCst), 0);
+    drop(published);
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+#[path = "captured_checkpoint_tests.rs"]
+mod captured_checkpoint_tests;

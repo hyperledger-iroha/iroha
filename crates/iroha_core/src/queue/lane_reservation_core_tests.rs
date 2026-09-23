@@ -29,8 +29,11 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
         lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,
@@ -38,9 +41,11 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         fsync_mode: kura_defaults::FSYNC_MODE,
         fsync_interval: kura_defaults::FSYNC_INTERVAL,
     };
-    let (kura, _) = Kura::new_fresh_single_lane(
+    let nexus = Nexus::default();
+    let (kura, _) = Kura::new_with_configured_lane_catalog(
         &config,
-        &iroha_config::parameters::actual::LaneConfig::default(),
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
     )
     .expect("open an exclusively owned lane-reservation Kura root");
     let mut state = State::new(
@@ -137,7 +142,9 @@ fn lane_reservation_key_current_layout_roundtrips() {
 #[test]
 fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::queue::tests::lane_reservation_key_rejects_pre_release_duplicate_identity_layout::PreReleaseLaneQueueReservationKeyV1")]
+    #[norito_schema(
+        name = "iroha_core::queue::tests::lane_reservation_key_rejects_pre_release_duplicate_identity_layout::PreReleaseLaneQueueReservationKeyV1"
+    )]
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     #[norito(deny_unknown_fields)]
     struct PreReleaseLaneQueueReservationKeyV1 {

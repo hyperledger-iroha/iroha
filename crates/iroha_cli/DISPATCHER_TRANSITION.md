@@ -15,6 +15,10 @@ source identity, all four transferred binaries, source receipt and completed
 transfer must join. Six-payload imports do not satisfy this command.
 
 ```sh
+"$IMPORTED_IROHA" taira public-reset capture-dispatcher-current-runtime \
+  --expected-host-identity-sha256 "$APPROVED_GUEST_HOST_IDENTITY_SHA256" \
+  --output "$CURRENT_RUNTIME_INPUT"
+
 "$IMPORTED_IROHA" taira public-reset prepare-dispatcher-transition \
   --import-root "$COMPLETED_IMPORT" \
   --expected-result-sha256 "$QUALIFIED_RESULT_SHA256" \
@@ -34,6 +38,18 @@ The output parent must already be an owner-private directory. No command opens a
 SSH connection or reads client/signing credentials. Invoke through the approved
 pinned route as root; authorization for ledger replacement remains the separate
 reset coordinator's responsibility.
+
+Run capture on the approved Linux guest after stopping all four validator units
+and before starting the replacement deployment. It reads the guest's Ed25519 SSH
+host public key, acquires the existing transition locks, checks all four loaded
+systemd units are stopped and nginx is running, derives the configuration release
+from each `current` symlink and the daemon revision/argv from each installed unit,
+hashes all installed artifacts, and records exact stopped state identities. It
+refuses changed selectors, units, files, host identity, or unsafe ownership, then
+atomically writes a new mode0600 typed record. Its JSON result prints the digest
+for `--expected-current-runtime-sha256`; the operator never edits runtime JSON.
+The installed unit source revision is the revision in its exact daemon path, which
+must use the current `release-<commit>-update-<operation>` launcher form.
 
 `current-runtime` is a mode0600 closed Norito JSON record with
 `schema: "iroha.taira.dispatcher-current-runtime.v1"`, `host_identity_sha256`,

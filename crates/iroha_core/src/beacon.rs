@@ -3408,6 +3408,7 @@ pub(crate) mod tests {
         keys: &[KeyPair],
         network_id: NetworkId,
         parent_hash: HashOf<BlockHeader>,
+        epoch_end_height: u64,
     ) -> wire::HeightContext {
         let roster = keys
             .iter()
@@ -3423,14 +3424,41 @@ pub(crate) mod tests {
             height: 40,
             view: 0,
         };
-        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 7, &roster);
+        // This fixture enters epoch seven immediately after boundary block 40.
+        // Retain the real generation-zero keys and installed beacon through that
+        // exact predecessor, then derive the contiguous authorization once.
+        let (previous_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+                network_id,
+                6,
+                parent_round.height,
+                &roster,
+            );
+        assert!(matches!(
+            previous_authorization.beacon,
+            iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(_)
+        ));
+        let kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &previous_authorization,
+                &kagemusha_mint_finality_authority,
+                epoch_end_height,
+                previous_authorization.beacon,
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
+                [0; 32],
+            );
+        assert_eq!(kagemusha_mint_finality_authorization.epoch, 7);
+        assert_eq!(kagemusha_mint_finality_authorization.first_height, 41);
+        assert_eq!(
+            kagemusha_mint_finality_authorization.last_height,
+            epoch_end_height
+        );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 41,
             epoch: 7,
-            epoch_end_height: 42,
+            epoch_end_height,
             next_epoch_snapshot: None,
             snapshot_bootstrap: None,
             mode: wire::ConsensusMode::Npos,
@@ -3458,8 +3486,8 @@ pub(crate) mod tests {
             }),
             quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
             roster,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             nexus_amx_context_hash: Hash::new(b"threshold beacon fixture nexus"),
             execution_policy_hash: Hash::new(b"threshold beacon fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -3599,13 +3627,17 @@ pub(crate) mod tests {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xB1);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
-        let mut context = live_producer_context(&keys, network_id, parent_hash);
-        context.epoch_end_height = 50;
+        let context = live_producer_context(&keys, network_id, parent_hash, 50);
         context.validate().expect("valid non-boundary context");
         assert_eq!(
             context.height, 41,
             "the fixture is the first height after boundary block 40"
         );
+        assert_eq!(
+            context.kagemusha_mint_finality_authorization.first_height, context.height,
+            "the retained authorization must start at the post-boundary height"
+        );
+        assert_eq!(context.epoch_end_height, 50);
         let roster = context
             .roster
             .iter()
@@ -3821,9 +3853,9 @@ pub(crate) mod tests {
             0xC2
         });
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD4; 32]));
-        let mut context = live_producer_context(&keys, network_id, parent_hash);
+        let epoch_end_height = if parliament_requested_slot { 50 } else { 42 };
+        let context = live_producer_context(&keys, network_id, parent_hash, epoch_end_height);
         if parliament_requested_slot {
-            context.epoch_end_height = 50;
             context.validate().expect("valid optional-slot context");
         }
         let roster = context
@@ -4079,7 +4111,7 @@ pub(crate) mod tests {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xA7);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD7; 32]));
-        let context = live_producer_context(&keys, network_id, parent_hash);
+        let context = live_producer_context(&keys, network_id, parent_hash, 42);
         let roster = context
             .roster
             .iter()
@@ -4154,7 +4186,7 @@ pub(crate) mod tests {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xA8);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD8; 32]));
-        let context = live_producer_context(&keys, network_id, parent_hash);
+        let context = live_producer_context(&keys, network_id, parent_hash, 42);
         let roster = context
             .roster
             .iter()
@@ -4214,7 +4246,7 @@ pub(crate) mod tests {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xA9);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD9; 32]));
-        let context = live_producer_context(&keys, network_id, parent_hash);
+        let context = live_producer_context(&keys, network_id, parent_hash, 42);
         let roster = context
             .roster
             .iter()
@@ -4292,7 +4324,7 @@ pub(crate) mod tests {
         let keys = live_producer_keys();
         let network_id = beacon_fixture_network_id(0xA1);
         let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD1; 32]));
-        let context = live_producer_context(&keys, network_id, parent_hash);
+        let context = live_producer_context(&keys, network_id, parent_hash, 42);
         let roster = context
             .roster
             .iter()
@@ -4539,7 +4571,7 @@ pub(crate) mod tests {
         ));
 
         let other_parent = HashOf::from_untyped_unchecked(Hash::prehashed([0xD2; 32]));
-        let other_context = live_producer_context(&keys, network_id, other_parent);
+        let other_context = live_producer_context(&keys, network_id, other_parent, 42);
         let other_state = live_producer_state(&fixture, cursor, other_parent);
         let mut other_anchor_producer = V2GlobalBeaconLifecycle::open(
             &other_context,

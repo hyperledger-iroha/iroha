@@ -107,13 +107,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "9da764b5c7ea5ef44f9e93049430b019133796135bbda358ef0a3c0c579618a5",
+                "614626bc4c9057cb34d0319ebbac59e8773f38cf55c29dad537909c0ca1dd3d9",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 320, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 321, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -131,12 +131,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 355, "complete populated record case inventory");
+            assert_eq!(case_count, 357, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 320, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 321, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -224,4 +224,16 @@ fn populated_record_values_preserve_the_original_capture() {
         assert_eq!(cases.len(), 1, "one original populated value for each gap");
         fixture_json::assert_json_matches(&cases[0], &frame_fields(&actual), nominal);
     }
+}
+
+#[test]
+#[ignore = "explicit maintenance command prints the canonical privacy qualification record"]
+fn print_privacy_qualification_record_fixture_row() {
+    let row = capture(super::privacy::RegisterPrivacyExact12QualificationV1::new(
+        crate::privacy::tests::generated_instruction_qualification(),
+    ));
+    println!(
+        "PRIVACY_QUALIFICATION_FIXTURE_ROW={}",
+        json::to_json(&row).expect("privacy qualification record")
+    );
 }

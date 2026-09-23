@@ -50,8 +50,11 @@ fn completed_secondary_kura_config(
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: defaults::FSYNC_INTERVAL,
         lane_history_retention: defaults::LANE_HISTORY_RETENTION,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: defaults::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::REPLICA_ADVERT_POLICY,
     }

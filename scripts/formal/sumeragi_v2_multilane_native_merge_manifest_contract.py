@@ -1173,7 +1173,7 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
  'method',
  'Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards',
  ('let used = self.kura_disk_usage_bytes()?;',
-  'let lane = self.lane_publication_budget_reserved_bytes()?;',
+  'let lane = self.all_publication_budget_reserved_bytes()?;',
   'let required = [\n'
   '            pending,\n'
   '            lane,\n'
@@ -1202,7 +1202,7 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
     ('crates/iroha_core/src/kura.rs',
  'method',
  'Kura::check_replace_storage_budget',
- ('let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+ ('let lane_publication_reservations = self.all_publication_budget_reserved_bytes()?;',
   '.saturating_add(lane_publication_reservations)')),
 )
 
@@ -1306,7 +1306,8 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "method",
         "PrefixPreparation::capture",
         "let manifest = exec::NativeAmxApplicationManifestV1::"
-        "from_result_bearing_block_and_merge_entry( block, None, )?;",
+        "from_result_bearing_block_and_merge_entry( block, None, )"
+        ".map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",

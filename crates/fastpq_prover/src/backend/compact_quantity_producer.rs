@@ -42,7 +42,7 @@ use crate::{
 
 // Exact valid maximal-byte shape at the fixed 375-query geometry, not the
 // larger invalid loose decode shape. The engine independently checks this cap.
-const SHARED_FRAME_BOUND: usize = 4_279_877;
+const SHARED_FRAME_BOUND: usize = 4_017_376;
 static PRODUCER: Mutex<()> = Mutex::new(());
 
 #[path = "compact_quantity_producer/decode_policy.rs"]

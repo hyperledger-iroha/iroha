@@ -438,7 +438,7 @@ state_test! { sync native_recorded_control_rejects_changed_opening_and_stale_ver
             .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
             else { panic!("exact original first-source owners"); };
         let error = source.record_execution(carrier, other).err().expect("verified foreign context is not applying authority");
-        assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+        assert!(matches!(error, MergeLedgerCommitError::NativeControlValidation(_)), "{error}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
         assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
         assert_native_economic_relay_recorder_released();
@@ -587,7 +587,7 @@ state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_p
             else { panic!("first input and Decisions remain authentic independently of controls"); };
         let error = source.record_execution(carrier, fixture.applying.clone())
             .err().expect("real requested beacon must be exact");
-        assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(_)), "{error}");
+        assert!(matches!(error, MergeLedgerCommitError::NativeControlValidation(_)), "{error}");
         assert!(error.to_string().contains("beacon"), "{error}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
         assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);

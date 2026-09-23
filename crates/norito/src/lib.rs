@@ -605,10 +605,12 @@ pub mod json {
     use std::cell::Cell;
     use url::Url;
     mod exact_string;
+    mod key_codec;
     mod key_hash;
     pub use super::{
         JsonDeserialize as Deserialize, JsonDeserialize, JsonSerialize as Serialize, JsonSerialize,
     };
+    pub use key_codec::JsonKeyCodec;
     /// Maximum structural nesting accepted while constructing a JSON [`Value`].
     ///
     /// The extra structural level covers a required boundary envelope around a value at the

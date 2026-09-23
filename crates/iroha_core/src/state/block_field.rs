@@ -53,8 +53,8 @@ pub type CellField<'a, V> =
     BlockField<mv::cell::Block<'a, V>, mv::cell::BlockPublicationSlot<'a, V>>;
 
 /// Exact Storage field types retain both original map publications in one phase.
-pub type StorageField<'a, K, V> =
-    BlockField<mv::storage::Block<'a, K, V>, mv::storage::BlockPublicationSlot<'a, K, V>>;
+pub type StorageField<'a, K, V, M = concread::bptree::Untracked> =
+    BlockField<mv::storage::Block<'a, K, V, M>, mv::storage::BlockPublicationSlot<'a, K, V, M>>;
 
 enum Phase<B, P> {
     Executing(B),

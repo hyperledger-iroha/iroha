@@ -5,7 +5,7 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters},
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
     },
     parameter::{Parameter, system::SumeragiConsensusMode},
@@ -31,18 +31,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
-        FIXTURE
-            .get_or_init(|| {
-                // Core genesis execution has the same bounded stack requirement as Kagami.
-                std::thread::Builder::new()
-                    .name("public-input-genesis-fixture".into())
-                    .stack_size(16 * 1024 * 1024)
-                    .spawn(Self::build)
-                    .unwrap()
-                    .join()
-                    .unwrap()
-            })
-            .clone()
+        FIXTURE.get_or_init(Self::build).clone()
     }
 
     fn build() -> Self {
@@ -70,12 +59,11 @@ impl Fixture {
             .collect();
         validators.sort_by(|a, b| a.validator.cmp(&b.validator));
         let mint = KagemushaMintFinalityGenesisParametersV1 {
-            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch: 0,
+                generation: 0,
                 validators,
             },
-            next_epoch_roster: None,
         };
         let topology = (110..114)
             .map(|seed| {
@@ -248,8 +236,11 @@ fn execute_fixture_genesis(
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        transaction_history_bytes: iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -346,77 +337,68 @@ pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::Validated
 pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
     static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
     let fixture = FIXTURE.get_or_init(|| {
-        std::thread::Builder::new()
-            .name("deployment-lane-genesis-fixture".into())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(|| {
-                use iroha_data_model::{
-                    account::{Account, address::AccountAddress},
-                    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
-                    domain::Domain,
-                    isi::{
-                        ActivatePublicLaneValidator, Mint, Register, RegisterPublicLaneValidator,
-                    },
-                };
-                use iroha_model_base::{domain::DomainId, metadata::Metadata, topology::LaneId};
-                use iroha_primitives::numeric::{NumericSpec, Quantity};
+        use iroha_data_model::{
+            account::{Account, address::AccountAddress},
+            asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+            domain::Domain,
+            isi::{ActivatePublicLaneValidator, Mint, Register, RegisterPublicLaneValidator},
+        };
+        use iroha_model_base::{domain::DomainId, metadata::Metadata, topology::LaneId};
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
 
-                let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
-                let escrow = AccountAddress::from_i105_for_discriminant(
-                    &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
-                    Some(iroha_config::parameters::defaults::common::chain_discriminant()),
-                )
-                .unwrap()
-                .to_i105_for_discriminant(CHAIN_DISCRIMINANT)
-                .unwrap();
-                let escrow = AccountId::parse_encoded(&escrow).unwrap();
-                let stake_asset = AssetDefinitionId::parse_address_literal(
-                    &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
-                )
-                .unwrap();
-                let mut instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
-                    Register::domain(Domain::new(
-                        DomainId::parse_fully_qualified("nexus.universal").unwrap(),
-                    ))
+        let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let escrow = AccountAddress::from_i105_for_discriminant(
+            &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+            Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+        )
+        .unwrap()
+        .to_i105_for_discriminant(CHAIN_DISCRIMINANT)
+        .unwrap();
+        let escrow = AccountId::parse_encoded(&escrow).unwrap();
+        let stake_asset = AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+        )
+        .unwrap();
+        let mut instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
+            Register::domain(Domain::new(
+                DomainId::parse_fully_qualified("nexus.universal").unwrap(),
+            ))
+            .into(),
+            Register::account(Account::new(escrow.clone())).into(),
+            Register::asset_definition(AssetDefinition::new(
+                stake_asset.clone(),
+                "Fixture stake",
+                NumericSpec::default(),
+                AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+        ];
+        for seed in 110..114 {
+            let validator = AccountId::new(key(seed + 20, Algorithm::Ed25519).public_key().clone());
+            let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
+            instructions.extend([
+                Register::account(Account::new(validator.clone())).into(),
+                Mint::asset_quantity(1_u64, AssetId::new(stake_asset.clone(), validator.clone()))
                     .into(),
-                    Register::account(Account::new(escrow)).into(),
-                    Register::asset_definition(AssetDefinition::new(
-                        stake_asset.clone(),
-                        "Fixture stake",
-                        NumericSpec::default(),
-                        AssetBalancePolicy::Global,
-                        None,
-                    ))
-                    .into(),
-                ];
-                for seed in 110..114 {
-                    let validator =
-                        AccountId::new(key(seed + 20, Algorithm::Ed25519).public_key().clone());
-                    let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
-                    instructions.extend([
-                        Register::account(Account::new(validator.clone())).into(),
-                        Mint::asset_quantity(
-                            1_u64,
-                            AssetId::new(stake_asset.clone(), validator.clone()),
-                        )
-                        .into(),
-                        RegisterPublicLaneValidator::new(
-                            LaneId::SINGLE,
-                            validator.clone(),
-                            peer,
-                            validator.clone(),
-                            Quantity::from(1_u64),
-                            Metadata::default(),
-                        )
-                        .into(),
-                        ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),
-                    ]);
-                }
-                Fixture::build_with_epoch_and_instructions(20, instructions)
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+                RegisterPublicLaneValidator::new(
+                    LaneId::SINGLE,
+                    validator.clone(),
+                    peer,
+                    validator.clone(),
+                    Quantity::from(1_u64),
+                    Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset.clone(), validator.clone()),
+                        AssetId::new(stake_asset.clone(), escrow.clone()),
+                        Quantity::from(1_u64),
+                    ),
+                )
+                .into(),
+                ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),
+            ]);
+        }
+        Fixture::build_with_epoch_and_instructions(20, instructions)
     });
     (fixture.block.clone(), fixture.genesis.clone())
 }
@@ -425,23 +407,13 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
 pub(crate) fn deployment_genesis_administrator_fixture() -> (SignedBlock, KeyPair) {
     static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
     let fixture = FIXTURE.get_or_init(|| {
-        std::thread::Builder::new()
-            .name("epoch-administrator-genesis-fixture".into())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(|| {
-                let administrator =
-                    AccountId::new(key(101, Algorithm::Ed25519).public_key().clone());
-                let permission = iroha_data_model::permission::Permission::new(
-                    "CanSetParameters".parse().unwrap(),
-                    iroha_primitives::json::Json::from(norito::json::Value::Null),
-                );
-                let grant =
-                    iroha_data_model::isi::Grant::account_permission(permission, administrator);
-                Fixture::build_with_epoch_and_instructions(20, vec![grant.into()])
-            })
-            .unwrap()
-            .join()
-            .unwrap()
+        let administrator = AccountId::new(key(101, Algorithm::Ed25519).public_key().clone());
+        let permission = iroha_data_model::permission::Permission::new(
+            "CanSetParameters".parse().unwrap(),
+            iroha_primitives::json::Json::from(norito::json::Value::Null),
+        );
+        let grant = iroha_data_model::isi::Grant::account_permission(permission, administrator);
+        Fixture::build_with_epoch_and_instructions(20, vec![grant.into()])
     });
     (fixture.block.clone(), fixture.genesis.clone())
 }
@@ -709,43 +681,31 @@ fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
     // Each case executes and signs its own real genesis; changing only a raw
     // manifest would fail authentication before reaching the production guard.
     for epoch in [8, 9, 12] {
-        std::thread::Builder::new()
-            .name(format!("beacon-window-epoch-{epoch}"))
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
-                let fixture = Fixture::build_with_epoch(epoch);
-                let mut inventory = sample_inventory_fixture();
-                let roster = iroha_core::sumeragi::signed_genesis_voting_peers(
-                    &iroha_genesis::GenesisBlock(fixture.block.clone()),
-                )
-                .unwrap();
-                for (client, peer) in inventory.validator_clients.iter_mut().zip(roster) {
-                    client.peer_id = peer.to_string();
-                }
-                let result = host::beacon::prepare_public_beacon_inputs(
-                    &fixture.block.encode_wire().unwrap(),
-                    &json_line(&fixture.manifest).unwrap(),
-                    fixture.genesis.public_key(),
-                    fixture.block.hash(),
-                    &inventory.authorization_nonce,
-                    &inventory.validators,
-                    &inventory.validator_clients,
-                );
-                if epoch == 8 {
-                    let error =
-                        result.expect_err("pulse 7 leaves no preceding installation carrier");
-                    assert!(
-                        format!("{error:#}")
-                            .contains("first mandatory beacon pulse after height 7")
-                    );
-                } else {
-                    result.expect("the native signed epoch permits installation before the pulse");
-                }
-            })
-            .unwrap()
-            .join()
-            .unwrap();
+        let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+        let fixture = Fixture::build_with_epoch(epoch);
+        let mut inventory = sample_inventory_fixture();
+        let roster = iroha_core::sumeragi::signed_genesis_voting_peers(
+            &iroha_genesis::GenesisBlock(fixture.block.clone()),
+        )
+        .unwrap();
+        for (client, peer) in inventory.validator_clients.iter_mut().zip(roster) {
+            client.peer_id = peer.to_string();
+        }
+        let result = host::beacon::prepare_public_beacon_inputs(
+            &fixture.block.encode_wire().unwrap(),
+            &json_line(&fixture.manifest).unwrap(),
+            fixture.genesis.public_key(),
+            fixture.block.hash(),
+            &inventory.authorization_nonce,
+            &inventory.validators,
+            &inventory.validator_clients,
+        );
+        if epoch == 8 {
+            let error = result.expect_err("pulse 7 leaves no preceding installation carrier");
+            assert!(format!("{error:#}").contains("first mandatory beacon pulse after height 7"));
+        } else {
+            result.expect("the native signed epoch permits installation before the pulse");
+        }
     }
 }
 

@@ -4,8 +4,9 @@
 //! this consuming transition. H is a recipe over the original quotient pieces, with one derived
 //! blind; no extra polynomial handle or permanent H column exists. The scratch accounting covers
 //! only this stage's initialized buffers and metadata, not inherited owners, allocator overhead,
-//! backend allocations or process RSS. TODO: implement the stored IPA multiopening suffix and
-//! exact Core constructor integration before exposing a complete proof entry point.
+//! backend allocations or process RSS. Its outer IPA continuation now constructs guarded P.
+//! The guarded inner IPA retains a closed completed owner. TODO: finish exact authenticated
+//! Core constructor integration before exposing a complete proof entry point.
 
 use super::{
     lookup::StoredLookupErrorV1,
@@ -611,15 +612,49 @@ where
             if request.source == StoredOpeningSourceV1::Quotient || count >= work.batch.0.len() {
                 return Err(StoredLookupErrorV1::Context);
             }
-            self = self.copy_source(request.source, &mut work.column.0)?;
-            // Serial Horner is algebraically identical over the exact prime field and avoids the
-            // ordinary helper's extra thread-count allocation. Every initialized result is guarded.
             let result = &mut work.batch.0[count];
             *result = C::Scalar::ZERO;
-            for coefficient in work.column.0.iter().rev() {
-                *result = *result * request.point + coefficient;
+            // Public coefficient banks already remain in the original key. Borrow them directly;
+            // all private stored sources reuse the single guarded column instead.
+            let public = match request.source {
+                StoredOpeningSourceV1::Fixed(column) => Some(
+                    &self
+                        .inner
+                        .inner
+                        .inner
+                        .pk
+                        .fixed_polys
+                        .get(column)
+                        .ok_or(StoredLookupErrorV1::Context)?
+                        .values,
+                ),
+                StoredOpeningSourceV1::Permutation(column) => Some(
+                    &self
+                        .inner
+                        .inner
+                        .inner
+                        .pk
+                        .permutation
+                        .polys
+                        .get(column)
+                        .ok_or(StoredLookupErrorV1::Context)?
+                        .values,
+                ),
+                _ => None,
+            };
+            if let Some(coefficients) = public {
+                for coefficient in coefficients.iter().rev() {
+                    *result = *result * request.point + coefficient;
+                }
+            } else {
+                self = self.copy_source(request.source, &mut work.column.0)?;
+                // Serial Horner is algebraically identical over the exact prime field and avoids
+                // the ordinary helper's extra thread-count allocation. The result is guarded.
+                for coefficient in work.column.0.iter().rev() {
+                    *result = *result * request.point + coefficient;
+                }
+                clear(&mut work.column.0);
             }
-            clear(&mut work.column.0);
             self.validate()?;
             count += 1;
         }
@@ -719,3 +754,7 @@ where
         Ok(owner)
     }
 }
+
+/// Original IPA multiopening through the guarded P frontier.
+#[path = "proof_evaluations/opening.rs"]
+pub(super) mod opening;

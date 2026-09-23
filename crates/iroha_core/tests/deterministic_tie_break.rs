@@ -1,8 +1,8 @@
-//! Deterministic scheduler tie-break test.
+//! Deterministic proposal-order execution test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-//! Independent account metadata events expose scheduler execution order; block entrypoint hashes
-//! and results retain payload order so their indices identify the serialized transactions.
+//! Independent account metadata events expose execution order. Ordinary network transactions
+//! follow proposal position, and block results retain those positions after execution.
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
@@ -13,6 +13,7 @@ use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,
     NetworkId,
+    SignedBlock,
     Vec<(AccountId, iroha_crypto::KeyPair)>,
 ) {
     let chain_id: ChainId = "chain".parse().unwrap();
@@ -35,14 +36,19 @@ fn build_world() -> (
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish scheduler fixture genesis");
     (
         state,
         network_id,
+        genesis,
         vec![(a1, k1), (a2, k2), (a3, k3), (a4, k4)],
     )
 }
 fn run_block(
     state: &iroha_core::state::State,
+    genesis: &SignedBlock,
     txs: Vec<SignedTransaction>,
 ) -> (ValidBlock, Vec<AccountId>) {
     let payload_hashes: Vec<_> = txs
@@ -55,7 +61,7 @@ fn run_block(
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
         .collect();
     let new_block = BlockBuilder::new(acc)
-        .chain(0, None)
+        .chain(0, Some(genesis))
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let mut sb = state.block(new_block.header());
@@ -81,7 +87,7 @@ fn run_block(
     assert_eq!(
         vb.as_ref().network_input_hashes().collect::<Vec<_>>(),
         payload_hashes,
-        "entrypoint hashes must preserve payload order independently of execution order"
+        "entrypoint hashes must preserve proposal order"
     );
     // Drop the overlay so every permutation starts from identical account state.
     (vb, execution_order)
@@ -107,20 +113,14 @@ fn independent_transactions(
         })
         .collect()
 }
-fn expected_execution_order(txs: &[SignedTransaction]) -> Vec<AccountId> {
-    let mut order: Vec<_> = txs.iter().enumerate().collect();
-    order.sort_by_key(|(index, tx)| (tx.hash_as_entrypoint(), *index));
-    order
-        .into_iter()
-        .map(|(_, tx)| tx.authority().clone())
-        .collect()
+fn proposal_order(txs: &[SignedTransaction]) -> Vec<AccountId> {
+    txs.iter().map(|tx| tx.authority().clone()).collect()
 }
 #[test]
-fn scheduler_tie_break_stable_by_call_hash_then_index() {
-    let (state, network_id, accs) = build_world();
+fn ordinary_network_execution_follows_proposal_order() {
+    let (state, network_id, genesis, accs) = build_world();
     let txs = independent_transactions(network_id, &accs);
-    let expected = expected_execution_order(&txs);
-    // Define a few deterministic permutations
+    // Each permutation is a distinct proposal order, irrespective of entrypoint hashes.
     let perms: Vec<Vec<usize>> = vec![
         vec![0, 1, 2, 3], // identity
         vec![3, 2, 1, 0], // reverse
@@ -130,8 +130,9 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
     ];
     for p in perms {
         let permuted_txs: Vec<_> = p.iter().map(|&i| txs[i].clone()).collect();
-        let (vb, got) = run_block(&state, permuted_txs);
-        assert_eq!(got, expected, "execution order must be stable");
+        let expected = proposal_order(&permuted_txs);
+        let (vb, got) = run_block(&state, &genesis, permuted_txs);
+        assert_eq!(got, expected, "execution must follow proposal order");
         // All must be approved
         assert!((0..4).all(|index| {
             vb.as_ref()
@@ -145,11 +146,10 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
     }
 }
 #[test]
-fn scheduler_tie_break_randomized_input_orders() {
-    // Same setup as the basic test, but exercise many randomized permutations
-    let (state, network_id, accs) = build_world();
+fn ordinary_network_execution_follows_randomized_proposal_orders() {
+    // Exercise many distinct proposal orders with a fixed, reproducible shuffle.
+    let (state, network_id, genesis, accs) = build_world();
     let txs = independent_transactions(network_id, &accs);
-    let expected = expected_execution_order(&txs);
     // Deterministic LCG for shuffling
     #[derive(Clone)]
     struct Lcg(u64);
@@ -177,10 +177,11 @@ fn scheduler_tie_break_randomized_input_orders() {
     let mut rng = Lcg::new(0x00C0_FFEE);
     for _ in 0..64 {
         let permuted = shuffle(&mut rng, &txs);
-        let (vb, got) = run_block(&state, permuted);
+        let expected = proposal_order(&permuted);
+        let (vb, got) = run_block(&state, &genesis, permuted);
         assert_eq!(
             got, expected,
-            "execution order must be stable across permutations"
+            "execution must follow each proposal's input order"
         );
         assert!((0..4).all(|index| {
             vb.as_ref()
@@ -196,7 +197,7 @@ fn scheduler_tie_break_randomized_input_orders() {
 
 #[test]
 fn scheduler_results_preserve_payload_indices_after_reordering() {
-    let (state, network_id, accs) = build_world();
+    let (state, network_id, genesis, accs) = build_world();
     let mut txs = independent_transactions(network_id, &accs);
     let (authority, keypair) = &accs[0];
     txs[0] = TransactionBuilder::new(
@@ -210,15 +211,17 @@ fn scheduler_results_preserve_payload_indices_after_reordering() {
     )])
     .sign(keypair.private_key());
     let rejected_hash = txs[0].hash_as_entrypoint();
-    let expected: Vec<_> = expected_execution_order(&txs)
-        .into_iter()
-        .filter(|account| account != authority)
-        .collect();
 
-    // Descending payload hashes guarantee a different order from the scheduler.
+    // Descending hashes show that ordinary execution follows proposal position,
+    // including when hash priority would choose the reverse order.
     txs.sort_by_key(|tx| std::cmp::Reverse(tx.hash_as_entrypoint()));
     for _ in 0..txs.len() {
-        let (block, execution_order) = run_block(&state, txs.clone());
+        let expected: Vec<_> = txs
+            .iter()
+            .filter(|tx| tx.hash_as_entrypoint() != rejected_hash)
+            .map(|tx| tx.authority().clone())
+            .collect();
+        let (block, execution_order) = run_block(&state, &genesis, txs.clone());
         assert_eq!(execution_order, expected);
         assert_eq!(block.as_ref().execution_outputs().len(), txs.len());
         for (index, tx) in txs.iter().enumerate() {

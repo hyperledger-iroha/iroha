@@ -3991,7 +3991,7 @@ mod gar_receipt_cli_tests {
 }
 #[derive(clap::Args, Debug)]
 pub struct FetchArgs {
-    /// Path to the Norito-encoded manifest (`.to`) describing the payload layout.
+    /// Path to the Norito-encoded manifest (`.norito`) describing the payload layout.
     #[arg(long, value_name = "PATH", required_unless_present = "storage_ticket")]
     pub manifest: Option<PathBuf>,
     /// Path to a canonical payload-bound `sorafs.chunk_fetch_plan.v1` JSON envelope.
@@ -4010,13 +4010,9 @@ pub struct FetchArgs {
     /// Storage ticket identifier to fetch manifest + chunk plan automatically from Torii.
     #[arg(long = "storage-ticket", value_name = "HEX")]
     pub storage_ticket: Option<String>,
-    /// Optional override for the Torii manifest endpoint used with `--storage-ticket`.
-    #[arg(
-        long = "manifest-endpoint",
-        value_name = "URL",
-        requires = "storage_ticket"
-    )]
-    pub manifest_endpoint: Option<String>,
+    /// Optional Torii base URL used with `--storage-ticket` (must end with `/`).
+    #[arg(long = "torii-url", value_name = "URL", requires = "storage_ticket")]
+    pub torii_url: Option<String>,
     /// Directory for storing manifest/chunk-plan artefacts fetched via `--storage-ticket`.
     #[arg(
         long = "manifest-cache-dir",
@@ -6433,7 +6429,7 @@ fn maybe_download_manifest<C: RunContext>(
         .as_ref()
         .expect("storage ticket present when fetch is required");
     let normalized_ticket = normalize_ticket_hex(ticket)?;
-    let fetcher = DaManifestFetcher::new(context.config(), args.manifest_endpoint.as_deref())?;
+    let fetcher = DaManifestFetcher::new(context.config(), args.torii_url.as_deref())?;
     let bundle = fetcher.fetch(&normalized_ticket)?;
     let persisted = persist_manifest_bundle(
         context,
@@ -6442,7 +6438,7 @@ fn maybe_download_manifest<C: RunContext>(
         &normalized_ticket,
     )?;
     Ok(Some(DownloadedManifest {
-        manifest_path: persisted.manifest,
+        manifest_path: persisted.manifest_raw,
         plan_path: persisted.chunk_plan,
         manifest_id: bundle.manifest_hash_hex,
     }))

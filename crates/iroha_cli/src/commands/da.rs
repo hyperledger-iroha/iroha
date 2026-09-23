@@ -1,8 +1,8 @@
 //! Generic data-availability CLI helpers (DA-8 roadmap workstream).
 use super::{
     da_common::{
-        DaManifestFetchBundle, DaManifestFetcher, DaPublisher, DaPublisherReceipt,
-        load_metadata_from_path, parse_blob_class, parse_fec_scheme, parse_storage_class,
+        DaManifestFetcher, DaPublisher, DaPublisherReceipt, load_metadata_from_path,
+        parse_blob_class, parse_fec_scheme, parse_storage_class,
     },
     sorafs::FetchArgs,
 };
@@ -38,7 +38,7 @@ use norito::{
     json::{self, Map, Number, Value},
     to_bytes,
 };
-use sorafs_car::{ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json};
+use sorafs_car::{ChunkStore, FilePayload, PorProof};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -63,8 +63,6 @@ pub enum Command {
     ProveAvailability(ProveAvailabilityArgs),
     /// Fetch the current DA proof-policy bundle from Torii.
     ProofPolicies(ProofPoliciesArgs),
-    /// Fetch the DA proof-policy snapshot from Torii.
-    ProofPolicySnapshot(ProofPolicySnapshotArgs),
     /// List DA commitments with optional filters.
     CommitmentsList(CommitmentQueryArgs),
     /// Build a DA commitment proof with optional filters.
@@ -91,7 +89,6 @@ impl Run for Command {
             Command::Prove(args) => args.run(context),
             Command::ProveAvailability(args) => args.run(context),
             Command::ProofPolicies(args) => args.run(context),
-            Command::ProofPolicySnapshot(args) => args.run(context),
             Command::CommitmentsList(args) => args.run_list(context),
             Command::CommitmentsProve(args) => args.run_prove(context),
             Command::CommitmentsVerify(args) => args.run(context),
@@ -203,9 +200,9 @@ pub struct GetBlobArgs {
     /// Storage ticket identifier (hex string) issued by Torii.
     #[arg(long = "storage-ticket", value_name = "HEX")]
     pub storage_ticket: String,
-    /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`).
-    #[arg(long = "endpoint", value_name = "URL")]
-    pub endpoint: Option<String>,
+    /// Optional Torii base URL for manifest reads (must end with `/`).
+    #[arg(long = "torii-url", value_name = "URL")]
+    pub torii_url: Option<String>,
     /// Directory for storing the fetched manifest + chunk plan artefacts.
     #[arg(long = "output-dir", value_name = "PATH")]
     pub output_dir: Option<PathBuf>,
@@ -213,7 +210,7 @@ pub struct GetBlobArgs {
 impl GetBlobArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let normalized_ticket = normalize_ticket_hex(&self.storage_ticket)?;
-        let fetcher = DaManifestFetcher::new(context.config(), self.endpoint.as_deref())?;
+        let fetcher = DaManifestFetcher::new(context.config(), self.torii_url.as_deref())?;
         let bundle = fetcher.fetch(&normalized_ticket)?;
         let manifest_label = bundle.manifest_hash_hex.to_ascii_lowercase();
         let persisted =
@@ -227,19 +224,9 @@ impl GetBlobArgs {
 pub struct ProofPoliciesArgs {}
 impl ProofPoliciesArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = context.client_from_config()?.get_da_proof_policies()?;
+        let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
+        let bundle = client.da().proof_policies()?;
         let text = render_da_proof_policies_text("DA proof policies", &bundle);
-        print_with_optional_text(context, Some(text), &bundle)
-    }
-}
-#[derive(Args, Debug, Default)]
-pub struct ProofPolicySnapshotArgs {}
-impl ProofPolicySnapshotArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = context
-            .client_from_config()?
-            .get_da_proof_policy_snapshot()?;
-        let text = render_da_proof_policies_text("DA proof policy snapshot", &bundle);
         print_with_optional_text(context, Some(text), &bundle)
     }
 }
@@ -267,17 +254,17 @@ pub struct CommitmentQueryArgs {
 impl CommitmentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_list_request()?;
-        let response = context
-            .client_from_config()?
-            .list_da_commitments(&request)?;
+        let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
+        let response = client.da().commitments(&request)?;
         let text = render_da_commitments_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_proof_request()?;
-        let response = context
-            .client_from_config()?
-            .prove_da_commitment(&request)?;
+        let client = iroha::blocking::AccountClient::from_client(
+            context.client_from_config()?.account_client()?,
+        )?;
+        let response = client.da().prove_commitment(&request)?;
         let text = render_da_commitment_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
@@ -333,7 +320,10 @@ impl CommitmentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let proof =
             load_json_payload::<DaCommitmentProof>(&self.proof_json, "DA commitment proof")?;
-        let response = context.client_from_config()?.verify_da_commitment(&proof)?;
+        let client = iroha::blocking::AccountClient::from_client(
+            context.client_from_config()?.account_client()?,
+        )?;
+        let response = client.da().verify_commitment(&proof)?;
         let text = render_da_verify_text(
             "DA commitment verification",
             response.valid,
@@ -372,17 +362,17 @@ pub struct PinIntentQueryArgs {
 impl PinIntentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_list_request()?;
-        let response = context
-            .client_from_config()?
-            .list_da_pin_intents(&request)?;
+        let client = iroha::blocking::Client::from_client(context.client_from_config()?)?;
+        let response = client.da().pin_intents(&request)?;
         let text = render_da_pin_intents_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_proof_request()?;
-        let response = context
-            .client_from_config()?
-            .prove_da_pin_intent(&request)?;
+        let client = iroha::blocking::AccountClient::from_client(
+            context.client_from_config()?.account_client()?,
+        )?;
+        let response = client.da().prove_pin_intent(&request)?;
         let text = render_da_pin_intent_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
@@ -446,7 +436,10 @@ pub struct PinIntentVerifyArgs {
 impl PinIntentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let proof = load_json_payload::<DaPinIntentProof>(&self.proof_json, "DA pin intent proof")?;
-        let response = context.client_from_config()?.verify_da_pin_intent(&proof)?;
+        let client = iroha::blocking::AccountClient::from_client(
+            context.client_from_config()?.account_client()?,
+        )?;
+        let response = client.da().verify_pin_intent(&proof)?;
         let text = render_da_verify_text(
             "DA pin intent verification",
             response.valid,
@@ -742,7 +735,7 @@ impl ProveAvailabilityArgs {
             .manifest_cache_dir
             .clone()
             .unwrap_or_else(|| artifact_root.clone());
-        let fetcher = DaManifestFetcher::new(context.config(), self.manifest_endpoint.as_deref())?;
+        let fetcher = DaManifestFetcher::new(context.config(), self.torii_url.as_deref())?;
         let bundle = fetcher.fetch(&normalized_ticket)?;
         let persisted = persist_manifest_bundle(
             context,
@@ -766,12 +759,12 @@ impl ProveAvailabilityArgs {
             })?;
         }
         let fetch_args = FetchArgs {
-            manifest: Some(persisted.manifest.clone()),
+            manifest: Some(persisted.manifest_raw.clone()),
             plan: Some(persisted.chunk_plan.clone()),
             manifest_id: Some(bundle.manifest_hash_hex.clone()),
             gateway_provider: self.gateway_provider.clone(),
             storage_ticket: None,
-            manifest_endpoint: None,
+            torii_url: None,
             manifest_cache_dir: None,
             client_id: Some(format!("prove-availability:{normalized_ticket}")),
             manifest_envelope: None,
@@ -809,7 +802,7 @@ impl ProveAvailabilityArgs {
             ))?;
         }
         let prove_args = ProveArgs {
-            manifest: persisted.manifest,
+            manifest: persisted.manifest_raw,
             payload: payload_path,
             json_out: self.json_out,
             sample_count: self.sample_count,
@@ -827,9 +820,9 @@ pub struct ProveAvailabilityArgs {
     /// Gateway provider descriptor reused by `sorafs fetch` (name=... , provider-id=... , base-url=... , stream-token=...).
     #[arg(long = "gateway-provider", value_name = "SPEC", required = true)]
     pub gateway_provider: Vec<String>,
-    /// Optional override for Torii manifest endpoint.
-    #[arg(long = "manifest-endpoint", value_name = "URL")]
-    pub manifest_endpoint: Option<String>,
+    /// Optional Torii base URL for manifest reads (must end with `/`).
+    #[arg(long = "torii-url", value_name = "URL")]
+    pub torii_url: Option<String>,
     /// Directory where manifests and plans downloaded from Torii are cached (defaults to `artifacts/da/fetch_<ts>`).
     #[arg(long = "manifest-cache-dir", value_name = "PATH")]
     pub manifest_cache_dir: Option<PathBuf>,
@@ -1058,54 +1051,18 @@ pub(super) fn normalize_ticket_hex(input: &str) -> Result<String> {
     hex::decode(trimmed).map_err(|err| eyre!("invalid storage ticket hex: {err}"))?;
     Ok(trimmed.to_ascii_lowercase())
 }
-#[derive(Debug)]
-pub(super) struct PersistedManifestPaths {
-    pub(super) manifest: PathBuf,
-    pub(super) manifest_json: PathBuf,
-    pub(super) chunk_plan: PathBuf,
-}
 pub(super) fn persist_manifest_bundle<C: RunContext>(
     _context: &mut C,
-    bundle: &DaManifestFetchBundle,
+    bundle: &iroha_storage_client::da::DaManifestBundle,
     output_dir: Option<PathBuf>,
     ticket_label: &str,
-) -> Result<PersistedManifestPaths> {
-    let parsed_chunk_plan = chunk_fetch_plan_from_json(&bundle.chunk_plan)
-        .map_err(|err| eyre!("refusing to persist invalid DA chunk plan: {err}"))?;
-    if hex::encode(parsed_chunk_plan.payload_digest) != bundle.blob_hash_hex {
-        return Err(eyre!(
-            "refusing to persist DA chunk plan whose payload digest does not match blob_hash"
-        ));
-    }
-    let root = default_fetch_root(output_dir)?;
-    fs::create_dir_all(&root).wrap_err_with(|| {
-        format!(
-            "failed to create manifest fetch directory `{}`",
-            root.display()
-        )
-    })?;
-    let manifest_path = root.join(format!("manifest_{ticket_label}.norito"));
-    let manifest_json_path = root.join(format!("manifest_{ticket_label}.json"));
-    let chunk_plan_path = root.join(format!("chunk_plan_{ticket_label}.json"));
-    fs::write(&manifest_path, &bundle.manifest_bytes)
-        .wrap_err_with(|| format!("failed to write `{}`", manifest_path.display()))?;
-    let manifest_json = norito::json::to_json_pretty(&bundle.manifest_json)
-        .wrap_err("failed to render manifest JSON")?;
-    fs::write(&manifest_json_path, manifest_json)
-        .wrap_err_with(|| format!("failed to write `{}`", manifest_json_path.display()))?;
-    let chunk_plan_json = norito::json::to_json_pretty(&bundle.chunk_plan)
-        .wrap_err("failed to render chunk plan JSON")?;
-    fs::write(&chunk_plan_path, chunk_plan_json)
-        .wrap_err_with(|| format!("failed to write `{}`", chunk_plan_path.display()))?;
-    Ok(PersistedManifestPaths {
-        manifest: manifest_path,
-        manifest_json: manifest_json_path,
-        chunk_plan: chunk_plan_path,
-    })
+) -> Result<iroha_storage_client::da::DaManifestPersistedPaths> {
+    bundle.persist_to_dir(default_fetch_root(output_dir)?, ticket_label)
 }
+
 fn build_manifest_fetch_value(
-    bundle: &DaManifestFetchBundle,
-    persisted: &PersistedManifestPaths,
+    bundle: &iroha_storage_client::da::DaManifestBundle,
+    persisted: &iroha_storage_client::da::DaManifestPersistedPaths,
 ) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -1122,7 +1079,7 @@ fn build_manifest_fetch_value(
     );
     map.insert(
         "manifest_path".into(),
-        Value::from(path_to_string(&persisted.manifest)),
+        Value::from(path_to_string(&persisted.manifest_raw)),
     );
     map.insert(
         "manifest_json_path".into(),
@@ -1137,15 +1094,15 @@ fn build_manifest_fetch_value(
     Value::Object(map)
 }
 fn render_manifest_fetch_text(
-    bundle: &DaManifestFetchBundle,
-    persisted: &PersistedManifestPaths,
+    bundle: &iroha_storage_client::da::DaManifestBundle,
+    persisted: &iroha_storage_client::da::DaManifestPersistedPaths,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "DA manifest fetched");
     let _ = writeln!(out, "storage_ticket: {}", bundle.storage_ticket_hex);
     let _ = writeln!(out, "manifest_hash: {}", bundle.manifest_hash_hex);
     let _ = writeln!(out, "blob_hash: {}", bundle.blob_hash_hex);
-    let _ = writeln!(out, "manifest: {}", persisted.manifest.display());
+    let _ = writeln!(out, "manifest: {}", persisted.manifest_raw.display());
     let _ = writeln!(out, "manifest_json: {}", persisted.manifest_json.display());
     let _ = writeln!(out, "chunk_plan: {}", persisted.chunk_plan.display());
     out
@@ -1764,6 +1721,7 @@ fn path_to_string(path: &Path) -> String {
 }
 #[cfg(test)]
 mod tests {
+    mod queries;
     use super::*;
     use iroha::{
         config::{self, Config},
@@ -1813,6 +1771,7 @@ mod tests {
     }
     struct TestContext {
         cfg: Config,
+        client_override: Option<iroha::client::Client>,
         printed: Vec<String>,
         i18n: Localizer,
         output_format: CliOutputFormat,
@@ -1843,6 +1802,7 @@ mod tests {
             };
             Self {
                 cfg,
+                client_override: None,
                 printed: Vec::new(),
                 i18n: Localizer::new(Bundle::Cli, Language::English),
                 output_format,
@@ -1850,6 +1810,12 @@ mod tests {
         }
     }
     impl RunContext for TestContext {
+        fn client_from_config(&self) -> Result<iroha::client::Client> {
+            if let Some(client) = &self.client_override {
+                return Ok(client.clone());
+            }
+            Ok(iroha::client::Client::builder(self.cfg.clone()).build()?)
+        }
         fn config(&self) -> &Config {
             &self.cfg
         }
@@ -2175,7 +2141,12 @@ mod tests {
         let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
         let manifest_json = norito::json::to_value(&manifest).expect("manifest JSON");
         let storage_ticket = "feedface".repeat(8);
-        let bundle = DaManifestFetchBundle {
+        let bundle = iroha_storage_client::da::DaManifestBundle {
+            client_blob_id_hex: hex::encode(manifest.client_blob_id.as_bytes()),
+            chunk_root_hex: hex::encode(manifest.chunk_root.as_bytes()),
+            lane_id: u64::from(manifest.lane_id.as_u32()),
+            epoch: manifest.epoch,
+            manifest_len: to_bytes(&manifest).unwrap().len() as u64,
             manifest_bytes,
             manifest_json,
             chunk_plan: sample_chunk_fetch_plan(&manifest),
@@ -2183,8 +2154,8 @@ mod tests {
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
         };
-        let persisted = PersistedManifestPaths {
-            manifest: PathBuf::from("/tmp/manifest.norito"),
+        let persisted = iroha_storage_client::da::DaManifestPersistedPaths {
+            manifest_raw: PathBuf::from("/tmp/manifest.norito"),
             manifest_json: PathBuf::from("/tmp/manifest.json"),
             chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
         };
@@ -2210,7 +2181,12 @@ mod tests {
     #[test]
     fn manifest_fetch_text_includes_paths() {
         let manifest = sample_manifest();
-        let bundle = DaManifestFetchBundle {
+        let bundle = iroha_storage_client::da::DaManifestBundle {
+            client_blob_id_hex: hex::encode(manifest.client_blob_id.as_bytes()),
+            chunk_root_hex: hex::encode(manifest.chunk_root.as_bytes()),
+            lane_id: u64::from(manifest.lane_id.as_u32()),
+            epoch: manifest.epoch,
+            manifest_len: to_bytes(&manifest).unwrap().len() as u64,
             manifest_bytes: Vec::new(),
             manifest_json: norito::json::to_value(&manifest).expect("manifest JSON"),
             chunk_plan: sample_chunk_fetch_plan(&manifest),
@@ -2218,8 +2194,8 @@ mod tests {
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
         };
-        let persisted = PersistedManifestPaths {
-            manifest: PathBuf::from("/tmp/manifest.norito"),
+        let persisted = iroha_storage_client::da::DaManifestPersistedPaths {
+            manifest_raw: PathBuf::from("/tmp/manifest.norito"),
             manifest_json: PathBuf::from("/tmp/manifest.json"),
             chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
         };

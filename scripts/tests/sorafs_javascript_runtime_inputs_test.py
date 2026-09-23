@@ -140,6 +140,118 @@ def test_original_fixture_roundtrip_without_any_historical_path_io(monkeypatch):
         result.manifest.version = "24.0.0"
 
 
+def produce(row, files):
+    return owner.produce_node_runtime_manifest(
+        version=row["version"], selected_executable=row["selected_executable"],
+        executable=row["executable"],
+        original_images={path: (body, next(item["mode"] for item in row["images"]
+                                           if item["path"] == path))
+                         for path, body in files.items()},
+        aliases={item["path"]: item["target"] for item in row["aliases"]})
+
+
+def test_producer_derives_complete_canonical_manifest_without_path_io(monkeypatch):
+    row, files = fixture()
+    def no_io(*_args, **_kwargs):
+        raise AssertionError("pure producer attempted filesystem I/O")
+    monkeypatch.setattr(builtins, "open", no_io)
+    monkeypatch.setattr(os, "open", no_io)
+    monkeypatch.setattr(Path, "open", no_io)
+    monkeypatch.setattr(Path, "resolve", no_io)
+    manifest = produce(row, files)
+    assert manifest.raw == owner.canonical_json(row)
+    assert manifest.sha256 == sha(manifest.raw)
+    assert manifest.aliases[0].resolved == "/observed/node"
+    bundle = (owner.MAGIC + struct.pack(">Q", len(manifest.raw)) + manifest.raw
+              + b"".join(files[item.path] for item in manifest.images))
+    assert owner.parse_node_runtime_bundle(
+        bundle, expected_manifest_sha256=manifest.sha256).manifest == manifest
+
+
+def test_producer_derives_inherited_shared_slots_from_original_bytes():
+    row, files = inherited_fixture()
+    produced = produce(row, files)
+    assert produced.raw == owner.canonical_json(row)
+    assert tuple(slot.path for slot in produced.edges[1].candidates) == (
+        "/observed/node/plugins/lib/Common", "/observed/node/bin/Common",
+        "/observed/node/lib/Common")
+    stale = copy.deepcopy(row)
+    stale["edges"][1]["candidates"].pop()
+    with pytest.raises(owner.RuntimeInputError, match="command/candidate relation differs"):
+        parse(stale, files)
+
+
+def test_producer_derives_all_slots_for_two_shared_requesters():
+    row, files = inherited_fixture()
+    exe = row["executable"]
+    peer = "/observed/node/plugins/Peer"
+    common = "/observed/node/plugins/lib/Common"
+    replace_image(row, files, exe, image(2, [
+        command(0xE, "/usr/lib/dyld"),
+        command(0x8000001C, "@loader_path"),
+        command(0x8000001C, "@loader_path/../lib"),
+        command(0xC, "/observed/node/plugins/Parent"),
+        command(0xC, peer),
+    ]))
+    files[peer] = image(6, [command(0xD, peer),
+                            command(0x8000001C, "@loader_path/lib"),
+                            command(0xC, "@rpath/Common")])
+    row["images"] = [{"path": path, "sha256": sha(body), "size": len(body), "mode": 0o755}
+                     for path, body in sorted(files.items())]
+    produced = produce(row, files)
+    shared = [edge for edge in produced.edges if edge.name == "@rpath/Common"]
+    assert len(shared) == 2
+    assert {edge.source for edge in shared} == {"/observed/node/plugins/Parent", peer}
+    assert all(tuple(slot.path for slot in edge.candidates) == (
+        common, "/observed/node/bin/Common", "/observed/node/lib/Common") for edge in shared)
+
+
+def test_producer_rederives_slots_after_original_command_change():
+    row, files = fixture()
+    exe = row["executable"]
+    replace_image(row, files, exe, image(2, [
+        command(0xE, "/usr/lib/dyld"),
+        command(0x8000001C, "@loader_path/../lib"),
+        command(0x8000001C, "@loader_path"),
+        existing_fixture()[32:],
+    ]))
+    produced = produce(row, files)
+    assert tuple(slot.path for slot in produced.edges[0].candidates) == (
+        "/observed/node/lib/Fixture", "/observed/node/bin/Fixture")
+    assert produced.edges[0].candidates[1].resolved is None
+    assert produced.raw != owner.canonical_json(row)
+    with pytest.raises(owner.RuntimeInputError, match="command/candidate relation differs"):
+        parse(row, files)
+
+
+@pytest.mark.parametrize("case", ["version", "image-bytearray", "image-size", "image-mode",
+                                  "image-extra", "alias-cycle", "alias-unused", "candidate-budget",
+                                  "manifest-budget"])
+def test_producer_rejects_invalid_or_unfunded_inputs(case, monkeypatch):
+    row, files = fixture()
+    originals = {path: (body, 0o755) for path, body in files.items()}
+    aliases = {item["path"]: item["target"] for item in row["aliases"]}
+    version = row["version"]
+    if case == "version": version = "24.01.0"
+    elif case == "image-bytearray":
+        path = row["executable"]; originals[path] = (bytearray(files[path]), 0o755)
+    elif case == "image-size":
+        path = row["executable"]; originals[path] = (b"x" * 31, 0o755)
+    elif case == "image-mode":
+        path = row["executable"]; originals[path] = (files[path], 0o777)
+    elif case == "image-extra":
+        path = "/unreachable/Extra"; originals[path] = (image(6, [command(0xD, path)]), 0o755)
+    elif case == "alias-cycle": aliases["/selected/node"] = "/selected/node"
+    elif case == "alias-unused": aliases["/unused"] = "/observed/node"
+    elif case == "candidate-budget": monkeypatch.setattr(owner, "MAX_CANDIDATES", 1)
+    elif case == "manifest-budget":
+        monkeypatch.setattr(owner, "MAX_MANIFEST_BYTES", len(owner.canonical_json(row)) - 1)
+    with pytest.raises(owner.RuntimeInputError):
+        owner.produce_node_runtime_manifest(
+            version=version, selected_executable=row["selected_executable"],
+            executable=row["executable"], original_images=originals, aliases=aliases)
+
+
 @pytest.mark.parametrize("case", ["schema", "platform", "architecture", "version", "version-leading-zero", "extra", "missing",
     "images-empty", "images-reversed", "images-duplicate", "size-bool", "size-small", "size-over", "mode-bool", "mode-write",
     "mode-no-exec", "digest", "selected", "alias-resolution", "alias-dangling", "alias-cycle", "alias-extra", "alias-case",

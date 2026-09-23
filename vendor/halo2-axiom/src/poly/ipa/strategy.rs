@@ -180,7 +180,7 @@ impl<
 
 /// Computes the coefficients of $g(X) = \prod\limits_{i=0}^{k-1} (1 + u_{k - 1 - i} X^{2^i})$.
 fn compute_s<F: Field>(u: &[F], init: F) -> Vec<F> {
-    assert!(!u.is_empty());
+    // With no IPA rounds the product is one, so its scaled coefficient is init.
     let mut v = vec![F::ZERO; 1 << u.len()];
     v[0] = init;
 
@@ -194,4 +194,40 @@ fn compute_s<F: Field>(u: &[F], init: F) -> Vec<F> {
     }
 
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halo2curves::pasta::{Fp, Fq};
+
+    fn coefficients<F: Field>() {
+        for init in [F::ZERO, F::ONE, -F::ONE] {
+            assert_eq!(compute_s::<F>(&[], init), vec![init]);
+            for challenges in [vec![F::ONE], vec![F::ZERO, -F::ONE, F::ONE]] {
+                let expected = (0..1_usize << challenges.len())
+                    .map(|bits| {
+                        challenges
+                            .iter()
+                            .rev()
+                            .enumerate()
+                            .fold(init, |value, (bit, u)| {
+                                if bits >> bit & 1 == 1 {
+                                    value * u
+                                } else {
+                                    value
+                                }
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(compute_s(&challenges, init), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn both_pasta_ipa_basis_including_empty_product_matches_expansion() {
+        coefficients::<Fp>();
+        coefficients::<Fq>();
+    }
 }

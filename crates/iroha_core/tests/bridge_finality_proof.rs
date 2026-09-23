@@ -14,7 +14,7 @@ use iroha_data_model::{
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
-    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
 };
 use iroha_model_base::peer::PeerId;
 use std::{num::NonZeroU64, sync::Arc};
@@ -59,10 +59,10 @@ fn fixture() -> Fixture {
             power,
         })
         .collect::<Vec<_>>();
-    let kagemusha_mint_finality_epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+    let kagemusha_mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
-        epoch: 0,
+        generation: 0,
         validators: roster
             .iter()
             .enumerate()
@@ -82,9 +82,12 @@ fn fixture() -> Fixture {
             })
             .collect(),
     };
-    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-        .finality_epoch_id()
-        .expect("derive bridge fixture Pasta roster ID");
+    let kagemusha_mint_finality_authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+            &kagemusha_mint_finality_authority,
+            10,
+        )
+        .expect("bridge fixture genesis authorization");
     let block_key = KeyPair::try_random().expect("block fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
@@ -115,8 +118,8 @@ fn fixture() -> Fixture {
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
         roster,
-        kagemusha_mint_finality_epoch_id,
-        kagemusha_mint_finality_epoch_roster,
+        kagemusha_mint_finality_authorization,
+        kagemusha_mint_finality_authority,
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
