@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1580 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1744 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1586 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1750 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -116,6 +116,7 @@ class BeaconGateTests(unittest.TestCase):
         self.assertCountEqual(names, (
             "registration_rejects_changed_signed_monetary_fields_without_custody_writes",
             "reward_claim_rejects_changed_record_source_and_entitlement_without_payment",
+            "genesis_monetary_scope_requires_exact_height_without_npos_parameters",
         ))
         expected = ["smartcontracts::isi::staking::tests::" + name for name in names]
         for platform in ("darwin", "linux"):
@@ -1999,10 +2000,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 shipping.assert_not_called()
                 fsm.assert_not_called()
 
-    def test_metadata_failure_stops_codegen_fixtures_and_checkpoint_changes(self):
+    def test_codegen_failure_stops_fixtures_and_checkpoint_changes_without_metadata_pass(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
-        later = ("compile_test_harnesses", "run_config_checks", "run_stages",
+        later = ("run_config_checks", "run_stages",
                  "check_shipping_binaries", "compile_network_binaries", "run_network_checks",
                  "independent_check_evidence")
         for scope in gate.QUALIFICATION_SCOPES:
@@ -2013,45 +2014,45 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     stack.enter_context(patch.object(gate, "run_lifecycle_source_checks"))
                     stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=shipping))
                     downstream = [stack.enter_context(patch.object(gate, name)) for name in later]
+                    failure = gate.CheckError("native codegen rejected macro/type error")
+                    compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", side_effect=failure))
                     stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                     self.test_metadata.reset_mock()
-                    failure = gate.CheckError("native metadata rejected macro/type error")
-                    self.test_metadata.side_effect = failure
                     with self.assertRaises(gate.CheckError) as caught:
                         gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
                             source_commit="a" * 40, lock_fds=(77, 88),
                             completed_independent_checks=completed, update_independent_checks=checkpoint)
                     self.assertIs(caught.exception, failure)
-                    self.test_metadata.assert_called_once()
+                    self.test_metadata.assert_not_called()
+                    compile.assert_called_once()
                     expected = gate.native_harness_plan(gate.qualification_stages(scope), shipping)[1]
-                    self.assertEqual(self.test_metadata.call_args.kwargs,
+                    self.assertEqual(compile.call_args.kwargs,
                                      {"harnesses": expected, "lock_fds": (77, 88)})
                     for action in downstream:
                         action.assert_not_called()
                     checkpoint.assert_not_called()
 
-    def test_metadata_success_precedes_codegen_with_identical_graph_environment_and_locks(self):
+    def test_full_qualification_uses_one_codegen_graph_with_identical_scope_and_locks(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         graphs = []
         for scope in gate.QUALIFICATION_SCOPES:
             order = []
             self.test_metadata.reset_mock()
-            self.test_metadata.side_effect = lambda *_args, **_kwargs: order.append("metadata")
             def stop_at_codegen(*_args, **_kwargs):
                 order.append("codegen")
-                raise gate.CheckError("stop after metadata ordering assertion")
+                raise gate.CheckError("stop after codegen graph assertion")
             with self.subTest(scope=scope), \
                  patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "compile_test_harnesses", side_effect=stop_at_codegen) as compile, \
                  contextlib.redirect_stdout(io.StringIO()):
-                with self.assertRaisesRegex(gate.CheckError, "stop after metadata"):
+                with self.assertRaisesRegex(gate.CheckError, "stop after codegen"):
                     gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
                                     source_commit="a" * 40, lock_fds=(77, 88))
-            self.assertEqual(order, ["metadata", "codegen"])
-            self.test_metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
-            self.assertIs(self.test_metadata.call_args.args[1], compile.call_args.args[1])
+            self.assertEqual(order, ["codegen"])
+            self.test_metadata.assert_not_called()
+            self.assertEqual({key: compile.call_args.args[1][key] for key in env}, env)
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (77, 88))
             graphs.append(compile.call_args.kwargs["harnesses"])
         self.assertEqual(graphs[0], graphs[1])
@@ -2090,7 +2091,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                 source_commit="a" * 40, update_independent_checks=checkpoint)
             builds.append(compile.call_args.kwargs["harnesses"])
-            self.test_metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.test_metadata.assert_not_called()
             selected = gate.qualification_stages(scope)
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
@@ -2795,8 +2796,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 gate.run_checks(Path("/mutable"), qualification_scope=scope,
                                 environment=self.env, source_commit="a" * 40, lock_fds=(91,))
                 complete_graph = compile.call_args.kwargs["harnesses"]
-                self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
-                self.metadata.reset_mock()
+                self.metadata.assert_not_called()
                 compile.reset_mock(); run.reset_mock(); network.reset_mock()
                 output.seek(0); output.truncate(0)
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
@@ -4386,6 +4386,50 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         process = MagicMock()
         process.__enter__.return_value = child
         return process
+
+    def test_release_codegen_alone_enforces_the_complete_exact_harness_census(self):
+        shipping = ("cli", "kagami", "taira-launcher", "sorafs-bin")
+        for scope in gate.QUALIFICATION_SCOPES:
+            _, names, _ = gate.native_harness_plan(gate.qualification_stages(scope), shipping)
+            metadata_lines = "".join(json.dumps({
+                "reason": "compiler-artifact",
+                "target": {"name": gate.HARNESS_TARGETS[name][1],
+                           "kind": [gate.HARNESS_TARGETS[name][2]]},
+                "profile": {"test": True}, "executable": None,
+            }) + "\n" for name in names)
+            with self.subTest(scope=scope), \
+                 patch.object(gate.subprocess, "Popen", return_value=self.process(metadata_lines)) as metadata_spawn, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                gate.check_test_harnesses(Path("/frozen"), self.env,
+                                          harnesses=names, lock_fds=(77, 88))
+            lines = "".join(self.artifact(name) for name in names)
+            with self.subTest(scope=scope), \
+                 patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
+                 patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                artifacts = gate.compile_test_harnesses(Path("/frozen"), self.env,
+                                                         harnesses=names, lock_fds=(77, 88))
+            self.assertEqual(set(artifacts), set(names))
+            self.assertEqual(spawn.call_args.args[0], gate._compile_command(
+                Path("/frozen"), self.env, gate.native_harness_selection(names)))
+            metadata_command, codegen_command = (metadata_spawn.call_args.args[0],
+                                                  spawn.call_args.args[0])
+            self.assertEqual(metadata_command[metadata_command.index("--offline") + 1:
+                                              metadata_command.index("--profile")],
+                             codegen_command[codegen_command.index("--offline") + 1:
+                                             codegen_command.index("--no-run")])
+            self.assertEqual(metadata_command[metadata_command.index("--profile"):],
+                             ["--profile", "test", "--message-format=json-render-diagnostics"])
+            self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
+            for missing in names:
+                without = "".join(self.artifact(name) for name in names if name != missing)
+                with self.subTest(scope=scope, missing=missing), \
+                     patch.object(gate.subprocess, "Popen", return_value=self.process(without)), \
+                     patch.object(gate, "isolate_native_artifacts") as isolate, \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(gate.CheckError, "0 test executables"):
+                        gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names)
+                isolate.assert_not_called()
 
     def test_resource_batch_requires_both_libraries_and_all_explicit_integration_artifacts(self):
         names = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")

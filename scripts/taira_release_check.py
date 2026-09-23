@@ -1118,6 +1118,7 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_REWARD_ACCOUNTING_STAGES
 CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary authority", (
     'smartcontracts::isi::staking::tests::registration_rejects_changed_signed_monetary_fields_without_custody_writes',
     'smartcontracts::isi::staking::tests::reward_claim_rejects_changed_record_source_and_entitlement_without_payment',
+    'smartcontracts::isi::staking::tests::genesis_monetary_scope_requires_exact_height_without_npos_parameters',
 )), )
 CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
 
@@ -4634,10 +4635,10 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
-        # Expand macros and type-check the exact test graph before expensive codegen.
-        # Keep the same feature union, environment, target lane and held locks; a
-        # metadata pass neither publishes test executables nor qualifies a regression.
-        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
+        # The complete --no-run build type-checks this same selected feature graph
+        # and requires one executable for every selected native harness. Keep the
+        # faster metadata-only failure probe in focused prequalification; repeating
+        # it before release codegen adds no qualification evidence.
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:
