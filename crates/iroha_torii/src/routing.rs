@@ -52193,6 +52193,10 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
                 m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
             }
             m.insert(
+                "entrypoint_kind".into(),
+                norito::json::Value::from(it.entrypoint_kind.clone()),
+            );
+            m.insert(
                 "entrypoint_hash".into(),
                 norito::json::Value::from(it.entrypoint_hash.clone()),
             );
@@ -52221,10 +52225,6 @@ fn contract_activity_projections_to_json(
             if let Some(ts) = it.timestamp_ms {
                 m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
             }
-            m.insert(
-                "entrypoint_kind".into(),
-                norito::json::Value::from(it.entrypoint_kind.clone()),
-            );
             m.insert(
                 "entrypoint_hash".into(),
                 norito::json::Value::from(it.entrypoint_hash.clone()),
