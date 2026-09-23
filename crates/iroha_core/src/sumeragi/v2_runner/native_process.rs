@@ -259,14 +259,6 @@ impl NativeRunnerProcess {
             .map_err(V2RunnerError::Service)
     }
 
-    /// Inspect retained transport custody without completing or replacing an output.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn retained_transport_outputs_for_test(
-        &self,
-    ) -> Vec<(Arc<super::super::message::BlockMessageWire>, Vec<PeerId>)> {
-        self.transport.retained_outputs_for_test()
-    }
-
     /// Native and exact historical responses continue while global Validate waits.
     pub(in crate::sumeragi) fn service_native_ingress(
         &mut self,
@@ -309,13 +301,6 @@ impl NativeRunnerProcess {
         self.source
             .as_ref()
             .is_some_and(|source| source.admits(message))
-    }
-
-    pub(in crate::sumeragi) fn matches_output_guard(
-        &self,
-        guard: &Arc<ConsensusOutputGuard>,
-    ) -> bool {
-        Arc::ptr_eq(&self.guard, guard)
     }
 
     pub(in crate::sumeragi) fn accept_source_response(
@@ -671,5 +656,372 @@ impl NativeProcessShutdown {
             .map_err(|error| V2RunnerError::Service(error.to_string()));
         candidate?;
         native
+    }
+}
+
+#[cfg(all(test, feature = "bls", unix, not(target_os = "espidf")))]
+mod pending_ingress_rollover_tests {
+    use super::*;
+    use crate::sumeragi::{
+        FairV2IngressPushDisposition, FairV2IngressSource,
+        serviced_candidate_store::{LeaderWireLifecycleStoreGate, LeaderWireRecoveryAuthority},
+        v2_runtime::RuntimeLifecycleOrdinalSource,
+    };
+    use iroha_crypto::Signature;
+    use iroha_data_model::block::lane_consensus::{
+        LANE_MESSAGE_VERSION_V1, LaneMessageEnvelopeV1, LaneMessageV1, LaneRoundV1,
+        LaneSignatureShareV1, LaneTimeoutBodyV1, LaneTimeoutVoteV1,
+    };
+
+    fn bind_global_gate(
+        ingress: &Arc<FairV2Ingress>,
+        roster: &[PeerId],
+        height: u64,
+        marker: u8,
+    ) -> tempfile::TempDir {
+        ingress.close();
+        ingress.configure_roster(roster.iter().cloned()).unwrap();
+        if !ingress.state.lock().requires_leader_wire_lifecycle_gate {
+            ingress.require_leader_wire_lifecycle_gate();
+        }
+        ingress.state.lock().leader_wire_max_chunk_count = 2;
+        let directory = tempfile::TempDir::new().unwrap();
+        let context =
+            wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new([marker; 32])));
+        let owner = [marker; 32];
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(roster.len(), 2).unwrap();
+        let authority =
+            LeaderWireRecoveryAuthority::from_replayed_adapter(context, height, owner, 0, false);
+        let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("safety.wal"),
+            context,
+            height,
+            owner,
+            roster.iter().cloned().collect(),
+            capacity,
+            2,
+            authority,
+            &[],
+            &[],
+        )
+        .unwrap();
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                gate,
+                restore,
+                RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+                context,
+                height,
+            )
+            .unwrap();
+        ingress.open().unwrap();
+        directory
+    }
+
+    #[test]
+    fn native_prepared_capacity_retry_survives_global_cut_and_rebind_then_advances() {
+        let now = Instant::now();
+        let (state, keys) = crate::state::State::native_dispatch_source_fixture_for_test();
+        let state_before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+        let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
+        let lane = &observed.contexts()[0];
+        let id = lane.instance_id();
+        let committee = lane.frozen().committee.clone();
+        let key_for = |signer: usize| {
+            keys.iter()
+                .find(|key| key.public_key() == committee[signer].public_key())
+                .unwrap()
+        };
+        let controls = std::array::from_fn::<_, 3, _>(|signer| {
+            let body = LaneTimeoutBodyV1 {
+                round: LaneRoundV1 {
+                    instance_id: Hash::from(id.0),
+                    lane_height: lane.frozen().next_lane_height,
+                    voting_view: 0,
+                },
+                highest_prepare: None,
+            };
+            let signature = Signature::try_new(
+                key_for(signer).private_key(),
+                &body.signature_preimage().unwrap(),
+            )
+            .unwrap()
+            .payload()
+            .to_vec();
+            LaneMessageEnvelopeV1 {
+                version: LANE_MESSAGE_VERSION_V1,
+                message: LaneMessageV1::TimeoutVote(LaneTimeoutVoteV1 {
+                    body,
+                    share: LaneSignatureShareV1 {
+                        signer: signer as u32,
+                        signature,
+                    },
+                }),
+            }
+        });
+        let guard = ConsensusOutputGuard::isolated();
+        let mut config =
+            super::super::super::v2::SumeragiV2Adapter::native_source_lifecycle_config_for_test();
+        config.limits.control_queue_capacity = 1;
+        let mut process = NativeRunnerProcess::new(
+            Arc::clone(&state),
+            Arc::clone(&guard),
+            committee[3].clone(),
+            key_for(3).clone(),
+            true,
+            &config,
+            32 * 1024 * 1024,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let ingress = Arc::new(FairV2Ingress::new(
+            40,
+            64 * 1_048_576,
+            8 * 1_048_576,
+            crate::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES,
+            0,
+        ));
+        let _predecessor = bind_global_gate(&ingress, &committee, 41, 0xA6);
+        for (signer, envelope) in controls.iter().enumerate() {
+            ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    BlockMessage::NativeLane(envelope.clone()),
+                    committee[signer].clone(),
+                ))
+                .unwrap();
+        }
+        process.service_native_ingress(&ingress).unwrap();
+        assert!(
+            !process.has_pending_ingress(),
+            "first control fills the real driver slot"
+        );
+        process.service_native_ingress(&ingress).unwrap();
+        let original = process
+            .pending_ingress
+            .as_ref()
+            .unwrap()
+            .native_timeout_owner_snapshot_for_test();
+        assert_eq!(ingress.len(), 1);
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::NativeLane(controls[2].clone()),
+                committee[2].clone(),
+            )),
+            Ok(FairV2IngressPushDisposition::Coalesced)
+        ));
+        let third_source = FairV2IngressSource::Native(committee[2].clone());
+        let queued = || {
+            let physical = ingress.state.lock();
+            let entry = &physical.lanes[&third_source].entries[0];
+            let BlockMessage::NativeLane(envelope) = entry.inbound.message() else {
+                panic!("queued Native control");
+            };
+            let LaneMessageV1::TimeoutVote(vote) = &envelope.message else {
+                panic!("queued timeout vote");
+            };
+            (
+                Arc::as_ptr(&entry.inbound),
+                entry.encoded_bytes.as_ptr(),
+                entry.admission_ordinal,
+                entry.ownership_snapshot.process_local_projection_hash(),
+                physical.bytes,
+                vote.share.signature.as_ptr(),
+            )
+        };
+        let original_queued = queued();
+        for _ in 0..3 {
+            process.service_native_ingress(&ingress).unwrap();
+            let prepared = process.pending_ingress.take().unwrap();
+            process.consume_native_ingress(prepared, &ingress).unwrap();
+            assert_eq!(
+                process
+                    .pending_ingress
+                    .as_ref()
+                    .unwrap()
+                    .native_timeout_owner_snapshot_for_test(),
+                original
+            );
+            assert_eq!(queued(), original_queued);
+        }
+        // A later global carrier cannot make finalization depend on draining
+        // process-lived Native custody. The real driver is still full, the
+        // second Native control is retained, and the third remains queued.
+        let mut global_vote = wire::TimeoutVote {
+            round: wire::ConsensusRound {
+                context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    [0xA6; 32],
+                ))),
+                height: 41,
+                view: 0,
+            },
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: Vec::new(),
+        };
+        global_vote.signature =
+            Signature::try_new(key_for(0).private_key(), &global_vote.signature_preimage())
+                .unwrap()
+                .payload()
+                .to_vec();
+        ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(global_vote),
+                )),
+                committee[0].clone(),
+            ))
+            .unwrap();
+        {
+            let physical = ingress.state.lock();
+            let record = physical.leader_wire_lifecycles.values().next().unwrap();
+            assert_eq!(record.ingress_predecessors.get(&third_source), Some(&1));
+        }
+        ingress.close();
+        assert_eq!(
+            ingress.ensure_closed_global_drained_cut().unwrap_err(),
+            "finalized global ingress cut retained global ownership",
+            "a closed queue with a real global owner is not an empty global cut"
+        );
+        let (mut global, authorization) = super::super::select_decided_lane_recovery_ingress(
+            &ingress,
+            41,
+            super::super::DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+        )
+        .unwrap()
+        .expect("both finalized callers must retire global work behind retained Native ingress");
+        assert!(matches!(
+            authorization,
+            super::super::DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire
+        ));
+        let mut global_ownership = global.take_ingress_ownership().unwrap();
+        assert!(global_ownership.validate_exact());
+        ingress
+            .bind_leader_wire_runtime_ownership(&mut global_ownership)
+            .unwrap();
+        ingress
+            .mark_leader_wire_volatile_terminal(
+                global_ownership.leader_wire_runtime_receipt().unwrap(),
+            )
+            .unwrap();
+        assert!(
+            super::super::select_decided_lane_recovery_ingress(
+                &ingress,
+                41,
+                super::super::DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(queued(), original_queued);
+        assert_eq!(
+            process
+                .pending_ingress
+                .as_ref()
+                .unwrap()
+                .native_timeout_owner_snapshot_for_test(),
+            original,
+            "global retirement cannot consume or replace the backpressured Native owner"
+        );
+        ingress.ensure_closed_global_drained_cut().unwrap();
+        assert!(ingress.ensure_closed_drained_cut().is_err());
+        let old_gate = ingress
+            .state
+            .lock()
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .unwrap()
+            .clone();
+        ingress
+            .retire_leader_wire_lifecycle_gate(&old_gate)
+            .unwrap();
+        let successor_roster = (0..4)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect::<Vec<_>>();
+        let _successor = bind_global_gate(&ingress, &successor_roster, 42, 0xA7);
+        assert_eq!(
+            queued(),
+            original_queued,
+            "global retirement and roster change conserve Native queue custody"
+        );
+        assert_eq!(
+            process
+                .pending_ingress
+                .as_ref()
+                .unwrap()
+                .native_timeout_owner_snapshot_for_test(),
+            original
+        );
+        assert!(!guard.restart_required());
+        // Drive the same production completion/control and exact retry phases as
+        // poll, with fixed Native time so no fourth locally timed vote can stand
+        // in for any of the three physically admitted controls.
+        let until = Instant::now() + Duration::from_secs(30);
+        while process.has_pending_ingress() {
+            process.driver.prepare_one_retirement().unwrap();
+            process.driver.poll(&observed, now).unwrap();
+            let prepared = process.pending_ingress.take().unwrap();
+            assert_eq!(prepared.native_timeout_owner_snapshot_for_test(), original);
+            process.consume_native_ingress(prepared, &ingress).unwrap();
+            assert_eq!(queued(), original_queued);
+            assert!(
+                Instant::now() < until,
+                "actual driver capacity must recover"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        process.service_native_ingress(&ingress).unwrap();
+        assert_eq!(ingress.len(), 0);
+        assert!(
+            process.has_pending_ingress(),
+            "second control still owns the sole driver slot"
+        );
+        let third = process
+            .pending_ingress
+            .as_ref()
+            .unwrap()
+            .native_timeout_owner_snapshot_for_test();
+        assert_eq!(
+            third.0, original_queued.2,
+            "the queued occurrence crosses the real dequeue once"
+        );
+        assert_eq!(
+            third.2, original_queued.5,
+            "the original queued signature allocation moves once"
+        );
+        while process.has_pending_ingress() {
+            process.driver.prepare_one_retirement().unwrap();
+            process.driver.poll(&observed, now).unwrap();
+            let prepared = process.pending_ingress.take().unwrap();
+            assert_eq!(prepared.native_timeout_owner_snapshot_for_test(), third);
+            process.consume_native_ingress(prepared, &ingress).unwrap();
+            assert!(
+                Instant::now() < until,
+                "third original control must cross recovered capacity"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        while process.driver.process().instance(id).unwrap().tag().view() != 1 {
+            process.driver.prepare_one_retirement().unwrap();
+            process.driver.poll(&observed, now).unwrap();
+            assert!(
+                Instant::now() < until,
+                "all three real timeout votes must advance the shared reducer"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ingress.close();
+        ingress.ensure_closed_global_drained_cut().unwrap();
+        ingress.ensure_closed_drained_cut().unwrap();
+        assert!(!guard.restart_required());
+        assert!(
+            process.publication.is_none(),
+            "ingress progress cannot fabricate publication authority"
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+            state_before
+        );
+        process.shutdown().join().unwrap();
     }
 }

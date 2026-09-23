@@ -22,7 +22,7 @@ use iroha::{
         },
         isi::{
             ActivatePublicLaneValidator, Grant, InstructionBox, Log, Mint, Register,
-            RegisterPublicLaneValidator, zk::VerifyProof,
+            RegisterPublicLaneValidator, consensus_keys::RegisterConsensusKey, zk::VerifyProof,
         },
         nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
         permission::Permission,
@@ -38,7 +38,7 @@ use iroha::{
     query::QueryError,
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
+use iroha_core::{da::proof_policy_bundle, state::derive_committee_key_id};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     prelude::QueryBuilderExt,
@@ -49,13 +49,15 @@ use iroha_data_model::{
         transaction::prelude::FindTransactions,
     },
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
-    NetworkBuilder, read_on_dedicated_thread, unexecuted_genesis_factory_with_post_topology,
+    NetworkBuilder, genesis_participant_committee_key_instructions, read_on_dedicated_thread,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use reqwest::{Client as HttpClient, StatusCode};
@@ -242,8 +244,10 @@ fn localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            let post_topology =
-                npos_multilane_genesis_post_topology_transactions(topology.as_ref());
+            let post_topology = npos_multilane_genesis_post_topology_transactions(
+                topology.as_ref(),
+                &topology_entries,
+            );
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(TOTAL_PEERS),
                 post_topology,
@@ -386,6 +390,7 @@ fn localnet_builder() -> NetworkBuilder {
 }
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
     assert_eq!(
         topology.len(),
@@ -437,6 +442,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         .into(),
     ];
     let mut validator_tx = Vec::new();
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        topology,
+    ));
     let lanes = [NEXUS_LANE_INDEX, DS1_LANE_INDEX, DS2_LANE_INDEX];
     let mint_amount =
         VALIDATOR_STAKE_PER_LANE.saturating_mul(u64::try_from(lanes.len()).unwrap_or(u64::MAX));
@@ -1800,17 +1809,34 @@ mod tests {
 #[test]
 fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
     iroha_test_network::init_instruction_registry();
-    let topology = (0..4)
+    let entries = (0..4)
         .map(|index| {
             let key = iroha_crypto::KeyPair::try_from_seed(
                 vec![index + 1; 32],
                 iroha_crypto::Algorithm::BlsNormal,
             )
             .expect("deterministic genesis staking validator");
-            iroha_model_base::peer::PeerId::new(key.public_key().clone())
+            GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("deterministic genesis staking validator PoP"),
+            )
         })
         .collect::<Vec<_>>();
-    let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+    let topology = entries
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let transactions = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
+    let committee_registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+        .collect::<Vec<_>>();
+    assert_eq!(committee_registrations.len(), TOTAL_PEERS);
+    for (registration, peer) in committee_registrations.iter().zip(&topology) {
+        assert_eq!(registration.id, derive_committee_key_id(peer.public_key()));
+    }
     let registrations = transactions
         .iter()
         .flatten()

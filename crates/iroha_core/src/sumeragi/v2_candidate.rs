@@ -86,14 +86,26 @@ impl CandidateLimits {
         })
     }
     /// Maximum entries selected across one complete carrier candidate.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_transactions(self) -> NonZeroUsize {
         self.max_transactions
     }
     /// Maximum canonical carrier payload bytes.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_payload_bytes(self) -> NonZeroUsize {
         self.max_payload_bytes
     }
     /// Maximum FIFO entries inspected during one selection attempt.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_queue_scan(self) -> NonZeroUsize {
         self.max_queue_scan
     }
@@ -146,6 +158,10 @@ pub(crate) struct CandidateDescriptor<'candidate> {
 impl<'candidate> CandidateDescriptor<'candidate> {
     /// Build a read-only descriptor from one exact accepted entrypoint and
     /// routing plan.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate assembly cutover")
+    )]
     pub(crate) fn new(
         transaction: &'candidate AcceptedTransaction<'static>,
         routing_plan: &'candidate RoutingPlan,
@@ -556,6 +572,10 @@ impl AssembledV2Candidate {
         self.tag
     }
     /// Borrow the signed canonical successor block.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate assembly cutover")
+    )]
     pub(crate) const fn block(&self) -> &SignedBlock {
         &self.block
     }

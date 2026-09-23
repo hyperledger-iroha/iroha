@@ -211,3 +211,72 @@ def test_nested_cfg_and_duplicate_owner_contexts_remain_distinct(checker: Module
     )
     assert first.attributes == ()
     assert second.attributes == ("#[cfg(test)]",)
+
+
+def test_lint_only_impl_attribute_preserves_reviewed_method_context(
+    checker: ModuleType,
+) -> None:
+    source = (
+        '#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]\n'
+        'impl Owner {\n    fn run(&self) {}\n}\n'
+    )
+    (item,) = checker.rust_items(source, "run")
+    assert item.brace_context == (("impl", "Owner"),)
+    assert tuple((opener, header) for opener, _, header in item.delimiter_context) == (
+        ("{", ("impl", "Owner")),
+    )
+    errors: list[str] = []
+    assert checker._require_qualified_rust_item(
+        Path("fixture.rs"), source, "Owner", "run", errors, "reviewed owner"
+    ) == item
+    assert errors == []
+
+    method_gated_source = source.replace(
+        "    fn run", "    #[cfg(test)]\n    fn run"
+    )
+    (gated_item,) = checker.rust_items(method_gated_source, "run")
+    assert gated_item.attributes == ("#[cfg(test)]",)
+    errors = []
+    checker._require_qualified_rust_item(
+        Path("fixture.rs"), method_gated_source, "Owner", "run", errors,
+        "reviewed owner",
+    )
+    assert len(errors) == 1 and "unreviewed cfg/cfg_attr attributes" in errors[0]
+
+
+def test_real_merge_sidecar_impl_attribute_preserves_reviewed_method_context(
+    checker: ModuleType,
+) -> None:
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "crates/iroha_core/src/merge_sidecar.rs"
+    )
+    source = path.read_text()
+    (item,) = checker.rust_items(source, "inbound_session_capacity")
+    assert item.brace_context == (("impl", "MergeSidecarLimits"),)
+    errors: list[str] = []
+    assert checker._require_qualified_rust_item(
+        path, source, "MergeSidecarLimits", "inbound_session_capacity", errors,
+        "reviewed sidecar limit",
+    ) == item
+    assert errors == []
+
+
+@pytest.mark.parametrize("gating_attribute", [
+    "#[cfg(test)]",
+    "#[cfg_attr(not(test), cfg(any()))]",
+    '#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]\n#[cfg(test)]',
+])
+def test_impl_gating_attribute_remains_in_reviewed_context(
+    checker: ModuleType, gating_attribute: str
+) -> None:
+    source = f"{gating_attribute}\nimpl Owner {{\n    fn run(&self) {{}}\n}}\n"
+    (item,) = checker.rust_items(source, "run")
+    assert item.brace_context != (("impl", "Owner"),)
+    errors: list[str] = []
+    assert checker._require_qualified_rust_item(
+        Path("fixture.rs"), source, "Owner", "run", errors, "reviewed owner"
+    ) is None
+    assert errors == [
+        "fixture.rs: require exactly one real Rust/Verus function item named Owner::run; found 0"
+    ]

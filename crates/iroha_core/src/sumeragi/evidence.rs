@@ -1932,17 +1932,16 @@ mod tests {
             .checked_add(1)
             .expect("fixture admission follows evidence height");
         let key = v2_evidence_admission_key(&evidence);
-        let recorded_height = evidence.context.height + 1;
         let mut records = state.world.consensus_evidence.block();
         records.insert(
             key,
             EvidenceRecord {
                 evidence: canonical_v2_evidence(&evidence),
-                recorded_at_height: recorded_height,
+                recorded_at_height,
                 recorded_at_view: 0,
                 recorded_at_ms: 20,
                 penalty_status: EvidencePenaltyStatus::Applied {
-                    height: recorded_height,
+                    height: recorded_at_height,
                 },
             },
         );

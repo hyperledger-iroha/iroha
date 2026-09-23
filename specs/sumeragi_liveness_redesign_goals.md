@@ -27,6 +27,13 @@ Validate the runtime handoff, original Apply settlement and recovery integration
 preserve all protocol and deterministic correctness gates below, and qualify
 the unchanged four/seven-validator campaigns. No L1–L6 outcome or release is marked complete here.
 
+The [retired-height ingress correction](../docs/history/2026-09-23/stale-height-consensus-ingress.md)
+removes a fatal relay outcome for authenticated consensus evidence that arrives
+after its height has finalized. Exact-source four-validator same-subject and
+distinct-subject fault cases pass. The nine-peer slow-observer recovery case and
+the complete unchanged fault campaign remain open; this correction does not
+close a redesign goal.
+
 Current retained-execution prerequisite: [admitted Storage restoration](../docs/history/2026-09-21/admitted-storage-restoration.md) now reconstructs exact current/undo images with per-edit funding and generic borrowed history. Replacement and ordinary blocks retain one original pool and both writers inside their callback. [Publication identities](../docs/history/2026-09-21/funded-publication-identities.md) now share that original admission, retain successor storage before execution and refund old versions only after publication unlock; exact startup and writer demands include those layouts. [Scoped detached capture](../docs/history/2026-09-21/funded-detached-storage.md) now retains original prepaid journals without writers and borrows the original refund scope for reattachment; native capture/abort signals follow both writer releases. [Executing-block abandonment](../docs/history/2026-09-21/executing-block-abandonment.md) now shares the prepared pair's original writer owner through ordinary/admitted opening, replacement, execution and snapshot restore; both locks release before callbacks and actual mutex poison survives payload and wake unwind. [Native reader readiness](../docs/history/2026-09-21/native-reader-readiness.md) now binds BlockHashes refusals to the actual blocking reader mutex and retains published native notifications through retirement. [Complete component preparation](../docs/history/2026-09-21/prepared-component-retirement.md) now retains native prepared map/Cell owners and identity before transfer, with successful World/runtime/membership cleanup held through State fences and original State/Kura/Queue completion notifications retained until commit unlock. [Fully acquired carrier abort](../docs/history/2026-09-21/prepared-component-abort.md) now keeps original component cleanup through all fences on explicit abort and Drop. [Returned preparation refusals](../docs/history/2026-09-21/prepared-refusal-cleanup.md) now return original MV/runtime/TriggerSet/World cleanup through the enclosing consumer. [Prepared runtime/trigger abandonment](../docs/history/2026-09-21/prepared-aggregate-abandonment.md) now releases all sibling writers before callbacks on Drop and unwind, retaining both original capacities. [Successor hash admission](../docs/history/2026-09-21/successor-acquisition-readiness.md) now binds the actual fresh writer before callbacks and waits on the native reader mutex when reader observation is contended. [Fresh MV pair construction](../docs/history/2026-09-21/fresh-pair-acquisition.md) now owns both actual mutexes and notifications before either constructor or policy can unwind. [Cell pair custody](../docs/history/2026-09-21/cell-pair-custody.md) now retains both raw guards before cloning and keeps joint release through complete Block/CurrentReplacement abandonment, detachment and publication-lock refusal. [World acquisition and abandonment](../docs/history/2026-09-21/world-acquisition-custody.md) now retains caller-owned field slots and releases all siblings before cleanup; its candidate validation is recorded separately. The [World/TriggerSet capture candidate](../docs/history/2026-09-21/world-capture-custody.md) now retains original slots and deferred notifications through all sibling captures; its qualification is separate. The [State capture correction](../docs/history/2026-09-21/state-capture-custody.md) composes those original World slots with all runtime and membership writers through refusal and unwind. The [State acquisition candidate](../docs/history/2026-09-22/state-acquisition-custody.md) now keeps partial acquisitions and executing blocks jointly armed through refusal and unwind; its qualification remains separate. The [direct State publication candidate](../docs/history/2026-09-22/direct-state-publication.md) passes its consumer test-target check; the [retained hash correction](../docs/history/2026-09-22/retained-hash-preparation.md) passes 636 distinct Core controls, 474 native unit tests and the canonical structural gate in their captured scopes. The complete participant candidate below covers sibling preparation. Complete process-memory accounting and production qualification remain open under the scoped admission boundary above; concrete nested World payloads, native control storage, decoding and aggregate execution/restore admission are not funded by the shell pool. The original Apply service already survives startup; unfinished-height recovery must retain its original executed owner and the named allocation charges before exposing validation markers. The later State effect-lock and aggregate cleanup records describe their actual custody corrections. This does not activate the retained production validator or close L1–L6.
 
 Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
@@ -622,8 +629,28 @@ replay, preserving its isolated-State finality/wire/checkpoint tail. All six
 new publication/replay and snapshot controls pass within unchanged Core75's full
 580-control selection. Matching daemon73/harness74 fail earlier at height rollover:
 a whole-process ingress cut rejects process-lived Native custody. The separate
-authenticated closed-global cut is under validation; strict full-drain semantics,
-network qualification and the complete fault matrix remain required. Evidence belongs in the
+authenticated closed-global cut now passes its genuine retained-Native retry,
+physical-owner, corruption and caller regressions. Matching daemon91/harness92
+pass the seven-validator two-restart diagnostic (298.30 seconds) and the
+four-validator silent-author/sole-input/restart diagnostic (127.05 seconds) on
+unchanged captured sources and binaries. Core93's fieldwise retained-journal
+materialization correction passes all 137 focused controls, including the four
+former default-stack failures and a real Native retry on an explicit 2 MiB
+thread. Core96 corrects the diagnostic source assertion and passes all 810
+controls. The subsequent [Native/global queue correction](../docs/history/2026-09-23/native-global-ingress-ordering.md)
+removes a reproduced terminal-drain dependency on retained Native custody and
+keeps replenished Native traffic from starving a global recovery dependency.
+Final Core109 passes all 878 selected controls with an unchanged source, binary
+and Git join; all 100 contract/mutation controls and the canonical multilane
+structural gate pass. These structural checks do not prove runtime liveness.
+The final daemon/harness pair passes the real four-validator NPoS outage/restart,
+seven-validator two-restart and four-validator silent-author/sole-input/restart
+checks in 226.64, 320.76 and 113.16 seconds. The first two precede only a test
+correction; final daemon/harness bytes are identical and each original source
+capture remains explicit. Two earlier NPoS fail-stops remain causally
+unattributed. Complete process-memory admission, successor activation, the
+remaining fault/seed campaign and clean signed release qualification remain
+required. Earlier evidence remains in the
 [epoch-authority record](../docs/history/2026-09-22/epoch-authority-cutover.md).
 
 ## Required invariants
@@ -635,6 +662,10 @@ network qualification and the complete fault matrix remain required. Evidence be
    capacity or validation cannot exclude the event which releases that wait.
    No operation waits for a permit or capacity held by itself or its joining
    caller. External waiting releases execution leases it no longer needs.
+   Physical queue order remains authenticated, but does not create a dependency
+   between independent lifetimes: global finalization cannot wait for Native
+   custody that survives the height. Independently eligible traffic shares fair
+   service with the responses needed to release a blocked global owner.
 3. **Progress service survives ordinary saturation.** Clocks, authenticated
    progress messages, required responses and completions receive bounded service
    even when ordinary work fills its queues. Untrusted traffic cannot claim
@@ -669,7 +700,7 @@ belongs in `iroha_config`; hardware choices cannot alter consensus results.
 | L1 — One contract and complete progress inventory | **Active** | Core/Sumeragi and formal owners | Reconcile voting/replay contradictions against executable code; map every wait, resource hold, wake source, terminal result and durable reconstruction path. Map all nine runner states to their authoritative facts. Identify each independent scheduling decision and the exact code to remove. |
 | L2 — Remove competing scheduling authority | **Active** for inventoried runner slice; full L1 inventory remains prerequisite to closure | Lifecycle, runner and runtime owners | Production uses a fresh owner-derived action projection; remove the runner's shadow state and transition history, then consolidate duplicate runtime decisions. Wake events and deadlines stay serviceable under saturation. Meet the existing measured simplification/deletion obligations across the complete source closure, including moved code. |
 | L3 — Conserve work through completion and recovery | **Active** for Store publication/completion handoff; integrate with L2 | Reducer, lifecycle, WAL, body store and Kura owners | One stable obligation survives view/generation changes and every durable cut. Adopt results only under current authority; no lost work, double-signing, duplicate application or lifecycle resurrection. Replace redundant journals/repair paths with the minimum sufficient recovery representation. |
-| L4 — Close resource cycles and permanent retry loops | **Active** for certified-persistence retry audit; L2–L3 | Worker, P2P, validation and application owners | No asynchronous wait or failure/destructor path retains a resource needed by its own completion. Exercise typed retry dependencies at exact capacity. Terminal failures are observable and never silently retried. Ordinary work and authenticated recovery receive bounded fair service. |
+| L4 — Close resource cycles and permanent retry loops | **Active** for certified-persistence retries and Native/global dependency closure; L2–L3 | Worker, P2P, validation and application owners | No asynchronous wait or failure/destructor path retains a resource needed by its own completion. Exercise typed retry dependencies at exact capacity. Terminal failures are observable and never silently retried. Ordinary work and authenticated recovery receive bounded fair service. |
 | L5 — Exercise the assembled runtime | Open; test construction starts with L1 | Core tests, simulation and formal owners | Deterministically explore event orderings, saturation, restart cuts and generation changes through production scheduling/adapter paths. Replay minimized counterexamples. Pass current formal/trace checks and adversarial mutations; source-text matching and ghost fairness assumptions do not establish runtime progress. |
 | L6 — Qualify one immutable candidate | Open; L1–L5 | Integration, release and component owners | Pass the real four/seven-validator matrix and applicable existing formal, chaos, multilane, workspace and SDK gates on the same source/artifacts. Documentation describes the resulting implementation. Missing, failing, skipped or stale gates remain open. |
 

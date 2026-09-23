@@ -4149,7 +4149,7 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                     'let body_store_authority = kura.mint_v2_body_store_directory_authority()',
                     'V2BodyStore::open_with_kura_authority_and_capacity(kura.as_ref(), '
                     'body_store_authority, context.clone(), signature_policy',
-                    'let (exact_output_service_owner, exact_output_transport_owner) = '
+                    'let (exact_output_service_owner, _) = '
                     'durable_exact_output_handoff_owner_pair();',
                     'Arc::clone(&output_guard), Arc::clone(&block_rx), '
                     'Arc::clone(&kura_replica_advert_refresh), exact_output_service_owner, '
@@ -4175,7 +4175,7 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                    'let body_store_authority = kura.mint_v2_body_store_directory_authority()',
                    'V2BodyStore::open_with_kura_authority_and_capacity(kura.as_ref(), '
                    'body_store_authority, context.clone(), signature_policy',
-                   'let (exact_output_service_owner, exact_output_transport_owner) = '
+                   'let (exact_output_service_owner, _) = '
                    'durable_exact_output_handoff_owner_pair();',
                    'Arc::clone(&output_guard), Arc::clone(&block_rx), '
                    'Arc::clone(&kura_replica_advert_refresh), exact_output_service_owner, '
@@ -4210,7 +4210,7 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                       'settle_apply_barrier_runner_decision_handoff(executor, services, local_proposal, &mut lane_work, output_guard.as_ref(), &permit,)?; let _ = reconcile_terminal_lane_output_handoffs(permit, &mut lane_work, services, control_queue_capacity,)?;',
                       'let ready_proposal_sign_preempts_producer = if executor_slice == AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary { let fence = executor.lifecycle_reducer_fence_observation(); match owner.ready_proposal_sign_preempts_bounded_producer_point(fence) { Ok(preempts) => preempts,',
                       'AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary if ready_proposal_sign_preempts_producer => { continue; }',
-                      '                let cut = terminal_finalization_cut\n                    .as_ref()\n                    .expect("rollover-ready closure authenticated the terminal cut above");\n                let _ = activated.with_runner_runtime(\n                    &mut active_runner,\n                    |_owner, _executor, services, _local_proposal| {\n                        reconcile_terminal_lane_output_handoffs(\n                            cut.decided_lane_recovery_permit(),\n                            &mut lane_work,\n                            services,\n                            control_queue_capacity,\n                        )\n                    },\n                )?;\n                // The finite ingress prefix must drain, but delivery to every peer\n                // is not a finality condition. The consuming rollover below owns\n                // exact output until its receipt- and lane-authenticated durable\n                // reconstruction handoff succeeds. Waiting for the network here\n                // would prevent that handoff when a validator is offline.\n                if block_sync_server.has_pending_historical_body_serve() {\n                    let _ = wake_rx.recv_timeout(IDLE_POLL);\n                    continue;\n                }\n                if drained_terminal_ingress || drained_terminal_relay {\n                    continue;\n                }\n                break;\n            }\n            receiver\n                .ensure_closed_drained_cut()\n                .map_err(V2RunnerError::Service)?;')),
+                      '                let cut = terminal_finalization_cut\n                    .as_ref()\n                    .expect("rollover-ready closure authenticated the terminal cut above");\n                let _ = activated.with_runner_runtime(\n                    &mut active_runner,\n                    |_owner, _executor, services, _local_proposal| {\n                        reconcile_terminal_lane_output_handoffs(\n                            cut.decided_lane_recovery_permit(),\n                            &mut lane_work,\n                            services,\n                            control_queue_capacity,\n                        )\n                    },\n                )?;\n                // The finite ingress prefix must drain, but delivery to every peer\n                // is not a finality condition. The consuming rollover below owns\n                // exact output until its receipt- and lane-authenticated durable\n                // reconstruction handoff succeeds. Waiting for the network here\n                // would prevent that handoff when a validator is offline.\n                if block_sync_server.has_pending_historical_body_serve() {\n                    let _ = wake_rx.recv_timeout(IDLE_POLL);\n                    continue;\n                }\n                if drained_terminal_ingress || drained_terminal_relay {\n                    continue;\n                }\n                break;\n            }\n            receiver\n                .ensure_closed_global_drained_cut()\n                .map_err(V2RunnerError::Service)?;')),
  'pending_active': ('lifecycle_pending_kura.rs',
                     'run_pending_active_height',
                     ('let finalization_ready = activated.ready_for_finalized_rollover(&mut '
@@ -4900,7 +4900,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'durable_lane_rollover_authority',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """if self.has_pending_historical_recovery()? {
             return Ok(None);
@@ -4911,7 +4911,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'durable_lane_rollover_authority',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """let mut durable_sessions = BTreeMap::new();
         for proposal in winning_proposals.values() {
@@ -4962,7 +4962,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
         'name': 'reconstruct_durable_lane_certificate',
         'context': ['impl V2LaneWorkAdapter'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': False,
         'expected': """    fn reconstruct_durable_lane_certificate(
         &self,
@@ -5173,7 +5173,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs',
         'name': 'service_historical_recovery_tick',
         'context': [],
-        'attributes': [],
+        'attributes': ['#[allow(dead_code, reason = "TODO: native cutover")]'],
         'exact': True,
         'expected': """fn service_historical_recovery_tick(
     lane_work: &mut V2LaneWorkAdapter,
@@ -5192,7 +5192,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/sumeragi/v2_runner.rs',
         'name': 'dispatch_lane_work_effects_with_progress',
         'context': [],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]'],
         'exact': True,
         'expected': """fn dispatch_lane_work_effects_with_progress(
     lane_work: &mut V2LaneWorkAdapter,
@@ -5522,7 +5522,7 @@ _LANE_STORAGE_RECONCILIATION_RULES = {
         'path': 'crates/iroha_core/src/kura/consensus_storage_reads.rs',
         'name': 'recover_canonical_lane_block_artifacts_at_proposal_height_matching',
         'context': ['impl Kura'],
-        'attributes': [],
+        'attributes': ['#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]'],
         'exact': True,
         'expected': """    pub(crate) fn recover_canonical_lane_block_artifacts_at_proposal_height_matching<F>(
         &self,

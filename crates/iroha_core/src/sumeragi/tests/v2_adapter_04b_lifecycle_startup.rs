@@ -793,7 +793,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         &mut block_sync_request,
         &mut npos_beacon,
         1,
-        64,
         None,
     )
     .expect("dispatch the first active CompleteTip recovered Sign");
@@ -828,7 +827,6 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
             &mut block_sync_request,
             &mut npos_beacon,
             1,
-            64,
             None,
         )
         .expect("settle the active CompleteTip recovered Sign");
@@ -1098,10 +1096,8 @@ fn assert_safety_wal_retention(path: &std::path::Path, retained: bool) {
 }
 fn exercise_pending_kura_production_lifecycle(
     owner: super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
-    verified: VerifiedHeightContext,
     context: wire::HeightContext,
     state: Arc<State>,
-    queue: Arc<crate::queue::Queue>,
     kura: Arc<Kura>,
     local_signer: KeyPair,
     expected: super::super::v2_recovery::PendingKuraApply,
@@ -2162,10 +2158,8 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             }
             exercise_pending_kura_production_lifecycle(
                 owner,
-                verified,
                 recovered_context,
                 state,
-                queue,
                 kura,
                 local_signer,
                 expected,
@@ -2928,7 +2922,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 &mut block_sync_request,
                 &mut npos_beacon,
                 1,
-                16,
                 None,
             )
             .expect("observe the settled Apply fence in the ordinary batch");

@@ -14,6 +14,10 @@ use iroha::{
             PublicLaneCandidateAuthorization, RegisterPublicLaneCandidate,
             RegisterPublicLaneValidator,
         },
+        nexus::{
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+        },
         parameter::system::SumeragiNposParameters,
         prelude::*,
         transaction::{FeePaymentIntent, error::TransactionRejectionReason},
@@ -181,14 +185,14 @@ async fn fresh_global_candidate_requires_prepared_epoch_transition() -> Result<(
                 stake_account: validator.clone(),
                 initial_stake: 2_000_u64.into(),
                 metadata: Metadata::default(),
-                monetary_plan: iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
-                    network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Network(network_id),
+                monetary_plan: PublicLaneMonetaryPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Network(network_id.clone()),
                     valid_until_height,
                     source_asset: AssetId::new(stake_definition.clone(), validator.clone()),
                     destination_asset: AssetId::new(stake_definition.clone(), stake_escrow.clone()),
                     amount: 2_000_u64.into(),
-                    precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
-                        iroha_data_model::nexus::PublicLaneMonetaryRegistrationV1 { activation_height },
+                    precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                        PublicLaneMonetaryRegistrationV1 { activation_height },
                     ),
                 },
             };

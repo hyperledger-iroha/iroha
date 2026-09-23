@@ -157,6 +157,7 @@ pub(in crate::sumeragi) fn dispatch_canonical_executed_block_recovery_effects_fo
 }
 /// Advance one retained historical lane owner on the ordinary retransmission
 /// cadence, even when no lane or relay ingress arrives to trigger recovery.
+#[allow(dead_code, reason = "TODO: native cutover")]
 fn service_historical_recovery_tick(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,

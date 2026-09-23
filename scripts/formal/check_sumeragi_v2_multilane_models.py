@@ -4468,7 +4468,7 @@ def _validate_kura_replica_retention_contract(
         {
             "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "kind": "method",
-            "symbol": "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+            "symbol": "ProductionV2Services::handoff_applied_height_output_inner",
             "required_tokens": list(KURA_RETENTION_HANDOFF_ORDERED_TOKENS),
         },
         {

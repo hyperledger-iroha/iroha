@@ -3,12 +3,9 @@
 use thiserror::Error;
 
 use super::*;
-use crate::sumeragi::{
-    Queue,
-    v2_lifecycle_coordinator::{
-        AttemptedProducerTurnV1, ClaimedProducerTurnV1, ProducerTurnSchedulerClaimErrorV1,
-        ProducerTurnTerminalSettlementErrorV1, RecoveredLifecycleOutputSettlementV1,
-    },
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    AttemptedProducerTurnV1, ClaimedProducerTurnV1, ProducerTurnSchedulerClaimErrorV1,
+    ProducerTurnTerminalSettlementErrorV1, RecoveredLifecycleOutputSettlementV1,
 };
 
 /// Result of one bounded closed-ingress interrupted-tip recovery turn.

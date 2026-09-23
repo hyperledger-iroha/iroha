@@ -1,3 +1,5 @@
+// Shared signed and persisted-state fixtures for the current privacy regressions.
+
 fn nonzero(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
@@ -883,15 +885,6 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
     let bootstrap_digest = bootstrap.digest().expect("Orchard bootstrap digest");
     let state =
         PrivacyOrchardPoolStateV1::bootstrap(bootstrap).expect("canonical Orchard empty state");
-    let reserve_asset_id = AssetId::with_scope(
-        state.asset_definition_id().clone(),
-        state.reserve_account().clone(),
-        state.public_balance_scope(),
-    );
-    let reserve_owner = PrivacyPublicReserveOwnerV1::Orchard {
-        namespace,
-        bootstrap_digest,
-    };
     let root = state.root();
     let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 9)
         .expect("Orchard bootstrap provenance");
@@ -923,18 +916,24 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         activation,
     );
     let mut commitments = Storage::new();
+    let reserve_asset = AssetId::with_scope(
+        state.asset_definition_id().clone(),
+        state.reserve_account().clone(),
+        state.public_balance_scope(),
+    );
+    let reserve_owner = PrivacyPublicReserveOwnerV1::Orchard {
+        namespace,
+        bootstrap_digest,
+    };
+    commitments.insert(
+        PrivacyCommitmentKeyV1::public_reserve_custody(reserve_owner.protocol_id(), &reserve_asset)
+            .expect("Orchard reserve key"),
+        PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset, reserve_owner)
+            .expect("Orchard reserve custody"),
+    );
     commitments.insert(
         state_key,
         PrivacyStateItemRecordV1::orchard_pool_state(state).expect("Orchard state record"),
-    );
-    commitments.insert(
-        PrivacyCommitmentKeyV1::public_reserve_custody(
-            reserve_owner.protocol_id(),
-            &reserve_asset_id,
-        )
-        .expect("Orchard public reserve key"),
-        PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset_id, reserve_owner)
-            .expect("Orchard public reserve record"),
     );
     let mut roots = Storage::new();
     roots.insert(root_key, provenance);
@@ -1127,16 +1126,11 @@ fn proof_managed_note_persisted_fixture(
         )
         .expect("bootstrap config"),
     );
-    if protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 {
-        let reserve_asset_id = AssetId::with_scope(
-            bootstrap.asset_definition_id().clone(),
-            bootstrap
-                .reserve_account()
-                .expect("private-IVM public reserve account")
-                .clone(),
-            bootstrap
-                .public_balance_scope()
-                .expect("private-IVM public reserve scope"),
+    if let PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(config) = &bootstrap {
+        let reserve_asset = AssetId::with_scope(
+            config.asset_definition_id.clone(),
+            config.reserve_account.clone(),
+            config.public_balance_scope,
         );
         let reserve_owner = PrivacyPublicReserveOwnerV1::PrivateIvm {
             namespace,
@@ -1145,11 +1139,11 @@ fn proof_managed_note_persisted_fixture(
         commitments.insert(
             PrivacyCommitmentKeyV1::public_reserve_custody(
                 reserve_owner.protocol_id(),
-                &reserve_asset_id,
+                &reserve_asset,
             )
-            .expect("private-IVM public reserve key"),
-            PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset_id, reserve_owner)
-                .expect("private-IVM public reserve record"),
+            .expect("private-IVM reserve key"),
+            PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset, reserve_owner)
+                .expect("private-IVM reserve custody"),
         );
     }
     for (position, commitment) in bootstrap

@@ -728,7 +728,18 @@ AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
   'crates/iroha_core/src/state.rs',
   'fn',
   'validate_merge_lane_drain_certificate_payload',
-  ('self.lane_has_drain_blocking_evidence(',
+  ('let mut releases = LaneLifecycleReleases::new(self);',
+   'self.validate_merge_lane_drain_certificate_payload_with_releases(',
+   '            replay,\n            &mut releases,',),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'validate_merge_lane_drain_certificate_payload_with_releases',
+  ('releases: &mut LaneLifecycleReleases',
+   'self.view_with_index_releases(releases)',
+   '.validate_drain_payload(&state, carrier_height, active_lanes, certificates)',
+   'self.lane_has_drain_blocking_evidence_with_releases(',
    '.map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?',
    'Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(',
    'if blocked {\n            return Err(MergeLedgerCommitError::ExecutionBatchInvalid('),
@@ -857,12 +868,15 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
             intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
         ).unwrap_or(true) || queue.lane_has_pending_work(""")
     if symbol == "validate_merge_lane_drain_certificate_payload":
+        require("let mut releases = LaneLifecycleReleases::new(self);")
+        require("self.validate_merge_lane_drain_certificate_payload_with_releases(certificates, carrier_height, active_lanes, replay, &mut releases,)")
+    if symbol == "validate_merge_lane_drain_certificate_payload_with_releases":
         require("""Self::evidence_aware_lane_drain_frontier_from_world(
             &self.world.view(), &self.kura,
             intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
         ).map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?""")
-        require("""self.lane_has_drain_blocking_evidence(
-            intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
+        require("""self.lane_has_drain_blocking_evidence_with_releases(
+            intent.lane_id, intent.dataspace_id, intent.lane_incarnation, releases,
         ).map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?""")
     if symbol == "validate_committed_autoscale_lane_lifecycle":
         require("""Self::evidence_aware_lane_drain_frontier_from_world(

@@ -6,7 +6,7 @@ use iroha_crypto::{HashOf, KeyPair};
 use norito::codec::{DecodeAll as _, Encode as _};
 use std::{
     fs,
-    io::{BufWriter, Write as _},
+    io::BufWriter,
     os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
     panic::{AssertUnwindSafe, catch_unwind},
 };

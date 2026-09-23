@@ -6671,26 +6671,6 @@ impl PrivacyCommitmentKeyV1 {
             record_epoch: u64::MAX,
         }
     }
-    /// Return the Orchard pool namespace, if this is a compact-state key.
-    #[must_use]
-    pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
-        match self {
-            Self::OrchardPoolState { namespace } => Some(namespace),
-            Self::ZkAcePolicy { .. }
-            | Self::BootleLanternIssuerPolicy { .. }
-            | Self::VegaIssuerRevision { .. }
-            | Self::ProofManagedPoolConfig { .. }
-            | Self::PublicReserveCustody { .. }
-            | Self::ProofManagedPoolCommitment { .. }
-            | Self::FcmpOutput { .. }
-            | Self::ZkX509TrustAnchorRevision { .. }
-            | Self::ZkX509CertificatePolicyRevision { .. }
-            | Self::ZkX509CrlCurrent { .. }
-            | Self::ZkAmsIssuerPolicyRecord { .. }
-            | Self::ZkAmsPhc { .. }
-            | Self::ZkAmsSeedKey { .. } => None,
-        }
-    }
     /// Return the proof-managed pool namespace, if this key belongs to one.
     #[must_use]
     #[cfg(test)]

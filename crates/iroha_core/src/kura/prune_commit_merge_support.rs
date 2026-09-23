@@ -24,6 +24,7 @@ const PRUNE_SIDECAR_PROMOTION_DATA: usize = 1;
 const PRUNE_SIDECAR_PROMOTION_INDEX: usize = 2;
 #[derive(Clone, Copy)]
 enum NativeAmxMergeAssociation<'a> {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     Live(Option<&'a MergeLedgerEntry>),
     Startup(Option<&'a MergeLedgerEntry>),
     CommittedOnly,
@@ -860,6 +861,7 @@ struct KagemushaMintAuthorityCheckpointEntryV1 {
 }
 impl CommitManifest {
     /// Construct a manifest for a committed height.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn new(
         height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -884,6 +886,7 @@ impl CommitManifest {
     /// Startup recovery rechecks the resulting manifest with
     /// [`Self::binds_authenticated_v2_commit_authority`] before trusting either root.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn with_authenticated_v2_commit_authority(
         mut self,
         artifact: &V2FinalityArtifact,

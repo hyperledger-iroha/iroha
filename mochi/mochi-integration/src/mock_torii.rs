@@ -809,13 +809,23 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(256 * 1024)
         );
+        let parameters = value
+            .get("kagemusha_mint_finality")
+            .and_then(Value::as_object)
+            .expect("KAGEMUSHA mint-finality parameters");
+        assert_eq!(parameters.len(), 1);
+        let authority = parameters
+            .get("authority_generation")
+            .and_then(Value::as_object)
+            .expect("generation-zero authority template");
+        assert_eq!(authority.get("generation").and_then(Value::as_u64), Some(0));
         assert_eq!(
-            value
-                .get("kagemusha_mint_finality")
-                .and_then(Value::as_object)
-                .and_then(|parameters| parameters.get("authority_generation"))
-                .and_then(Value::as_object)
-                .and_then(|roster| roster.get("validators"))
+            authority.get("version").and_then(Value::as_u64),
+            Some(u64::from(KAGEMUSHA_CHAIN_VERSION_V1))
+        );
+        assert_eq!(
+            authority
+                .get("validators")
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(4)

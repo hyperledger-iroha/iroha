@@ -1407,7 +1407,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "reconcile_terminal_lane_output_handoffs(",
                     "if block_sync_server.has_pending_historical_body_serve()",
                     "if drained_terminal_ingress || drained_terminal_relay",
-                    "ensure_closed_drained_cut()",
+                    "ensure_closed_global_drained_cut()",
                     "finalize_lifecycle_height(",
                 ),
             )

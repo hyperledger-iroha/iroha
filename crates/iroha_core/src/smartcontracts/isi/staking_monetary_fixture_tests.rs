@@ -6,6 +6,52 @@ use iroha_data_model::nexus::{
     public_lane_reward_record_commitment,
 };
 
+#[test]
+fn genesis_monetary_scope_requires_exact_height_without_npos_parameters() {
+    let state = setup_state();
+    let mut genesis = state.block(block_header_with_height(1));
+    let mut stx = genesis.transaction();
+    stx.world
+        .parameters
+        .get_mut()
+        .custom
+        .remove(&SumeragiNposParameters::parameter_id());
+    assert!(stx.world.sumeragi_npos_parameters().is_none());
+    assert!(effects::validate_plan_context(&stx, &PublicLaneMonetaryScopeV1::Genesis, 1).is_ok());
+    for invalid_height in [0, 2] {
+        let error = effects::validate_plan_context(
+            &stx,
+            &PublicLaneMonetaryScopeV1::Genesis,
+            invalid_height,
+        )
+        .expect_err("genesis consent must expire at its exact height");
+        assert!(error.to_string().contains("genesis height"));
+    }
+    let error = effects::validate_plan_context(
+        &stx,
+        &PublicLaneMonetaryScopeV1::Network(*stx.network_id()),
+        1,
+    )
+    .expect_err("network consent still requires a committed epoch schedule");
+    assert!(
+        error
+            .to_string()
+            .contains("committed NPoS epoch parameters")
+    );
+
+    drop(stx);
+    drop(genesis);
+    let mut next_block = state.block(block_header_with_height(2));
+    let next_stx = next_block.transaction();
+    let error = effects::validate_plan_context(&next_stx, &PublicLaneMonetaryScopeV1::Genesis, 2)
+        .expect_err("genesis scope must not authorize a later block");
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated genesis or network scope")
+    );
+}
+
 fn fixture_transfer_plan(
     stx: &StateTransaction<'_, '_>,
     source_asset: AssetId,

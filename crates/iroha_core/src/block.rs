@@ -3165,9 +3165,9 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs<'a>(
+fn creation_time_after_inputs(
     minimum: Duration,
-    inputs: impl IntoIterator<Item = &'a TransactionEntrypoint>,
+    inputs: impl IntoIterator<Item = impl std::ops::Deref<Target = TransactionEntrypoint>>,
 ) -> Option<Duration> {
     let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
     for input in inputs {
@@ -3261,12 +3261,15 @@ mod input_clock_tests {
         assert!(
             creation_time_after_inputs(
                 Duration::from_millis(u64::MAX) + Duration::from_millis(1),
-                std::iter::empty()
+                std::iter::empty::<&TransactionEntrypoint>()
             )
             .is_none()
         );
         assert_eq!(
-            creation_time_after_inputs(Duration::from_millis(u64::MAX), std::iter::empty()),
+            creation_time_after_inputs(
+                Duration::from_millis(u64::MAX),
+                std::iter::empty::<&TransactionEntrypoint>()
+            ),
             Some(Duration::from_millis(u64::MAX))
         );
     }

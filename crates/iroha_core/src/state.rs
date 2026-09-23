@@ -3914,19 +3914,32 @@ pub enum MergeLedgerCommitError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MergeLedgerPublicationMode {
     /// The entry was just committed by global consensus and may emit its one live event.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     LiveCommit,
     /// The entry is being reconstructed from durable history and must remain silent.
     Replay,
 }
 /// Bounds which pending merge-entry shapes may be selected for one carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 pub(crate) enum PendingCertifiedMergeSelection {
     /// Execution and control-only entries are eligible.
     Any,
     /// Only entries without an autonomous execution batch are eligible.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: wire native state publication"))]
     ControlOnly,
 }
 impl PendingCertifiedMergeSelection {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     const fn allows_execution(self) -> bool {
         matches!(self, Self::Any)
     }
@@ -14802,6 +14815,10 @@ impl<'state> StateBlock<'state> {
     /// Callers use this read-only projection to acquire the Queue retirement
     /// observer only for a real scale-in. State re-derives and checks the same
     /// binding under its lifecycle fence during commit.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn pending_autoscale_retirement_binding(
         &self,
     ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
@@ -16316,7 +16333,7 @@ pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId 
     derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Validator, "validator")
 }
 /// Derive a collision-resistant participant-committee key identifier from a peer public key.
-pub(crate) fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
+pub fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
     derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Committee, "committee")
 }
 /// Fetch the stored BLS proof-of-possession for a consensus public key.
@@ -16598,19 +16615,15 @@ pub(crate) fn peer_consensus_key_gate_for_role(
 ) -> ConsensusKeyGate {
     peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
-const GLOBAL_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] = &[ConsensusKeyRole::Validator];
-const PARTICIPANT_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] =
-    &[ConsensusKeyRole::Committee, ConsensusKeyRole::Validator];
-/// Return the ordered consensus-key roles accepted for one lane.
+/// Return the exact consensus-key role accepted for one lane.
 ///
-/// Global consensus accepts only `Validator` keys. Participant lanes prefer
-/// the narrower `Committee` role but retain `Validator` compatibility for
-/// existing transparent lane deployments.
-pub(crate) fn consensus_key_roles_for_lane(lane_id: LaneId) -> &'static [ConsensusKeyRole] {
+/// Global consensus accepts only `Validator` keys. Participant lanes accept
+/// only `Committee` keys.
+pub(crate) fn consensus_key_role_for_lane(lane_id: LaneId) -> ConsensusKeyRole {
     if lane_id == LaneId::SINGLE {
-        GLOBAL_LANE_CONSENSUS_KEY_ROLES
+        ConsensusKeyRole::Validator
     } else {
-        PARTICIPANT_LANE_CONSENSUS_KEY_ROLES
+        ConsensusKeyRole::Committee
     }
 }
 const fn consensus_key_gate_priority(gate: ConsensusKeyGate) -> u8 {
@@ -16622,24 +16635,19 @@ const fn consensus_key_gate_priority(gate: ConsensusKeyGate) -> u8 {
         ConsensusKeyGate::Live => 4,
     }
 }
-/// Resolve the best lifecycle gate among the roles accepted for one lane.
+/// Resolve the lifecycle gate for the exact role accepted on one lane.
 pub(crate) fn peer_consensus_key_gate_for_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
     block_height: u64,
     lane_id: LaneId,
 ) -> ConsensusKeyGate {
-    let mut best = ConsensusKeyGate::Missing;
-    for role in consensus_key_roles_for_lane(lane_id) {
-        let candidate = peer_consensus_key_gate_for_role(snapshot, peer_id, block_height, *role);
-        if candidate == ConsensusKeyGate::Live {
-            return candidate;
-        }
-        if consensus_key_gate_priority(candidate) > consensus_key_gate_priority(best) {
-            best = candidate;
-        }
-    }
-    best
+    peer_consensus_key_gate_for_role(
+        snapshot,
+        peer_id,
+        block_height,
+        consensus_key_role_for_lane(lane_id),
+    )
 }
 fn peer_consensus_key_gate_matching_role(
     snapshot: &impl WorldReadOnly,
@@ -16702,7 +16710,7 @@ pub(crate) fn peer_has_live_consensus_key_for_role(
         ConsensusKeyGate::Live
     )
 }
-/// Check whether a peer has a live key in the role set accepted for one lane.
+/// Check whether a peer has a live key with the exact role accepted for one lane.
 pub(crate) fn peer_has_live_consensus_key_for_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
@@ -16730,18 +16738,19 @@ pub(crate) fn live_consensus_key_pop_for_peer_with_role(
 ) -> Option<Vec<u8>> {
     live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, Some(&role))
 }
-/// Fetch a live PoP using the ordered role policy for one lane.
+/// Fetch a live PoP for the exact role accepted on one lane.
 pub(crate) fn live_consensus_key_pop_for_peer_on_lane(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
     block_height: u64,
     lane_id: LaneId,
 ) -> Option<Vec<u8>> {
-    consensus_key_roles_for_lane(lane_id)
-        .iter()
-        .find_map(|role| {
-            live_consensus_key_pop_for_peer_with_role(snapshot, peer_id, block_height, *role)
-        })
+    live_consensus_key_pop_for_peer_with_role(
+        snapshot,
+        peer_id,
+        block_height,
+        consensus_key_role_for_lane(lane_id),
+    )
 }
 fn live_consensus_key_pop_for_peer_matching_role(
     snapshot: &impl WorldReadOnly,
@@ -16842,6 +16851,12 @@ where
     peers.dedup();
     peers
 }
+// TODO: Route production epoch construction through the authenticated-seed
+// committee selector before removing this expectation.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn bounded_global_committee_size(
     world: &impl WorldReadOnly,
     available_candidates: usize,
@@ -16860,6 +16875,10 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
@@ -16870,6 +16889,10 @@ fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Has
         peer_bytes.as_slice(),
     ])
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn select_threshold_beacon_committee(
     world: &impl WorldReadOnly,
     epoch: u64,
@@ -17060,6 +17083,10 @@ where
 /// selection and the successor leader schedule consume the same finalized
 /// randomness. The caller owns authentication and exact chain-height binding
 /// of `selection_seed`.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
     world: &impl WorldReadOnly,
     commit_topology: I,
@@ -27846,6 +27873,10 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
@@ -28104,6 +28135,10 @@ impl State {
             )
     }
     /// Snapshot all lane routes and incarnations authoritative at one proposal height.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn consensus_lane_routes_at_height(
         &self,
         proposal_height: u64,
@@ -32349,7 +32384,7 @@ impl State {
         cache.registry = Arc::clone(&registry);
         registry
     }
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn install_sccp_registry_cache(&self, registry: Arc<ValidatedSccpRegistryV1>) {
         let mut cache = self.sccp_registry_cache.lock();
         cache.registry = registry;
@@ -45072,6 +45107,10 @@ impl State {
         Ok(())
     }
     /// Select a pending settlement entry bound to the exact consensus round.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn select_pending_certified_merge_entry_for_round(
         &self,
         round_header: &BlockHeader,
@@ -45217,6 +45256,10 @@ impl State {
     /// authoritative admission or deterministic WSV markers. Callers use this
     /// after State reaches the carrier height and before publishing any of those
     /// recoverable side effects.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn ensure_globally_committed_merge_entry_applied(
         &self,
         entry: &MergeLedgerEntry,
@@ -53589,6 +53632,10 @@ impl<'state> StateBlock<'state> {
         self.parliament_timed_ovn_casting_bindings.take()
     }
     /// Take the local-only FASTPQ witness context, if one was captured.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn take_fastpq_witness_context(
         &mut self,
     ) -> Option<crate::fastpq::FastpqWitnessContext> {
@@ -55621,6 +55668,10 @@ impl<'state> StateBlock<'state> {
     }
     /// Commit with a move-only authorization consumed inside State's exact
     /// linearization boundary.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn commit_with_state_commit_authorization(
         self,
         authorization: Box<dyn StateBlockCommitAuthorization>,
@@ -55640,6 +55691,10 @@ impl<'state> StateBlock<'state> {
     }
     /// Commit with both the exact State authorization and final Queue scale-in
     /// veto. The authorization is consumed only after the veto succeeds.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(
         self,
         authorization: Box<dyn StateBlockCommitAuthorization>,
@@ -58034,6 +58089,10 @@ impl<'state> StateBlock<'state> {
     /// Callers hold the lane lifecycle admission fence while consulting the
     /// local Queue, so no ordinary owner can appear between this projection
     /// and the retirement vote check.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn prospective_autoscale_retirement_binding(
         &mut self,
         block: &SignedBlock,
@@ -67605,8 +67664,8 @@ mod npos_effect_application_tests {
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    finalized_lane_relay_registration_fixture, native_dispatch_state_fixture,
-    prove_finalized_lane_relay_for_registration, ton_breaker_hydration_fixture_for_testing,
+    finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
+    ton_breaker_hydration_fixture_for_testing,
 };
 
 mod telemetry_status;

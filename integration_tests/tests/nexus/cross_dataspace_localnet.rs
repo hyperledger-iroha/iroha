@@ -28,6 +28,7 @@ use iroha::{
         },
         isi::{
             Grant, InstructionBox, Log, Mint, Register, Transfer,
+            consensus_keys::RegisterConsensusKey,
             settlement::{
                 DvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
                 SettlementPlan,
@@ -55,6 +56,7 @@ use iroha_core::{
     da::proof_policy_bundle,
     kura::Kura,
     merge::{MergeLedgerCandidate, merge_qc_message_digest},
+    state::derive_committee_key_id,
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
@@ -73,12 +75,14 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
-    NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
+    NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
@@ -328,8 +332,10 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            let post_topology =
-                npos_multilane_genesis_post_topology_transactions(topology.as_ref());
+            let post_topology = npos_multilane_genesis_post_topology_transactions(
+                topology.as_ref(),
+                &topology_entries,
+            );
             let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
@@ -530,12 +536,18 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
 }
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
     assert_eq!(
         topology.len(),
         TOTAL_PEERS,
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
+    );
+    assert_eq!(
+        topology_entries.len(),
+        topology.len(),
+        "every topology peer needs a proof-of-possession entry"
     );
     let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let universal_domain: DomainId =
@@ -618,6 +630,10 @@ fn npos_multilane_genesis_post_topology_transactions(
         )
         .into(),
     ];
+    bootstrap_tx.extend(genesis_participant_committee_key_instructions(
+        topology_entries,
+        &topology[VALIDATORS_PER_LANE..LANE_VALIDATOR_COUNT],
+    ));
     for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
@@ -5206,6 +5222,7 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
             iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     }
 }
 fn assert_stale_archived_marker_rejected(
@@ -7353,27 +7370,27 @@ mod tests {
         DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH, ExpectedLaneValidatorBinding,
         FAULT_SOAK_DURATION_SECS, KeyPair, LANE_VALIDATOR_COUNT, LaneDomainProgress,
         LanePayloadOwnershipProgress, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX,
-        OBSERVER_QUERY_TIMEOUT_CAP, RegisterPublicLaneValidator, RoutedJsonGetResponse,
-        TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
+        OBSERVER_QUERY_TIMEOUT_CAP, RegisterConsensusKey, RegisterPublicLaneValidator,
+        RoutedJsonGetResponse, TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
         bounded_observer_request_timeout, committed_lane_block_has_expected_quorum,
         committed_tx_outcome_quorum, copy_kura_tree_with_limits, cross_dataspace_gas_account_id,
-        durable_native_participant_evidence_is_after_baseline, durable_native_participant_row,
-        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
-        expected_lane_binding_for_peer, expected_post_swap_balances,
-        is_expected_rollback_failure_text, is_inconclusive_blocking_submit_error,
-        is_inconclusive_committed_outcome_error, lane_domain_progress_is_after_baseline,
-        lane_validator_snapshot, latest_lane_domain_application_progress,
-        latest_lane_domain_progress, latest_lane_payload_ownership_progress,
-        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
-        npos_multilane_genesis_post_topology_transactions, parse_autoscale_lifecycle_log,
-        parse_corridor_seed, parse_fault_soak_duration, parse_required_seed_flag,
-        peer_indices_for_committed_lane_evidence, quorum_lane_domain_progress,
-        quorum_lane_payload_ownership_progress, recreated_autoscale_lane_diagnostics_ready,
-        render_error_with_debug, render_rejection_reason, rotating_validator_indices,
-        routed_header_string, should_submit_tick, stake_asset_definition_id,
-        stake_asset_id_literal, total_balance_observer_request_slots,
-        validate_autoscale_merge_qc_height_context_binding, validator_authority_account_for_peer,
-        validator_authority_seed,
+        derive_committee_key_id, durable_native_participant_evidence_is_after_baseline,
+        durable_native_participant_row, duration_min_avg_max_secs,
+        expect_local_or_proxy_fanout_headers, expected_lane_binding_for_peer,
+        expected_post_swap_balances, is_expected_rollback_failure_text,
+        is_inconclusive_blocking_submit_error, is_inconclusive_committed_outcome_error,
+        lane_domain_progress_is_after_baseline, lane_validator_snapshot,
+        latest_lane_domain_application_progress, latest_lane_domain_progress,
+        latest_lane_payload_ownership_progress, multilane_da_proof_policy_bundle,
+        nexus_fee_asset_definition_id, npos_multilane_genesis_post_topology_transactions,
+        parse_autoscale_lifecycle_log, parse_corridor_seed, parse_fault_soak_duration,
+        parse_required_seed_flag, peer_indices_for_committed_lane_evidence,
+        quorum_lane_domain_progress, quorum_lane_payload_ownership_progress,
+        recreated_autoscale_lane_diagnostics_ready, render_error_with_debug,
+        render_rejection_reason, rotating_validator_indices, routed_header_string,
+        should_submit_tick, stake_asset_definition_id, stake_asset_id_literal,
+        total_balance_observer_request_slots, validate_autoscale_merge_qc_height_context_binding,
+        validator_authority_account_for_peer, validator_authority_seed,
     };
     use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{
@@ -7483,6 +7500,26 @@ mod tests {
             })
             .collect()
     }
+    fn deterministic_genesis_topology(
+        peer_count: usize,
+    ) -> (Vec<PeerId>, Vec<iroha_genesis::GenesisTopologyEntry>) {
+        let entries = (0..peer_count)
+            .map(|index| {
+                let mut seed = vec![0_u8; 32];
+                seed[0] = 0xD2;
+                seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+                let key_pair = KeyPair::try_from_seed(seed, Algorithm::BlsNormal)
+                    .expect("fixture cross-dataspace genesis peer key");
+                iroha_genesis::GenesisTopologyEntry::new(
+                    PeerId::new(key_pair.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                        .expect("fixture cross-dataspace genesis peer PoP"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let topology = entries.iter().map(|entry| entry.peer.clone()).collect();
+        (topology, entries)
+    }
     fn equal_vote_height_context() -> HeightContext {
         let mut validators = deterministic_topology(4);
         validators.sort();
@@ -7497,9 +7534,8 @@ mod tests {
             b"g13p historical roster genesis",
         )));
         use iroha::data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-            KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-            KagemushaMintFinalityEpochDecisionV1,
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+            KagemushaMintFinalityEpochAuthorizationV1,
         };
         let kagemusha_mint_finality_authority = KagemushaMintFinalityAuthorityGenerationV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
@@ -7518,24 +7554,12 @@ mod tests {
                 })
                 .collect(),
         };
-        let kagemusha_mint_finality_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch: 0,
-            first_height: 1,
-            last_height: 100,
-            authority_generation: 0,
-            authority_id: kagemusha_mint_finality_authority
-                .authority_id()
-                .expect("fixture authority identity"),
-            beacon: BeaconEpochBindingV1::Bootstrap,
-            previous_authorization_id: [0; 32],
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
-        };
-        kagemusha_mint_finality_authorization
-            .validate_against_authority(&kagemusha_mint_finality_authority)
-            .expect("fixture genesis authorization");
+        let kagemusha_mint_finality_authorization =
+            KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &kagemusha_mint_finality_authority,
+                100,
+            )
+            .expect("valid KAGEMUSHA mint-finality fixture authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -7694,13 +7718,41 @@ mod tests {
     }
     #[test]
     fn genesis_post_topology_builder_covers_all_lane_buckets() {
-        let topology = deterministic_topology(TOTAL_PEERS);
-        let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(transactions.len(), 1);
         assert_eq!(
             transactions[0].len(),
-            12 + LANE_VALIDATOR_COUNT * 5 + VALIDATORS_PER_LANE
+            12 + LANE_VALIDATOR_COUNT * 5
+                + VALIDATORS_PER_LANE
+                + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE)
+                + 2
         );
+        let committee_registrations = transactions[0]
+            .iter()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<RegisterConsensusKey>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            committee_registrations.len(),
+            LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE
+        );
+        for (registration, peer) in committee_registrations
+            .iter()
+            .zip(&topology[VALIDATORS_PER_LANE..LANE_VALIDATOR_COUNT])
+        {
+            assert_eq!(registration.id, derive_committee_key_id(peer.public_key()));
+            assert_eq!(registration.record.public_key, peer.public_key().clone());
+            assert_eq!(
+                registration.record.pop.as_deref(),
+                entries
+                    .iter()
+                    .find(|entry| entry.peer == *peer)
+                    .expect("matching topology entry")
+                    .pop_bytes()
+                    .expect("valid PoP")
+                    .as_deref()
+            );
+        }
         let lane_registrations = transactions[0]
             .iter()
             .filter_map(|instruction| {
@@ -7770,16 +7822,17 @@ mod tests {
     }
     #[test]
     fn genesis_post_topology_builder_is_deterministic_for_same_roster() {
-        let topology = deterministic_topology(TOTAL_PEERS);
-        let first = npos_multilane_genesis_post_topology_transactions(&topology);
-        let second = npos_multilane_genesis_post_topology_transactions(&topology);
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let first = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
+        let second = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
     }
     #[test]
     fn genesis_post_topology_builder_rejects_wrong_peer_count() {
-        let topology = deterministic_topology(TOTAL_PEERS - 1);
-        let result =
-            panic::catch_unwind(|| npos_multilane_genesis_post_topology_transactions(&topology));
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS - 1);
+        let result = panic::catch_unwind(|| {
+            npos_multilane_genesis_post_topology_transactions(&topology, &entries)
+        });
         assert!(result.is_err());
     }
     #[test]

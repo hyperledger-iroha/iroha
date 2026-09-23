@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateReadOnly, World},
+    state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -14,7 +14,7 @@ use iroha_data_model::{
     sorafs::release_manifest_authority::{
         ReleaseManifestCheckPhaseV1, ReleaseManifestCheckV1, ReleaseManifestCompleteV1,
         ReleaseManifestExpireV1, ReleaseManifestFloorV1, ReleaseManifestReserveV1,
-        ReleaseManifestRevokeV1,
+        ReleaseManifestRevocationV1,
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion;
@@ -181,7 +181,7 @@ fn role13_grants_match_only_their_action_and_independent_observer() {
     for action in [
         Action::Configure(Vec::new()),
         Action::Enroll(Vec::new()),
-        Action::Revoke(ReleaseManifestRevokeV1 {
+        Action::Revoke(ReleaseManifestRevocationV1 {
             signer: true,
             attester: false,
         }),
@@ -226,7 +226,7 @@ fn role13_permission_preflight_rejects_foreign_deployment_and_oversized_action()
 
 #[test]
 fn every_role13_action_remains_closed_even_with_exact_permission() {
-    let mut f = fixture();
+    let f = fixture();
     let header = BlockHeader::new(
         1.try_into().expect("positive height"),
         f.state.view().latest_block_hash(),
@@ -240,7 +240,7 @@ fn every_role13_action_remains_closed_even_with_exact_permission() {
         (Action::Configure(Vec::new()), &f.manager),
         (Action::Enroll(Vec::new()), &f.manager),
         (
-            Action::Revoke(ReleaseManifestRevokeV1 {
+            Action::Revoke(ReleaseManifestRevocationV1 {
                 signer: true,
                 attester: false,
             }),

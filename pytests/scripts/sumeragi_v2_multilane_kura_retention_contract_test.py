@@ -75,3 +75,19 @@ def test_kura_replica_retention_contract_rejects_missing_lifecycle_refresh_turn(
         and ".service_kura_replica_advert_refresh_turn(Instant::now())" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("authority.authenticate(&self.state, receipt, artifact)?;", "unchecked_authority();"),
+    ("self.handoff_applied_height_output_inner(receipt, artifact, None)",
+     "self.handoff_applied_height_output_inner(receipt, artifact, Some(unrelated_authority))"),
+])
+def test_kura_replica_retention_contract_rejects_unbound_native_handoff(tmp_path, old, new):
+    module = _SUITE.load_checker()
+    contract = _SUITE.copy_kura_retention_fixture(tmp_path, module)
+    _SUITE.replace_once_after(
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs",
+        "fn handoff_native_height_output_to_durable_reconstruction(", old, new,
+    )
+    errors = _SUITE.validate_kura_retention_fixture(tmp_path, module, contract)
+    assert any("handoff_native_height_output_to_durable_reconstruction" in e for e in errors), errors

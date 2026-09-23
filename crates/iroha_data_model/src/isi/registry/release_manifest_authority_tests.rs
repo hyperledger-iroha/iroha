@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     isi::sorafs::MutateSorafsReleaseManifestAuthority,
-    sorafs::release_manifest_authority::{ReleaseManifestActionV1, ReleaseManifestRevokeV1},
+    sorafs::release_manifest_authority::{ReleaseManifestActionV1, ReleaseManifestRevocationV1},
 };
 
 #[test]
@@ -11,7 +11,7 @@ fn release_manifest_authority_instruction_has_one_canonical_wire_identity() {
         deployment_id: "release-primary".into(),
         expected_control_revision: 7,
         expected_control_digest: [9; 32],
-        action: ReleaseManifestActionV1::Revoke(ReleaseManifestRevokeV1 {
+        action: ReleaseManifestActionV1::Revoke(ReleaseManifestRevocationV1 {
             signer: true,
             attester: false,
         }),

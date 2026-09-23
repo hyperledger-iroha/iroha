@@ -19,6 +19,24 @@ PASSIVE_RECOVERY_TEST_RELATIVE = Path(
 NATIVE_MODULE = "SumeragiV2NativeApplicationEvidence"
 AUTONOMOUS_MODULE = "SumeragiV2AutonomousReservationCarrier"
 
+# The diagnostic closures only observe errors; each original result still propagates.
+NATIVE_SOURCE_SERVICE_TURN = """native.service_sources(services, now).inspect_err(|error| {
+                    iroha_logger::error!(
+                        ?error,
+                        height = context.height,
+                        "Sumeragi v2 Native source service failed closed"
+                    );
+                })?;"""
+NATIVE_PROCESS_TURN = """native
+            .poll(native_global, native_network, now, receiver)
+            .inspect_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    height = context.height,
+                    "Sumeragi v2 Native process turn failed closed"
+                );
+            })?;"""
+
 # Passive completed diagnostics retain proof data only; none of these owners
 # reconstructs a Ready row or authorizes a new consensus output.
 COMPLETED_EQUIVOCATION_BINDINGS = (
@@ -637,8 +655,8 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "run_lifecycle_active_height",
         (
             "native.take_service_publication(services)",
-            "native.service_sources(services, now)?",
-            "native.poll(native_global, native_network, now, receiver)?",
+            NATIVE_SOURCE_SERVICE_TURN,
+            NATIVE_PROCESS_TURN,
             "native.next_deadline().map_or(IDLE_POLL, |deadline|",
             "wake_rx.recv_timeout(native_wait)",
         ),
@@ -931,11 +949,25 @@ NATIVE_QUIET_LOOP_PREFIXES = (
             &mut active_runner,
             |_owner, _executor, services, _local_proposal| {
                 native.take_service_publication(services);
-                native.service_sources(services, now)?;
+                native.service_sources(services, now).inspect_err(|error| {
+                    iroha_logger::error!(
+                        ?error,
+                        height = context.height,
+                        "Sumeragi v2 Native source service failed closed"
+                    );
+                })?;
                 Ok::<_, V2RunnerError>(())
             },
         )?;
-        native.poll(native_global, native_network, now, receiver)?;
+        native
+            .poll(native_global, native_network, now, receiver)
+            .inspect_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    height = context.height,
+                    "Sumeragi v2 Native process turn failed closed"
+                );
+            })?;
         liveness_watchdog.poll(now);""",
     ),
     (
@@ -1233,8 +1265,8 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         "run_lifecycle_active_height",
         (
             "native.take_service_publication(services)",
-            "native.service_sources(services, now)?",
-            "native.poll(native_global, native_network, now, receiver)?",
+            NATIVE_SOURCE_SERVICE_TURN,
+            NATIVE_PROCESS_TURN,
             "dispatch_queue_plan_admission_effects(",
         ),
     ),

@@ -171,6 +171,8 @@ enum Substitution {
     Issuance,
     AppleAppMode,
     AndroidAppMode,
+    AppBindingFirst,
+    AppBindingSecond,
 }
 
 fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
@@ -217,10 +219,22 @@ fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
                 },
             )
         }),
+        app_bindings: [0, 1].map(|slot| {
+            assign_fixed_digest_v1(
+                ctx,
+                &range,
+                if matches!(
+                    (mutation, slot),
+                    (Substitution::AppBindingFirst, 0) | (Substitution::AppBindingSecond, 1)
+                ) {
+                    [0x43; 32]
+                } else {
+                    credential.app_policy_binding_digest
+                },
+            )
+        }),
         device_keys: [0, 1]
             .map(|_| assign_bytes(ctx, &range, credential.device_public_key.as_sec1_bytes())),
-        app_bindings: [0, 1]
-            .map(|_| assign_fixed_digest_v1(ctx, &range, credential.app_policy_binding_digest)),
     };
     match mutation {
         Substitution::CredentialExpiry => credential.expires_at_ms += 1,
@@ -230,7 +244,9 @@ fn sender_opening_case<F: KagemushaPoseidonFieldV1>(
         Substitution::None
         | Substitution::Issuance
         | Substitution::AppleAppMode
-        | Substitution::AndroidAppMode => {}
+        | Substitution::AndroidAppMode
+        | Substitution::AppBindingFirst
+        | Substitution::AppBindingSecond => {}
     }
     let enabled = ctx.load_constant(F::ONE);
     let windows = constrain_terminal_sender_credential_v1(
@@ -277,6 +293,8 @@ fn assert_sender_openings<F: KagemushaPoseidonFieldV1>() {
         Substitution::Issuance,
         Substitution::AppleAppMode,
         Substitution::AndroidAppMode,
+        Substitution::AppBindingFirst,
+        Substitution::AppBindingSecond,
     ] {
         let circuit = sender_opening_case::<F>(mutation);
         let result = MockProver::run(17, &circuit, vec![vec![]])

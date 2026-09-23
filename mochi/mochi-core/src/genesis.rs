@@ -294,6 +294,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected_validators
         );
+        assert_eq!(first.authority_generation.generation, 0);
+        assert_eq!(
+            first.authority_generation.version,
+            KAGEMUSHA_CHAIN_VERSION_V1
+        );
         assert_ne!(first, second);
     }
 

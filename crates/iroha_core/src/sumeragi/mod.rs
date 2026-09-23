@@ -566,13 +566,6 @@ pub(crate) mod v2_lane_instance;
     )
 )]
 pub(crate) mod v2_lane_payload;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "native transport is compiled but awaits the sole runner cutover"
-    )
-)]
 pub(crate) mod v2_lane_transport;
 #[cfg_attr(
     not(test),
@@ -807,7 +800,7 @@ pub(crate) fn authenticated_peer_for_test() -> PeerId {
 }
 /// Ownership-aware result of one non-blocking Sumeragi ingress attempt.
 #[derive(Debug)]
-#[must_use = "retryable and fail-stop dispositions retain the exact ingress item"]
+#[must_use = "stale, retryable and fail-stop dispositions retain the exact ingress item"]
 pub enum SumeragiIngressDisposition<T> {
     /// The serialized Sumeragi owner accepted the exact item.
     Accepted,
@@ -815,6 +808,8 @@ pub enum SumeragiIngressDisposition<T> {
     Coalesced,
     /// The item belongs to a retired or decode-only protocol surface.
     Obsolete,
+    /// A prior finalized height can no longer own this exact authenticated item.
+    Stale(T),
     /// The exact item is permanently invalid for the active ingress geometry.
     Rejected(T),
     /// Capacity or height readiness is temporary; retry this exact item.
@@ -3891,6 +3886,7 @@ enum FairV2IngressPushError {
     Closed(InboundBlockMessage),
     FailStop(InboundBlockMessage),
     Full(InboundBlockMessage),
+    Stale(InboundBlockMessage),
     Rejected(FairV2IngressRejection),
 }
 impl FairV2IngressPushError {
@@ -3920,6 +3916,11 @@ enum FairV2IngressCheckedSelectionScope {
     /// Only process-owned Native traffic and exact retained source responses.
     NativeProcess,
     /// Admit only independent lane-local traffic under an authenticated lifecycle barrier.
+    // TODO: route this class through the sole native ingress consumer.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane ingress cutover")
+    )]
     LifecycleLaneLocal {
         _permit: v2_runner::LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
     },
@@ -5128,6 +5129,7 @@ impl FairV2Ingress {
         Ok(operation(value))
     }
     /// Prove that the closed physical ingress has no queued or in-flight owner.
+    #[cfg(test)]
     pub(crate) fn ensure_closed_drained_cut(&self) -> Result<(), String> {
         let _service_guard = self.service_lock.lock();
         let _publication_guard = self.producer_publication_lock.lock();
@@ -5520,6 +5522,21 @@ impl FairV2Ingress {
         if !state.open {
             return Err(FairV2IngressPushError::Closed(inbound));
         }
+        if state.requires_leader_wire_lifecycle_gate
+            && fair_v2_ingress_is_productive_leader_wire(inbound.message())
+        {
+            let Some((_, height)) = state.leader_wire_context else {
+                state.open = false;
+                return Err(FairV2IngressPushError::FailStop(inbound));
+            };
+            if fair_v2_ingress_consensus_round(inbound.message())
+                .is_some_and(|round| round.height < height)
+            {
+                // A retired height cannot reserve current-roster or bounded
+                // queue capacity, including after validator membership rotates.
+                return Err(FairV2IngressPushError::Stale(inbound));
+            }
+        }
         let history_serve_request = history_serve_request.filter(|request| {
             request.matches_configured_network(state.configured_network_id.as_ref())
         });
@@ -5825,6 +5842,12 @@ impl FairV2Ingress {
                     state.open = false;
                     return Err(FairV2IngressPushError::FailStop(inbound));
                 };
+                if identity.height < height {
+                    // A finalized predecessor cannot become the active height
+                    // again. Return its exact owner until the queue lock drops;
+                    // release callbacks may need that lock on destruction.
+                    return Err(FairV2IngressPushError::Stale(inbound));
+                }
                 if identity.context_id != context_id || identity.height != height {
                     return Err(FairV2IngressPushError::rejected(
                         inbound,
@@ -6338,6 +6361,10 @@ impl FairV2Ingress {
     /// The sealed permit grants no global leader-wire authority. This path still validates the
     /// durable leader-wire census, but lane-local traffic is selected independently of its global
     /// ingress barrier and committed through the ordinary ownership/accounting tail.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane ingress cutover")
+    )]
     pub(in crate::sumeragi) fn try_recv_lifecycle_lane_local_checked(
         &self,
         permit: v2_runner::LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
@@ -7087,6 +7114,9 @@ impl SumeragiHandle {
                 self.output_guard
                     .activate_restart_required_from_permit(permit);
                 SumeragiIngressDisposition::FailStop(inbound)
+            }
+            Err(FairV2IngressPushError::Stale(inbound)) => {
+                SumeragiIngressDisposition::Stale(inbound)
             }
             Err(FairV2IngressPushError::Rejected(rejection)) => {
                 let message_kind = FairV2IngressMessageKind::classify(rejection.inbound.message());

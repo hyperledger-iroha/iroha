@@ -14,7 +14,7 @@ use halo2_base::{
     QuantumCell::Constant,
     gates::GateInstructions as _,
     gates::RangeInstructions as _,
-    utils::{BigPrimeField, modulus, power_of_two},
+    utils::{BigPrimeField, CurveAffineExt as _, modulus, power_of_two},
 };
 use halo2_ecc::{
     bigint::{FixedOverflowInteger, ProperCrtUint, big_less_than},
@@ -225,6 +225,8 @@ fn select_p256_point<F: BigPrimeField>(
 /// the table entry is then the constrained identity. Compared with two
 /// independent ladders this removes one doubling and one addition per bit,
 /// without changing the public or private scalar range.
+/// The caller must bind a 256-bit instance to canonical scalar residues; this
+/// bounded group primitive alone does not prove that representation.
 pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -687,8 +689,6 @@ mod tests {
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::{
-            ff::Field as _,
-            ff::PrimeField as _,
             group::{Curve as _, prime::PrimeCurveAffine as _},
             pasta::{Fp, Fq},
         },

@@ -6,9 +6,9 @@
 //! census remains required. These finite byte/work limits do not bound kernel I/O
 //! latency or claim an atomic filesystem snapshot against a privileged writer.
 
-use super::{
-    HeightInputBinding, SuppliedHeightEvidence, TrustedRunPlan, VerificationLimits, VerifiedExport,
-};
+#[cfg(test)]
+use super::HeightInputBinding;
+use super::{SuppliedHeightEvidence, TrustedRunPlan, VerificationLimits, VerifiedExport};
 use color_eyre::eyre::{Result, ensure, eyre};
 use iroha_core::kura::CanonicalKuraEvidenceLimits;
 use iroha_crypto::Hash;
@@ -136,15 +136,18 @@ impl PublishedProof {
         Ok(identity)
     }
     /// Raw digest of the exact published canonical artifact.
+    #[cfg(test)]
     pub(crate) fn sha256(&self) -> [u8; 32] {
         self.sha256
     }
     /// Actual canonical artifact bytes, not its admitted maximum.
+    #[cfg(test)]
     pub(crate) fn byte_length(&self) -> u64 {
         self.byte_length
     }
     /// Derived complete projection; never a substitute for retained canonical proof.
     /// The independent maximum includes array delimiters and commas.
+    #[cfg(test)]
     pub(crate) fn json_projection(&self, maximum: u64) -> Result<Vec<u8>> {
         self.proof.json_projection(maximum)
     }
@@ -165,8 +168,8 @@ use supported::InputPublicationLease;
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 ))]
 pub(crate) use supported::{
-    PreparedLaunch, PreparedOutputPair, ProofOutput, RetainedStoppedTip, export_bound_request,
-    observe_stopped_tip, open_launcher, prepare_bound, replay_bound_request,
+    PreparedOutputPair, ProofOutput, export_bound_request, observe_stopped_tip, open_launcher,
+    prepare_bound, replay_bound_request,
 };
 
 #[cfg(not(all(
@@ -271,8 +274,8 @@ mod unsupported {
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
 pub(crate) use unsupported::{
-    PreparedLaunch, PreparedOutputPair, ProofOutput, RetainedStoppedTip, export_bound_request,
-    observe_stopped_tip, open_launcher, prepare_bound, replay_bound_request,
+    PreparedOutputPair, ProofOutput, export_bound_request, observe_stopped_tip, open_launcher,
+    prepare_bound, replay_bound_request,
 };
 
 #[cfg(not(all(
@@ -303,7 +306,7 @@ pub(in crate::kura::scaling_evidence::export) struct FactsInputBindings {
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 ))]
-pub(in crate::kura::scaling_evidence::export) use supported::{PublishedFacts, produce_facts};
+pub(in crate::kura::scaling_evidence::export) use supported::produce_facts;
 
 #[cfg(not(all(
     unix,
@@ -356,6 +359,4 @@ mod unsupported_facts {
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
-pub(in crate::kura::scaling_evidence::export) use unsupported_facts::{
-    PublishedFacts, produce_facts,
-};
+pub(in crate::kura::scaling_evidence::export) use unsupported_facts::produce_facts;
