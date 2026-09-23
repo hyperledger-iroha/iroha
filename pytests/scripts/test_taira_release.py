@@ -271,6 +271,9 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_resume_restores_actual_environment_before_tool_resolution_and_build(self):
         selected, built = [], []
+        first_tmpdir, second_tmpdir = self.root / "session-one-tmp", self.root / "session-two-tmp"
+        first_tmpdir.mkdir(mode=0o700)
+        second_tmpdir.mkdir(mode=0o700)
         def isolate(_root, _source, environment):
             selected.append(dict(environment))
             return dict(environment, CARGO="/fixed/cargo"), []
@@ -278,7 +281,7 @@ class TairaPrepareTests(unittest.TestCase):
             built.append(dict(environment))
             log.write_text("fixture process interruption")
             raise release.PrepareError("fixture process interruption")
-        with patch.dict(os.environ, {"PATH": "/fixture/session-one:/bin", "TMPDIR": "/fixture/tmp-one"}):
+        with patch.dict(os.environ, {"PATH": "/fixture/session-one:/bin", "TMPDIR": str(first_tmpdir)}):
             with self.assertRaisesRegex(release.PrepareError, "process interruption"):
                 self.prepare(build=interrupted, isolate=isolate)
         request_before = (self.out / "request.json").read_bytes()
@@ -286,7 +289,7 @@ class TairaPrepareTests(unittest.TestCase):
             built.append(dict(environment))
             self.binaries()
             log.write_text("fixture resumed build")
-        with patch.dict(os.environ, {"PATH": "/fixture/session-two:/bin", "TMPDIR": "/fixture/tmp-two"}):
+        with patch.dict(os.environ, {"PATH": "/fixture/session-two:/bin", "TMPDIR": str(second_tmpdir)}):
             result, gate, build = self.prepare(build=resumed, isolate=isolate)
         self.assertEqual(selected[0], selected[1])
         self.assertEqual(built[0], built[1])
@@ -509,6 +512,49 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(env["SCCACHE_DIR"], "/warm/cache")
         self.assertEqual(set(env), {"PATH", "HOME", "SCCACHE_DIR", "LC_ALL", "PYTHONNOUSERSITE",
                                     "PYTHONDONTWRITEBYTECODE", "CARGO_TARGET_DIR"})
+
+    def test_preparation_tmpdir_recreates_only_missing_scoped_directory(self):
+        parent = self.root / "temporary-parent"
+        parent.mkdir()
+        parent.chmod(0o1777)
+        scoped = parent / "iroha-taira-native-501"
+        release.preflight_preparation_tmpdir({"TMPDIR": str(scoped)}, scoped_parent=parent)
+        identity = (scoped.stat().st_dev, scoped.stat().st_ino)
+        self.assertEqual(stat.S_IMODE(scoped.stat().st_mode), 0o700)
+        self.assertEqual(list(scoped.iterdir()), [])
+        release.preflight_preparation_tmpdir({"TMPDIR": str(scoped)}, scoped_parent=parent)
+        self.assertEqual((scoped.stat().st_dev, scoped.stat().st_ino), identity)
+        self.assertEqual(list(scoped.iterdir()), [])
+
+    def test_preparation_tmpdir_rejects_missing_unscoped_and_unsafe_existing(self):
+        parent = self.root / "temporary-parent"
+        parent.mkdir()
+        parent.chmod(0o1777)
+        missing = self.root / "arbitrary-missing-directory"
+        with self.assertRaisesRegex(release.PrepareError, "TMPDIR does not exist"):
+            release.preflight_preparation_tmpdir({"TMPDIR": str(missing)}, scoped_parent=parent)
+        self.assertFalse(missing.exists())
+        loose = self.root / "loose-directory"
+        loose.mkdir(mode=0o755)
+        loose.chmod(0o755)
+        with self.assertRaisesRegex(release.PrepareError, "owner-held 0700"):
+            release.preflight_preparation_tmpdir({"TMPDIR": str(loose)}, scoped_parent=parent)
+        self.assertEqual(stat.S_IMODE(loose.stat().st_mode), 0o755)
+        private = self.root / "private-directory"
+        private.mkdir(mode=0o700)
+        alias = self.root / "symlink-directory"
+        alias.symlink_to(private, target_is_directory=True)
+        with self.assertRaisesRegex(release.PrepareError, "owner-held 0700"):
+            release.preflight_preparation_tmpdir({"TMPDIR": str(alias)}, scoped_parent=parent)
+        self.assertTrue(alias.is_symlink())
+
+    def test_preparation_tmpdir_fails_before_git_signature_verification(self):
+        missing = self.root / "arbitrary-missing-directory"
+        with patch.dict(os.environ, {"TMPDIR": str(missing)}), \
+             patch.object(release, "verify_signed_source") as verify:
+            with self.assertRaisesRegex(release.PrepareError, "TMPDIR does not exist"):
+                release.prepare_in_lane(self.args, self.source, 88, 89)
+        verify.assert_not_called()
 
     def test_native_incremental_admits_only_zero_or_one_without_release_environment_leak(self):
         environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm",

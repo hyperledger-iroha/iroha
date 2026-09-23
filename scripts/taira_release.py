@@ -136,6 +136,73 @@ def child_environment(inherited: dict[str, str], target_dir: Path) -> dict[str, 
 
 
 
+def preflight_preparation_tmpdir(inherited: dict[str, str], *,
+                                 scoped_parent: Path = Path("/tmp")) -> None:
+    """Restore the disposable Taira temp directory before Git invokes GPG.
+
+    Other configured temporary directories must already exist. Never repair an
+    existing directory's ownership or permissions, or follow a final symlink.
+    """
+    raw = inherited.get("TMPDIR")
+    if raw is None:
+        return
+    path = Path(raw)
+    require(bool(raw) and path.is_absolute() and Path(os.path.abspath(raw)) == path,
+            "TMPDIR must be an absolute normalized directory path")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        require(path.parent == scoped_parent
+                and re.fullmatch(r"iroha-taira-native-[0-9]+", path.name) is not None,
+                f"TMPDIR does not exist in this build environment: {path}; "
+                "create an owner-only directory or select the scoped Taira temp path")
+        try:
+            parent_fd = os.open(scoped_parent, os.O_RDONLY | os.O_DIRECTORY |
+                                os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as error:
+            raise PrepareError(f"TMPDIR parent is not a direct usable directory: {scoped_parent}: {error}") from error
+        try:
+            parent = os.fstat(parent_fd)
+            require(stat.S_ISDIR(parent.st_mode) and parent.st_uid in (0, os.geteuid())
+                    and stat.S_IMODE(parent.st_mode) == 0o1777,
+                    "scoped TMPDIR parent must be an owner-held 01777 directory")
+            try:
+                os.mkdir(path.name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                # A concurrent invocation can create the same scoped directory.
+                # Its identity and permissions must still pass below.
+                pass
+            except OSError as error:
+                raise PrepareError(f"cannot recreate scoped TMPDIR {path}: {error}") from error
+        finally:
+            os.close(parent_fd)
+        try:
+            info = path.lstat()
+        except OSError as error:
+            raise PrepareError(f"cannot inspect recreated TMPDIR {path}: {error}") from error
+    except OSError as error:
+        raise PrepareError(f"cannot inspect TMPDIR {path}: {error}") from error
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == 0o700,
+            f"TMPDIR must be a direct owner-held 0700 directory: {path}")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        raise PrepareError(f"cannot open TMPDIR {path}: {error}") from error
+    try:
+        opened = os.fstat(fd)
+        require((opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                f"TMPDIR changed during admission: {path}")
+        probe = ".taira-preparation-probe-" + uuid.uuid4().hex
+        try:
+            os.mkdir(probe, mode=0o700, dir_fd=fd)
+        except OSError as error:
+            raise PrepareError(f"TMPDIR is not writable in this build environment: {path}: {error}") from error
+        os.rmdir(probe, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 def native_check_environment(environment: dict[str, str], inherited: dict[str, str]) -> dict[str, str]:
     """Align native dependency metadata without changing the release environment."""
     incremental = inherited.get("CARGO_INCREMENTAL", "1")
@@ -1368,6 +1435,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     require(args.native_check_scope in {"basic", "full"}, "unknown native check scope")
     output = real_path(args.output_dir, exists=False)
+    preflight_preparation_tmpdir(dict(os.environ))
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
             "prepare must use the maintained script from the selected checkout")
     require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
