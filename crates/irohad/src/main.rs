@@ -8160,6 +8160,7 @@ impl Iroha {
                 config.snapshot.store_dir.resolve_relative_path(),
                 &kura,
                 &configured_lane_manifests,
+                &config.nexus,
                 || live_query_store.clone(),
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
