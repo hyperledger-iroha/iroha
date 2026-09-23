@@ -112,3 +112,32 @@ async fn elapsed_deadline_and_invalid_certificates_fail_before_publication_wait(
         "rejected input must not even create the durable admission namespace"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn canonical_admission_wait_requires_exact_input_and_the_original_deadline() {
+    let kura = iroha_core::kura::Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(
+        iroha_core::state::World::default(),
+        kura,
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    );
+    let wire = super::super::torii_proxy_test_deadline_unix_ms();
+    let expired = PersistenceDeadline::new(
+        Instant::now() - super::super::TORII_PROXY_EXECUTION_BUDGET,
+        wire,
+    );
+    assert!(
+        expired
+            .wait_for_canonical_admission(&state, b"invalid complete input")
+            .await
+            .unwrap_err()
+            .contains("budget expired")
+    );
+    let live = PersistenceDeadline::new(Instant::now(), wire);
+    let error = live
+        .wait_for_canonical_admission(&state, b"invalid complete input")
+        .await
+        .unwrap_err();
+    assert!(error.contains("complete") || error.contains("admission"));
+    assert!(!error.contains("deadline"));
+}

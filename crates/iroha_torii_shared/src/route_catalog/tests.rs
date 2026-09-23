@@ -1373,6 +1373,14 @@ mod tests {
     }
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
+        assert_eq!(
+            application_api::TRANSACTIONS_HISTORY_GET.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            application_api::TRANSACTIONS_HISTORY_GET.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
         for route in [
             contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
             contracts_and_verification_keys::MULTISIG_SPEC_POST,

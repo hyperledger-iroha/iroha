@@ -24,6 +24,7 @@ use crate::zk::kagemusha_v1_recursion::{
         TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, public_instance,
     },
 };
+use crate::zk::kagemusha_v1_state::CommittedOutgoingCandidateV1;
 use halo2_proofs::poly::commitment::Params as _;
 use iroha_data_model::kagemusha::{KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KagemushaPaymentProofV1};
 

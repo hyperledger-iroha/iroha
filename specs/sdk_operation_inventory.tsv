@@ -190,7 +190,7 @@ application.subscriptions_post	POST	/v1/subscriptions	public	canonical_account_s
 application.telemetry_live_get	GET	/v1/telemetry/live	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	true	false	false
 application.telemetry_peers_info_get	GET	/v1/telemetry/peers-info	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	true	false	false
 application.telemetry_propagation_get	GET	/v1/telemetry/propagation	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	false	false	false
-application.transactions_history_get	GET	/v1/transactions/history	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
+application.transactions_history_get	GET	/v1/transactions/history	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 application.transactions_query_post	POST	/v1/transactions/query	public	optional_canonical_account_signature	dataspace_visible	compute	http	feature(app_api)	true	true	false	true
 application.webhooks_by_id_delete	DELETE	/v1/webhooks/{id}	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true
 application.webhooks_get	GET	/v1/webhooks	public	operator_signature	operator	read	http	feature(app_api)	true	true	false	true
@@ -424,8 +424,8 @@ kagemusha.operation	GET	/v1/kagemusha/operations/{operation_id}	public	torii_def
 kagemusha.readiness	GET	/v1/kagemusha/readiness	public	torii_default	public	read	http	feature(app_api)	true	true	true	false
 kagemusha.redeem	POST	/v1/kagemusha/redeem	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
 kagemusha.top_up	POST	/v1/kagemusha/top-up	public	canonical_signed_body	authenticated_account	mutation	http	feature(app_api)	true	true	true	false
-ledger.block_proof	GET	/v1/ledger/block/{height}/proof/{entry_hash}	public	torii_default	public	read	http	always	true	true	false	false
-ledger.executed_block_wire	GET	/v1/ledger/block/{height}	public	torii_default	public	read	http	always	true	true	false	false
+ledger.block_proof	GET	/v1/ledger/block/{height}/proof/{entry_hash}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
+ledger.executed_block_wire	GET	/v1/ledger/block/{height}	public	canonical_account_signature	authenticated_account	read	http	always	true	true	false	true
 ledger.headers	GET	/v1/ledger/headers	public	torii_default	public	read	http	always	true	true	false	false
 ledger.state_proof	GET	/v1/ledger/state-proof/{height}	public	torii_default	public	read	http	always	true	true	false	false
 ledger.state_root	GET	/v1/ledger/state/{height}	public	torii_default	public	read	http	always	true	true	false	false

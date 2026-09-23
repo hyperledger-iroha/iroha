@@ -78,3 +78,61 @@ These are source-joined local network diagnostics, not a clean signed release,
 the full loss/reordering/backpressure/final-transaction campaign, or a general
 liveness proof. The original lifecycle simplification and complete memory
 admission remain open.
+
+## Superseded retained Validate owner
+
+The later candidate distinguishes a stable finalized State head at or beyond
+the old proposal height from a transient State-generation change. Before Native
+execution, the former yields a typed supersession refusal. The lifecycle
+Completion owner also checks the finalized head while an original first-input
+recovery or source-refresh wait remains parked, so it does not require an
+obsolete response to become runnable again.
+
+That owner reattaches the original worker dispatch to its exact Waiting
+Validate row and concrete body carrier, persists a `Cancelled` LedgerV1
+successor, removes that carrier, then acknowledges the guarded worker
+completion. A failed ledger write leaves both the waiting row and carrier
+unchanged; no validation marker or invalid-body verdict is fabricated. The
+same-height publication is now covered by a State-source regression. The
+exact cancellation, write-failure, and driver-level guarded-completion cuts
+pass three focused Core tests. The wider `superseded_` Core selection passes
+21/21, and the Native preparation and physical Validate retry selections pass
+1/1 and 3/3 on the same test executable.
+
+The changed local-release daemon has SHA-256
+`8c0440e36cc195c74b584982c55a7c1a35a27d6756f144237946edacbe68b20d`;
+the final isolated network harness has SHA-256
+`c49bdf2d722692f0b8907567ce82c6eca200e0e601bf66a358ddbae6074b4cf6`.
+One four-validator silent-initial-author outage run passes in 97.82 seconds:
+the other three finalize the finite input, and the restarted author agrees on
+the committed result. One four-validator distinct-subject PrepareQC run passes
+in 183.83 seconds after causal message release; all four authenticated message
+controllers acknowledge the exact revision-4 drain fence with no held or
+in-flight message. One seven-validator run with two validator restarts passes
+in 219.66 seconds, including finality during the outage, recovery of both
+identities, and the finite final transaction. One four-validator/five-observer
+slow-reader relay run passes in 173.43 seconds, including exact successor
+recovery and measured relay pressure. One four-validator NPoS stopped-leader
+run passes in 174.28 seconds with bounded timeout-certificate rotation. The
+four-validator same-subject locked-reproposal run passes in 65.35 seconds
+after ordered quorum release. One four-validator restart run passes in 151.40
+seconds, including continued finality during the outage and after recovery.
+The retained logs are under
+`dist/sumeragi-main-work/generation251-superseded-validate-network`.
+
+The first attempted changed-daemon run stopped at Torii startup because the
+transaction-history route was declared optional while its handler required a
+canonical account signature. The route catalog and mount now agree on signed
+account admission. The next run reached the block-2 read and received HTTP 401
+because this harness used an unsigned raw GET for a canonical-authenticated
+ledger carrier; the harness now signs that exact network request. Neither run
+established a consensus outcome. The production Torii route tests pass 90/90.
+
+The intermittent controlled-drain timeout above remains an independent open
+signal. The harness wait now extends only when the exact active drain records
+additional delivered or retired messages and has a fixed six-times hard cap;
+this prevents a progressing drain from failing solely at the original 20-second
+idle boundary without hiding a stalled controller. Its focused unit test passes;
+the current multilane formal checker and Rust formatting check pass. These
+network passes do not prove every superseded Validate cut was exercised or
+close the four/seven-validator fault campaign or release gate.

@@ -275,7 +275,7 @@ async fn incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queue_plan_handoff_after_quorum_resumes_exact_certificate_publication() {
+async fn queue_plan_handoff_after_quorum_retains_exact_input_until_canonical_carrier() {
     let fixture = QueuePlanHandoffFixture::new();
     let expected = super::queue_plan_synced_acceptance_expectation(&fixture.request)
         .unwrap()
@@ -293,9 +293,8 @@ async fn queue_plan_handoff_after_quorum_resumes_exact_certificate_publication()
     let snapshot = queue_plan_synced_test_certificate_snapshot(&fixture.request, receipts);
     let input = queue_plan_synced_test_complete_input(&fixture.request, &snapshot.body);
     let input_hash = Hash::new(&input);
-    let original_certificate = snapshot.body.clone();
     let deadline = super::queue_plan_publication_wait::PersistenceDeadline::new(
-        Instant::now(),
+        Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET + Duration::from_secs(3),
         fixture.request.deadline_unix_ms,
     );
     let memory = super::acquire_torii_proxy_memory(&fixture.app).unwrap();
@@ -330,7 +329,7 @@ async fn queue_plan_handoff_after_quorum_resumes_exact_certificate_publication()
     let response = tokio::time::timeout(Duration::from_secs(5), future)
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_queue_plan_handoff_uncertainty(&response, &fixture.request);
     assert_eq!(
         fixture
             .app
@@ -339,10 +338,7 @@ async fn queue_plan_handoff_after_quorum_resumes_exact_certificate_publication()
             .unwrap(),
         Some(input)
     );
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    assert_eq!(body.as_ref(), original_certificate.as_slice());
+    drop(response);
     assert_eq!(
         fixture.app.torii_proxy_memory_inflight.available_permits(),
         1

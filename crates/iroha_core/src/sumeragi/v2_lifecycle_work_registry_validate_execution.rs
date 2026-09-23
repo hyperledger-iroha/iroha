@@ -184,10 +184,6 @@ impl DurableValidateCompletionAuthority {
             payload: self.payload,
         }
     }
-    /// Exact immutable owner of the waiting record.
-    pub(super) const fn owner(self) -> OwnerId {
-        self.address.owner
-    }
     /// Existing lifecycle ordinal; completion never allocates another one.
     pub(super) const fn ordinal(self) -> u128 {
         self.address.ordinal
@@ -196,10 +192,6 @@ impl DurableValidateCompletionAuthority {
     pub(super) const fn slot(self) -> PhysicalSlotId {
         self.address.slot
     }
-    /// Digest of the original closed Validate carrier.
-    pub(super) const fn incumbent_digest(self) -> LifecycleDigest {
-        self.incumbent_digest
-    }
     /// Outcome-bound digest installed only for executable outcomes.
     pub(super) const fn replacement_digest(self) -> Option<LifecycleDigest> {
         self.replacement_digest
@@ -207,22 +199,6 @@ impl DurableValidateCompletionAuthority {
     /// Exact wait token retained from the claimed-side dispatch cut.
     pub(super) const fn wait_token(self) -> WaitToken {
         self.wait_token
-    }
-    /// Exact immutable lifecycle key validated before async detachment.
-    pub(super) const fn lifecycle_key(self) -> LifecycleKey {
-        self.lifecycle_key
-    }
-    /// Exact immutable lifecycle stage validated before async detachment.
-    pub(super) const fn lifecycle_stage(self) -> LifecycleStage {
-        self.lifecycle_stage
-    }
-    /// Return whether the waiting row retains this completion's exact frame.
-    pub(super) fn matches_durable_payload(self, payload: DurablePayloadReference) -> bool {
-        self.payload == payload
-            && super::body_pipeline_transition::durable_validate_payload_is_exact(
-                self.lifecycle_key,
-                payload,
-            )
     }
     /// Construct the only Ready event authorized by this executable outcome.
     pub(super) fn ready_event(self) -> Option<ReadyEvent> {

@@ -466,6 +466,14 @@ impl RetainedLocalLifecycleValidateV1 {
         )
     }
 
+    /// The worker already authenticated a stable finalized-height advance.
+    pub(in crate::sumeragi) fn is_superseded(&self) -> bool {
+        matches!(
+            &self.refusal,
+            super::v2_body_store::LocalValidationRefusal::Superseded
+        )
+    }
+
     /// Retire the worker index only after the exact lifecycle row was cancelled.
     pub(in crate::sumeragi) fn acknowledge_superseded(self) {
         self.ack.acknowledge_after_publication();

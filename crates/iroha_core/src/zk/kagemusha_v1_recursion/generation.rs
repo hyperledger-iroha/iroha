@@ -258,7 +258,7 @@ use super::{
         verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding,
         verify_eq_succinct_protocol, verify_eq_succinct_protocol_with_transcript_binding,
     },
-    state_relation::PUBLIC_INSTANCE_COUNT,
+    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
     transport_decider::{
         KagemushaTransportDeciderCapacityProfileV1, KagemushaTransportDeciderEpCircuitV1,
         KagemushaTransportDeciderEqCircuitV1, KagemushaTransportDeciderParityWitnessV1,
@@ -10627,8 +10627,7 @@ fn validate_transport_proof_profile(
 
 #[cfg(feature = "zk-halo2-ipa")]
 const fn recursive_public_instance_count() -> usize {
-    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
-        + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
+    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
 }
 
 fn ensure_embedded_vk<C>(
@@ -11894,7 +11893,7 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn recursive_public_shape_and_transport_bound_are_fixed() {
-        assert_eq!(PUBLIC_INSTANCE_COUNT, 85);
+        assert_eq!(super::super::state_relation::PUBLIC_INSTANCE_COUNT, 85);
         assert_eq!(recursive_public_instance_count(), 121);
         assert!(
             validate_recursive_proof_length(

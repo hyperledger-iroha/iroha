@@ -18326,6 +18326,20 @@ impl V2LaneWorkAdapter {
         let Some((body, committee)) = self.refresh_lane_drain_body() else {
             return Ok(());
         };
+        if let Some(queue) = self.lane_drain_queue.as_ref()
+            && let Err(error) = queue.reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                body.intent.lane_id,
+                body.intent.dataspace_id,
+                body.intent.lane_incarnation,
+            )
+        {
+            iroha_logger::warn!(
+                %error,
+                "retaining lane drain until exact closed-route Queue claims are reconciled"
+            );
+            return Ok(());
+        }
         if self.lane_drain_has_local_blockers(&body) {
             return Ok(());
         }

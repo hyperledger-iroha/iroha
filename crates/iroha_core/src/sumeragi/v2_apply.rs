@@ -5132,6 +5132,14 @@ impl V2ApplyService {
         else {
             return Ok(());
         };
+        self.queue
+            .reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
+            .map_err(|error| V2ApplyError::LocalCanonicalState(error.to_string()))?;
         self.try_validate_autoscale_retirement_queue_binding(
             lane_id,
             dataspace_id,
@@ -5150,6 +5158,14 @@ impl V2ApplyService {
             return Ok(());
         };
         Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        self.queue
+            .reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
+            .map_err(|error| V2ApplyError::LocalCanonicalState(error.to_string()))?;
         // Apply has no retained local-dependency continuation yet. Keep its original
         // blocking order and final veto until the prepared publication owner
         // can retain the decided execution across physical contention.

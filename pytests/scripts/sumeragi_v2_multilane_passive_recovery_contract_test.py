@@ -664,11 +664,16 @@ def test_native_recovery_generic_bindings_use_actual_sources(tmp_path, mutate_so
     ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "return LaneCurrentGate::ObservationChanged", "return LaneCurrentGate::InstanceClosed"),
     ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "if gate == LaneCurrentGate::InstanceClosed", "if gate != LaneCurrentGate::ObservationChanged"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::service_sources", ".source_recovery_target(id, observed.as_ref()?)?", ".unchecked_source_target(id)?"),
-    ("v2_runner/native_process.rs", "NativeRunnerProcess::poll", "source_gate != LaneCurrentGate::ObservationChanged", "true"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::poll", "if !source_observation_changed", "if true"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "observed.filter(|observed| observed.is_current(state))", "observed"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "source.is_current_in(observed)", "true"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "response.is_some()", "false"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_released_validation", "Arc::ptr_eq(source, owned_source)", "true"),
+    ("v2_runner/native_candidate.rs", "NativeRunnerProcess::prune_closed_candidate_source_waits", "source.is_current_in(observed)", "true"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::next_deadline", "if self.awaiting_current_observation", "if false"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::note_current_observation", "observed.is_none_or(|observed| !observed.is_current(&self.state))", "observed.is_none()"),
 ])
-def test_native_source_retirement_requires_original_authenticated_closure(tmp_path, relative, symbol, old, new):
+def test_native_source_retirement_requires_original_owner_and_current_lane(tmp_path, relative, symbol, old, new):
     support = load_support()
     module = support.load_checker()
     models = copy_fixture(tmp_path, support, module)

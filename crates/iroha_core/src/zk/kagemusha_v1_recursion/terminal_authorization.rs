@@ -1198,7 +1198,9 @@ pub(crate) fn constrain_candidate_envelope_digest_v1<F: KagemushaPoseidonFieldV1
     public: &[AssignedValue<F>],
 ) -> Result<[PastaSha256ByteV1<F>; 32], String> {
     if public.len() != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
-        return Err("candidate envelope requires the exact recursive State semantic prefix".to_owned());
+        return Err(
+            "candidate envelope requires the exact recursive State semantic prefix".to_owned(),
+        );
     }
     let range = builder.range_chip();
     let ctx = builder.main(0);

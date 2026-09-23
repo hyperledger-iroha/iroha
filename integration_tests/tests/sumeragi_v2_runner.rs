@@ -5,7 +5,7 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    crypto::{Algorithm, Hash, HashOf, KeyPair},
+    crypto::{Algorithm, Hash, HashOf, KeyPair, Signature},
     data_model::{
         Identifiable, Level, NetworkId,
         account::{Account, AccountId},
@@ -39,7 +39,8 @@ use iroha_test_network::{
 use norito::json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{task, time::sleep};
 const VALIDATOR_COUNT: usize = 4;
@@ -3822,13 +3823,33 @@ fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()>
 }
 
 async fn committed_block_at_height(peer: &NetworkPeer, height: u64) -> Result<SignedBlock> {
+    static REQUEST_NONCE: AtomicU64 = AtomicU64::new(0);
     ensure!(height > 0, "committed block height must be nonzero");
     let client = peer.client();
+    let context = client.client();
     let url = client
         .client()
         .endpoint()
         .join(&format!("v1/ledger/block/{height}"))
         .wrap_err("construct committed-block URL")?;
+    let timestamp: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "sumeragi-block-{}-{timestamp}-{}",
+        std::process::id(),
+        REQUEST_NONCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let message = iroha::client::canonical_network_request_signature_message(
+        context.network_id(),
+        &iroha::http::Method::GET,
+        &url,
+        &[],
+        timestamp,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(context.key_pair().private_key(), &message)?;
     let mut response = reqwest::Client::builder()
         .timeout(
             client
@@ -3840,6 +3861,19 @@ async fn committed_block_at_height(peer: &NetworkPeer, height: u64) -> Result<Si
         .wrap_err("build committed-block HTTP client")?
         .get(url)
         .header(reqwest::header::ACCEPT, "application/x-norito")
+        .header(
+            "x-iroha-account",
+            iroha::client::canonical_request_account_header_value(context.account())?,
+        )
+        .header(
+            "x-iroha-signature",
+            iroha::client::canonical_request_signature_header_value(&signature)?,
+        )
+        .header(
+            "x-iroha-timestamp-ms",
+            iroha::client::canonical_request_timestamp_header_value(timestamp)?,
+        )
+        .header("x-iroha-nonce", nonce)
         .send()
         .await
         .wrap_err_with(|| format!("fetch committed block {height} from {}", peer.mnemonic()))?;

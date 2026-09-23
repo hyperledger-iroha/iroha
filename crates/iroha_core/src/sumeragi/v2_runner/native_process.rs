@@ -150,8 +150,15 @@ impl NativeRunnerProcess {
             self.driver.process(),
             observed.as_ref(),
         );
-        self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged;
-        if source_gate != LaneCurrentGate::ObservationChanged {
+        let candidate_gate = NativeSourceRequest::retire_closed_candidate(
+            &mut self.source,
+            &self.state,
+            observed.as_ref(),
+        );
+        let source_observation_changed = source_gate == LaneCurrentGate::ObservationChanged
+            || candidate_gate == LaneCurrentGate::ObservationChanged;
+        self.awaiting_current_observation |= source_observation_changed;
+        if !source_observation_changed {
             if let Some(source) = self.source.as_mut() {
                 source.poll(network, &self.guard, now, self.retransmit)?;
             }
@@ -175,7 +182,7 @@ impl NativeRunnerProcess {
             .poll(&observed, now)
             .map_err(V2RunnerError::Service)?;
         self.note_current_observation(Some(&observed));
-        self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged;
+        self.awaiting_current_observation |= source_observation_changed;
         if self.relay_context != Some(global.context().id()) {
             self.relayed.clear();
             self.relay_context = Some(global.context().id());
@@ -322,12 +329,14 @@ impl NativeRunnerProcess {
         services: &mut ProductionV2Services,
         now: Instant,
     ) -> Result<(), V2RunnerError> {
-        // Authentication is needed only for an actual instance source need.
+        // Authentication is needed only for an actual instance or candidate
+        // source need.
         // The common no-source turn must not repeat Kura/State observation work.
         let needs_current =
             self.source
                 .as_ref()
-                .is_some_and(NativeSourceRequest::targets_instance)
+                .is_some_and(|source| source.targets_instance() || source.targets_candidate())
+                || self.candidate_source_requirement().is_some()
                 || self.driver.process().instance_ids().any(|id| {
                     self.driver.process().is_productive(id)
                         && self.driver.process().instance(id).is_some_and(|instance| {
@@ -350,6 +359,28 @@ impl NativeRunnerProcess {
             self.awaiting_current_observation = true;
             return Ok(());
         }
+        if NativeSourceRequest::retire_closed_candidate(
+            &mut self.source,
+            &self.state,
+            observed.as_ref(),
+        ) == LaneCurrentGate::ObservationChanged
+        {
+            self.awaiting_current_observation = true;
+            return Ok(());
+        }
+        if let Some(observed) = observed
+            .as_ref()
+            .filter(|observed| observed.is_current(&self.state))
+        {
+            self.prune_closed_candidate_source_waits(observed);
+        }
+        // Superseded Validate cancels its original wait independently of the
+        // signed request. Free only that orphaned network slot before a buffered
+        // response can be mistaken for current worker-completion authority.
+        NativeSourceRequest::retire_released_validation(
+            &mut self.source,
+            services.native_source_requirement().as_ref(),
+        );
         if let Some(mut source) = self.source.take() {
             match source.settle(&mut self.driver, services, &mut self.recovered_sources) {
                 Ok(true) => {}
@@ -363,8 +394,16 @@ impl NativeRunnerProcess {
         if self.source.is_some() {
             return Ok(());
         }
-        let need = if let Some((subject, _, source)) = services.native_source_requirement() {
-            Some((source, NativeSourceTarget::Validation(Box::new(subject))))
+        let need = if let Some((subject, execution_index, source)) =
+            services.native_source_requirement()
+        {
+            Some((
+                source,
+                NativeSourceTarget::Validation {
+                    subject: Box::new(subject),
+                    execution_index,
+                },
+            ))
         } else {
             self.driver.process().instance_ids().find_map(|id| {
                 let target = self
@@ -384,6 +423,9 @@ impl NativeRunnerProcess {
             })
         }
         .or_else(|| {
+            observed
+                .as_ref()
+                .filter(|observed| observed.is_current(&self.state))?;
             self.candidate_source_requirement()
                 .map(|source| (source, NativeSourceTarget::Candidate))
         });

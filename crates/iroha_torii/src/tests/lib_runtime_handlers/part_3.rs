@@ -1269,7 +1269,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
+async fn strict_proxy_finalization_keeps_w_through_canonical_admission_wait() {
     let signers = (0_u8..4)
         .map(|offset| {
             checked_torii_test_keypair_from_seed_byte(
@@ -1310,7 +1310,8 @@ async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
                 &expected.admission_binding,
                 queue_plan_synced_test_entrypoint(&request),
                 super::queue_plan_publication_wait::PersistenceDeadline::new(
-                    Instant::now(),
+                    Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET
+                        + Duration::from_secs(3),
                     request.deadline_unix_ms,
                 ),
             )
@@ -1329,7 +1330,7 @@ async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
             response
         })
         .await;
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(super::is_queue_plan_outcome_unknown_response(&response));
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
     drop(response);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
@@ -2988,7 +2989,7 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queue_plan_quorum_is_accepted_before_registry_application() {
+async fn queue_plan_quorum_is_not_publicly_accepted_before_registry_application() {
     let signers = (0_u8..4)
         .map(|offset| {
             checked_torii_test_keypair_from_seed_byte(
@@ -3031,15 +3032,14 @@ async fn queue_plan_quorum_is_accepted_before_registry_application() {
         &expected.admission_binding,
         queue_plan_synced_test_entrypoint(&request),
         super::queue_plan_publication_wait::PersistenceDeadline::new(
-            Instant::now(),
+            Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET + Duration::from_secs(3),
             request.deadline_unix_ms,
         ),
     );
     let response = response.await;
-    assert_eq!(
-        response.status(),
-        StatusCode::ACCEPTED,
-        "a locally durable f+1 certificate is Accepted before WSV application with an authenticated capacity owner"
+    assert!(
+        super::is_queue_plan_outcome_unknown_response(&response),
+        "an uncarried f+1 certificate cannot promise canonical admission"
     );
     assert_eq!(
         app.kura
@@ -3052,17 +3052,13 @@ async fn queue_plan_quorum_is_accepted_before_registry_application() {
             .queue_plan_admission_binding_registry_match(&expected.admission_binding)
             .expect("inspect unapplied QueuePlan registry"),
         QueuePlanAdmissionRegistryMatch::Absent,
-        "Accepted is a durable-admission receipt, not an Applied receipt"
+        "local durability does not create canonical registry membership"
     );
     let response_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(
-        response_bytes.as_ref(),
-        snapshot.body.as_slice(),
-        "the public response remains the certificate-only quorum receipt"
-    );
-    assert!(super::decode_queue_plan_synced_certificate(&response_bytes).is_ok());
+    assert_ne!(response_bytes.as_ref(), snapshot.body.as_slice());
+    assert!(super::decode_queue_plan_synced_certificate(&response_bytes).is_err());
     assert!(
         norito::decode_canonical::<iroha_data_model::block::lane_admission::LaneAdmittedInputV1>(
             &response_bytes
@@ -4342,7 +4338,7 @@ async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
     app.kura.store_block(Arc::new(successor)).unwrap();
     let memory = super::try_acquire_torii_proxy_memory(&app).unwrap();
     let deadline = super::queue_plan_publication_wait::PersistenceDeadline::new(
-        Instant::now(),
+        Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET + Duration::from_secs(3),
         request.deadline_unix_ms,
     );
     let observed_wait_height = deadline.observed_wait_height.clone();
@@ -4400,7 +4396,7 @@ async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(super::is_queue_plan_outcome_unknown_response(&response));
     assert_eq!(
         app.kura
             .pending_queue_plan_admission_certificate(hash)

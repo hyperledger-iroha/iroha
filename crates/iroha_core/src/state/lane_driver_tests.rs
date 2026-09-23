@@ -153,6 +153,41 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
 }
 
 #[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_full_effect_reservation_does_not_spin_on_overdue_clock
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::NativeLaneDriver,
+    };
+    use std::time::Instant;
+    let start = Instant::now();
+    let fixture = native_process_fixture(false, start);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let signer = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() != lane.reducer_context().leader(0)).unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, signer), native_driver_limits_for_test()).unwrap();
+    let until = Instant::now() + Duration::from_secs(15);
+    while driver.process().instance(id).is_none() {
+        driver.poll(&observed, start).unwrap();
+        assert!(Instant::now() < until, "physical lane opening must complete");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let due = driver.next_deadline().expect("fresh active lane has a clock");
+    let tag = driver.process().instance(id).unwrap().tag();
+    driver.restrict_effect_capacity_to_retained_for_test(id);
+    assert_eq!(driver.next_deadline(), None,
+        "an unserviceable overdue clock must use the runner's bounded idle wake");
+    driver.poll(&observed, due + Duration::from_secs(1)).unwrap();
+    assert_eq!(driver.process().instance(id).unwrap().tag(), tag);
+    assert_eq!(driver.next_deadline(), None);
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
 state_test! { sync native_driver_retains_exact_ingress_and_instance_across_global_carrier_change
     use crate::sumeragi::{output_guard::ConsensusOutputGuard,
         v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput}};
@@ -1259,6 +1294,12 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
         .verified_lane_consensus_contexts()
         .unwrap()
         .unwrap();
+    assert!(source.is_current_in(&current));
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&current)),
+        LaneCurrentGate::Current,
+        "a new global carrier does not cancel the still-current candidate source"
+    );
     assert_eq!(
         retained.retire(driver.process(), Some(&observed)),
         LaneCurrentGate::ObservationChanged
@@ -1291,6 +1332,34 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
         .unwrap()
         .unwrap();
     assert!(closed.contexts().is_empty());
+    assert!(!source.is_current_in(&closed));
+    if buffered_response {
+        let mut completed_candidate = NativeSourceRequestTestProbe::non_instance(
+            Arc::clone(&source), &source_keys[0], now, false,
+        );
+        completed_candidate.accept(response.response().clone(), &request.request().requester);
+        assert_eq!(
+            completed_candidate.retire_closed_candidate(&fixture.state, None),
+            LaneCurrentGate::Current,
+            "an authenticated body can settle while State publication moves"
+        );
+        assert_eq!(
+            completed_candidate.retire_closed_candidate(&fixture.state, Some(&closed)),
+            LaneCurrentGate::Current,
+            "an authenticated buffered body remains available for another current route"
+        );
+        assert!(completed_candidate.retains_request());
+    }
+    #[cfg(feature = "bls")]
+    if !buffered_response && !hold_body {
+        NativeSourceRequestTestProbe::assert_candidate_source_pruning(
+            Arc::clone(&fixture.state),
+            Arc::clone(&source),
+            &current,
+            &closed,
+            &source_keys[0],
+        );
+    }
     assert!(
         driver
             .process()
@@ -1370,6 +1439,47 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
             "validation and candidate owners need their own completion/cancellation authority"
         );
     }
+    let exact_validate = (source.finality().subject, 0, Arc::clone(&source));
+    assert!(!validation.retire_released_validation(Some(&exact_validate)));
+    let validation_ticket = validation.backpressure();
+    let wrong_index = (exact_validate.0, 1, Arc::clone(&source));
+    assert!(validation.retire_released_validation(Some(&wrong_index)));
+    assert!(!validation.retains_request());
+    assert_eq!(validation_ticket.waiter_count(), 0);
+    assert_eq!(validation_ticket.ticket_drop_cancellations(), 1);
+    let mut different_source = NativeSourceRequestTestProbe::non_instance(
+        Arc::clone(&source), &source_keys[0], now, true,
+    );
+    let copied_source = (exact_validate.0, 0, Arc::new(source.as_ref().clone()));
+    assert!(different_source.retire_released_validation(Some(&copied_source)));
+    let mut superseded = NativeSourceRequestTestProbe::non_instance(
+        Arc::clone(&source), &source_keys[0], now, true,
+    );
+    let superseded_ticket = superseded.backpressure();
+    assert!(superseded.retire_released_validation(None));
+    assert_eq!(superseded_ticket.waiter_count(), 0);
+    assert_eq!(superseded_ticket.ticket_drop_cancellations(), 1);
+    assert!(!candidate.retire_released_validation(None));
+    assert!(candidate.retains_request());
+    let candidate_ticket = candidate.backpressure();
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, None),
+        LaneCurrentGate::ObservationChanged,
+        "missing current State cannot cancel an outstanding candidate request"
+    );
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&current)),
+        LaneCurrentGate::ObservationChanged,
+        "a stale observation cannot retire a candidate source"
+    );
+    assert!(candidate.retains_request());
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&closed)),
+        LaneCurrentGate::InstanceClosed,
+        "authenticated lane closure frees the shared recovery slot"
+    );
+    assert_eq!(candidate_ticket.waiter_count(), 0);
+    assert_eq!(candidate_ticket.ticket_drop_cancellations(), 1);
     assert_eq!(
         outstanding.len(),
         1,
