@@ -1568,8 +1568,6 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             ensure!(proved_height > last_proved_height, "proved useful operation did not strictly advance height");
             wait_for_exact_height(&clients, proved_height, ceremony_deadline).await?;
             last_proved_height = proved_height;
-            writeln!(height_write, "{proved_height}")?;
-            height_write.flush()?;
             if matches!(operation, "onboarding" | "faucet") {
                 // The SDK's synchronous HTTP client refuses a Tokio runtime
                 // thread. Replay the retained envelope on a scoped OS thread
@@ -1589,6 +1587,11 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                 wait_for_exact_height(&clients, proved_height, ceremony_deadline).await?;
             }
         }
+        // The native provisioner finalizes on the first height that reaches the
+        // response boundary. Send only the final authenticated canary height so
+        // its certificate is effective at the exact next proved height.
+        writeln!(height_write, "{last_proved_height}")?;
+        height_write.flush()?;
         drop(height_write);
         let status = timeout_at(ceremony_deadline, provision.wait()).await??;
         ensure!(status.success(), "fresh native DKG provisioning failed");
