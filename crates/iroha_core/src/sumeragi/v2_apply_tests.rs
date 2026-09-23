@@ -745,6 +745,18 @@ fn current_carrier_rejects_unrelated_ordinary_external_transaction() {
 #[cfg(feature = "bls")]
 #[test]
 fn retained_current_genesis_executes_once_and_publishes_original_owner() {
+    let handle =
+        crate::sumeragi::sumeragi_thread_builder("retained-current-genesis-original-owner")
+            .spawn(retained_current_genesis_on_consensus_stack)
+            .expect("spawn retained genesis test on the production consensus stack");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[inline(never)]
+fn retained_current_genesis_on_consensus_stack() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let verified = verified_context_for_fixture(&fixture, &fixture.context);
     let directory = tempfile::tempdir().unwrap();

@@ -452,7 +452,7 @@ fn native_service_retention_fixture(atomic: bool) -> Box<NativeServicePreparatio
 
 // Current first-admission carriers have useful authenticated controls but no
 // Native economic batch. Their one common execution must use the same custody.
-state_test! { sync native_service_control_only_admission_retains_one_execution_and_publishes
+state_test! { consensus_stack native_service_control_only_admission_retains_one_execution_and_publishes
     use crate::sumeragi::{
         v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
         v2_chunks::encode_payload,
@@ -535,11 +535,11 @@ fn native_service_retained_source_allocations(phase: &NativeServiceProductionPha
      groups[0].decisions().as_ptr() as usize, groups[0].contexts().as_ptr() as usize]
 }
 
-state_test! { sync native_service_single_body_store_retries_reuse_original_execution
+state_test! { consensus_stack native_service_single_body_store_retries_reuse_original_execution
     assert_native_service_body_store_retention(native_service_retention_fixture(false));
 }
 
-state_test! { sync native_service_atomic_body_store_retries_reuse_original_execution
+state_test! { consensus_stack native_service_atomic_body_store_retries_reuse_original_execution
     assert_native_service_body_store_retention(native_service_retention_fixture(true));
 }
 
@@ -783,7 +783,7 @@ impl NativeServicePreparationFixture {
 }
 
 
-state_test! { sync native_service_postpublication_refusal_retains_original_owner_and_notifies_once
+state_test! { consensus_stack native_service_postpublication_refusal_retains_original_owner_and_notifies_once
     use crate::sumeragi::{
         v2_apply::native_validation::fail_next_post_publication_queue_tail_for_test,
         v2_body_store::{BlockSignaturePolicy, LocalValidationRefusal, V2BodyStore, V2BodyStoreCapacity},
