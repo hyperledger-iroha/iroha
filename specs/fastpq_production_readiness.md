@@ -56,15 +56,25 @@ and release performance qualification are separate from those focused checks.
 
 The applied fixed-width row codec separately passes five new byte/canonicality/
 allocation/equivalence tests and 30 resource, producer, API and corrected boundary
-checks. The complete shared-opening test run and new-layout quantity artifacts
-remain pending; the same September 22 record distinguishes those results and
-retains the initial compiler and test failures.
+checks. The shared-opening selection subsequently passed 29 tests with no failures
+and one full-transfer diagnostic ignored; its controller's incorrect expected count
+is recorded separately. The new-layout ordinary artifact passes self-verification
+and independent verification at 7,479,589 bytes, 750 AIR evaluations and two
+terminal checks. AXT also passes at 7,496,970 bytes, and the separate captured-artifact
+positive and rejection controls pass. Both artifacts exceed production limits;
+the same September 22 record retains the initial compiler and test failures.
 
 The borrowed hash-body framing also passes 37 focused checks, including exact
 wire/hash equivalence, typed binding, the fixed-row codec and the public API.
 It removes temporary field vectors and digest copies while retaining the same
-canonical BodyV1 bytes. The measured full-producer follow-up remains pending;
-this focused result does not establish a latency improvement.
+canonical BodyV1 bytes. The full-producer follow-up has completed both ordinary and AXT proving and
+independent verification; neither scoped timing establishes a latency improvement.
+
+The cached Goldilocks reduction now matches the existing unsigned Metal field
+fold. Its full dependency-free primitive harness passes 68 tests with one timing
+diagnostic ignored, including exact canonical-hash parity. A scoped complete-hash
+comparison improved both tested payload sizes; dependent-prover and release
+performance results remain outstanding in the September 22 record.
 
 The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
 17 binary folds and four terminal values. The 22-message transcript expands 931
@@ -96,6 +106,12 @@ independent cryptographic qualification, hardware/resource measurements and
 four-validator rollout/recovery remain unfinished. Production consumers, schemas,
 fixtures and SDKs must change together after those obligations are met. No
 production profile, limit or admission registry is activated by this slice.
+
+The replacement protocol's public-column reconstruction, 606-component DEEP
+arithmetic and radix-2/4/8/16 folding now pass 21 new real-crate tests, alongside
+37 existing framing/profile/codec/API regressions. These private test-registered
+owners are not yet a complete smaller proof format or production verifier. The
+September 22 record binds the executable and subsequent registration correction.
 
 ## Completion goals
 

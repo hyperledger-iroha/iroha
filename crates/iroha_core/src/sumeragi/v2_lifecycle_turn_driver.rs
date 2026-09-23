@@ -6,9 +6,9 @@ use super::super::{
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
-    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, LifecycleWorkClass,
-    ProductionIngressCapacityStatus, ReadyValidateSuccessorDispatchV1,
-    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
+    LifecycleLedgerV1, LifecycleWorkClass, ProductionIngressCapacityStatus,
+    ReadyValidateSuccessorDispatchV1, SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken,
+    claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -118,7 +118,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact reducer-fence generation which still owns the retry.
         wait: WaitToken,
     },
-    /// The exact missing-sidecar Apply owner remains parked for another turn.
+    /// The exact locally refused Apply owner remains parked for another turn.
     LifecycleDecisionApplyDeferred,
     /// The unchanged deferred Apply command re-entered its dedicated FIFO.
     LifecycleDecisionApplyRequeued,
@@ -126,7 +126,7 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     LifecycleDecisionApplyRestartRequired,
     /// One lifecycle Decision Apply worker result was durably settled.
     LifecycleDecisionApplyApplied,
-    /// One lifecycle Decision Apply worker result became the retained sidecar owner.
+    /// One lifecycle Decision Apply result retained its original local retry owner.
     LifecycleDecisionApplyCompletionDeferred,
     /// Lifecycle Decision Apply settlement requires cold restart.
     LifecycleDecisionApplyCompletionRestartRequired,
@@ -472,7 +472,7 @@ fn selected_ingress_is_certified_body_response(inbound: &InboundBlockMessage) ->
     )
 }
 
-fn selected_ingress_is_validate_sidecar_pacemaker_progress(inbound: &InboundBlockMessage) -> bool {
+fn selected_ingress_is_native_source_pacemaker_progress(inbound: &InboundBlockMessage) -> bool {
     let crate::sumeragi::message::BlockMessage::V2(message) = inbound.message() else {
         return false;
     };
@@ -482,6 +482,21 @@ fn selected_ingress_is_validate_sidecar_pacemaker_progress(inbound: &InboundBloc
             | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(_)
             | iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutCertificate(
                 _
+            )
+    )
+}
+
+fn selected_ingress_is_native_source_historical_request(
+    inbound: &InboundBlockMessage,
+    active_height: iroha_data_model::block::consensus_v2::Height,
+) -> bool {
+    matches!(
+        inbound.message(),
+        crate::sumeragi::message::BlockMessage::V2(message)
+            if matches!(
+                &message.payload,
+                iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+                    if request.round.height < active_height
             )
     )
 }
@@ -1081,18 +1096,19 @@ impl LaunchedProductionLifecycleV1 {
                         None => Claim::AwaitingValidateSuccessor { ordinal },
                     }
                 }
-                PendingLifecycleCompletionV1::RegisteredDeferredValidate(_) => {
-                    Claim::AwaitingValidateSidecar
-                }
                 PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(_) => {
                     Claim::AwaitingApplyCompletion
+                }
+                PendingLifecycleCompletionV1::LocalValidate(retained)
+                    if retained.native_source_recovery().is_some() =>
+                {
+                    Claim::AwaitingNativeSource
                 }
                 PendingLifecycleCompletionV1::CertifiedFetch(_)
                 | PendingLifecycleCompletionV1::RecoveredDecisionFetch(_)
                 | PendingLifecycleCompletionV1::RecoveredSign(_)
                 | PendingLifecycleCompletionV1::Validate(_)
-                | PendingLifecycleCompletionV1::LocalValidate(_)
-                | PendingLifecycleCompletionV1::DeferredValidate(_) => Claim::AwaitingCompletion,
+                | PendingLifecycleCompletionV1::LocalValidate(_) => Claim::AwaitingCompletion,
             });
         }
         if let Some(lease) = self.owner.coordinator.active_lease.as_ref() {
@@ -1151,86 +1167,19 @@ impl LaunchedProductionLifecycleV1 {
         Ok(Claim::Eligible)
     }
 
-    fn drive_registered_lifecycle_validate_sidecar(
-        &mut self,
-        registration: RegisteredLifecycleValidateSidecarWaitV1,
-        lane_work: &mut V2LaneWorkAdapter,
-    ) -> ProductionLifecycleCompletionSelectionV1 {
-        match registration.drive(
-            &mut self.owner.coordinator,
-            &mut self.owner.registry,
-            lane_work,
-        ) {
-            LifecycleValidateSidecarDriveV1::Waiting(registration) => {
-                assert!(self.pending_lifecycle_completion.is_none());
-                self.pending_lifecycle_completion = Some(
-                    PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration),
-                );
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
-            }
-            LifecycleValidateSidecarDriveV1::Woken(successor) => {
-                let ordinal = successor.lifecycle_ordinal();
-                assert!(self.pending_lifecycle_completion.is_none());
-                self.pending_lifecycle_completion = Some(
-                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor),
-                );
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { ordinal }
-            }
-            LifecycleValidateSidecarDriveV1::Superseded(cancellation) => {
-                let ordinal = cancellation.dispatch_key().lifecycle_ordinal();
-                if let Err(error) = self
-                    .executor
-                    .cancel_unwoken_lifecycle_validate_retry(cancellation)
-                {
-                    iroha_logger::error!(
-                        %error,
-                        ordinal,
-                        "superseded lifecycle Validate sidecar lost its executor owner"
-                    );
-                    self.close_output_for_restart();
-                    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-                }
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarSuperseded
-            }
-            LifecycleValidateSidecarDriveV1::RestartRequired(error) => {
-                iroha_logger::error!(
-                    %error,
-                    "lifecycle Validate sidecar registration failed closed"
-                );
-                self.close_output_for_restart();
-                ProductionLifecycleCompletionSelectionV1::RestartRequired
-            }
-        }
-    }
-
-    fn register_and_drive_lifecycle_validate_sidecar(
-        &mut self,
-        completion: PreparedDeferredLifecycleValidateCompletionV1,
-        lane_work: &mut V2LaneWorkAdapter,
-    ) -> ProductionLifecycleCompletionSelectionV1 {
-        let registration = match RegisteredLifecycleValidateSidecarWaitV1::register_live(
-            &self.owner.coordinator,
-            &self.owner.registry,
-            completion,
-        ) {
-            Ok(registration) => registration,
-            Err((error, completion)) => {
-                iroha_logger::error!(
-                    %error,
-                    "lifecycle Validate sidecar registration could not cross its durable boundary"
-                );
-                drop(completion);
-                self.close_output_for_restart();
-                return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-            }
-        };
-        self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
-    }
-
     fn retry_local_lifecycle_validate(
         &mut self,
-        retained: RetainedLocalLifecycleValidateV1,
+        mut retained: RetainedLocalLifecycleValidateV1,
     ) -> ProductionLifecycleCompletionSelectionV1 {
+        if let Err(reason) = self.services.drive_native_source_wait(&mut retained) {
+            self.pending_lifecycle_completion =
+                Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+            self.services
+                .lifecycle_output_guard()
+                .retain_effect_failure(reason);
+            self.close_output_for_restart();
+            return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        }
         match retained.retry() {
             LocalLifecycleValidateRetryV1::Waiting(retained) => {
                 self.pending_lifecycle_completion =
@@ -1306,17 +1255,6 @@ impl LaunchedProductionLifecycleV1 {
                 );
                 ack.acknowledge_after_publication();
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
-            }
-            Ok(
-                crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::DeferredMergeSidecar(
-                    deferred,
-                ),
-            ) => {
-                assert!(pending_lifecycle_completion.is_none());
-                *pending_lifecycle_completion = Some(
-                    PendingLifecycleCompletionV1::DeferredValidate(ack.bind_deferred(deferred)),
-                );
-                ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
             }
             Err((error, dispatch)) => {
                 iroha_logger::error!(
@@ -1482,9 +1420,8 @@ impl LaunchedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_completion_pre_gate<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
-        self.drive_completion_pre_gate_inner(runner, lane_work, None)
+        self.drive_completion_pre_gate_inner(runner, None)
     }
 
     /// Classify Completion while allowing one exact durable local Proposal Sign
@@ -1494,16 +1431,14 @@ impl LaunchedProductionLifecycleV1 {
     >(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
         permit: &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
-        self.drive_completion_pre_gate_inner(runner, lane_work, Some(permit))
+        self.drive_completion_pre_gate_inner(runner, Some(permit))
     }
 
     fn drive_completion_pre_gate_inner<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
         proposal_sign_preemption: Option<
             &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
         >,
@@ -1552,7 +1487,7 @@ impl LaunchedProductionLifecycleV1 {
         if let Some(pending) = self.pending_lifecycle_completion.take() {
             let selected = match pending {
                 PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(deferred) => {
-                    match self.drive_lifecycle_decision_apply_deferred(deferred, lane_work) {
+                    match self.drive_lifecycle_decision_apply_deferred(deferred) {
                         ProductionLifecycleDecisionApplyRetryV1::Requeued => {
                             ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyRequeued
                         }
@@ -1614,40 +1549,6 @@ impl LaunchedProductionLifecycleV1 {
                 },
                 PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
                     .settle_ready_validate_successor(published, runner.debt()),
-                PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
-                    self.register_and_drive_lifecycle_validate_sidecar(deferred, lane_work)
-                }
-                PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration) => {
-                    // Poll the exact dependency before any pass-through so a
-                    // stream of ordinary completions cannot starve its wake.
-                    // Waiting retains the same sealed registration; only the
-                    // existing ordinary physical head may use the one-item
-                    // drain while the reducer remains fenced.
-                    let selected =
-                        self.drive_registered_lifecycle_validate_sidecar(registration, lane_work);
-                    if matches!(
-                        selected,
-                        ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
-                    ) {
-                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
-                            Ok(true) => {
-                                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
-                            }
-                            Ok(false) => {}
-                            Err(reason) => {
-                                iroha_logger::error!(
-                                    %reason,
-                                    "ordinary Completion sidecar-wait classification failed closed"
-                                );
-                                self.close_output_for_restart();
-                                return ProductionLifecycleCompletionPreGateV1::Selected(
-                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
-                                );
-                            }
-                        }
-                    }
-                    selected
-                }
             };
             return ProductionLifecycleCompletionPreGateV1::Selected(selected);
         }
@@ -1687,9 +1588,18 @@ impl LaunchedProductionLifecycleV1 {
             }
             Ok(LifecycleCompletionTakeV1::Apply(completion)) => {
                 let selected = match self
-                    .settle_lifecycle_decision_apply_completion_owner(completion, lane_work)
+                    .settle_lifecycle_decision_apply_completion_owner(completion)
                 {
-                    Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied) => {
+                    Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied(published)) => {
+                        if let Some(published) = published
+                            && let Err(_original) =
+                                self.services.retain_native_publication(published)
+                        {
+                            self.close_output_for_restart();
+                            return ProductionLifecycleCompletionPreGateV1::Selected(
+                                ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyCompletionRestartRequired,
+                            );
+                        }
                         ProductionLifecycleCompletionSelectionV1::LifecycleDecisionApplyApplied
                     }
                     Ok(ProductionLifecycleDecisionApplyCompletionV1::Deferred(deferred)) => {
@@ -1967,9 +1877,8 @@ impl LaunchedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_completion_turn_for_test<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
-        match self.drive_completion_pre_gate(runner, lane_work) {
+        match self.drive_completion_pre_gate(runner) {
             ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
                 ProductionLifecycleCompletionTurnV1::Selected(selected)
             }
@@ -2053,15 +1962,17 @@ impl LaunchedProductionLifecycleV1 {
     }
 
     /// Move at most one authenticated pacemaker Progress carrier while an
-    /// unprotected Validate sidecar retains the ordinary lifecycle barrier.
+    /// retained Native source retains the ordinary lifecycle barrier.
     ///
     /// Selection preserves the ordinary fair queue gates and freezes the
     /// current physical prefix. The sealed permit narrows the predicate to
-    /// QC, TimeoutVote, or TC; proposal, vote, payload, Serve, and lane traffic
-    /// remain unavailable through this path.
-    pub(in crate::sumeragi) fn prepare_validate_sidecar_pacemaker_ingress_turn(
+    /// QC, TimeoutVote, or TC, plus historical body requests needed by peer
+    /// source recovery. Current-height Serve, proposal, vote, payload, and lane
+    /// traffic remain unavailable through this path. Historical requests retain
+    /// their original ingress owner and authenticate in the bounded server.
+    pub(in crate::sumeragi) fn prepare_native_source_pacemaker_ingress_turn(
         &mut self,
-        _permit: crate::sumeragi::v2_runner::LifecycleValidateSidecarPacemakerEscapePermitV1,
+        _permit: crate::sumeragi::v2_runner::LifecycleNativeSourcePacemakerEscapePermitV1,
     ) -> Result<
         Option<ProductionPreparedOrdinaryIngressTurnV1>,
         crate::sumeragi::v2_runner::V2RunnerError,
@@ -2072,7 +1983,7 @@ impl LaunchedProductionLifecycleV1 {
             .map_err(|error| {
                 iroha_logger::error!(
                     %error,
-                    "Validate-sidecar pacemaker terminal-subject projection failed closed"
+                    "Native-source pacemaker terminal-subject projection failed closed"
                 );
                 self.close_output_for_restart();
                 crate::sumeragi::v2_runner::V2RunnerError::RestartRequired
@@ -2082,7 +1993,11 @@ impl LaunchedProductionLifecycleV1 {
         let cut = {
             let executor = &self.executor;
             ingress.capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
-                selected_ingress_is_validate_sidecar_pacemaker_progress(occurrence.inbound())
+                (selected_ingress_is_native_source_pacemaker_progress(occurrence.inbound())
+                    || selected_ingress_is_native_source_historical_request(
+                        occurrence.inbound(),
+                        executor.context().height,
+                    ))
                     && crate::sumeragi::v2_effects::v2_ingress_head_can_drain(
                         occurrence.inbound(),
                         executor,
@@ -2093,7 +2008,7 @@ impl LaunchedProductionLifecycleV1 {
         .map_err(|error| {
             iroha_logger::error!(
                 ?error,
-                "Validate-sidecar pacemaker fair-ingress cut failed closed"
+                "Native-source pacemaker fair-ingress cut failed closed"
             );
             self.close_output_for_restart();
             crate::sumeragi::v2_runner::V2RunnerError::RestartRequired
@@ -2124,6 +2039,7 @@ impl LaunchedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
+        native_ingress_pending: bool,
     ) -> ProductionLifecycleIngressTurnV1<'cursor> {
         if !self.runner_turn_matches(
             &runner,
@@ -2226,11 +2142,12 @@ impl LaunchedProductionLifecycleV1 {
         let cut = {
             let executor = &self.executor;
             ingress.capture_next_ingress_turn_cut(|occurrence| {
-                crate::sumeragi::v2_effects::v2_ingress_head_can_drain(
-                    occurrence.inbound(),
-                    executor,
-                    terminal_subject,
-                )
+                (!native_ingress_pending || !occurrence.inbound().message().is_native_lane())
+                    && crate::sumeragi::v2_effects::v2_ingress_head_can_drain(
+                        occurrence.inbound(),
+                        executor,
+                        terminal_subject,
+                    )
             })
         };
         let Some(cut) = (match cut {
@@ -2895,19 +2812,16 @@ impl ActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_completion_turn_for_test<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
-        self.launched
-            .drive_completion_turn_for_test(runner, lane_work)
+        self.launched.drive_completion_turn_for_test(runner)
     }
 
     /// Classify parked and physical Completion owners without claiming fresh Ready work.
     pub(in crate::sumeragi) fn drive_completion_pre_gate<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
-        self.launched.drive_completion_pre_gate(runner, lane_work)
+        self.launched.drive_completion_pre_gate(runner)
     }
 
     /// Classify Completion with the sealed exact local-Proposal Sign exception.
@@ -2916,13 +2830,10 @@ impl ActivatedProductionLifecycleV1 {
     >(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
-        lane_work: &mut V2LaneWorkAdapter,
         permit: &crate::sumeragi::v2_runner::LifecycleReadyProposalSignPreemptionPermitV1,
     ) -> ProductionLifecycleCompletionPreGateV1<'cursor> {
         self.launched
-            .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
-                runner, lane_work, permit,
-            )
+            .drive_completion_pre_gate_with_ready_proposal_sign_preemption(runner, permit)
     }
 
     /// Consume a physically empty Completion cursor through fresh Ready dispatch.
@@ -2959,8 +2870,10 @@ impl ActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
+        native_ingress_pending: bool,
     ) -> ProductionLifecycleIngressTurnV1<'cursor> {
-        self.launched.drive_ingress_turn(runner)
+        self.launched
+            .drive_ingress_turn(runner, native_ingress_pending)
     }
 
     /// Forward one fixed-cut pre-timeout ingress preparation without exposing
@@ -2973,17 +2886,17 @@ impl ActivatedProductionLifecycleV1 {
             .prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)
     }
 
-    /// Forward one sealed Validate-sidecar pacemaker ingress turn without
+    /// Forward one sealed Native-source pacemaker ingress turn without
     /// exposing the launched executor or fair-ingress owner.
-    pub(in crate::sumeragi) fn prepare_validate_sidecar_pacemaker_ingress_turn(
+    pub(in crate::sumeragi) fn prepare_native_source_pacemaker_ingress_turn(
         &mut self,
-        permit: crate::sumeragi::v2_runner::LifecycleValidateSidecarPacemakerEscapePermitV1,
+        permit: crate::sumeragi::v2_runner::LifecycleNativeSourcePacemakerEscapePermitV1,
     ) -> Result<
         Option<ProductionPreparedOrdinaryIngressTurnV1>,
         crate::sumeragi::v2_runner::V2RunnerError,
     > {
         self.launched
-            .prepare_validate_sidecar_pacemaker_ingress_turn(permit)
+            .prepare_native_source_pacemaker_ingress_turn(permit)
     }
 
     /// Emit a read-only, rate-limited ownership census when a non-empty fair
@@ -3047,7 +2960,7 @@ impl ActivatedProductionLifecycleV1 {
                 None,
             ),
             Claim::AwaitingCompletion => ("AwaitingCompletion", None, None, None, None),
-            Claim::AwaitingValidateSidecar => ("AwaitingValidateSidecar", None, None, None, None),
+            Claim::AwaitingNativeSource => ("AwaitingNativeSource", None, None, None, None),
             Claim::AwaitingApplyCompletion => ("AwaitingApplyCompletion", None, None, None, None),
             Claim::ApplyTerminalSettled => ("ApplyTerminalSettled", None, None, None, None),
             Claim::AwaitingReplayCompletion => ("AwaitingReplayCompletion", None, None, None, None),
@@ -3095,10 +3008,6 @@ impl ActivatedProductionLifecycleV1 {
                     PendingLifecycleCompletionV1::LocalValidate(_) => "LocalValidate",
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
                         "ReadyValidateSuccessor"
-                    }
-                    PendingLifecycleCompletionV1::DeferredValidate(_) => "DeferredValidate",
-                    PendingLifecycleCompletionV1::RegisteredDeferredValidate(_) => {
-                        "RegisteredDeferredValidate"
                     }
                 });
         let pending_capacity = self
@@ -3211,7 +3120,7 @@ impl ActivatedProductionLifecycleV1 {
         &mut self,
         _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
         mut turn: ProductionPreparedOrdinaryIngressTurnV1,
-        lane_work: &mut V2LaneWorkAdapter,
+        native: &mut crate::sumeragi::v2_runner::native_process::NativeRunnerProcess,
         kura: &Kura,
         local_key: &KeyPair,
         block_sync_server: &mut crate::sumeragi::v2_block_sync::V2BlockSyncServer,
@@ -3220,7 +3129,6 @@ impl ActivatedProductionLifecycleV1 {
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
         npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
-        lane_output_limit: usize,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
         crate::sumeragi::v2_runner::V2RunnerError,
@@ -3242,14 +3150,13 @@ impl ActivatedProductionLifecycleV1 {
             &leader_wire_ingress_binding.ingress,
             executor,
             services,
-            lane_work,
+            native,
             kura,
             local_key,
             block_sync_server,
             block_sync,
             block_sync_request,
             npos_beacon,
-            lane_output_limit,
         )
     }
 

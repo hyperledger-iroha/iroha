@@ -883,12 +883,12 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
         subject_digest: binding(b"subject"),
         execution_commitment_digest: binding(b"execution"),
         kagemusha_top_up_root: kagemusha_mint_finality_root_v1(root),
-        // This unsigned shape witness is used only by the zero-value Bootstrap
-        // branch. Its empty-root membership and absent seals cannot authorize a
-        // finalized mint; no successor authorization is invented for framing.
-        kagemusha_top_up_count: 1,
+        kagemusha_top_up_count: 0,
         next_epoch_authorization: None,
     };
+    message
+        .validate_bootstrap()
+        .map_err(|error| format!("invalid bootstrap message: {error}"))?;
     let certificate = KagemushaMintCertificateWitnessV1 {
         statement,
         membership,
@@ -963,10 +963,11 @@ mod mint_authority_bootstrap_tests {
                 .is_none()
         );
         assert!(certificate.seal_bundle.seals.is_empty());
+        assert_eq!(certificate.seal_bundle.message.kagemusha_top_up_count, 0);
         certificate
             .seal_bundle
             .message
-            .validate()
+            .validate_bootstrap()
             .expect("canonical bootstrap framing");
         assert!(
             certificate.validate_shape().is_err(),

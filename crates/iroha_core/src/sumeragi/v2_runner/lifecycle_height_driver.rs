@@ -86,9 +86,9 @@ pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     },
     /// A queued worker or parked worker result must advance through Completion.
     AwaitingCompletion,
-    /// A registered Validate sidecar wait permits lane transport and sealed
+    /// A retained Native source wait permits lane transport and sealed
     /// global pacemaker Progress, plus bounded recovery after Decision.
-    AwaitingValidateSidecar,
+    AwaitingNativeSource,
     /// A typed Decision Apply owns the terminal barrier until Kura and LedgerV1 settle.
     AwaitingApplyCompletion,
     /// Recovered Apply settled the reducer terminal; only authenticated direct/recovered
@@ -113,7 +113,7 @@ struct LifecycleReadyProposalSignPreemptionPermitSealV1;
 
 /// Sealed authority to service only decided-lane recovery after Decision.
 ///
-/// The active runner can mint this token from a registered Validate sidecar
+/// The active runner can mint this token from a retained Native source
 /// wait with a current Decision, either Apply disposition, or the narrower
 /// proof that an `Eligible` executor is terminal and ready for rollover. These paths keep
 /// current-height certified-body service alive without reopening ordinary
@@ -183,15 +183,15 @@ pub(in crate::sumeragi) struct LifecycleBlockedOrdinaryLaneLocalIngressPermitV1 
 struct LifecycleBlockedOrdinaryLaneLocalIngressPermitSealV1;
 
 /// Sealed authority to admit only global pacemaker Progress while one
-/// unprotected Validate sidecar owns the ordinary lifecycle barrier.
+/// retained Native source owns the ordinary lifecycle barrier.
 ///
 /// The permit cannot be minted by Apply, generic Completion, or replay
 /// barriers, so none of those owners can reopen global fair ingress.
-pub(in crate::sumeragi) struct LifecycleValidateSidecarPacemakerEscapePermitV1 {
-    _seal: LifecycleValidateSidecarPacemakerEscapePermitSealV1,
+pub(in crate::sumeragi) struct LifecycleNativeSourcePacemakerEscapePermitV1 {
+    _seal: LifecycleNativeSourcePacemakerEscapePermitSealV1,
 }
 
-struct LifecycleValidateSidecarPacemakerEscapePermitSealV1;
+struct LifecycleNativeSourcePacemakerEscapePermitSealV1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleProducerClaimTransitionErrorV1 {
@@ -278,7 +278,7 @@ impl LifecycleProducerClaimDispositionV1 {
             | Self::AwaitingValidateSuccessor { .. }
             | Self::AwaitingValidateFence { .. }
             | Self::AwaitingCompletion
-            | Self::AwaitingValidateSidecar
+            | Self::AwaitingNativeSource
             | Self::AwaitingApplyCompletion
             | Self::ApplyTerminalSettled
             | Self::AwaitingReplayCompletion => None,
@@ -293,7 +293,7 @@ impl LifecycleProducerClaimDispositionV1 {
             Self::Eligible
             | Self::AwaitingLiveApplyQueue { .. }
             | Self::AwaitingCompletion
-            | Self::AwaitingValidateSidecar
+            | Self::AwaitingNativeSource
             | Self::AwaitingApplyCompletion
             | Self::ApplyTerminalSettled
             | Self::AwaitingReplayCompletion => None,
@@ -307,7 +307,7 @@ impl LifecycleProducerClaimDispositionV1 {
             Self::AwaitingValidateSuccessor { .. }
                 | Self::AwaitingValidateFence { .. }
                 | Self::AwaitingCompletion
-                | Self::AwaitingValidateSidecar
+                | Self::AwaitingNativeSource
                 | Self::AwaitingApplyCompletion
                 | Self::ApplyTerminalSettled
                 | Self::AwaitingReplayCompletion
@@ -319,24 +319,22 @@ impl LifecycleProducerClaimDispositionV1 {
     pub(super) const fn blocks_runtime(self) -> bool {
         matches!(
             self,
-            Self::AwaitingValidateSidecar
-                | Self::AwaitingApplyCompletion
-                | Self::ApplyTerminalSettled
+            Self::AwaitingNativeSource | Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled
         )
     }
 
     /// Mint authority for the blocked-runtime cut to service only the typed
     /// pacemaker escape.
     ///
-    /// A registered Validate sidecar can depend on an unavailable holder and
+    /// A retained Native source can depend on an unavailable holder and
     /// must not suppress the absolute view deadline. Apply barriers are
     /// already decision-bound and therefore cannot mint this authority.
-    pub(super) const fn validate_sidecar_pacemaker_escape_permit(
+    pub(super) const fn native_source_pacemaker_escape_permit(
         self,
-    ) -> Option<LifecycleValidateSidecarPacemakerEscapePermitV1> {
-        if matches!(self, Self::AwaitingValidateSidecar) {
-            Some(LifecycleValidateSidecarPacemakerEscapePermitV1 {
-                _seal: LifecycleValidateSidecarPacemakerEscapePermitSealV1,
+    ) -> Option<LifecycleNativeSourcePacemakerEscapePermitV1> {
+        if matches!(self, Self::AwaitingNativeSource) {
+            Some(LifecycleNativeSourcePacemakerEscapePermitV1 {
+                _seal: LifecycleNativeSourcePacemakerEscapePermitSealV1,
             })
         } else {
             None
@@ -344,16 +342,16 @@ impl LifecycleProducerClaimDispositionV1 {
     }
 
     /// Keep certified recovery ingress moving while an already stored Decision
-    /// body waits for its registered Validate sidecar.
+    /// body waits for its retained Native source.
     ///
     /// The caller must read Decision from the current executor after runner
     /// reconciliation. This grants only the existing decided-ingress drain:
     /// it neither releases Validate nor opens Runtime or finalization.
-    pub(in crate::sumeragi) const fn decided_validate_sidecar_recovery_permit(
+    pub(in crate::sumeragi) const fn decided_native_source_recovery_permit(
         self,
         decided_subject_present: bool,
     ) -> Option<LifecycleDecidedLaneRecoveryPermitV1> {
-        if matches!(self, Self::AwaitingValidateSidecar) && decided_subject_present {
+        if matches!(self, Self::AwaitingNativeSource) && decided_subject_present {
             Some(LifecycleDecidedLaneRecoveryPermitV1 {
                 _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
             })
@@ -628,7 +626,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     activated: &mut super::super::v2_lifecycle_coordinator::ActivatedProductionLifecycleV1,
     runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
     receiver: &Arc<FairV2Ingress>,
-    lane_work: &mut V2LaneWorkAdapter,
+    native: &mut super::native_process::NativeRunnerProcess,
     kura: &Kura,
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
@@ -735,10 +733,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     Some(permit) => activated
                         .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
                             current_turn,
-                            lane_work,
                             permit,
                         ),
-                    None => activated.drive_completion_pre_gate(current_turn, lane_work),
+                    None => activated.drive_completion_pre_gate(current_turn),
                 };
                 let selected = match pre_gate {
                     PreGate::Ordinary(ordinary_turn) => {
@@ -851,7 +848,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     "terminal finalization cannot acquire a Runtime turn"
                 );
                 if producer_claim.blocks_runtime() {
-                    // A typed Apply or registered Validate sidecar wait can
+                    // A typed Apply or retained Native source wait can
                     // advance outside this batch. Ordinary Runtime and Ingress
                     // remain inert; run_inner separately admits only the
                     // sidecar claim's sealed pacemaker Progress escape.
@@ -902,14 +899,13 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             let consumption = activated.consume_prepared_ordinary_ingress_turn(
                                 runner,
                                 prepared,
-                                lane_work,
+                                native,
                                 kura,
                                 local_key,
                                 block_sync_server,
                                 block_sync,
                                 block_sync_request,
                                 npos_beacon,
-                                lane_output_limit,
                             )?;
                             match consumption {
                                 super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
@@ -928,14 +924,13 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             let consumption = activated.consume_prepared_ordinary_ingress_turn(
                                 runner,
                                 prepared,
-                                lane_work,
+                                native,
                                 kura,
                                 local_key,
                                 block_sync_server,
                                 block_sync,
                                 block_sync_request,
                                 npos_beacon,
-                                lane_output_limit,
                             )?;
                             match consumption {
                                 super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
@@ -1017,7 +1012,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     terminal_finalization_cut.is_none(),
                     "terminal finalization must stop before the open Ingress turn"
                 );
-                match activated.drive_ingress_turn(current_turn) {
+                match activated.drive_ingress_turn(current_turn, native.has_pending_ingress()) {
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::PassThrough(
                         empty_turn,
                     ) => {
@@ -1030,14 +1025,13 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         let consumed = activated.consume_prepared_ordinary_ingress_turn(
                             runner,
                             ordinary,
-                            lane_work,
+                            native,
                             kura,
                             local_key,
                             block_sync_server,
                             block_sync,
                             block_sync_request,
                             npos_beacon,
-                            lane_output_limit,
                         );
                         if let Err(error) = consumed {
                             iroha_logger::error!(
@@ -1134,16 +1128,16 @@ mod tests {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
             (
-                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingNativeSource,
                 Completion::LifecycleValidateSidecarWoken { ordinal },
             ) => {
                 // Woken retains the immutable registration that installed
-                // AwaitingValidateSidecar, so this is the same Validate row
+                // AwaitingNativeSource, so this is the same Validate row
                 // advancing back into its exact Ready-successor corridor.
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
             (
-                Self::AwaitingValidateSidecar,
+                Self::AwaitingNativeSource,
                 Completion::LifecycleValidateSidecarSuperseded { .. },
             ) => Ok(Self::Eligible),
             (
@@ -1296,7 +1290,7 @@ mod tests {
                 Ok(Self::AwaitingCompletion)
             }
             (
-                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingNativeSource,
                 Completion::LifecycleValidateSidecarWaiting,
             ) => {
                 // Registration moved the exact Validate row to an external
@@ -1304,7 +1298,7 @@ mod tests {
                 // Producer and ordinary lifecycle ingress blocked while the
                 // narrowed barrier admits its authenticated lane response and
                 // sealed global pacemaker Progress.
-                Ok(Self::AwaitingValidateSidecar)
+                Ok(Self::AwaitingNativeSource)
             }
             (
                 Self::AwaitingCompletion,
@@ -1559,7 +1553,7 @@ mod tests {
         );
         for claim in [
             LifecycleProducerClaimDispositionV1::AwaitingCompletion,
-            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
+            LifecycleProducerClaimDispositionV1::AwaitingNativeSource,
             LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
         ] {
@@ -1764,10 +1758,10 @@ mod tests {
         );
         let sidecar = LifecycleProducerClaimDispositionV1::AwaitingCompletion
             .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
-            .expect("registered Validate sidecar retains the height");
+            .expect("retained Native source retains the height");
         assert_eq!(
             sidecar,
-            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            LifecycleProducerClaimDispositionV1::AwaitingNativeSource
         );
         assert!(sidecar.requires_yield());
         assert_eq!(
@@ -1916,7 +1910,7 @@ mod tests {
                 child_ordinal: 3,
             },
             LifecycleProducerClaimDispositionV1::AwaitingCompletion,
-            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
+            LifecycleProducerClaimDispositionV1::AwaitingNativeSource,
             LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
         ] {
             assert!(
@@ -1961,7 +1955,7 @@ mod tests {
             .expect("registered sidecar wait installs its lane-only barrier");
         assert_eq!(
             claim,
-            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            LifecycleProducerClaimDispositionV1::AwaitingNativeSource
         );
         assert!(claim.blocks_runtime());
 
@@ -1970,7 +1964,7 @@ mod tests {
             .expect("an unchanged registered wait is an idempotent retry");
         assert_eq!(
             claim,
-            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            LifecycleProducerClaimDispositionV1::AwaitingNativeSource
         );
 
         let claim = claim
@@ -2008,17 +2002,17 @@ mod tests {
     fn registered_validate_sidecar_recovery_preserves_the_wait_until_superseded() {
         use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1 as Completion;
 
-        let sidecar = LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        let sidecar = LifecycleProducerClaimDispositionV1::AwaitingNativeSource;
         assert!(sidecar.blocks_runtime());
-        assert!(sidecar.validate_sidecar_pacemaker_escape_permit().is_some());
+        assert!(sidecar.native_source_pacemaker_escape_permit().is_some());
         assert!(
             sidecar
-                .decided_validate_sidecar_recovery_permit(false)
+                .decided_native_source_recovery_permit(false)
                 .is_none()
         );
         assert!(
             sidecar
-                .decided_validate_sidecar_recovery_permit(true)
+                .decided_native_source_recovery_permit(true)
                 .is_some()
         );
         assert!(sidecar.blocks_runtime());
@@ -2047,14 +2041,10 @@ mod tests {
             LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
         ] {
             assert!(
-                claim.validate_sidecar_pacemaker_escape_permit().is_none(),
+                claim.native_source_pacemaker_escape_permit().is_none(),
                 "only the registered missing-sidecar barrier may service the pacemaker"
             );
-            assert!(
-                claim
-                    .decided_validate_sidecar_recovery_permit(true)
-                    .is_none()
-            );
+            assert!(claim.decided_native_source_recovery_permit(true).is_none());
         }
 
         assert_eq!(

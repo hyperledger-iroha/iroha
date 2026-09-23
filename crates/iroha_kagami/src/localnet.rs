@@ -6634,6 +6634,9 @@ mod tests {
         assert_eq!(actual_topology, expected_topology);
         assert_eq!(actual_topology.len(), 4);
         assert_eq!(parameters.authority_generation.generation, 0);
+        let encoded =
+            norito::json::to_value(&parameters).expect("encode current genesis authority");
+        assert!(encoded.get("next_epoch_roster").is_none());
         assert_eq!(
             parameters,
             localnet_kagemusha_mint_finality_genesis_parameters(&peers)

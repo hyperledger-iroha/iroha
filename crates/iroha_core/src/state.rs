@@ -385,9 +385,10 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-#[cfg(test)]
-pub(crate) use carrier_preparation::PublishedCarrier;
-pub(crate) use carrier_preparation::{PreparedCarrier, PublishedNativeApply, RetainedCarrier};
+pub(crate) use carrier_preparation::{
+    CarrierArchivePreparationError, CarrierJournalPreparationError, PreparedCarrier,
+    PublishedCarrier, PublishedNativeApply, RetainedCarrier,
+};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
@@ -430,10 +431,10 @@ pub(crate) use lane_decision_batch::NativeExecutionCustody;
 )]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
-pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
 #[cfg(test)]
+pub(crate) use native_lane_batch_replay::NativeLaneBatchReplayV1;
 pub(crate) use native_lane_batch_replay::{
-    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+    NativeLaneBatchSourcePreparationV1, PreparedNativeLaneBatchSourceV1,
 };
 #[cfg_attr(
     not(test),
@@ -1017,10 +1018,10 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let kagemusha_mint_finality_authority =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 certificate.network_id,
-                0,
+                8,
                 &election_roster,
             );
         let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
@@ -1028,11 +1029,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_authorization:
-                        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                            &kagemusha_mint_finality_authority, 8,
-                        ).expect("exact genesis epoch authorization"),
                     kagemusha_mint_finality_authority,
+                    kagemusha_mint_finality_authorization,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -1093,48 +1091,31 @@ mod threshold_key_lifecycle_certificate_tests {
         let parent_roster = sorted_roster();
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
-        use iroha_data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
-        };
-        let parent_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            network_id,
-            0,
-            &parent_roster,
-        );
-        let parent_authorization =
-            KagemushaMintFinalityEpochAuthorizationV1::genesis(&parent_authority, 1)
-                .expect("exact genesis authorization");
+        let (parent_authorization, parent_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                1,
+                &parent_roster,
+            );
         let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
             network_id,
             1,
             &successor_roster,
         );
-        // This selector consumes a preauthenticated context; the distinct successor
-        // fixture exercises roster selection, not production activation admission.
-        let successor_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: parent_authorization.version,
-            network_id,
-            epoch: 1,
-            first_height: 2,
-            last_height: 9,
-            authority_generation: successor_authority.generation,
-            authority_id: successor_authority
-                .authority_id()
-                .expect("successor authority ID"),
-            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: [0x66; 32],
-                transcript_hash: [0x67; 32],
-            }),
-            previous_authorization_id: parent_authorization
-                .authorization_id()
-                .expect("parent authorization ID"),
-            transition_id: [0x68; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Activate,
-        };
-        successor_authorization
-            .validate_successor(&parent_authorization)
-            .expect("structurally valid successor authorization");
+        let successor_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &parent_authorization,
+                &successor_authority,
+                9,
+                iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
+                    iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                        session_id: [0x67; 32],
+                        transcript_hash: [0x68; 32],
+                    },
+                ),
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+                [0x69; 32],
+            );
         let successor_snapshot = FinalizedNextEpochSnapshot {
             epoch: 1,
             kagemusha_mint_finality_authorization: successor_authorization,
@@ -1152,8 +1133,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    kagemusha_mint_finality_authorization: parent_authorization,
                     kagemusha_mint_finality_authority: parent_authority,
+                    kagemusha_mint_finality_authorization: parent_authorization,
                     epoch_end_height: 1,
                     mode: ConsensusMode::Npos,
                     roster: parent_roster.clone(),
@@ -1179,9 +1160,11 @@ mod threshold_key_lifecycle_certificate_tests {
 
         let mut non_boundary_parent = boundary_parent.clone();
         non_boundary_parent.epoch_end_height = 8;
-        non_boundary_parent
-            .kagemusha_mint_finality_authorization
-            .last_height = 8;
+        non_boundary_parent.kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
+                &non_boundary_parent.kagemusha_mint_finality_authority,
+                8,
+            );
         non_boundary_parent.next_epoch_snapshot = None;
         assert_eq!(
             threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
@@ -24368,13 +24351,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
-        executor_data_model
-            .parameters
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
-        self.parameters
-            .get_mut()
-            .custom
-            .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
+        executor_data_model.parameters.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
+        self.parameters.get_mut().custom.retain(|_, parameter| {
+            !is_retired_sccp_registry_parameter(parameter)
+                && !is_retired_kagemusha_mint_finality_parameter(parameter.id())
+        });
         let declared_permissions = executor_data_model.permissions().clone();
         let permission_is_declared = |permission: &Permission| {
             declared_permissions
@@ -50736,6 +50720,32 @@ pub fn compute_genesis_confidential_policy_hash(
         ValidatedSccpRegistryV1::empty().policy_hash(),
     )
 }
+/// Reject the retired next-roster custom parameter without interpreting its payload.
+pub(crate) fn is_retired_kagemusha_mint_finality_parameter(
+    id: &iroha_data_model::parameter::CustomParameterId,
+) -> bool {
+    id.name().as_ref() == "kagemusha_mint_finality_next_epoch_v1"
+}
+
+#[cfg(test)]
+mod retired_mint_finality_parameter_tests {
+    #[test]
+    fn retired_parameter_id_has_no_payload_or_authority_fallback() {
+        assert!(super::is_retired_kagemusha_mint_finality_parameter(
+            &"kagemusha_mint_finality_next_epoch_v1".parse().unwrap()
+        ));
+        for name in [
+            "sumeragi_npos_parameters",
+            "kagemusha_mint_finality",
+            "ordinary_custom",
+        ] {
+            assert!(!super::is_retired_kagemusha_mint_finality_parameter(
+                &name.parse().unwrap()
+            ));
+        }
+    }
+}
+
 const RETIRED_SCCP_REGISTRY_PARAMETER_ID: &str = "sccp_registry_v1";
 pub(crate) fn is_retired_sccp_registry_parameter(
     parameter: &iroha_data_model::parameter::CustomParameter,
@@ -67297,8 +67307,8 @@ mod npos_effect_application_tests {
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
-    ton_breaker_hydration_fixture_for_testing,
+    finalized_lane_relay_registration_fixture, native_dispatch_state_fixture,
+    prove_finalized_lane_relay_for_registration, ton_breaker_hydration_fixture_for_testing,
 };
 
 mod telemetry_status;

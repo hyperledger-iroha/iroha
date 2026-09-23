@@ -3,9 +3,8 @@
 //! This is a bounded physical fanout, not a reducer or an acknowledgement of
 //! economic Apply. A blocked destination retains its original post and actor
 //! ticket while other destinations and other instances continue to progress.
-//! Native framing is registered, but live ingress stays closed. TODO: connect
-//! the sole process-lifetime consumer and candidate handoff, retiring the legacy
-//! fresh lane signer at that same connected activation.
+//! One process-lived Native runner supplies the only live ingress consumer and
+//! retains this exact transport across independently activated global heights.
 
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -130,6 +129,24 @@ impl NativeLaneTransport {
             capacity,
             fanouts: VecDeque::new(),
         }
+    }
+
+    /// Borrow exact retained frames and unfinished destinations for custody assertions.
+    #[cfg(test)]
+    pub(crate) fn retained_outputs_for_test(&self) -> Vec<(Arc<BlockMessageWire>, Vec<PeerId>)> {
+        self.fanouts
+            .iter()
+            .map(|fanout| {
+                (
+                    Arc::clone(&fanout.message),
+                    fanout
+                        .destinations
+                        .iter()
+                        .map(|destination| destination.peer.clone())
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     /// Transfer an actual native outbox packet only after the exact current

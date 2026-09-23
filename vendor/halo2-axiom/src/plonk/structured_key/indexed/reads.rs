@@ -23,6 +23,51 @@ pub(crate) enum IndexedKeyPolynomialV1 {
     PermutationLagrange(usize),
 }
 
+// Synthetic test boundary only: this models an unwind after successful native decoding.
+// It is not a naturally reachable cryptographic failure or an allocator-abort simulation.
+#[cfg(test)]
+std::thread_local! {
+    static COEFFICIENT_TRANSFORM_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Non-secret observations carried by the synthetic transform-boundary panic.
+#[cfg(test)]
+#[derive(Debug)]
+pub(in crate::plonk::structured_key) struct CoefficientTransformBoundaryPanic {
+    pub(in crate::plonk::structured_key) rows: usize,
+    pub(in crate::plonk::structured_key) nonzero: usize,
+}
+
+/// Arm one synthetic boundary panic and always disarm it when this scope exits.
+#[cfg(test)]
+pub(in crate::plonk::structured_key) fn with_coefficient_transform_panic<T>(
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            COEFFICIENT_TRANSFORM_PANIC.with(|armed| armed.set(false));
+        }
+    }
+    assert!(
+        !COEFFICIENT_TRANSFORM_PANIC.with(|armed| armed.replace(true)),
+        "coefficient transform panic hook is already armed"
+    );
+    let _reset = Reset;
+    operation()
+}
+
+#[cfg(test)]
+fn coefficient_transform_boundary<F: PrimeField>(values: &[F]) {
+    // Disarm before panicking so a caught unwind cannot poison a later parser operation.
+    if COEFFICIENT_TRANSFORM_PANIC.with(|armed| armed.replace(false)) {
+        std::panic::panic_any(CoefficientTransformBoundaryPanic {
+            rows: values.len(),
+            nonzero: values.iter().filter(|value| **value != F::ZERO).count(),
+        });
+    }
+}
+
 struct Destination<'a, F: PrimeField> {
     values: &'a mut [F],
     complete: bool,
@@ -65,6 +110,41 @@ impl<C: SerdeCurveAffine> IndexedStructuredProvingKeyV1<C>
 where
     C::Scalar: SerdePrimeField + FromUniformBytes<64>,
 {
+    /// Fill exactly one coefficient column from this index's original native encoding.
+    ///
+    /// The caller retains the sole full-column allocation. Fixed and permutation values
+    /// use the existing baseline in-place inverse transform; masks already encode coefficients.
+    /// The destination remains guarded across both decoding and transformation. Invalid shape,
+    /// read/decode failure or unwind clears it, including elements beyond a rejected row count.
+    /// Public FFT twiddles and the original index/domain remain additional memory costs.
+    /// This does not authenticate a source or establish a stored-polynomial receipt.
+    pub(crate) fn copy_coefficient_column<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        polynomial: IndexedKeyPolynomialV1,
+        output: &mut [C::Scalar],
+    ) -> io::Result<()> {
+        let mut destination = Destination {
+            values: output,
+            complete: false,
+        };
+        if destination.values.len() != self.metadata.rows {
+            return Err(invalid(
+                "indexed coefficient destination has the wrong row count",
+            ));
+        }
+        self.copy_native_interval(reader, polynomial, 0, destination.values)?;
+        if !matches!(polynomial, IndexedKeyPolynomialV1::MaskCoefficient(_)) {
+            #[cfg(test)]
+            coefficient_transform_boundary(destination.values);
+            self.vk
+                .domain
+                .stored_column_transform_in_place(destination.values, true, None);
+        }
+        destination.complete = true;
+        Ok(())
+    }
+
     /// Fill a requested native-basis interval with constant-size decoding scratch.
     ///
     /// Offsets are frame-relative (the supplied source must start at the same frame).

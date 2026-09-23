@@ -9,7 +9,9 @@ use super::{
 };
 use crate::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
+        GlobalThresholdBeaconSessionBindingV1, active_global_threshold_beacon_session_id_v1,
+        authenticated_global_threshold_beacon_roster_hash_v1,
+        global_threshold_beacon_npos_successor_seed_v1,
         validate_global_threshold_beacon_session_v1,
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
@@ -291,7 +293,14 @@ pub fn validate_signed_genesis_v2_authority(
     .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     if signed_authority != context.kagemusha_mint_finality_authority
         || signed_authorization != context.kagemusha_mint_finality_authorization
-        || context.next_epoch_snapshot.is_some()
+        || context
+            .next_epoch_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| {
+                snapshot.kagemusha_mint_finality_authority != signed_authority
+                    || snapshot.kagemusha_mint_finality_authorization.decision
+                        != KagemushaMintFinalityEpochDecisionV1::Retain
+            })
     {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
@@ -1047,6 +1056,32 @@ fn retained_next_epoch_snapshot(
     {
         return Err(V2ContextBuildError::InvalidKagemushaMintFinalityAuthority);
     }
+    let active_session = active_global_threshold_beacon_session_id_v1(state.world())
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if active_session != authenticated_beacon.binding.session_id {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    let session = state
+        .world()
+        .global_beacon_key_sessions()
+        .get(&active_session)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let peers = election
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    session
+        .validate()
+        .and_then(|()| {
+            authenticated_global_threshold_beacon_roster_hash_v1(&session.session, &peers)
+                .map(|_| ())
+        })
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if !session.is_active_at(successor_height) {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
     let quorum = wire::DualQuorum::from_roster(&roster)?;
     let validator_set_pops = roster
         .iter()
@@ -1537,10 +1572,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -1964,12 +1997,26 @@ mod tests {
             next_pops
         );
     }
-    fn install_pre_boundary_beacon(state: &mut State, boundary_height: u64) {
+    fn install_pre_boundary_beacon(
+        state: &mut State,
+        boundary_height: u64,
+        roster: &[wire::ValidatorPower],
+    ) {
         let pulse_height = boundary_height - 1;
-        let (key, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+        let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+            height: pulse_height - 1,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
+        };
+        let peers = roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
             *state.network_id_ref(),
-            pulse_height,
+            &peers,
+            &[anchor],
         );
+        let pulse = pulses.into_iter().next().expect("one authenticated pulse");
         let link = validate_persisted_global_threshold_beacon_pulse_v1(&pulse)
             .expect("real persisted pulse shape");
         let mut hashes =
@@ -1984,6 +2031,9 @@ mod tests {
         world
             .global_beacon_key_sessions
             .insert(pulse.session_id, key);
+        world
+            .global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, pulse.session_id);
         world.global_beacon_pulses.insert(pulse.pulse_id, pulse);
         world
             .global_beacon_latest_pulse
@@ -2043,7 +2093,7 @@ mod tests {
                 chain_id.clone(),
                 network_id,
             );
-            install_pre_boundary_beacon(&mut state, BOUNDARY_HEIGHT);
+            install_pre_boundary_beacon(&mut state, BOUNDARY_HEIGHT, &roster);
             state
         };
         let expiring_state = state_with_lifecycle(true);
@@ -2233,7 +2283,7 @@ mod tests {
         let original_roster = election.roster.clone();
         let mut installed = None;
         for boundary in [7, 14, 21] {
-            install_pre_boundary_beacon(&mut state, boundary);
+            install_pre_boundary_beacon(&mut state, boundary, &election.roster);
             let view = state.view();
             let snapshot =
                 finalized_next_epoch_snapshot(&view, view.network_id(), boundary, &election)
@@ -2281,9 +2331,41 @@ mod tests {
         }
     }
     #[test]
+    fn retained_authority_rejects_changed_or_retired_beacon_session() {
+        for retire_session in [false, true] {
+            let (mut state, election) = retained_npos_fixture();
+            install_pre_boundary_beacon(&mut state, 7, &election.roster);
+            {
+                let mut world = state.world.block();
+                if retire_session {
+                    let session_id = *world
+                        .global_beacon_active_session
+                        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+                        .expect("fixture installed one active beacon");
+                    world
+                        .global_beacon_key_sessions
+                        .get_mut(&session_id)
+                        .expect("fixture retained the session")
+                        .retire(8)
+                        .expect("retire after the signed pulse");
+                } else {
+                    world
+                        .global_beacon_active_session
+                        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, [0xFA; 32]);
+                }
+                world.commit();
+            }
+            let view = state.view();
+            assert_eq!(
+                finalized_next_epoch_snapshot(&view, view.network_id(), 7, &election),
+                Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse),
+            );
+        }
+    }
+    #[test]
     fn retained_authority_rejects_stale_forged_and_changed_beacon_inputs() {
         let (mut state, election) = retained_npos_fixture();
-        install_pre_boundary_beacon(&mut state, 7);
+        install_pre_boundary_beacon(&mut state, 7, &election.roster);
         let next = {
             let view = state.view();
             finalized_next_epoch_snapshot(&view, view.network_id(), 7, &election)
@@ -2291,7 +2373,7 @@ mod tests {
                 .expect("boundary")
         };
         let retained = election_from_snapshot(next);
-        install_pre_boundary_beacon(&mut state, 14);
+        install_pre_boundary_beacon(&mut state, 14, &retained.roster);
         let view = state.view();
         for mutation in 0..5 {
             let mut invalid = retained.clone();
@@ -2369,6 +2451,12 @@ mod tests {
     fn genesis_rejects_non_unit_consensus_power() {
         let network_id = test_network_id(0x43);
         let election_roster = roster(&[1, 2, 1, 1]);
+        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id,
+                10,
+                &election_roster,
+            );
         let error = build_genesis_height_context(GenesisContextInputs {
             network_id,
             election: genesis_election(
@@ -2429,3 +2517,7 @@ mod tests {
             .expect("the full terminal height context must validate");
     }
 }
+
+#[cfg(test)]
+#[path = "v2_context_authority_tests.rs"]
+mod authority_tests;

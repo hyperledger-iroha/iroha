@@ -3,12 +3,12 @@
 //! No mutable StateBlock survives this handoff. Membership admission consumes its
 //! original writer and releases it with its exact predecessor identity retained.
 //! Block hashes move their original private tree without a chain copy or physical lock.
-//! World/runtime journals and tiered snapshots follow one resource admission.
+//! World/runtime journals and tiered snapshots retain their original ownership.
 //! Archive plans retain original logical reservations and filesystem owners.
 //! The private terminal consumer joins exact QC/Kura/Native custody, retains the
 //! original Queue for namespace retirement, and refuses retired participant
-//! manifests. TODO: complete aggregate resource admission and carry these original
-//! owners through live Validate/cache/Apply before retiring the old writer.
+//! manifests. Concrete descriptor, wrapper and effects allocations are admitted;
+//! TODO: extend that accounting to nested payloads and tiered snapshots.
 
 use super::super::*;
 use super::{PreparedCarrier, PreparedCarrierFields, execution_prefix::ValidatedExecutionPrefix};
@@ -31,7 +31,6 @@ use state_capture::{StateCaptureError, StateJournalCapture};
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
-#[cfg(test)]
 pub(crate) use decision_binding::PublishedCarrier;
 pub(crate) use decision_binding::{PublishedNativeApply, RetainedCarrier};
 #[cfg(test)]
@@ -263,7 +262,7 @@ pub(crate) struct DetachedCarrierComponents {
         reason = "TODO: consume retained journals and effects in the aggregate State publisher"
     )
 )]
-struct RetainedCarrierEffects {
+pub(super) struct RetainedCarrierEffects {
     header: BlockHeader,
     nexus: iroha_config::parameters::actual::Nexus,
     runtime_policy: canonical_runtime::CapturedRuntimePolicy,
@@ -396,9 +395,9 @@ impl<'state> PreparedCarrier<'state> {
             committed_musubi_replication_shortfall_releases =
                 *state.world.musubi_replication_shortfall_releases.get();
         }
-        // A cold backend copies the complete tiered baseline. Capture only after
-        // admission, from the same immutable World whose deterministic tail was
-        // prepared above. The reservation outlives this payload on every exit.
+        // A cold backend copies the complete tiered baseline from the same
+        // immutable World whose deterministic tail was prepared above. This
+        // payload uses its existing allocation policy, outside shell admission.
         tiered_snapshot = tiered_publication::PreparedTieredSnapshot::prepare(
             &state.world,
             &state.state_ref.tiered_snapshot_worker,
@@ -659,3 +658,6 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use decision_binding::publish_governance_fixture;
+
+#[cfg(test)]
+pub(in crate::state) use tests::archive_fixture_instructions;

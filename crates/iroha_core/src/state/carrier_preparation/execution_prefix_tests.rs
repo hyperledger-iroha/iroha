@@ -130,7 +130,7 @@ fn prefix_capture_rejects_missing_witness_and_changed_owned_inventory_before_tai
             .err()
             .expect("missing original owner must refuse");
         assert!(
-            error.contains("witness") || error.contains("inventory"),
+            error.to_string().contains("witness") || error.to_string().contains("inventory"),
             "{error}"
         );
         assert_eq!(
@@ -169,9 +169,9 @@ fn prefix_capture_rejects_changed_world_and_competing_membership_without_publica
             .expect("changed execution refused");
         assert!(
             if competing_membership {
-                error.contains("source owner")
+                error.to_string().contains("source owner")
             } else {
-                error.contains("World values changed")
+                error.to_string().contains("World values changed")
             },
             "{error}"
         );

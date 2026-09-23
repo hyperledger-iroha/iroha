@@ -20438,7 +20438,7 @@ pub mod isi {
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                         )
                         .into(),
                     )
@@ -20785,6 +20785,14 @@ pub mod isi {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions"
+                                .to_owned(),
+                        ),
+                    ));
+                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -29504,7 +29512,7 @@ pub mod isi {
                 provisional_finality.finality_artifact.height_context.network_id,
             );
             let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
-            assert_eq!(state.network_id(), &finality.finality_artifact.height_context.network_id);
+            assert_eq!(state.network_id_ref(), &finality.finality_artifact.height_context.network_id);
             let mut state_block = state.block(finality.block_header.clone());
             let exact_sender = exact_sccp_fixture_sender(&fixture);
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);
@@ -33316,7 +33324,7 @@ seiyaku GovernanceLifecycle {
             stx.world.public_lane_reward_reserves.insert(source.clone(), Quantity::one());
             let error = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "positive source accrual prevents domain deletion");
-            assert_contains!(format!("{error:?}"), "public-lane reward claim state", "unexpected error: {error}");
+            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
             assert!(stx.world.domains.get(&domain_id).is_some());
             assert!(stx.world.asset_definitions.get(&definition).is_some());
             assert_eq!(stx.world.public_lane_reward_accruals.get(&key), Some(&Quantity::one()));
@@ -33403,6 +33411,16 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                 },
             );
+            let accrual_key = (
+                LaneId::SINGLE, ALICE_ID.clone(), AssetId::new(reward_def.clone(), ALICE_ID.clone()),
+            );
+            stx.world.public_lane_reward_accruals.insert(accrual_key.clone(), Quantity::one());
+            let error = Unregister::domain(domain_id.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "unpaid source must pin its asset-definition domain");
+            assert_contains!(format!("{error:?}"), "public-lane reward accrual state", "unexpected error: {error}");
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&reward_def).is_some());
+            stx.world.public_lane_reward_accruals.remove(accrual_key);
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "mismatched public-lane reward row must not block domain unregister");
             assert!(
@@ -33951,7 +33969,9 @@ seiyaku GovernanceLifecycle {
             let reward_source = AssetId::new(reward_def, account_id.clone());
             stx.world.public_lane_reward_claims.insert(
                 (LaneId::SINGLE, ALICE_ID.clone()),
-                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 { through_epoch: Some(1) },
+                iroha_data_model::nexus::PublicLaneRewardClaimStateV1 {
+                    through_epoch: Some(1),
+                },
             );
             stx.world.public_lane_reward_accruals.insert(
                 (LaneId::SINGLE, ALICE_ID.clone(), reward_source.clone()),
@@ -39503,6 +39523,27 @@ seiyaku GovernanceLifecycle {
             let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "retention target rollback must fail");
             assert_contains!(format!("{error:?}"), "target did not advance");
+        });
+        world_test!(set_parameter_rejects_retired_kagemusha_epoch_authority_before_state_changes {
+            blank_state_transaction!(state, block, state_block, stx);
+            let id: iroha_data_model::parameter::CustomParameterId =
+                "kagemusha_mint_finality_next_epoch_v1".parse().expect("retired ID fixture");
+            let before = stx.world.parameters.get().clone();
+            for payload in ["{}", "17", "{\"roster\":null}"] {
+                let payload: iroha_primitives::json::Json = payload.parse().expect("valid JSON fixture");
+                let custom = iroha_data_model::parameter::CustomParameter::new(id.clone(), payload);
+                let error = SetParameter::new(Parameter::Custom(custom)).expect_execute_err(
+                    &ALICE_ID, &mut stx, "retired authority payloads must be rejected before interpretation",
+                );
+                match error {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                        assert_eq!(message, "retired KAGEMUSHA epoch-roster parameters cannot authorize authority transitions");
+                    }
+                    other => panic!("unexpected error: {other:?}"),
+                }
+                assert_eq!(stx.world.parameters.get(), &before);
+                assert!(!stx.world.parameters.get().custom().contains_key(&id));
+            }
         });
         world_test!(set_parameter_rejects_zero_npos_reconfig_fields {
             let state = blank_state();

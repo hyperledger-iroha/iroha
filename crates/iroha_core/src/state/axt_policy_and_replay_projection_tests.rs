@@ -641,7 +641,7 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
         .collect::<Vec<_>>();
     mint_finality_voters.sort_by(|left, right| left.validator.cmp(&right.validator));
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(anchored.network_id, 0, 1, 6, &mint_finality_voters);
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(anchored.network_id, 6, &mint_finality_voters);
     let snapshot_block_hash = anchored
         .latest_block_hash_fast()
         .expect("hash-only fixture has a committed tip");

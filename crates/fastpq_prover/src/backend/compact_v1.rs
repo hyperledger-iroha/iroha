@@ -148,7 +148,16 @@ impl Oracle {
 /// canonical body. State reuse changes physical work, never those input bytes.
 #[derive(Clone, Debug)]
 pub(super) struct Context {
+    profile: FramingProfile,
     prefix: Arc<AbsorbedPrefix>,
+}
+
+// A closed internal profile selector preserves the single canonical framing owner.
+#[derive(Clone, Copy, Debug)]
+enum FramingProfile {
+    Current,
+    #[cfg(test)]
+    Deep,
 }
 
 #[derive(Debug)]
@@ -176,9 +185,12 @@ struct PrefixFrame {
 
 // These payload-only views preserve Vec<Vec<u8>> bytes without owning copies.
 // The protocol has exactly one leaf/predecessor field or two child/tape-root fields.
+/// Borrowed canonical body fields shared by the closed internal protocol owners.
 #[derive(Clone, Copy, Debug)]
-enum BodyFields<'a> {
+pub(super) enum BodyFields<'a> {
+    /// One complete leaf or predecessor.
     One(&'a [u8]),
+    /// Two complete children, or a whole tape followed by its committed root.
     Two(&'a [u8], &'a [u8]),
 }
 
@@ -229,8 +241,9 @@ impl norito::core::SerializePayload for BodyFields<'_> {
     }
 }
 
+/// The sole canonical typed body layout; schema identity does not change.
 #[derive(Clone, Debug, NoritoSerialize)]
-struct Frame<'a> {
+pub(super) struct Frame<'a> {
     kind: u8,
     oracle: u8,
     round: u8,
@@ -255,15 +268,26 @@ impl norito::NoritoSchema for Frame<'_> {
 impl Context {
     /// Canonically frame and absorb one bounded immutable complete context.
     pub(super) fn new(bytes: &[u8]) -> Result<Self> {
+        Self::with_profile(bytes, IDENTITY, FramingProfile::Current)
+    }
+
+    /// Construct only the fixed private DEEP profile, using the same frame owner.
+    #[cfg(test)]
+    pub(super) fn new_deep(bytes: &[u8]) -> Result<Self> {
+        Self::with_profile(bytes, super::deep_binding::IDENTITY, FramingProfile::Deep)
+    }
+
+    fn with_profile(bytes: &[u8], identity: &[u8], profile: FramingProfile) -> Result<Self> {
         if bytes.is_empty() || bytes.len() > MAX_CONTEXT_BYTES {
             return Err(CandidateError::Context);
         }
         let encoded = norito::encode_canonical(&PrefixFrame {
             version: 1,
-            identity: IDENTITY.to_vec(),
+            identity: identity.to_vec(),
             context: bytes.to_vec(),
         })?;
         Ok(Self {
+            profile,
             prefix: Arc::new(AbsorbedPrefix {
                 encoded: Arc::from(encoded),
                 states: core::array::from_fn(|_| OnceLock::new()),
@@ -298,7 +322,30 @@ impl Context {
         round: u8,
         level: u32,
     ) -> Result<&GoldilocksDigest384OwnedDomainPrefixV1> {
-        let slot = Self::cache_slot(role, phase, round, level)?;
+        let slot = match self.profile {
+            FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,
+            #[cfg(test)]
+            FramingProfile::Deep => {
+                const LEVELS: usize = super::deep_geometry::LDE_ROWS.ilog2() as usize + 1;
+                const ROUNDS: usize = 10;
+                const _: () = assert!(ROUNDS * LEVELS + ROUNDS <= PREFIX_CACHE_SLOTS);
+                if role == H_ROLE
+                    && phase == H_PHASE
+                    && usize::from(round) < ROUNDS
+                    && (level as usize) < LEVELS
+                {
+                    usize::from(round) * LEVELS + level as usize
+                } else if role == G_ROLE
+                    && phase == G_PHASE
+                    && (1..=ROUNDS as u8).contains(&round)
+                    && level == 0
+                {
+                    ROUNDS * LEVELS + usize::from(round - 1)
+                } else {
+                    return Err(CandidateError::Tree);
+                }
+            }
+        };
         self.prefix.states[slot]
             .get_or_init(|| {
                 GoldilocksDigest384OwnedDomainPrefixV1::new(GoldilocksDigest384OwnedDomainV1 {
@@ -336,13 +383,31 @@ impl Context {
         if output.len() != round.tape_bytes() || output.len() % 48 != 0 {
             return Err(CandidateError::TapeLength);
         }
+        self.expand_blocks(round.0, body, output)
+    }
+
+    /// Expand the complete tape of one fixed private DEEP message.
+    #[cfg(test)]
+    pub(super) fn expand_deep(
+        &self,
+        round: super::deep_binding::Round,
+        body: &[u8],
+        output: &mut [u8],
+    ) -> Result<()> {
+        if !matches!(self.profile, FramingProfile::Deep) || output.len() != round.tape_bytes() {
+            return Err(CandidateError::TapeLength);
+        }
+        self.expand_blocks(round.ordinal(), body, output)
+    }
+
+    fn expand_blocks(&self, round: u8, body: &[u8], output: &mut [u8]) -> Result<()> {
         // All scheduled blocks are materialized, including unconsumed coordinates.
         // These are F_p^6 outputs, never uniform 384-bit strings.
         for (block, target) in output.chunks_exact_mut(48).enumerate() {
             let digest = self.digest(
                 b"compact-transcript",
                 b"whole-field-tape-block",
-                round.0,
+                round,
                 0,
                 block as u64,
                 body,
@@ -352,7 +417,8 @@ impl Context {
         Ok(())
     }
 
-    fn hash_frame(&self, frame: &Frame<'_>) -> Result<Digest> {
+    /// Hash a body through the sole canonical cached framing owner.
+    pub(super) fn hash_frame(&self, frame: &Frame<'_>) -> Result<Digest> {
         let encoded = norito::encode_canonical(frame)?;
         self.digest(
             b"compact-commitment",
@@ -364,7 +430,8 @@ impl Context {
         )
     }
 
-    fn frame<'a>(
+    /// Construct a body for a closed internal protocol owner.
+    pub(super) fn frame<'a>(
         &self,
         kind: u8,
         oracle: u8,
@@ -623,6 +690,68 @@ mod tests {
             slot.copy_from_slice(&value.to_le_bytes());
         }
         output
+    }
+
+    #[test]
+    fn fixed_deep_profile_reuses_one_shot_framing_without_changing_current_profile() {
+        let current = Context::new(b"same statement bytes").unwrap();
+        let deep = Context::new_deep(b"same statement bytes").unwrap();
+        let expected_prefix = norito::encode_canonical(&PrefixFrame {
+            version: 1,
+            identity: super::super::deep_binding::IDENTITY.to_vec(),
+            context: b"same statement bytes".to_vec(),
+        })
+        .unwrap();
+        assert_eq!(deep.prefix.encoded.as_ref(), expected_prefix);
+        assert_ne!(deep.prefix.encoded, current.prefix.encoded);
+        for (role, phase, round, level) in [
+            (H_ROLE, H_PHASE, 0, 23),
+            (H_ROLE, H_PHASE, 9, 0),
+            (G_ROLE, G_PHASE, 1, 0),
+            (G_ROLE, G_PHASE, 10, 0),
+        ] {
+            let expected = hash_bytes_384_v1(
+                GoldilocksDigestDomainV1 {
+                    catalog: FASTPQ_CATALOG_V1.as_bytes(),
+                    protocol: FASTPQ_FINAL_V1.name.as_bytes(),
+                    profile: &expected_prefix,
+                    role,
+                    phase,
+                    level: u64::from(level),
+                    index: 7,
+                    counter: u64::from(round),
+                },
+                &[b"same body"],
+            )
+            .unwrap();
+            assert_eq!(
+                deep.digest(role, phase, round, level, 7, b"same body")
+                    .unwrap(),
+                expected
+            );
+        }
+        for (role, phase, round, level) in [
+            (H_ROLE, H_PHASE, 10, 0),
+            (H_ROLE, H_PHASE, 0, 24),
+            (G_ROLE, G_PHASE, 0, 0),
+            (G_ROLE, G_PHASE, 11, 0),
+            (G_ROLE, G_PHASE, 1, 1),
+            (H_ROLE, G_PHASE, 1, 0),
+        ] {
+            assert!(deep.cached_prefix(role, phase, round, level).is_err());
+        }
+        assert!(current.cached_prefix(H_ROLE, H_PHASE, 0, 23).is_err());
+        assert!(current.cached_prefix(G_ROLE, G_PHASE, 22, 0).is_ok());
+        assert!(deep.cached_prefix(G_ROLE, G_PHASE, 22, 0).is_err());
+        assert!(
+            current
+                .expand_deep(
+                    super::super::deep_binding::Round::new(1).unwrap(),
+                    b"",
+                    &mut [0; 48]
+                )
+                .is_err()
+        );
     }
 
     #[test]

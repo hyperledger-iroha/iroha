@@ -1555,12 +1555,16 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         BTreeSet::from([retired_request_hash]),
         "completion publishes one exact cancellation identity"
     );
+    // This component's original owner publishes cancellation explicitly; the
+    // Native runner does not poll or reactivate the retired lane adapter.
+    assert!(crate::sumeragi::v2_runner::apply_retired_historical_recovery_requests(
+        &mut adapter, &services,
+    ).expect("consume the completed historical request") > 0);
     assert!(
         !reconcile_terminal_lane_output_handoffs(
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
                 .decided_lane_recovery_permit()
                 .expect("settled Apply mints terminal handoff authority"),
-            &mut adapter,
             &services,
             1,
         )
@@ -2573,15 +2577,7 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
     (
         finality_context.kagemusha_mint_finality_authorization,
         finality_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-        finality_context.network_id,
-        finality_context.epoch,
-        finality_context
-            .kagemusha_mint_finality_authorization
-            .first_height,
-        finality_context.epoch_end_height,
-        &finality_context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(finality_context.network_id, finality_context.epoch, finality_context.epoch_end_height, &finality_context.roster);
     let finality = verified_finality_for_context(&finality_context, &finality_keys, &block);
     if !matches!(finality_kind, HistoricalSidecarFinality::Missing) {
         let _ = adapter
@@ -3413,22 +3409,9 @@ fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authorization,
         fixture.adapter.context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-        fixture.adapter.context.network_id,
-        fixture.adapter.context.epoch,
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authorization
-            .first_height,
-        fixture.adapter.context.epoch_end_height,
-        &fixture.adapter.context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(fixture.adapter.context.network_id, fixture.adapter.context.epoch, fixture.adapter.context.epoch_end_height, &fixture.adapter.context.roster);
     fixture
         .adapter
         .context
@@ -3505,22 +3488,9 @@ fn disjoint_successor_roster_serves_only_exact_historical_requester() {
     fixture.adapter.context.quorum = wire::DualQuorum::from_roster(&fixture.adapter.context.roster)
         .expect("disjoint successor has valid equal-vote geometry");
     (
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authorization,
+        fixture.adapter.context.kagemusha_mint_finality_authorization,
         fixture.adapter.context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-        fixture.adapter.context.network_id,
-        fixture.adapter.context.epoch,
-        fixture
-            .adapter
-            .context
-            .kagemusha_mint_finality_authorization
-            .first_height,
-        fixture.adapter.context.epoch_end_height,
-        &fixture.adapter.context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(fixture.adapter.context.network_id, fixture.adapter.context.epoch, fixture.adapter.context.epoch_end_height, &fixture.adapter.context.roster);
     fixture
         .adapter
         .context

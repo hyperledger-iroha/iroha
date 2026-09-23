@@ -13,7 +13,7 @@ struct ExactValidateSidecarRegistrationFixture {
     _body_directory: TempDir,
     coordinator: LifecycleCoordinator,
     holder: LifecycleWorkRegistryHolder,
-    _deferred: DeferredDurableValidateDispatch,
+    _retained: ExecutedDurableValidateDispatch,
     identity: LifecycleValidateSidecarRegistrationIdentityV1,
     _ledger_directory: TempDir,
 }
@@ -54,15 +54,27 @@ fn exact_validate_sidecar_registration_fixture(
             ))
         })
         .expect("execute exact missing-sidecar Validate");
-    let publication = coordinator
+    let (error, retained) = coordinator
         .complete_durable_validate_dispatch(&mut holder, executed)
-        .expect("retain exact missing-sidecar Validate outcome");
-    let DurableValidateCompletionPublication::DeferredMergeSidecar(deferred) = publication else {
-        panic!("missing sidecar must retain one deferred Validate dispatch")
-    };
-    let identity = deferred
-        .sidecar_registration_identity(key)
-        .expect("seal exact deferred Validate sidecar identity");
+        .expect_err("retired sidecar outcome cannot publish a live completion");
+    assert!(matches!(
+        error,
+        DurableValidateCompletionPublicationError::Registry(
+            DurableValidateCompletionConversionError::InvalidOutcome
+        )
+    ));
+    // Exercise durable identity/generation primitives without a live sidecar path.
+    let request = &retained.executed.request;
+    let identity = LifecycleValidateSidecarRegistrationIdentityV1::from_sealed_dispatch(
+        key,
+        request.lifecycle_key,
+        request.lifecycle_stage,
+        round,
+        subject,
+        wait,
+        reference.clone(),
+    )
+    .expect("seal exact test registration identity");
     assert_eq!(identity.round(), round);
     assert_eq!(identity.subject(), subject);
     assert_eq!(identity.wait_token(), wait);
@@ -78,7 +90,7 @@ fn exact_validate_sidecar_registration_fixture(
         _body_directory: _directory,
         coordinator,
         holder,
-        _deferred: deferred,
+        _retained: retained,
         identity,
         _ledger_directory: ledger_directory,
     }
@@ -203,12 +215,8 @@ fn validate_sidecar_supersession_cancels_row_and_recovers_post_ledger_cleanup() 
         .validate_sidecar_registration_path()
         .expect("sidecar fixture has a registration path");
 
-    cancel_registration_for_test(
-        &mut exact.coordinator,
-        &exact.identity,
-        &mut exact.holder,
-    )
-    .expect("cancel the superseded unprotected sidecar row");
+    cancel_registration_for_test(&mut exact.coordinator, &exact.identity, &mut exact.holder)
+        .expect("cancel the superseded unprotected sidecar row");
 
     assert_eq!(
         exact.coordinator.records[&ordinal].state,
@@ -299,13 +307,12 @@ fn validate_sidecar_cold_open_restores_exact_waiting_row_and_generation() {
     assert!(reopened.ready_index.contains(&ordinal));
     reopened.ledger_store = Some(store);
 
-    let recovered =
-        RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
-            &mut reopened,
-            &mut exact.holder,
-        )
-            .expect("recover exact sidecar registration")
-            .expect("durable sidecar registration is present");
+    let recovered = RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
+        &mut reopened,
+        &mut exact.holder,
+    )
+    .expect("recover exact sidecar registration")
+    .expect("durable sidecar registration is present");
     assert_eq!(
         reopened.records[&ordinal].state,
         LifecycleState::Waiting(exact.identity.wait_token())

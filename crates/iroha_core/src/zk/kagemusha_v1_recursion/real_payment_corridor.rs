@@ -1116,8 +1116,8 @@ impl FundingCertificate {
             0,
             &validators,
         );
-        let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&roster, u64::MAX)
-            .expect("complete genesis authorization");
+        let authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(&roster, 10);
         let genesis_authorization_id = authorization
             .authorization_id()
             .expect("genesis authorization ID");
@@ -1138,6 +1138,7 @@ impl FundingCertificate {
             tree.execution_root(),
             tree.leaf_count(),
             2,
+            None,
         );
         let seals = (0_u32..3)
             .map(|index| {
@@ -1180,10 +1181,9 @@ impl FundingCertificate {
                     &roster,
                     authorization,
                     kagemusha_mint_finality_root_v1(empty_root),
-                    // The Bootstrap selector disables membership and signatures and exposes
-                    // zero monetary value. This is only a fixed nonempty parser witness.
+                    0,
                     1,
-                    1,
+                    None,
                 ),
                 seals: Vec::new(),
             },
@@ -1205,6 +1205,7 @@ impl FundingCertificate {
         root: Hash,
         count: u32,
         block_height: u64,
+        next: Option<KagemushaMintFinalityEpochAuthorizationV1>,
     ) -> KagemushaMintFinalitySealMessageV1 {
         KagemushaMintFinalitySealMessageV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
@@ -1220,7 +1221,7 @@ impl FundingCertificate {
             execution_commitment_digest: digest(b"funding-execution", u64::from(count)),
             kagemusha_top_up_root: root,
             kagemusha_top_up_count: count,
-            next_epoch_authorization: None,
+            next_epoch_authorization: next,
         }
     }
 }
@@ -2928,6 +2929,64 @@ fn mint_authority_retention_advances_authorization_with_original_signing_keys() 
             .authorization_head_for_step(KagemushaMintAuthorityStepV1::Rotate)
             .is_err()
     );
+}
+
+#[test]
+fn bootstrap_certificate_is_zero_authority_and_pins_complete_genesis_authorization() {
+    let (_, _, funding) = funding_fixture();
+    let bootstrap = &funding.bootstrap;
+    bootstrap
+        .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    assert!(bootstrap.seal_bundle.seals.is_empty());
+    assert_eq!(bootstrap.seal_bundle.message.kagemusha_top_up_count, 0);
+    assert!(
+        bootstrap
+            .seal_bundle
+            .message
+            .next_epoch_authorization
+            .is_none()
+    );
+    assert!(bootstrap.seal_bundle.message.signing_digest().is_err());
+    assert!(bootstrap.validate_shape().is_err());
+    assert_eq!(
+        bootstrap
+            .seal_bundle
+            .message
+            .epoch_authorization
+            .authorization_id()
+            .unwrap(),
+        funding.genesis_authorization_id
+    );
+    assert_ne!(
+        bootstrap.authority_generation.authority_id().unwrap(),
+        funding.genesis_authorization_id
+    );
+    let binding = bootstrap
+        .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+        .unwrap();
+    let mut changed = bootstrap.clone();
+    changed.seal_bundle.message.epoch_authorization.last_height += 1;
+    assert_ne!(
+        changed
+            .certificate_binding_digest(KagemushaMintAuthorityStepV1::Bootstrap)
+            .unwrap(),
+        binding
+    );
+    for mutation in 0..4 {
+        let mut changed = bootstrap.clone();
+        match mutation {
+            0 => changed.seal_bundle.message.kagemusha_top_up_count = 1,
+            1 => changed.seal_bundle.message.block_height = 2,
+            2 => changed.seal_bundle.seals = funding.finalized.seal_bundle.seals.clone(),
+            _ => changed.authority_generation.generation = 1,
+        }
+        assert!(
+            changed
+                .validate_for_step(KagemushaMintAuthorityStepV1::Bootstrap)
+                .is_err()
+        );
+    }
 }
 
 #[test]

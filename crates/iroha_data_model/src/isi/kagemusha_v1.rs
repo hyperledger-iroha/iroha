@@ -1703,6 +1703,35 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// Returns an error when any authority-bearing identity is absent, the top-up projection is
     /// empty or oversized, or `validator_count` is not an admitted `3f + 1` committee size.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        self.validate_header()?;
+        if self.kagemusha_top_up_count == 0 && self.next_epoch_authorization.is_none() {
+            return Err(invalid("mint_finality.header"));
+        }
+        Ok(())
+    }
+
+    /// Validate the unsigned zero-authority input to the release-pinned bootstrap proof.
+    ///
+    /// This input cannot be signed or accepted as a normal finality certificate. It carries the
+    /// complete genesis authorization and authorizes neither a mint nor an epoch transition.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed header, a non-genesis authorization, a noninitial height, any top-up,
+    /// or a successor authorization.
+    pub fn validate_bootstrap(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        self.validate_header()?;
+        if self.epoch_authorization.decision != KagemushaMintFinalityEpochDecisionV1::Genesis
+            || self.block_height != 1
+            || self.kagemusha_top_up_count != 0
+            || self.next_epoch_authorization.is_some()
+        {
+            return Err(invalid("mint_finality.bootstrap"));
+        }
+        Ok(())
+    }
+
+    fn validate_header(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
         require_chain_version(self.version)?;
         self.epoch_authorization.validate()?;
         if let Some(next) = self.next_epoch_authorization {
@@ -1727,7 +1756,6 @@ impl KagemushaMintFinalitySealMessageV1 {
             || self.network_id != self.epoch_authorization.network_id
             || self.block_height < self.epoch_authorization.first_height
             || self.block_height > self.epoch_authorization.last_height
-            || (self.kagemusha_top_up_count == 0 && self.next_epoch_authorization.is_none())
             || self.kagemusha_top_up_root == Hash::prehashed([0; Hash::LENGTH])
             || self
                 .height_context_id
@@ -1751,6 +1779,23 @@ impl KagemushaMintFinalitySealMessageV1 {
     /// Returns an error unless the complete message is structurally valid.
     pub fn signing_digest(&self) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
         self.validate()?;
+        self.binding_digest()
+    }
+
+    /// Return the fixed-width binding for an unsigned zero-authority bootstrap proof input.
+    ///
+    /// Only the explicit bootstrap circuit branch may consume this binding; validator signing
+    /// and ordinary finality verification continue to require [`Self::signing_digest`].
+    ///
+    /// # Errors
+    ///
+    /// Rejects any input that fails [`Self::validate_bootstrap`].
+    pub fn bootstrap_binding_digest(&self) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
+        self.validate_bootstrap()?;
+        self.binding_digest()
+    }
+
+    fn binding_digest(&self) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
         let mut hasher = Sha256::new();
         hasher.update(MINT_FINALITY_SEAL_MESSAGE_DOMAIN_V1);
         hasher.update([0]);
@@ -3194,6 +3239,56 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_message_cannot_be_used_as_ordinary_finality() {
+        let message = KagemushaMintFinalitySealMessageV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch_authorization: genesis_authorization(),
+            validator_count: 4,
+            network_id: network(),
+            block_height: 1,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"bootstrap context",
+            ))),
+            subject_digest: [1; 32],
+            execution_commitment_digest: [2; 32],
+            kagemusha_top_up_root: Hash::new(b"bootstrap empty root shape"),
+            kagemusha_top_up_count: 0,
+            next_epoch_authorization: None,
+        };
+        message
+            .validate_bootstrap()
+            .expect("unsigned bootstrap input");
+        message
+            .bootstrap_binding_digest()
+            .expect("bootstrap circuit binding");
+        assert!(message.validate().is_err());
+        assert!(message.signing_digest().is_err());
+        let mut mint = message.clone();
+        mint.kagemusha_top_up_count = 1;
+        assert!(mint.validate().is_ok());
+        assert!(mint.validate_bootstrap().is_err());
+        assert!(mint.bootstrap_binding_digest().is_err());
+        let mut later = message.clone();
+        later.block_height = 2;
+        assert!(later.validate_bootstrap().is_err());
+        let mut successor = message.clone();
+        successor.block_height = successor.epoch_authorization.last_height;
+        successor.next_epoch_authorization =
+            Some(retained_authorization(&successor.epoch_authorization));
+        assert!(successor.validate().is_ok());
+        assert!(successor.validate_bootstrap().is_err());
+        let mut non_genesis = message.clone();
+        non_genesis.epoch_authorization = retained_authorization(&message.epoch_authorization);
+        non_genesis.block_height = non_genesis.epoch_authorization.first_height;
+        assert!(non_genesis.validate_bootstrap().is_err());
+        let mut foreign = message;
+        foreign.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"foreign bootstrap network"),
+        ));
+        assert!(foreign.validate_bootstrap().is_err());
+    }
+
+    #[test]
     fn scheduling_authorization_retains_keys_without_retaining_epoch() {
         let genesis = genesis_authorization();
         let retained = retained_authorization(&genesis);
@@ -4425,3 +4520,7 @@ mod additional_frame_owner_identity_tests {
         >("iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1");
     }
 }
+
+#[cfg(test)]
+#[path = "kagemusha_v1_epoch_binding_tests.rs"]
+mod epoch_binding_codec_tests;

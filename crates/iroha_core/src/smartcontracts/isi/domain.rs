@@ -1867,7 +1867,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has pending public-lane reward claim state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister account {account_id}: it has unpaid public-lane reward accrual state as claimant or reward-asset owner (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -2777,7 +2777,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister asset definition {asset_definition_id}: it has pending public-lane reward claim state (lane {lane_id}, account {claimant}, asset {asset_id}); claim or clear rewards first"
+                        "cannot unregister asset definition {asset_definition_id}: it has unpaid public-lane reward accrual state (lane {lane_id}, account {claimant}, asset {asset_id}); settle rewards first"
                     )
                     .into(),
                 )
@@ -8766,7 +8766,7 @@ mod tests {
                     .insert(source, Quantity::one());
             },
             "account referenced by reward-accrual source owner must not be unregistered",
-            "public-lane reward claim state",
+            "public-lane reward accrual state",
             "error should explain reward-accrual conflict",
         );
     }
@@ -8785,7 +8785,9 @@ mod tests {
                 .execute(&authority, tx)
                 .expect_err("positive accrual keeps its exact source definition registered");
             assert!(
-                error.to_string().contains("public-lane reward claim state"),
+                error
+                    .to_string()
+                    .contains("public-lane reward accrual state"),
                 "{error}"
             );
             assert!(tx.world.asset_definitions.get(&definition).is_some());
@@ -11868,6 +11870,29 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
+        let accrual_key = (
+            LaneId::SINGLE,
+            authority.clone(),
+            AssetId::new(asset_definition_id.clone(), authority.clone()),
+        );
+        tx.world
+            .public_lane_reward_accruals
+            .insert(accrual_key.clone(), Quantity::one());
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("unpaid source must pin its asset definition");
+        assert!(
+            error
+                .to_string()
+                .contains("public-lane reward accrual state")
+        );
+        assert!(
+            tx.world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        tx.world.public_lane_reward_accruals.remove(accrual_key);
         Unregister::asset_definition(asset_definition_id.clone())
             .execute(&authority, &mut tx)
             .expect("mismatched public-lane reward row must not block asset definition unregister");

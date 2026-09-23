@@ -1021,7 +1021,7 @@ mod slice_tests {
         );
         let authorization =
             crate::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &authority, 1,
+                &authority, 2,
             )
             .expect("valid fixture genesis scheduling authorization");
         let context = HeightContext {
@@ -1031,7 +1031,7 @@ mod slice_tests {
             epoch: 0,
             kagemusha_mint_finality_authorization: authorization,
             kagemusha_mint_finality_authority: authority,
-            epoch_end_height: 1,
+            epoch_end_height: 2,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: None,
@@ -1050,6 +1050,9 @@ mod slice_tests {
             },
             leader_seed: [0xA5; 32],
         };
+        context
+            .validate()
+            .expect("canonical non-boundary evidence fixture");
         let round = ConsensusRound {
             context_id: context.id(),
             height: context.height,

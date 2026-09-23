@@ -4,7 +4,7 @@ use iroha_data_model::{
     NetworkId,
     block::consensus_v2::ValidatorPower,
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
         KagemushaMintFinalityEpochDecisionV1,
     },
@@ -18,7 +18,7 @@ use iroha_data_model::{
     },
 };
 
-/// Build real paired-Pasta public keys for one immutable authority generation.
+/// Build actual paired-Pasta keys for one immutable generation, independent of election epoch.
 pub(crate) fn mint_finality_authority(
     network_id: NetworkId,
     generation: u64,
@@ -38,197 +38,117 @@ pub(crate) fn mint_finality_authority(
             .expect("derive deterministic paired-Pasta test validator keys")
         })
         .collect();
-    let authority = KagemushaMintFinalityAuthorityGenerationV1 {
+    let fixture = KagemushaMintFinalityAuthorityGenerationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         generation,
         validators,
     };
-    authority
+    fixture
         .validate()
         .expect("valid test mint-finality authority");
-    authority
+    fixture
 }
 
-/// Construct a complete retained-authority chain from genesis to a scheduling epoch.
-///
-/// Earlier non-genesis epochs each occupy one height. Genesis fills the prefix
-/// before them, so every predecessor ID comes from a real contiguous authorization.
-/// The target interval is explicit; a later epoch cannot start at height one.
-/// This is authorization-body test data, not a manufactured boundary certificate.
-pub(crate) fn mint_finality_authorization_and_authority(
+/// Bind generation zero to the explicit signed-genesis scheduling interval.
+pub(crate) fn mint_finality_genesis_for_authority(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    KagemushaMintFinalityEpochAuthorizationV1::genesis(authority, last_height)
+        .expect("generation-zero genesis authorization")
+}
+
+/// Build a complete generation-zero authority and explicit genesis authorization.
+#[cfg(test)]
+pub(crate) fn mint_finality_genesis_authorization(
     network_id: NetworkId,
-    epoch: u64,
-    first_height: u64,
     last_height: u64,
     roster: &[ValidatorPower],
 ) -> (
     KagemushaMintFinalityEpochAuthorizationV1,
     KagemushaMintFinalityAuthorityGenerationV1,
 ) {
-    assert!(
-        last_height >= first_height,
-        "nonempty fixture authorization interval"
-    );
     let authority = mint_finality_authority(network_id, 0, roster);
-    if epoch == 0 {
-        assert_eq!(
-            first_height, 1,
-            "genesis authorization starts at height one"
-        );
-        let authorization =
-            KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, last_height)
-                .expect("valid fixture genesis authorization");
-        return (authorization, authority);
-    }
-    let genesis_last = first_height
-        .checked_sub(epoch)
-        .filter(|height| *height > 0)
-        .expect("each earlier fixture epoch needs at least one positive height");
-    let mut authorization =
-        KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, genesis_last)
-            .expect("valid fixture genesis predecessor");
-    // A stable, explicit fixture beacon binding is retained through all epochs.
-    // It is not accepted as a DKG transcript or boundary certificate by this helper.
-    let authority_id = authority
-        .authority_id()
-        .expect("fixture authority identity");
-    let mut beacon_domain = b"iroha-core-mint-finality-fixture-beacon".to_vec();
-    beacon_domain.extend_from_slice(network_id.as_bytes());
-    beacon_domain.extend_from_slice(&authority_id);
-    let session_id = *iroha_crypto::Hash::new(&beacon_domain).as_ref();
-    beacon_domain.extend_from_slice(b"installed-transcript");
-    let transcript_hash = *iroha_crypto::Hash::new(&beacon_domain).as_ref();
-    let beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-        session_id,
-        transcript_hash,
-    });
-    for next_epoch in 1..=epoch {
-        let first = authorization
-            .last_height
-            .checked_add(1)
-            .expect("fixture height fits");
-        let next = KagemushaMintFinalityEpochAuthorizationV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch: next_epoch,
-            first_height: first,
-            last_height: if next_epoch == epoch {
-                last_height
-            } else {
-                first
-            },
-            authority_generation: authority.generation,
-            authority_id,
-            beacon,
-            previous_authorization_id: authorization
-                .authorization_id()
-                .expect("fixture predecessor identity"),
-            transition_id: [0; 32],
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
-        };
-        next.validate_against_authority(&authority)
-            .expect("fixture retains original authority");
-        next.validate_successor(&authorization)
-            .expect("contiguous fixture epoch authorization");
-        authorization = next;
-    }
-    assert_eq!(authorization.first_height, first_height);
+    let authorization = mint_finality_genesis_for_authority(&authority, last_height);
     (authorization, authority)
 }
 
-/// Build a structurally valid boundary authorization linked to the actual predecessor.
-///
-/// Tests must separately supply any incumbent certificate or activation readiness required
-/// by their consumer. The deterministic transition binding below is fixture body data.
+/// Build one explicit contiguous successor and check its complete predecessor/authority binding.
+#[cfg(test)]
 pub(crate) fn mint_finality_successor_authorization(
     previous: &KagemushaMintFinalityEpochAuthorizationV1,
     authority: &KagemushaMintFinalityAuthorityGenerationV1,
     last_height: u64,
+    beacon: BeaconEpochBindingV1,
     decision: KagemushaMintFinalityEpochDecisionV1,
+    transition_id: [u8; 32],
 ) -> KagemushaMintFinalityEpochAuthorizationV1 {
-    let authority_id = authority
-        .authority_id()
-        .expect("fixture authority identity");
-    let previous_authorization_id = previous
-        .authorization_id()
-        .expect("fixture predecessor identity");
-    let mut domain = b"iroha-core-mint-finality-fixture-boundary".to_vec();
-    domain.extend_from_slice(&previous_authorization_id);
-    domain.extend_from_slice(&authority_id);
-    let transition_id = match decision {
-        KagemushaMintFinalityEpochDecisionV1::Retain => [0; 32],
-        KagemushaMintFinalityEpochDecisionV1::Activate => {
-            *iroha_crypto::Hash::new(&domain).as_ref()
-        }
-        _ => panic!("fixture supports explicit retention or activation"),
-    };
-    let beacon = if decision == KagemushaMintFinalityEpochDecisionV1::Retain
-        && previous.beacon != BeaconEpochBindingV1::Bootstrap
-    {
-        previous.beacon
-    } else {
-        domain.extend_from_slice(b"beacon-session");
-        let session_id = *iroha_crypto::Hash::new(&domain).as_ref();
-        domain.extend_from_slice(b"installed-transcript");
-        BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id,
-            transcript_hash: *iroha_crypto::Hash::new(&domain).as_ref(),
-        })
-    };
-    let next = KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id: authority.network_id,
-        epoch: previous.epoch.checked_add(1).expect("fixture epoch fits"),
+        epoch: previous
+            .epoch
+            .checked_add(1)
+            .expect("fixture epoch successor"),
         first_height: previous
             .last_height
             .checked_add(1)
-            .expect("fixture height fits"),
+            .expect("fixture height successor"),
         last_height,
         authority_generation: authority.generation,
-        authority_id,
+        authority_id: authority
+            .authority_id()
+            .expect("fixture authority identity"),
         beacon,
-        previous_authorization_id,
+        previous_authorization_id: previous
+            .authorization_id()
+            .expect("fixture previous authorization identity"),
         transition_id,
         decision,
     };
-    next.validate_against_authority(authority)
-        .expect("fixture authority matches");
-    next.validate_successor(previous)
-        .expect("fixture links the exact predecessor");
-    next
+    authorization
+        .validate_against_authority(authority)
+        .expect("successor authority binding");
+    authorization
+        .validate_successor(previous)
+        .expect("contiguous fixture epoch authorization");
+    authorization
 }
 
-/// Build real network-independent signed-genesis authority parameters.
+/// Build a real networkless signed-genesis template aligned with `roster`.
+#[cfg(test)]
+pub(crate) fn mint_finality_authority_template(
+    generation: u64,
+    roster: &[ValidatorPower],
+) -> KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"non-shipping mint finality template key derivation"),
+    ));
+    let authority = mint_finality_authority(network_id, generation, roster);
+    let template = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
+        version: authority.version,
+        generation,
+        validators: authority.validators,
+    };
+    template
+        .validate()
+        .expect("valid test mint-finality authority template");
+    template
+}
+
+/// Build mandatory signed Kagemusha genesis parameters for a closed roster.
 #[cfg(test)]
 pub(crate) fn mint_finality_genesis_parameters(
     roster: &[ValidatorPower],
 ) -> KagemushaMintFinalityGenesisParametersV1 {
-    let validators = roster
-        .iter()
-        .enumerate()
-        .map(|(index, validator)| {
-            let seed_byte =
-                0xA0_u8.wrapping_add(u8::try_from(index).expect("small fixture roster"));
-            crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[seed_byte; 32],
-                0,
-                validator.validator.clone(),
-            )
-            .expect("derive real genesis paired keys")
-        })
-        .collect();
-    let authority_generation = KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        generation: 0,
-        validators,
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        authority_generation: mint_finality_authority_template(0, roster),
     };
-    authority_generation
+    parameters
         .validate()
-        .expect("valid fixture genesis authority template");
-    KagemushaMintFinalityGenesisParametersV1 {
-        authority_generation,
-    }
+        .expect("valid generation-zero genesis parameters");
+    parameters
 }
 
 /// Build a closed four-validator signed-genesis parameter fixture.
@@ -237,114 +157,133 @@ pub(crate) fn genesis_context_parameters() -> SumeragiV2GenesisContextParameters
     SumeragiV2GenesisContextParameters::recommended()
 }
 
+/// Build a scheduling-epoch fixture while retaining generation-zero keys throughout.
+///
+/// Earlier epochs each span one height; the requested final epoch spans through
+/// `last_height`. Each predecessor link is constructed and validated explicitly.
+#[cfg(test)]
+pub(crate) fn mint_finality_retained_authorization(
+    network_id: NetworkId,
+    epoch: u64,
+    last_height: u64,
+    roster: &[ValidatorPower],
+) -> (
+    KagemushaMintFinalityEpochAuthorizationV1,
+    KagemushaMintFinalityAuthorityGenerationV1,
+) {
+    assert!(epoch < 1_024, "fixture epoch history is bounded");
+    let authority = mint_finality_authority(network_id, 0, roster);
+    let mut authorization =
+        mint_finality_genesis_for_authority(&authority, if epoch == 0 { last_height } else { 1 });
+    for next_epoch in 1..=epoch {
+        authorization = mint_finality_successor_authorization(
+            &authorization,
+            &authority,
+            if next_epoch == epoch {
+                last_height
+            } else {
+                next_epoch + 1
+            },
+            fixture_installed_beacon(),
+            KagemushaMintFinalityEpochDecisionV1::Retain,
+            [0; 32],
+        );
+    }
+    (authorization, authority)
+}
+
+/// Build an exact fixed-length scheduling history, retaining generation zero.
+#[cfg(test)]
+pub(crate) fn mint_finality_scheduled_authorization(
+    network_id: NetworkId,
+    epoch: u64,
+    epoch_length: u64,
+    roster: &[ValidatorPower],
+) -> (
+    KagemushaMintFinalityEpochAuthorizationV1,
+    KagemushaMintFinalityAuthorityGenerationV1,
+) {
+    assert!(epoch < 1_024, "fixture epoch history is bounded");
+    assert!(epoch_length != 0, "fixture epochs have at least one height");
+    let authority = mint_finality_authority(network_id, 0, roster);
+    let mut authorization = mint_finality_genesis_for_authority(&authority, epoch_length);
+    for next_epoch in 1..=epoch {
+        let last_height = next_epoch
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(epoch_length))
+            .expect("fixture schedule remains representable");
+        authorization = mint_finality_successor_authorization(
+            &authorization,
+            &authority,
+            last_height,
+            fixture_installed_beacon(),
+            KagemushaMintFinalityEpochDecisionV1::Retain,
+            [0; 32],
+        );
+    }
+    (authorization, authority)
+}
+
+/// Return the explicit installed-beacon binding used by non-shipping authorization histories.
+#[cfg(test)]
+pub(crate) fn fixture_installed_beacon() -> BeaconEpochBindingV1 {
+    BeaconEpochBindingV1::Installed(
+        iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+            session_id: [0x71; 32],
+            transcript_hash: [0x72; 32],
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::block::BlockHeader;
-    use iroha_model_base::peer::PeerId;
 
-    fn fixture() -> (NetworkId, Vec<ValidatorPower>) {
-        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-            Hash::new(b"mint-finality-fixture-helper-controls"),
-        ));
+    #[test]
+    fn retained_epoch_history_keeps_generation_zero_and_links_each_successor() {
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"fixture retained authorization history"),
+            ));
+        // Use the same closed deterministic roster as production-oriented fixtures.
         let mut roster = (1_u8..=4)
             .map(|seed| {
-                let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic BLS validator");
+                let key = iroha_crypto::KeyPair::try_from_seed(
+                    vec![seed; 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .expect("fixture validator");
                 ValidatorPower {
-                    validator: PeerId::new(key.public_key().clone()),
+                    validator: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
                     power: 1,
                 }
             })
             .collect::<Vec<_>>();
-        roster.sort_by(|a, b| a.validator.cmp(&b.validator));
-        (network, roster)
-    }
-
-    #[test]
-    fn retained_epoch_chain_uses_actual_contiguous_predecessors_and_unchanged_keys() {
-        let (network, roster) = fixture();
-        let (genesis, authority) =
-            mint_finality_authorization_and_authority(network, 0, 1, 10, &roster);
-        let (first, first_authority) =
-            mint_finality_authorization_and_authority(network, 1, 11, 11, &roster);
-        let (second, second_authority) =
-            mint_finality_authorization_and_authority(network, 2, 12, 50, &roster);
-        assert_eq!(authority, first_authority);
-        assert_eq!(authority, second_authority);
-        assert_eq!(second.authority_generation, 0);
-        assert_eq!(
-            first.previous_authorization_id,
-            genesis.authorization_id().unwrap()
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let (epoch, authority) = mint_finality_retained_authorization(network_id, 3, 40, &roster);
+        assert_eq!(epoch.epoch, 3);
+        assert_eq!(epoch.first_height, 4);
+        assert_eq!(epoch.last_height, 40);
+        assert_eq!(authority.generation, 0);
+        assert_eq!(epoch.authority_generation, 0);
+        assert_eq!(epoch.beacon, fixture_installed_beacon());
+        let (previous, _) = mint_finality_retained_authorization(network_id, 2, 3, &roster);
+        epoch
+            .validate_successor(&previous)
+            .expect("exact previous authorization");
+        let (scheduled_previous, _) =
+            mint_finality_scheduled_authorization(network_id, 2, 10, &roster);
+        let (scheduled, scheduled_authority) =
+            mint_finality_scheduled_authorization(network_id, 3, 10, &roster);
+        assert_eq!(scheduled.first_height, 31);
+        assert_eq!(scheduled.last_height, 40);
+        assert_eq!(scheduled_authority, authority);
+        scheduled
+            .validate_successor(&scheduled_previous)
+            .expect("exact fixed-length predecessor");
+        assert_ne!(
+            scheduled.previous_authorization_id,
+            epoch.previous_authorization_id
         );
-        assert_eq!(
-            second.previous_authorization_id,
-            first.authorization_id().unwrap()
-        );
-        first.validate_successor(&genesis).unwrap();
-        second.validate_successor(&first).unwrap();
-        assert_eq!(first.beacon, second.beacon);
-    }
-
-    #[test]
-    fn explicit_boundary_retains_authority_or_activates_exact_next_generation() {
-        let (network, roster) = fixture();
-        let (genesis, authority) =
-            mint_finality_authorization_and_authority(network, 0, 1, 10, &roster);
-        let retained = mint_finality_successor_authorization(
-            &genesis,
-            &authority,
-            20,
-            KagemushaMintFinalityEpochDecisionV1::Retain,
-        );
-        let next_authority = mint_finality_authority(network, 1, &roster);
-        assert_ne!(authority.validators, next_authority.validators);
-        let activated = mint_finality_successor_authorization(
-            &retained,
-            &next_authority,
-            30,
-            KagemushaMintFinalityEpochDecisionV1::Activate,
-        );
-        assert_eq!(
-            activated.authority_id,
-            next_authority.authority_id().unwrap()
-        );
-        assert_eq!(activated.authority_generation, 1);
-        assert_ne!(activated.transition_id, [0; 32]);
-        let mut stale_parent = retained;
-        stale_parent.last_height += 1;
-        assert!(activated.validate_successor(&stale_parent).is_err());
-        let mut false_retention = activated;
-        false_retention.decision = KagemushaMintFinalityEpochDecisionV1::Retain;
-        false_retention.transition_id = [0; 32];
-        assert!(false_retention.validate_successor(&retained).is_err());
-    }
-
-    #[test]
-    fn signed_genesis_template_binds_the_same_real_authority_keys() {
-        let (network, roster) = fixture();
-        let template = mint_finality_genesis_parameters(&roster);
-        assert_eq!(
-            template
-                .authority_generation
-                .bind_network_id(network)
-                .unwrap(),
-            mint_finality_authority(network, 0, &roster)
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "each earlier fixture epoch needs at least one positive height")]
-    fn later_epoch_cannot_be_fabricated_at_height_one() {
-        let (network, roster) = fixture();
-        mint_finality_authorization_and_authority(network, 1, 1, 10, &roster);
-    }
-
-    #[test]
-    #[should_panic(expected = "genesis authorization starts at height one")]
-    fn genesis_cannot_skip_initial_history() {
-        let (network, roster) = fixture();
-        mint_finality_authorization_and_authority(network, 0, 2, 10, &roster);
     }
 }

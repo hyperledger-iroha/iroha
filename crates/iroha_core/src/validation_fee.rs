@@ -4447,8 +4447,8 @@ pub(crate) mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = validation_fee_test_network_id();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id, 0, 1, 2, &roster,
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 2, &roster,
             );
         let context = HeightContext {
             network_id,

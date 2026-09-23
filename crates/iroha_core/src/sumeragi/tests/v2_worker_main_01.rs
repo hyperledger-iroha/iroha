@@ -4690,19 +4690,25 @@ fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
     let (service, keys) = fixture();
     let mut context = service.context.clone();
     context.epoch_end_height = context.height;
-    context.kagemusha_mint_finality_authorization.last_height = context.height;
-    let next_authority = context.kagemusha_mint_finality_authority.clone();
-    let next_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
+    let next_mint_roster = fixture_kagemusha_mint_finality_authority(
+        context.network_id,
+        context.kagemusha_mint_finality_authority.generation + 1,
+        &context.roster,
+        0xC0,
+    );
+    let next_mint_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &context.kagemusha_mint_finality_authorization,
-            &next_authority,
+            &next_mint_roster,
             context.height + 8,
-            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: context.epoch + 1,
-        kagemusha_mint_finality_authorization: next_authorization,
-        kagemusha_mint_finality_authority: next_authority,
+        kagemusha_mint_finality_authorization: next_mint_authorization.clone(),
+        kagemusha_mint_finality_authority: next_mint_roster,
         epoch_end_height: context.height + 8,
         mode: context.mode,
         roster: context.roster.clone(),
@@ -4767,14 +4773,7 @@ fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
     )
     .expect("decode boundary seal share");
     assert_eq!(share.message.kagemusha_top_up_count, 0);
-    assert_eq!(
-        share.message.next_epoch_authorization,
-        Some(next_authorization)
-    );
-    assert_eq!(
-        share.message.epoch_authorization.authority_id,
-        next_authorization.authority_id
-    );
+    assert_eq!(share.message.next_epoch_authorization, Some(next_mint_authorization));
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
         &context.kagemusha_mint_finality_authority,
         &context,

@@ -2856,6 +2856,9 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
+    /// Finite shared pool for retained carrier World shells, effects and service descriptors.
+    /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
+    pub retained_carrier_shell_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
     pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
@@ -2886,6 +2889,10 @@ impl fmt::Debug for NexusStorage {
                 &self.budget_enforce_interval_blocks,
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
+            .field(
+                "retained_carrier_shell_bytes",
+                &self.retained_carrier_shell_bytes,
+            )
             .field("disk_budget_weights", &self.disk_budget_weights)
             .finish()
     }
@@ -2897,6 +2904,7 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
             configured_component_caps: None,
         }

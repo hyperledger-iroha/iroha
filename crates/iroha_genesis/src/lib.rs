@@ -1403,7 +1403,7 @@ impl GenesisSourceTemplate {
 }
 
 impl RawGenesisTransaction {
-    /// Validate consensus-mode parameters and the signed mint-finality authority schedule.
+    /// Validate consensus-mode parameters and the signed generation-zero mint-finality authority.
     ///
     /// # Errors
     ///
@@ -1776,7 +1776,7 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
-    /// Validate that the signed epoch-zero KAGEMUSHA authority names the
+    /// Validate that the signed generation-zero KAGEMUSHA authority names the
     /// exact canonical validator topology which will enter genesis.
     ///
     /// The Pasta proof keys are separately provisioned and must never be

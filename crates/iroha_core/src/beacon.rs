@@ -3424,14 +3424,35 @@ pub(crate) mod tests {
             height: 40,
             view: 0,
         };
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+        // This fixture enters epoch seven immediately after boundary block 40.
+        // Retain the real generation-zero keys and installed beacon through that
+        // exact predecessor, then derive the contiguous authorization once.
+        let (previous_authorization, kagemusha_mint_finality_authority) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
                 network_id,
-                7,
-                41,
-                epoch_end_height,
+                6,
+                parent_round.height,
                 &roster,
             );
+        assert!(matches!(
+            previous_authorization.beacon,
+            iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(_)
+        ));
+        let kagemusha_mint_finality_authorization =
+            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+                &previous_authorization,
+                &kagemusha_mint_finality_authority,
+                epoch_end_height,
+                previous_authorization.beacon,
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
+                [0; 32],
+            );
+        assert_eq!(kagemusha_mint_finality_authorization.epoch, 7);
+        assert_eq!(kagemusha_mint_finality_authorization.first_height, 41);
+        assert_eq!(
+            kagemusha_mint_finality_authorization.last_height,
+            epoch_end_height
+        );
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -3612,6 +3633,11 @@ pub(crate) mod tests {
             context.height, 41,
             "the fixture is the first height after boundary block 40"
         );
+        assert_eq!(
+            context.kagemusha_mint_finality_authorization.first_height, context.height,
+            "the retained authorization must start at the post-boundary height"
+        );
+        assert_eq!(context.epoch_end_height, 50);
         let roster = context
             .roster
             .iter()

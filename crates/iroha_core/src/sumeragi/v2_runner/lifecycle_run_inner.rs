@@ -240,7 +240,6 @@ struct FinalizedLifecycleHeightV1 {
     verified_context: crate::sumeragi::v2::VerifiedHeightContext,
     lifecycle_storage_authority: crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1,
     pending_successor_activation: PendingSuccessorActivation,
-    retained_merge_sidecars: RetainedMergeSidecars,
     eager_block_sync: bool,
 }
 
@@ -662,36 +661,24 @@ fn recover_canonical_bodies_before_activation(
 pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
     activated: ActivatedProductionLifecycleV1,
     active_runner: &mut ProductionLifecycleActiveRunnerBorrowV1,
-    mut lane_work: V2LaneWorkAdapter,
+    native: &mut super::native_process::NativeRunnerProcess,
     control_queue_capacity: usize,
     cleanup_supervisor: &mut V2CleanupSupervisor,
     prepare_successor: impl FnOnce(
         &KuraV2CommitReceipt,
         &wire::finality::V2FinalityArtifact,
-        &mut V2LaneWorkAdapter,
     ) -> Result<(wire::HeightContext, T), V2RunnerError>,
-) -> Result<
-    (
-        T,
-        RetainedMergeSidecars,
-        ProductionLifecycleFinalizationOutcomeV1,
-    ),
-    V2RunnerError,
-> {
+) -> Result<(T, ProductionLifecycleFinalizationOutcomeV1), V2RunnerError> {
     let finalized = activated.into_finalized_rollover(active_runner)?;
     let (next_context, prepared_successor) = {
         let (receipt, artifact) = finalized.finality();
-        prepare_successor(receipt, artifact, &mut lane_work)?
+        prepare_successor(receipt, artifact)?
     };
-    let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
-        active_runner,
-        lane_work,
-        &next_context,
-        control_queue_capacity,
-    )?;
+    let post_output =
+        finalized.rollover_outputs(active_runner, native, &next_context, control_queue_capacity)?;
     let cleanup_ready = post_output.retire_lifecycle_stores()?;
     let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
-    Ok((prepared_successor, retained_merge_sidecars, cleanup))
+    Ok((prepared_successor, cleanup))
 }
 
 /// Retry an already-owned terminal response without reopening ordinary runtime.
@@ -718,21 +705,22 @@ pub(super) fn retry_decided_lane_recovery_exact_output(
 /// ingress, advance the reducer, or plan fresh producer work.
 pub(in crate::sumeragi) fn reconcile_terminal_lane_output_handoffs(
     _permit: LifecycleDecidedLaneRecoveryPermitV1,
-    lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
-    limit: usize,
+    _limit: usize,
 ) -> Result<bool, V2RunnerError> {
-    retry_exact_output_and_apply_sidecar_admissions(lane_work, services, limit)
+    services
+        .retry_pending_exact_output()
+        .map_err(V2RunnerError::Service)
 }
 
 /// Exercise the production decided-lane drain without exposing its private outcome carrier.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
-    receiver: &FairV2Ingress,
+    receiver: &Arc<FairV2Ingress>,
     executor: &V2EffectExecutor,
+    native: &mut super::native_process::NativeRunnerProcess,
     services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
     kura: &Kura,
     block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<bool, V2RunnerError> {
@@ -740,7 +728,7 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
         receiver,
         executor,
         services,
-        lane_work,
+        native,
         executor.current_tag().view(),
         kura,
         block_sync_server,
@@ -753,10 +741,10 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_for_test(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_batch_for_test(
-    receiver: &FairV2Ingress,
+    receiver: &Arc<FairV2Ingress>,
     executor: &V2EffectExecutor,
+    native: &mut super::native_process::NativeRunnerProcess,
     services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
     kura: &Kura,
     block_sync_server: &mut V2BlockSyncServer,
     limit: usize,
@@ -766,13 +754,15 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_batch_for_test(
             receiver,
             executor,
             services,
-            lane_work,
+            native,
             executor.current_tag().view(),
             kura,
             block_sync_server,
             mode,
         )?;
-        dispatch_lane_work_effects(lane_work, services, limit)?;
+        services
+            .retry_pending_exact_output()
+            .map_err(V2RunnerError::Service)?;
         Ok(drained.is_some())
     })
 }
@@ -788,7 +778,6 @@ pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut impl V2EffectServices,
     local_proposal: &mut ProductionLifecycleLocalProposalStateV1,
-    lane_work: &mut V2LaneWorkAdapter,
     output_guard: &ConsensusOutputGuard,
     _permit: &LifecycleDecidedLaneRecoveryPermitV1,
 ) -> Result<(), V2RunnerError> {
@@ -801,11 +790,6 @@ pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(
     local_proposal
         .state
         .reconcile(LocalProposalOwner::from(directive));
-    lane_work.retain_merge_sidecars_for_global_view(
-        directive.tag().view(),
-        directive.locked_subject(),
-        Some(decided_subject),
-    )?;
     executor.acknowledge_runner_decision_cleanup(directive.tag(), Some(decided_subject))?;
     Ok(())
 }
@@ -814,7 +798,6 @@ pub(in crate::sumeragi) fn settle_apply_barrier_runner_decision_handoff(
 fn run_lifecycle_active_height(
     mut activated: ActivatedProductionLifecycleV1,
     mut active_runner: ProductionLifecycleActiveRunnerBorrowV1,
-    mut lane_work: V2LaneWorkAdapter,
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
     context_store: &crate::sumeragi::v2_context_store::V2ContextStore,
@@ -826,6 +809,10 @@ fn run_lifecycle_active_height(
     receiver: &Arc<FairV2Ingress>,
     lane_relay_rx: &std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
     pending_queue_plan_admission_dirty: &Arc<AtomicBool>,
+    queue_plan: &mut QueuePlanAdmissionOwner,
+    native: &mut super::native_process::NativeRunnerProcess,
+    native_global: &crate::sumeragi::v2::VerifiedHeightContext,
+    native_network: &crate::IrohaNetwork,
     wake_rx: &std::sync::mpsc::Receiver<()>,
     shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
     output_guard: &Arc<ConsensusOutputGuard>,
@@ -851,11 +838,9 @@ fn run_lifecycle_active_height(
         initial_block_sync_deadline(height_started_at, round_timeout, *eager_block_sync);
     let mut next_recovered_decision_fetch_retransmit =
         deadline_after(height_started_at, retransmit_interval);
-    let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
-    let mut canonical_lane_body_recovered = false;
     let mut terminal_finalization_cut = None;
     let mut finalized_ingress_closed = false;
     let scheduler_stall_diagnostic_age = round_timeout.max(Duration::from_secs(5));
@@ -875,7 +860,22 @@ fn run_lifecycle_active_height(
             return Ok(HeightRunOutcome::Shutdown);
         }
         let now = Instant::now();
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_owner, _executor, services, _local_proposal| {
+                native.take_service_publication(services);
+                native.service_sources(services, now)?;
+                Ok::<_, V2RunnerError>(())
+            },
+        )?;
+        native.poll(native_global, native_network, now, receiver)?;
         liveness_watchdog.poll(now);
+        activated.with_runner_runtime(
+            &mut active_runner,
+            |_owner, _executor, services, _local_proposal| {
+                dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)
+            },
+        )?;
         activated.with_runner_runtime(
             &mut active_runner,
             |_owner, executor, services, _local_proposal| {
@@ -970,28 +970,26 @@ fn run_lifecycle_active_height(
                 |_owner, _executor, services, _local_proposal| {
                     reconcile_terminal_lane_output_handoffs(
                         cut.decided_lane_recovery_permit(),
-                        &mut lane_work,
                         services,
                         control_queue_capacity,
                     )
                 },
             )?;
         } else if lane_only_completion_barrier {
-            if let Some(permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()
+            if let Some(permit) = producer_claim.native_source_pacemaker_escape_permit()
                 && let Some(prepared) =
-                    activated.prepare_validate_sidecar_pacemaker_ingress_turn(permit)?
+                    activated.prepare_native_source_pacemaker_ingress_turn(permit)?
             {
                 let _ = activated.consume_prepared_ordinary_ingress_turn(
                     &mut active_runner,
                     prepared,
-                    &mut lane_work,
+                    native,
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server,
                     block_sync,
                     &mut block_sync_request,
                     npos_beacon,
-                    control_queue_capacity,
                 )?;
             }
             if let Some(permit) = producer_claim.decided_lane_recovery_permit() {
@@ -1003,7 +1001,7 @@ fn run_lifecycle_active_height(
                 &mut active_runner,
                 |_owner, executor, services, local_proposal| {
                     // Keep only the lane transport needed to recover an exact
-                    // certified sidecar or finish durable output handoff, plus
+                    // authenticated source or finish durable output handoff, plus
                     // the sealed pacemaker escape serviced below.
                     // In particular, do not reconcile or advance the reducer,
                     // wake generic deferred Apply work, or admit ordinary
@@ -1023,14 +1021,14 @@ fn run_lifecycle_active_height(
                             services,
                         )?;
                     }
-                    if let Some(_permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()
-                    {
-                        // A missing merge sidecar is an I/O dependency, not
+
+                    if let Some(_permit) = producer_claim.native_source_pacemaker_escape_permit() {
+                        // An authenticated Native source wait is an I/O dependency, not
                         // authority to stop the absolute view clock. Preserve
                         // the exact fair-ingress cut which ordinary Runtime
                         // would have installed, then service only the typed
                         // timeout/Progress escape while generic reducer work
-                        // remains fenced by the registered Validate owner.
+                        // remains fenced by the retained original Validate owner.
                         executor
                             .set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
                         let completion_cut = services
@@ -1050,7 +1048,7 @@ fn run_lifecycle_active_height(
                                 // The full FIFO necessarily retains a reserved
                                 // Completion-class owner. Retire exactly that
                                 // owner; Normal/Progress/timer work remains
-                                // fenced by AwaitingValidateSidecar.
+                                // fenced by AwaitingNativeSource.
                                 let _ = executor.step_completion_capacity_relief_after_cut(
                                     completion_cut,
                                     services,
@@ -1061,32 +1059,25 @@ fn run_lifecycle_active_height(
                         local_proposal
                             .state
                             .reconcile(LocalProposalOwner::from(directive));
-                        lane_work.retain_merge_sidecars_for_global_view(
-                            directive.tag().view(),
-                            directive.locked_subject(),
-                            directive.decided_subject(),
-                        )?;
                         executor.acknowledge_runner_decision_cleanup(
                             directive.tag(),
                             directive.decided_subject(),
                         )?;
-                        if let Some(_permit) = producer_claim
-                            .decided_validate_sidecar_recovery_permit(
-                                directive.decided_subject().is_some(),
-                            )
-                        {
-                            // The registered Validate owns the stored body and
-                            // its missing sidecar. Drain one exact decided
+                        if let Some(_permit) = producer_claim.decided_native_source_recovery_permit(
+                            directive.decided_subject().is_some(),
+                        ) {
+                            // The retained Validate owns the stored body and
+                            // its missing Native source. Drain one exact decided
                             // ingress occurrence without releasing that owner:
                             // queued replica adverts and redundant body traffic
                             // otherwise retain receive capacity needed by the
-                            // sidecar reply itself. The drain rechecks Decision
+                            // source reply itself. The drain rechecks Decision
                             // and preserves durable ingress terminal ownership.
                             drain_decided_lane_recovery_ingress(
                                 receiver,
                                 executor,
                                 services,
-                                &mut lane_work,
+                                native,
                                 directive.tag().view(),
                                 kura.as_ref(),
                                 block_sync_server,
@@ -1114,13 +1105,11 @@ fn run_lifecycle_active_height(
                             executor,
                             services,
                             local_proposal,
-                            &mut lane_work,
                             output_guard.as_ref(),
                             &permit,
                         )?;
                         let _ = reconcile_terminal_lane_output_handoffs(
                             permit,
-                            &mut lane_work,
                             services,
                             control_queue_capacity,
                         )?;
@@ -1129,7 +1118,7 @@ fn run_lifecycle_active_height(
                                 receiver,
                                 executor,
                                 services,
-                                &mut lane_work,
+                                native,
                                 executor.current_tag().view(),
                                 kura.as_ref(),
                                 block_sync_server,
@@ -1137,39 +1126,18 @@ fn run_lifecycle_active_height(
                             )?;
                         }
                     }
-                    if let Some(permit) =
-                        producer_claim.blocked_ordinary_lane_local_ingress_permit()
-                    {
-                        // A registered Validate-sidecar barrier deliberately
-                        // fences reducer reconciliation, but its already
-                        // reconciled autonomous lane owner must keep receiving
-                        // exact lane-local fair ingress.
-                        let _ = drain_blocked_ordinary_lane_local_ingress(
-                            receiver,
-                            &mut lane_work,
-                            executor.current_tag().view(),
-                            permit,
-                        )?;
-                    }
+
                     drain_lane_relay_ingress(
                         lane_relay_rx,
-                        &mut lane_work,
-                        services,
+                        queue_plan,
                         executor.current_tag().view(),
                     )?;
-                    drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                    let now = Instant::now();
-                    if now >= next_lane_retransmit {
-                        let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-                        lane_work.schedule_autonomous_new_view_timeouts(
-                            now,
-                            executor.current_tag().view(),
-                            round_timeout,
-                        )?;
-                        lane_work.schedule_retransmission()?;
-                        next_lane_retransmit = deadline_after(now, retransmit_interval);
-                    }
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
+                    dispatch_queue_plan_admission_effects(
+                        queue_plan,
+                        services,
+                        control_queue_capacity,
+                    )
+                    .map(|_| ())?;
                     Ok::<_, V2RunnerError>(())
                 },
             )?;
@@ -1218,11 +1186,9 @@ fn run_lifecycle_active_height(
                             services,
                         )?;
                     }
-                    let _ = retry_exact_output_and_apply_sidecar_admissions(
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
+                    let _ = services
+                        .retry_pending_exact_output()
+                        .map_err(V2RunnerError::Service)?;
                     let advert_refresh = services
                         .service_kura_replica_advert_refresh_turn(Instant::now())
                         .map_err(V2RunnerError::Service)?;
@@ -1235,64 +1201,17 @@ fn run_lifecycle_active_height(
                             "advanced bounded Kura replica-advert refresh"
                         );
                     }
-                    let _ = retry_exact_output_and_apply_sidecar_admissions(
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
+                    let _ = services
+                        .retry_pending_exact_output()
+                        .map_err(V2RunnerError::Service)?;
                     let directive = reconcile_executor_locked_body(executor, services)?;
                     local_proposal
                         .state
                         .reconcile(LocalProposalOwner::from(directive));
-                    lane_work.retain_merge_sidecars_for_global_view(
-                        directive.tag().view(),
-                        directive.locked_subject(),
-                        directive.decided_subject(),
-                    )?;
                     executor.acknowledge_runner_decision_cleanup(
                         directive.tag(),
                         directive.decided_subject(),
                     )?;
-                    if let Some(permit) =
-                        producer_claim.blocked_ordinary_lane_local_ingress_permit()
-                    {
-                        // `reconcile_executor_locked_body` and the exact
-                        // runner-decision acknowledgement above must precede
-                        // autonomous lane admission. A prior reducer turn can
-                        // install Decision immediately before yielding this
-                        // retained lifecycle claim.
-                        let _ = drain_blocked_ordinary_lane_local_ingress(
-                            receiver,
-                            &mut lane_work,
-                            executor.current_tag().view(),
-                            permit,
-                        )?;
-                        drain_lane_relay_ingress(
-                            lane_relay_rx,
-                            &mut lane_work,
-                            services,
-                            executor.current_tag().view(),
-                        )?;
-                        drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                        let now = Instant::now();
-                        if now >= next_lane_retransmit {
-                            let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-                            lane_work.schedule_autonomous_new_view_timeouts(
-                                now,
-                                executor.current_tag().view(),
-                                round_timeout,
-                            )?;
-                            lane_work.schedule_retransmission()?;
-                            next_lane_retransmit = deadline_after(now, retransmit_interval);
-                        }
-                        dispatch_lane_work_effects(
-                            &mut lane_work,
-                            services,
-                            control_queue_capacity,
-                        )?;
-                    } else {
-                        drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                    }
                     services
                         .replay_buffered_chunks(executor)
                         .map_err(V2RunnerError::Service)?;
@@ -1317,7 +1236,7 @@ fn run_lifecycle_active_height(
             &mut activated,
             &mut active_runner,
             receiver,
-            &mut lane_work,
+            native,
             kura.as_ref(),
             &common_config.key_pair,
             block_sync_server,
@@ -1336,7 +1255,12 @@ fn run_lifecycle_active_height(
             admitted_discovered_commit_qc = true;
         }
         if drain_disposition.requires_yield() || producer_claim.requires_yield() {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(IDLE_POLL)
+            });
+            let _ = wake_rx.recv_timeout(native_wait);
             continue;
         }
 
@@ -1368,48 +1292,22 @@ fn run_lifecycle_active_height(
                             services,
                         )?;
                     }
-                    let _ = retry_exact_output_and_apply_sidecar_admissions(
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
+                    let _ = services.retry_pending_exact_output().map_err(V2RunnerError::Service)?;
                     let directive = reconcile_executor_locked_body(executor, services)?;
                     local_proposal
                         .state
                         .reconcile(LocalProposalOwner::from(directive));
-                    lane_work.retain_merge_sidecars_for_global_view(
-                        directive.tag().view(),
-                        directive.locked_subject(),
-                        directive.decided_subject(),
-                    )?;
                     executor.acknowledge_runner_decision_cleanup(
                         directive.tag(),
                         directive.decided_subject(),
                     )?;
                     drain_lane_relay_ingress(
                         lane_relay_rx,
-                        &mut lane_work,
-                        services,
+                        queue_plan,
                         executor.current_tag().view(),
                     )?;
-                    drive_merge_sidecar_recovery(executor, services, &mut lane_work)?;
-                    let now = Instant::now();
-                    if now >= next_lane_retransmit {
-                        let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-                        lane_work.schedule_autonomous_new_view_timeouts(
-                            now,
-                            executor.current_tag().view(),
-                            round_timeout,
-                        )?;
-                        lane_work.schedule_retransmission()?;
-                        next_lane_retransmit = deadline_after(now, retransmit_interval);
-                    }
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                    let _ = retry_exact_output_and_apply_sidecar_admissions(
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
+                    dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity).map(|_| ())?;
+                    let _ = services.retry_pending_exact_output().map_err(V2RunnerError::Service)?;
                     // Bound this tail before the Producer point to one reducer
                     // macrostep. Exact output can be waiting behind an
                     // actor-owned admission rank; consuming the whole command
@@ -1426,11 +1324,7 @@ fn run_lifecycle_active_height(
                     if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice {
                         return Ok::<_, V2RunnerError>((false, executor_slice, false));
                     }
-                    let _ = retry_exact_output_and_apply_sidecar_admissions(
-                        &mut lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
+                    let _ = services.retry_pending_exact_output().map_err(V2RunnerError::Service)?;
                     let directive = reconcile_executor_locked_body(executor, services)?;
                     if directive.decided_subject().is_some() {
                         let _ = retire_block_sync_request_after_decision(
@@ -1442,11 +1336,6 @@ fn run_lifecycle_active_height(
                     local_proposal
                         .state
                         .reconcile(LocalProposalOwner::from(directive));
-                    lane_work.retain_merge_sidecars_for_global_view(
-                        directive.tag().view(),
-                        directive.locked_subject(),
-                        directive.decided_subject(),
-                    )?;
                     executor.acknowledge_runner_decision_cleanup(
                         directive.tag(),
                         directive.decided_subject(),
@@ -1454,17 +1343,8 @@ fn run_lifecycle_active_height(
                     if directive.decided_subject().is_none()
                         && let Some((locked_round, locked)) = directive.locked_body()
                     {
-                        let lock_outcome =
-                            lane_work.mark_global_body_locked(locked_round, locked)?;
-                        if lock_outcome == GlobalBodyLockOutcome::Inserted
-                            && local_validator.is_some()
-                        {
-                            services
-                                .request_locked_candidate(
-                                    executor.current_tag(),
-                                    locked_round,
-                                    locked,
-                                )
+                        if local_validator.is_some() {
+                            services.request_locked_candidate(executor.current_tag(), locked_round, locked)
                                 .map_err(V2RunnerError::Service)?;
                         }
                     }
@@ -1534,7 +1414,12 @@ fn run_lifecycle_active_height(
 
         producer_claim = activated.producer_claim_projection()?;
         if producer_claim.requires_yield() {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(IDLE_POLL)
+            });
+            let _ = wake_rx.recv_timeout(native_wait);
             continue;
         }
         if terminal_finalization_cut.is_none() {
@@ -1588,11 +1473,11 @@ fn run_lifecycle_active_height(
                 },
             )?;
             if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)
-                || lane_work.queue_plan_admission_handoffs_need_refresh(active_view)?
+                || queue_plan.needs_refresh(active_view)?
             {
                 // Pending capacity and a changed view are explicit handoff
                 // states. A coalesced arrival is only an inventory wakeup.
-                lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)?;
+                queue_plan.refresh(active_view)?;
             }
         }
 
@@ -1627,7 +1512,8 @@ fn run_lifecycle_active_height(
                         &mut local_proposal.state,
                         executor,
                         services,
-                        &mut lane_work,
+                        native,
+                        queue_plan,
                         npos_beacon,
                         retransmit_interval,
                     )
@@ -1639,15 +1525,20 @@ fn run_lifecycle_active_height(
                         );
                         error
                     })?;
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
-                        .map_err(|error| {
-                            iroha_logger::error!(
-                                ?error,
-                                height = context.height,
-                                "Sumeragi v2 post-proposal lane output dispatch failed closed"
-                            );
-                            error
-                        })
+                    dispatch_queue_plan_admission_effects(
+                        queue_plan,
+                        services,
+                        control_queue_capacity,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        iroha_logger::error!(
+                            ?error,
+                            height = context.height,
+                            "Sumeragi v2 post-proposal lane output dispatch failed closed"
+                        );
+                        error
+                    })
                 },
             );
             if let Err(error) = scheduled {
@@ -1684,7 +1575,12 @@ fn run_lifecycle_active_height(
                 false
             };
         if ready_to_finish && !finalization_ready {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(IDLE_POLL)
+            });
+            let _ = wake_rx.recv_timeout(native_wait);
             continue;
         }
 
@@ -1695,17 +1591,7 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, services, _local_proposal| {
-                    if !services.matches_lifecycle_lane_work(&lane_work) {
-                        return Err(V2RunnerError::Service(
-                            "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
-                        ));
-                    }
-                    super::preflight_finalized_lane_rollover(
-                        executor,
-                        services,
-                        &mut lane_work,
-                        &mut canonical_lane_body_recovered,
-                    )
+                    super::preflight_finalized_native_rollover(executor, services, native)
                 },
             )?
         } else {
@@ -1734,7 +1620,7 @@ fn run_lifecycle_active_height(
                         &mut activated,
                         &mut active_runner,
                         receiver,
-                        &mut lane_work,
+                        native,
                         kura.as_ref(),
                         &common_config.key_pair,
                         block_sync_server,
@@ -1778,7 +1664,6 @@ fn run_lifecycle_active_height(
                             }
                             let _ = reconcile_terminal_lane_output_handoffs(
                                 cut.decided_lane_recovery_permit(),
-                                &mut lane_work,
                                 services,
                                 control_queue_capacity,
                             )?;
@@ -1786,17 +1671,18 @@ fn run_lifecycle_active_height(
                                 receiver,
                                 executor,
                                 services,
-                                &mut lane_work,
+                                native,
                                 executor.current_tag().view(),
                                 kura.as_ref(),
                                 block_sync_server,
                                 mode,
                             )?;
-                            dispatch_lane_work_effects(
-                                &mut lane_work,
+                            dispatch_queue_plan_admission_effects(
+                                queue_plan,
                                 services,
                                 control_queue_capacity,
-                            )?;
+                            )
+                            .map(|_| ())?;
                             Ok::<_, V2RunnerError>(drained.is_some())
                         },
                     )
@@ -1808,35 +1694,30 @@ fn run_lifecycle_active_height(
             activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
-                    let now = Instant::now();
-                    if now >= next_lane_retransmit {
-                        lane_work.schedule_retransmission()?;
-                        next_lane_retransmit = deadline_after(now, retransmit_interval);
-                    }
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                    dispatch_queue_plan_admission_effects(
+                        queue_plan,
+                        services,
+                        control_queue_capacity,
+                    )
+                    .map(|_| ())
                 },
             )?;
             if terminal_stall_due {
                 // Report the actual completed preflight, not a second storage
                 // audit after ingress may have changed the durable lane state.
-                let pending_historical_recovery = activated.with_runner_runtime(
-                    &mut active_runner,
-                    |_owner, _executor, _services, _local_proposal| {
-                        lane_work
-                            .has_pending_historical_recovery()
-                            .map_err(V2RunnerError::from)
-                    },
-                )?;
                 iroha_logger::warn!(
                     height = context.height,
-                    canonical_lane_body_recovered,
-                    pending_historical_recovery,
                     rollover_preflight_ready = rollover_ready,
                     "Sumeragi v2 finalized lane rollover preflight stalled"
                 );
             }
             if !drained_terminal_ingress {
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(IDLE_POLL)
+                });
+                let _ = wake_rx.recv_timeout(native_wait);
             }
             continue;
         }
@@ -1859,7 +1740,6 @@ fn run_lifecycle_active_height(
                 |_owner, _executor, services, _local_proposal| {
                     reconcile_terminal_lane_output_handoffs(
                         cut.decided_lane_recovery_permit(),
-                        &mut lane_work,
                         services,
                         control_queue_capacity,
                     )
@@ -1904,6 +1784,7 @@ fn run_lifecycle_active_height(
                     return Ok(HeightRunOutcome::Shutdown);
                 }
                 let now = Instant::now();
+                native.poll(native_global, native_network, now, receiver)?;
                 liveness_watchdog.poll(now);
                 if now >= next_terminal_stall_diagnostic {
                     next_terminal_stall_diagnostic = deadline_after(now, Duration::from_secs(30));
@@ -1954,7 +1835,6 @@ fn run_lifecycle_active_height(
                     |_owner, _executor, services, _local_proposal| {
                         reconcile_terminal_lane_output_handoffs(
                             cut.decided_lane_recovery_permit(),
-                            &mut lane_work,
                             services,
                             control_queue_capacity,
                         )
@@ -1968,7 +1848,7 @@ fn run_lifecycle_active_height(
                     &mut activated,
                     &mut active_runner,
                     receiver,
-                    &mut lane_work,
+                    native,
                     kura.as_ref(),
                     &common_config.key_pair,
                     block_sync_server,
@@ -1984,7 +1864,12 @@ fn run_lifecycle_active_height(
                     last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
                 }
                 if drain_disposition.requires_yield() || producer_claim.requires_yield() {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(IDLE_POLL)
+                    });
+                    let _ = wake_rx.recv_timeout(native_wait);
                     continue;
                 }
                 let executor_ready = activated.with_runner_runtime(
@@ -1998,7 +1883,12 @@ fn run_lifecycle_active_height(
                 if block_sync_server.has_pending_historical_body_serve()
                     || !activated.ready_for_finalized_rollover(&mut active_runner)?
                 {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(IDLE_POLL)
+                    });
+                    let _ = wake_rx.recv_timeout(native_wait);
                     continue;
                 }
                 let (drained_terminal_ingress, drained_terminal_relay) = activated
@@ -2009,7 +1899,7 @@ fn run_lifecycle_active_height(
                                 receiver,
                                 executor,
                                 services,
-                                &mut lane_work,
+                                native,
                                 executor.current_tag().view(),
                                 kura.as_ref(),
                                 block_sync_server,
@@ -2017,15 +1907,16 @@ fn run_lifecycle_active_height(
                             )?;
                             let drained_relay = drain_finalized_lane_relay_prefix(
                                 lane_relay_rx,
-                                &mut lane_work,
+                                queue_plan,
                                 executor.current_tag().view(),
                                 control_queue_capacity,
-                            );
-                            dispatch_lane_work_effects(
-                                &mut lane_work,
+                            )?;
+                            dispatch_queue_plan_admission_effects(
+                                queue_plan,
                                 services,
                                 control_queue_capacity,
-                            )?;
+                            )
+                            .map(|_| ())?;
                             Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
                         },
                     )?;
@@ -2037,7 +1928,6 @@ fn run_lifecycle_active_height(
                     |_owner, _executor, services, _local_proposal| {
                         reconcile_terminal_lane_output_handoffs(
                             cut.decided_lane_recovery_permit(),
-                            &mut lane_work,
                             services,
                             control_queue_capacity,
                         )
@@ -2049,7 +1939,12 @@ fn run_lifecycle_active_height(
                 // reconstruction handoff succeeds. Waiting for the network here
                 // would prevent that handoff when a validator is offline.
                 if block_sync_server.has_pending_historical_body_serve() {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(IDLE_POLL)
+                    });
+                    let _ = wake_rx.recv_timeout(native_wait);
                     continue;
                 }
                 if drained_terminal_ingress || drained_terminal_relay {
@@ -2088,13 +1983,13 @@ fn run_lifecycle_active_height(
                 activated.into_clean_shutdown(&mut active_runner)?;
                 return Ok(HeightRunOutcome::Terminal);
             }
-            let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
+            let (prepared_successor, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,
-                lane_work,
+                native,
                 control_queue_capacity,
                 cleanup_supervisor,
-                |receipt, artifact, _lane_work| {
+                |receipt, artifact| {
                     let predecessor =
                         DurableV2PredecessorIdentity::authenticate(artifact, receipt)?;
                     let artifact_hash = HashOf::new(artifact);
@@ -2215,12 +2110,16 @@ fn run_lifecycle_active_height(
                 verified_context: prepared_successor.verified_context,
                 lifecycle_storage_authority: prepared_successor.lifecycle_storage_authority,
                 pending_successor_activation: prepared_successor.pending_activation,
-                retained_merge_sidecars,
                 eager_block_sync: *eager_block_sync,
             }));
         }
 
-        let _ = wake_rx.recv_timeout(IDLE_POLL);
+        let native_wait = native.next_deadline().map_or(IDLE_POLL, |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(IDLE_POLL)
+        });
+        let _ = wake_rx.recv_timeout(native_wait);
     }
 }
 
@@ -2256,6 +2155,8 @@ pub(super) fn run_non_pending_lifecycle_loop(
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
     pending_queue_plan_admission_dirty: Arc<AtomicBool>,
+    mut queue_plan: QueuePlanAdmissionOwner,
+    native: &mut super::native_process::NativeRunnerProcess,
     wake_rx: std::sync::mpsc::Receiver<()>,
     shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
     ingress_ready: Arc<AtomicBool>,
@@ -2284,7 +2185,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
     mut cleanup_supervisor: V2CleanupSupervisor,
     mut liveness_watchdog: crate::sumeragi::status::V2LivenessWatchdog,
     deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
-    mut retained_merge_sidecars: Option<RetainedMergeSidecars>,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
     mut startup_recovery: Option<&crate::sumeragi::StartupRecoveryPublisher>,
@@ -2299,6 +2199,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
         if shutdown_signal.is_sent() {
             return Ok(());
         }
+        queue_plan.rollover(&verified_context)?;
         let context = verified_context.context().clone();
         beacon_readiness.begin_height(context.id());
         close_ingress_for_rollover(&ingress_ready, &block_rx);
@@ -2704,47 +2605,10 @@ pub(super) fn run_non_pending_lifecycle_loop(
             }
         }
 
-        let authenticated_genesis_nexus_amx_context = staged_genesis_nexus_amx_context
-            .take()
-            .map(AuthenticatedGenesisNexusAmxContext::Staged);
-        let lane_work =
-            preactivation.with_runner_setup(&mut setup_runner, |executor, services| {
-                let mut lane_work =
-                    construct_after_pending_tip_application_recovery(false, false, || {
-                        V2LaneWorkAdapter::new_with_output_guard_and_transport(
-                            &verified_context,
-                            local_peer.clone(),
-                            common_config.key_pair.clone(),
-                            config.role == NodeRole::Validator,
-                            Arc::clone(&state),
-                            Arc::clone(&kura),
-                            lane_work_limits,
-                            authenticated_genesis_nexus_amx_context,
-                            None,
-                            Arc::clone(&output_guard),
-                            exact_output_transport_owner,
-                            retained_merge_sidecars.take(),
-                            lifecycle_process_generation.clone(),
-                        )
-                        .map_err(V2RunnerError::from)
-                    })?;
-                lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
-                lane_work.activate_after_lane_drain_queue_install(&queue)?;
-                let _ = reconcile_executor_locked_body(executor, services)?;
-                let startup_directive = executor.local_proposal_directive()?;
-                lane_work.retain_merge_sidecars_for_global_view(
-                    startup_directive.tag().view(),
-                    startup_directive.locked_subject(),
-                    startup_directive.decided_subject(),
-                )?;
-                if startup_directive.decided_subject().is_none()
-                    && let Some((locked_round, locked)) = startup_directive.locked_body()
-                {
-                    let _ = lane_work.mark_global_body_locked(locked_round, locked)?;
-                }
-                dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                Ok(lane_work)
-            })?;
+        preactivation.with_runner_setup(&mut setup_runner, |executor, services| {
+            let _ = reconcile_executor_locked_body(executor, services)?;
+            Ok::<_, V2RunnerError>(())
+        })?;
         let (initial_directive, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
         if let Some(timings) = pending_successor_timings.as_mut() {
@@ -2788,7 +2652,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
         let finalized = run_lifecycle_active_height(
             activated,
             active_runner,
-            lane_work,
             &context,
             verified_context.proofs_of_possession(),
             &context_store,
@@ -2800,6 +2663,10 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &block_rx,
             &lane_relay_rx,
             &pending_queue_plan_admission_dirty,
+            &mut queue_plan,
+            native,
+            &verified_context,
+            &network,
             &wake_rx,
             &shutdown_signal,
             &output_guard,
@@ -2841,7 +2708,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
         verified_context = finalized.verified_context;
         lifecycle_storage_authority = finalized.lifecycle_storage_authority;
         pending_successor_activation = Some(finalized.pending_successor_activation);
-        retained_merge_sidecars = Some(finalized.retained_merge_sidecars);
         eager_block_sync = finalized.eager_block_sync;
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_authenticated_genesis = None;

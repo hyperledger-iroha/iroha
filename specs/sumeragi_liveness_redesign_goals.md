@@ -1,6 +1,33 @@
 # Sumeragi liveness redesign goals
 
-Current retained-execution prerequisite: [admitted Storage restoration](../docs/history/2026-09-21/admitted-storage-restoration.md) now reconstructs exact current/undo images with per-edit funding and generic borrowed history. Replacement and ordinary blocks retain one original pool and both writers inside their callback. [Publication identities](../docs/history/2026-09-21/funded-publication-identities.md) now share that original admission, retain successor storage before execution and refund old versions only after publication unlock; exact startup and writer demands include those layouts. [Scoped detached capture](../docs/history/2026-09-21/funded-detached-storage.md) now retains original prepaid journals without writers and borrows the original refund scope for reattachment; native capture/abort signals follow both writer releases. [Executing-block abandonment](../docs/history/2026-09-21/executing-block-abandonment.md) now shares the prepared pair's original writer owner through ordinary/admitted opening, replacement, execution and snapshot restore; both locks release before callbacks and actual mutex poison survives payload and wake unwind. [Native reader readiness](../docs/history/2026-09-21/native-reader-readiness.md) now binds BlockHashes refusals to the actual blocking reader mutex and retains published native notifications through retirement. [Complete component preparation](../docs/history/2026-09-21/prepared-component-retirement.md) now retains native prepared map/Cell owners and identity before transfer, with successful World/runtime/membership cleanup held through State fences and original State/Kura/Queue completion notifications retained until commit unlock. [Fully acquired carrier abort](../docs/history/2026-09-21/prepared-component-abort.md) now keeps original component cleanup through all fences on explicit abort and Drop. [Returned preparation refusals](../docs/history/2026-09-21/prepared-refusal-cleanup.md) now return original MV/runtime/TriggerSet/World cleanup through the enclosing consumer. [Prepared runtime/trigger abandonment](../docs/history/2026-09-21/prepared-aggregate-abandonment.md) now releases all sibling writers before callbacks on Drop and unwind, retaining both original capacities. [Successor hash admission](../docs/history/2026-09-21/successor-acquisition-readiness.md) now binds the actual fresh writer before callbacks and waits on the native reader mutex when reader observation is contended. [Fresh MV pair construction](../docs/history/2026-09-21/fresh-pair-acquisition.md) now owns both actual mutexes and notifications before either constructor or policy can unwind. [Cell pair custody](../docs/history/2026-09-21/cell-pair-custody.md) now retains both raw guards before cloning and keeps joint release through complete Block/CurrentReplacement abandonment, detachment and publication-lock refusal. [World acquisition and abandonment](../docs/history/2026-09-21/world-acquisition-custody.md) now retains caller-owned field slots and releases all siblings before cleanup; its candidate validation is recorded separately. The [World/TriggerSet capture candidate](../docs/history/2026-09-21/world-capture-custody.md) now retains original slots and deferred notifications through all sibling captures; its qualification is separate. The [State capture correction](../docs/history/2026-09-21/state-capture-custody.md) composes those original World slots with all runtime and membership writers through refusal and unwind. The [State acquisition candidate](../docs/history/2026-09-22/state-acquisition-custody.md) now keeps partial acquisitions and executing blocks jointly armed through refusal and unwind; its qualification remains separate. The [direct State publication candidate](../docs/history/2026-09-22/direct-state-publication.md) passes its consumer test-target check; the [retained hash correction](../docs/history/2026-09-22/retained-hash-preparation.md) passes 636 distinct Core controls, 474 native unit tests and the canonical structural gate in their captured scopes. The complete participant candidate below covers sibling preparation; complete resource admission and production cutover remain open. Concrete World payload and native control storage, complete State effect-lock preparation and aggregate abort/cleanup, decoding and aggregate execution/restore admission remain required. The original Apply service already survives startup; unfinished-height recovery must retain a funded execution owner before exposing validation markers. This does not activate the retained production validator or close L1–L6.
+Current production-adapter candidate, 2026-09-22: retained validation has bounded
+candidate descriptor slots and a finite shared allocation pool covering those
+slots, two concrete World journal shell sets, the retained effects `Box` and the
+candidate phase `Box`. The original shell/effects reservation moves with the
+actual executed carrier through capture, decision binding, physical refusal,
+publication and final destruction. The descriptor and phase allocations retain
+their own charges for their actual lifetimes. Decision binding and physical
+preparation add no artificial `B`/`I` admission callbacks or reservations.
+
+This is scoped memory admission, not complete process-memory accounting. Nested
+maps and values, execution/event payloads, current/undo COW copies, tiered
+snapshots, geometry/archive projections, canonical wire encoding and decoding
+still need complete allocation accounting at their actual creation and release
+boundaries. **Complete process-memory admission remains an outstanding goal.**
+The finite shell pool does not prepay these allocations or establish a process
+memory ceiling; the historical allocator milestones below do not imply otherwise.
+
+The production ownership requirement is unchanged: retain the actual source,
+execution, exact finality and original State/Kura/Queue owners, preserve the same
+carrier on local refusal, and publish once without rerunning execution. Cache and
+recovery markers cannot replace that owner. The consuming facade and production
+adapter candidate implement this custody path; their presence is not live
+activation or network qualification. Complete and validate the runtime handoff,
+original Apply settlement and recovery integration, preserve all protocol and
+deterministic correctness gates below, and qualify the unchanged four/seven-
+validator campaigns. No L1–L6 outcome or release is marked complete here.
+
+Current retained-execution prerequisite: [admitted Storage restoration](../docs/history/2026-09-21/admitted-storage-restoration.md) now reconstructs exact current/undo images with per-edit funding and generic borrowed history. Replacement and ordinary blocks retain one original pool and both writers inside their callback. [Publication identities](../docs/history/2026-09-21/funded-publication-identities.md) now share that original admission, retain successor storage before execution and refund old versions only after publication unlock; exact startup and writer demands include those layouts. [Scoped detached capture](../docs/history/2026-09-21/funded-detached-storage.md) now retains original prepaid journals without writers and borrows the original refund scope for reattachment; native capture/abort signals follow both writer releases. [Executing-block abandonment](../docs/history/2026-09-21/executing-block-abandonment.md) now shares the prepared pair's original writer owner through ordinary/admitted opening, replacement, execution and snapshot restore; both locks release before callbacks and actual mutex poison survives payload and wake unwind. [Native reader readiness](../docs/history/2026-09-21/native-reader-readiness.md) now binds BlockHashes refusals to the actual blocking reader mutex and retains published native notifications through retirement. [Complete component preparation](../docs/history/2026-09-21/prepared-component-retirement.md) now retains native prepared map/Cell owners and identity before transfer, with successful World/runtime/membership cleanup held through State fences and original State/Kura/Queue completion notifications retained until commit unlock. [Fully acquired carrier abort](../docs/history/2026-09-21/prepared-component-abort.md) now keeps original component cleanup through all fences on explicit abort and Drop. [Returned preparation refusals](../docs/history/2026-09-21/prepared-refusal-cleanup.md) now return original MV/runtime/TriggerSet/World cleanup through the enclosing consumer. [Prepared runtime/trigger abandonment](../docs/history/2026-09-21/prepared-aggregate-abandonment.md) now releases all sibling writers before callbacks on Drop and unwind, retaining both original capacities. [Successor hash admission](../docs/history/2026-09-21/successor-acquisition-readiness.md) now binds the actual fresh writer before callbacks and waits on the native reader mutex when reader observation is contended. [Fresh MV pair construction](../docs/history/2026-09-21/fresh-pair-acquisition.md) now owns both actual mutexes and notifications before either constructor or policy can unwind. [Cell pair custody](../docs/history/2026-09-21/cell-pair-custody.md) now retains both raw guards before cloning and keeps joint release through complete Block/CurrentReplacement abandonment, detachment and publication-lock refusal. [World acquisition and abandonment](../docs/history/2026-09-21/world-acquisition-custody.md) now retains caller-owned field slots and releases all siblings before cleanup; its candidate validation is recorded separately. The [World/TriggerSet capture candidate](../docs/history/2026-09-21/world-capture-custody.md) now retains original slots and deferred notifications through all sibling captures; its qualification is separate. The [State capture correction](../docs/history/2026-09-21/state-capture-custody.md) composes those original World slots with all runtime and membership writers through refusal and unwind. The [State acquisition candidate](../docs/history/2026-09-22/state-acquisition-custody.md) now keeps partial acquisitions and executing blocks jointly armed through refusal and unwind; its qualification remains separate. The [direct State publication candidate](../docs/history/2026-09-22/direct-state-publication.md) passes its consumer test-target check; the [retained hash correction](../docs/history/2026-09-22/retained-hash-preparation.md) passes 636 distinct Core controls, 474 native unit tests and the canonical structural gate in their captured scopes. The complete participant candidate below covers sibling preparation. Complete process-memory accounting and production qualification remain open under the scoped admission boundary above; concrete nested World payloads, native control storage, decoding and aggregate execution/restore admission are not funded by the shell pool. The original Apply service already survives startup; unfinished-height recovery must retain its original executed owner and the named allocation charges before exposing validation markers. The later State effect-lock and aggregate cleanup records describe their actual custody corrections. This does not activate the retained production validator or close L1–L6.
 
 Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
 
@@ -1443,8 +1470,10 @@ caller admission; the primitive itself is not a complete candidate-memory policy
 The production completion criterion remains one move-only prepared candidate in
 worker/body-store custody, joined by exact cached/recovered receipts, then consumed
 under actual QC/Kura/Native authority. An execution-hash cache hit cannot replace
-that owner. Whole geometry/receipt/archive/installation capacity must be admitted
-before canonical append; partial durable work retains the same recovery owner.
+that owner. The immutable-store capacity goal still requires complete
+geometry/receipt/archive/publication demand before canonical append; the current
+shell pool does not supply that disk or aggregate memory guarantee. Partial
+durable work retains the same recovery owner.
 Acquire all State/component locks without waiting, return the full owner on local
 deferral, and await its exact release outside the synchronous worker. Only the
 complete publisher may expose State and return its post-WSV continuation. Existing
@@ -1508,7 +1537,8 @@ reader identity through retry and publication. DPN runs32–35 pass 136 MV contr
 strict Clippy and the charged-API check on the frozen parent source; those results
 do not qualify the subsequently merged tree. Complete actual node/cursor/nested
 payload custody and an explicit configured aggregate policy remain required
-before activating the live handoff. The
+for the outstanding complete process-memory goal. They are not supplied by the
+scoped shell admission used by the retained handoff. The
 [B+tree lifetime correction](../docs/history/2026-09-20/bptree-allocation-lifetimes.md)
 repairs actual partial-clone and separator reclamation before attaching those
 credits. The subsequent
@@ -1535,8 +1565,8 @@ now threads the provider and concrete charge through that same engine, retains
 original fixed buffers through real reader release, and refuses deficient
 bookkeeping before mutation. Shared traversal and clone probes use immutable
 references. Production MV maps remain explicitly untracked until concrete model
-payload policies and complete initial/undo ownership are connected. These are
-still required before production activation.
+payload policies and complete initial/undo ownership are connected. These remain
+requirements of complete process-memory admission, beyond the current shell pool.
 
 The [explicit payload-cloning boundary](../docs/history/2026-09-20/prepaid-payload-cloning.md)
 requires each node payload copy to use the original provider's policy. Node
@@ -1550,7 +1580,8 @@ admission before handoff. The [retained edit extension](../docs/history/2026-09-
 admits subsequent edits against that same original cursor and funds its exact
 initial root allocation. Refusal preserves private work; publication remains
 atomic. Native mutex/runtime storage, real model payloads, MV undo/transaction
-storage and configured aggregate policy remain required before production cutover.
+storage and configured aggregate policy remain required for complete process-memory
+admission; the current production-adapter candidate makes the narrower claim above.
 The [borrowed checkpoint](../docs/history/2026-09-20/borrowed-map-checkpoints.md)
 now preserves an already funded parent root and its original tracking buffers
 through nested child edits. Abort needs no rollback allocation or admission;
@@ -1603,7 +1634,9 @@ controls pass with exact final executable joins; the integration record retains
 failed captures and distinct formal/vendor scopes. Native lock/runtime provisioning
 and complete resident capacity remain open. Each World field migration must propagate
 its concrete mode through capture/publication and return local capacity refusals
-through execution before enabling retained Validate-to-Apply.
+through execution before that field can be claimed as completely funded. The
+retained Validate-to-Apply candidate preserves ownership without claiming those
+nested allocations are prepaid.
 L1–L6 and four/seven-validator qualification stay open.
 
 
@@ -1614,7 +1647,8 @@ Decision binding checks the execution-prefix commitment, exact proposal bytes/he
 and semantic frozen context identity. Equivalent valid parent CommitQC witnesses do
 not create different context identities. Refusal returns the original journals and
 verified artifact. Binding does not publish State or deliver its committed event;
-source/economic, retirement, Kura/Native and installation authority are still required.
+source/economic, retirement, Kura/Native and original physical publication authority
+are still required. Binding adds no separate memory-admission reservation.
 
 Certified merge execution now retains the actual application header through pristine
 geometry and writes-root checks, restoring the outer carrier header on success and
@@ -1644,8 +1678,9 @@ inputs. No ignored test, compatibility method or shipping fixture authority was 
 ### Joint physical acquisition, September 19, 2026
 
 The complete decided carrier now owns one nonblocking acquisition attempt across
-its original Kura and State. Installation admission runs first; exact Kura instance
-identity is joined before physical probes. Acquire Kura prune, canonical, geometry
+its original Kura and State. The original shell/effects reservation already travels
+with it; physical preparation adds no installation admission callback. Exact Kura
+instance identity is joined before physical probes. Acquire Kura prune, canonical, geometry
 and sidecar fences, then State commit, lifecycle and write fences, then the original
 hash, membership, runtime and complete World writers. Hash acquisition precedes
 World acquisition to avoid a cycle with an existing validation overlay. Refusal
@@ -1656,9 +1691,9 @@ One shared physical mutex owner serves State and Kura. Each Busy result observes
 only its actual failed lock before probing it. Component cleanup, unrelated locks
 and other Kura/State instances cannot wake that retry. Normal release, unwind and
 fair unlock notify after the physical guard releases. The fence group releases
-all component writers before State fences, State before Kura, and all physical
-ownership before the installation reservation. Capture and decision-binding
-reservations continue to outlive their original values.
+all component writers before State fences and State before Kura. The one original
+shell/effects reservation outlives the carrier payloads and all physical ownership;
+there are no additional decision-binding or installation reservations.
 
 Canonical poisoning is permanent and refuses before any probe. The prune recovery
 flag is different: healthy active pruning sets it while holding its prune fence.
@@ -2013,7 +2048,9 @@ commitment caches, SCCP cache, block hashes and the latest header. Physical fenc
 release before cursor persistence, relay hydration, tiered persistence, storage
 budget and query completion; Apply serialization survives those completion steps.
 There is no retryable error after the first component write and no second execution.
-The result retains the original source, events and all three admission lifetimes.
+The result retains the original source, events and original shell/effects
+reservation. The former independent decision-binding and installation admission
+parameters are removed; actual archive and physical publication owners remain.
 
 Provider and reputation captures publish before the final joint lease; a successful
 provider survives reputation refusal with its exact file identity and original
@@ -2043,8 +2080,9 @@ missing HeightContext fixture path and its unchanged input receipt remain record
 
 This is not an L1–L6 completion or release claim. Pending geometry/Queue retirement
 and nonempty old participant durability explicitly return the original carrier
-before visibility. Real aggregate memory/disk admission, original worker-owned
-Validate-to-Apply custody, cached/recovered round aliases, async owner-bound local
+before visibility. Complete process-memory and immutable-store disk accounting
+remain outstanding goals. Original worker-owned Validate-to-Apply custody,
+cached/recovered round aliases, async owner-bound local
 deferral, complete geometry/participant publication, atomic live cutover and the
 unchanged four/seven-validator loss/reordering/backpressure/leader/restart/final-
 transaction campaigns remain required. Native live admission and raw State gates
@@ -2167,23 +2205,24 @@ unfinished recovery rebuilds once; already-applied recovery does not execute.
 The production shared-lane and complete publication cutovers, full workspace tests
 and unchanged four/seven-validator campaigns remain required. L1–L6 remain open.
 
-The capture-admission implementation must first close its input surface:
-`prepare_journals` currently exposes StateBlock and execution prefix, while the
-retained owner also contains the ValidBlock, context, manifest, effects, events,
-tiered snapshot, geometry and archive plans. Events are already allocated during
-preparation; the possible full cold tiered snapshot and geometry/archive
-projections follow journal admission. Reserve earlier execution/event allocations
-at their actual boundaries, fund those later projections before they allocate,
-and retain one aggregate ownership chain through capture, decision binding and
-installation. Installation must cover
-publication and delayed EBR reclamation, not only detached deltas. Current/undo
-COW allocation admission belongs before acquisition and first mutation;
-detachment and reattachment move those original allocations without cloning.
-Existing
-body-store limits and `MeasuredBytes` are not a complete journal reservation; an
-allocating encoded-size fallback, omitted container nodes or saturating arithmetic
-cannot establish the required admission bound. This is an open implementation
-constraint, not a completed resource guarantee.
+The complete capture input surface now borrows the original StateBlock, execution
+prefix, ValidBlock, context, manifest, effects, events and retained source owners.
+Visibility of those inputs is not funding for their nested allocations. The
+production-adapter candidate charges the named descriptor, World shell, effects
+box and phase box layouts only. Events may already be allocated during execution;
+the full cold tiered snapshot and geometry/archive projections can allocate later.
+
+The outstanding complete process-memory goal must reserve execution/event
+allocations at their actual boundaries, fund later projections before allocation,
+and retain their actual charges through publication and delayed EBR reclamation.
+Current/undo COW admission belongs before acquisition and first mutation;
+detachment and reattachment move original allocations without cloning. Preserve
+one ownership chain through capture, decision binding and physical publication;
+extra binding/installation admission tokens are not accounting. Existing BodyStore
+limits and `MeasuredBytes` are not a complete journal reservation. An allocating
+encoded-size fallback, omitted container nodes or saturating arithmetic cannot
+establish the required bound. This remains an open resource goal, not a guarantee
+of the scoped shell pool or a claim that runtime activation is complete.
 
 
 ### Explicit storage failure versus validation verdict, build54

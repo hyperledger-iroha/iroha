@@ -710,3 +710,87 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
         directory,
     }
 }
+
+#[cfg(feature = "bls")]
+#[test]
+fn retained_current_genesis_executes_once_and_publishes_original_owner() {
+    let fixture = ApplyFixture::new_with_lane_lifecycle();
+    let verified = verified_context_for_fixture(&fixture, &fixture.context);
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = V2BodyStore::open_with_policy_and_capacity(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.genesis_key.public_key().clone()),
+        super::super::v2_body_store::V2BodyStoreCapacity::for_test(1, 8 << 20).unwrap(),
+    )
+    .unwrap();
+    let durable = store
+        .store(
+            fixture.manifest.clone(),
+            fixture.body.encode_wire().unwrap(),
+        )
+        .unwrap();
+    let context = fixture.context.clone();
+    let state = Arc::clone(&fixture.state);
+    let subject = fixture.task.subject();
+    let certificate = fixture.task.certificate().clone();
+    let service = Arc::new(fixture.service);
+    let before = service.candidate_executions_for_test();
+    let mut retained = service
+        .retained_validation_service(&store, verified)
+        .unwrap();
+    let receipt = store
+        .execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut retained,
+        )
+        .unwrap()
+        .into_validated_receipt()
+        .unwrap();
+    let allocation = retained
+        .owner_for_test(subject)
+        .unwrap()
+        .phase_allocation_for_test();
+    assert_eq!(
+        certificate.execution_commitment,
+        receipt.execution_commitment()
+    );
+    let cached = store
+        .execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut retained,
+        )
+        .unwrap()
+        .into_validated_receipt()
+        .unwrap();
+    assert_eq!(cached, receipt);
+    assert_eq!(
+        retained
+            .owner_for_test(subject)
+            .unwrap()
+            .phase_allocation_for_test(),
+        allocation
+    );
+    assert_eq!(service.candidate_executions_for_test(), before + 1);
+    assert_eq!(state.committed_height(), 0);
+    let task = ApplyTask::for_test(
+        1,
+        EventTag::new(1, 0, Generation::new(1)),
+        subject,
+        certificate,
+        receipt,
+    );
+    let completion = service
+        .execute_retained_apply(&context, &mut store, &mut retained, &task)
+        .unwrap();
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(completion.published.receipt().height(), 1);
+    assert!(completion.published.matches_state(&state));
+    assert!(completion.published.native_apply().is_none());
+    assert_eq!(service.candidate_executions_for_test(), before + 1);
+    drop(completion);
+    drop(retained);
+    assert_eq!(service.carrier_shell_budget_for_test().reserved_bytes(), 0);
+}

@@ -4,9 +4,9 @@
 //! seal, source inventory and witness while staging deterministic metadata. It
 //! exposes no mutable State or publication operation. The existing commitment
 //! remains the execution-prefix projection, not a complete prepared State root.
-//! TODO: finish non-World/resource admission and consume the prepared journals
-//! under exact QC and durable Kura/Native authorization. Keep the existing
-//! execution commitment; complete ownership does not require a new wire root.
+//! Publication consumes these journals under exact finality and original
+//! State/Queue/Kura custody. The execution commitment remains unchanged.
+//! TODO: extend concrete shell admission to aggregate nested payload accounting.
 
 use super::{EventBox, StateBlock};
 use crate::{
@@ -29,10 +29,10 @@ mod execution_prefix;
 )]
 mod journals;
 pub(super) mod queue_retirement;
-#[cfg(test)]
-pub(crate) use journals::PublishedCarrier;
-pub(crate) use journals::PublishedNativeApply;
-pub(crate) use journals::RetainedCarrier;
+pub(crate) use journals::{
+    CarrierArchivePreparationError, CarrierJournalPreparationError, RetainedCarrier,
+};
+pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 
 /// A prepared candidate with all execution ownership retained and no Apply API.
 pub(crate) struct PreparedCarrier<'state> {
@@ -96,6 +96,12 @@ impl<'state> PreparedCarrier<'state> {
             .map(|demand| demand.total_bytes())
     }
 
+    /// Exact inline allocation for the deferred effects owner captured by journals.
+    /// Nested payloads use their existing standard allocations and are excluded.
+    pub(crate) fn retained_effects_layout() -> std::alloc::Layout {
+        std::alloc::Layout::new::<journals::RetainedCarrierEffects>()
+    }
+
     /// Inspect the exact retained Native custody without source reconstruction.
     #[cfg(test)]
     pub(in crate::state) fn native_source_for_test(
@@ -113,7 +119,7 @@ impl<'state> PreparedCarrier<'state> {
     /// Consume the exact validator output; errors drop every staged journal.
     pub(crate) fn prepare(
         input: ValidatedCarrierPreparationInput<'state>,
-    ) -> Result<Self, (Box<SignedBlock>, String)> {
+    ) -> Result<Self, (Box<SignedBlock>, super::MergeLedgerCommitError)> {
         execution_prefix::prepare(input)
     }
 
@@ -149,3 +155,6 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use journals::publish_governance_fixture;
+
+#[cfg(test)]
+pub(in crate::state) use journals::archive_fixture_instructions;

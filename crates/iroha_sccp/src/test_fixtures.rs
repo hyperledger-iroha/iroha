@@ -1453,6 +1453,19 @@ mod tests {
                     .map(|validator| &validator.validator)),
             "the Pasta fixture authority must exactly match consensus roster order"
         );
+        context
+            .kagemusha_mint_finality_authorization
+            .validate_against_authority(&context.kagemusha_mint_finality_authority)
+            .expect("generation zero and the complete genesis interval remain bound");
+        assert_eq!(context.kagemusha_mint_finality_authority.generation, 0);
+        assert_eq!(
+            context.kagemusha_mint_finality_authorization.first_height,
+            1
+        );
+        assert_eq!(
+            context.kagemusha_mint_finality_authorization.last_height,
+            10
+        );
         let block = fixture.finalized_block.block().clone();
         let header = block.header();
         let rebound = fixture.with_finalized_block(&block, None);

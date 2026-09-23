@@ -1528,26 +1528,26 @@ mod tests {
 
     #[test]
     fn runtime_authority_rebinds_private_seed_to_each_exact_authority_generation() {
-        let epoch_zero = runtime_generation_fixture(0);
+        let generation_zero = runtime_generation_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(epoch_zero.clone()),
+            Arc::new(generation_zero.clone()),
             Zeroizing::new([0xB1; 32]),
             1,
         )
-        .expect("bind generation zero");
-        let epoch_one = runtime_generation_fixture(1);
+        .expect("bind epoch zero");
+        let generation_one = runtime_generation_fixture(1);
         let signer = authority
-            .signer_for_authority(&epoch_one)
-            .expect("bind authenticated next generation");
+            .signer_for_authority(&generation_one)
+            .expect("bind authenticated next epoch");
         assert_eq!(signer.validator_index(), 1);
-        assert_eq!(signer.validator, epoch_zero.validators[1].validator);
+        assert_eq!(signer.validator, generation_zero.validators[1].validator);
         assert_eq!(signer.generation, 1);
         assert_eq!(
             signer.authority_id,
-            epoch_one.authority_id().expect("generation id")
+            generation_one.authority_id().expect("epoch id")
         );
         assert!(
-            authority.signer_for_authority(&epoch_zero).is_ok(),
+            authority.signer_for_authority(&generation_zero).is_ok(),
             "exact recovery context remains valid"
         );
     }
@@ -1629,21 +1629,21 @@ mod tests {
 
     #[test]
     fn runtime_generation_rebinding_rejects_network_keys_generation_and_missing_validator() {
-        let epoch_zero = runtime_generation_fixture(0);
+        let generation_zero = runtime_generation_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(epoch_zero.clone()),
+            Arc::new(generation_zero.clone()),
             Zeroizing::new([0xB1; 32]),
             1,
         )
-        .expect("bind generation zero");
+        .expect("bind epoch zero");
         let mut foreign = runtime_generation_fixture(1);
         foreign.network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime generation")),
         );
         assert!(authority.signer_for_authority(&foreign).is_err());
-        let mut wrong_epoch = epoch_zero.clone();
-        wrong_epoch.generation = 1;
-        assert!(authority.signer_for_authority(&wrong_epoch).is_err());
+        let mut wrong_generation = generation_zero.clone();
+        wrong_generation.generation = 1;
+        assert!(authority.signer_for_authority(&wrong_generation).is_err());
         let mut wrong_key = runtime_generation_fixture(1);
         wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
             &[0xDD; 32],
@@ -1726,12 +1726,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let epoch_zero_keys = derive_keys(0, 0xC0);
+        let generation_zero_keys = derive_keys(0, 0xC0);
         let mut parameters = KagemushaMintFinalityGenesisParametersV1 {
             authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 generation: 0,
-                validators: epoch_zero_keys.clone(),
+                validators: generation_zero_keys.clone(),
             },
         };
         validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
@@ -1741,7 +1741,7 @@ mod tests {
             .expect_err("non-canonical Pallas point must fail closed");
         assert!(error.to_string().contains("Pallas point"));
 
-        parameters.authority_generation.validators = epoch_zero_keys;
+        parameters.authority_generation.validators = generation_zero_keys;
         parameters.authority_generation.validators[0].ep_proof_public_key = [0xFF; 32];
         let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect_err("non-canonical Vesta point must fail closed");

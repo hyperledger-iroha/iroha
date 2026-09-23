@@ -24,46 +24,26 @@ pub(crate) struct PreparedNativeServiceCandidate<'state> {
     carrier: PreparedCarrier<'state>,
     provider: Option<ProviderCandidateCapture>,
     reputation: Option<ReputationCandidateCapture>,
-    service: &'state V2ApplyService,
+    shell_admission: super::native_validation::CarrierShellAdmission,
 }
 
 impl<'state> PreparedNativeServiceCandidate<'state> {
-    /// Move the actual execution and its original captures into journal preparation.
-    /// The caller must provide the real journal admission policy; this handoff
-    /// does not replace it with a scalar receipt or an empty reservation.
-    /// A local post-execution refusal returns this same synchronous owner. Its
-    /// State writers cannot cross an async wait; the retained validator must
-    /// detach this exact execution before scheduling a retry.
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn try_into_parts(
+    /// Detach readiness from synchronous execution: publication checks Queue ownership,
+    /// while the retained validator checks AMX evidence after releasing all State writers.
+    pub(crate) fn into_parts(
         self,
-    ) -> Result<
+    ) -> (
+        PreparedCarrier<'state>,
+        Option<ProviderCandidateCapture>,
+        Option<ReputationCandidateCapture>,
+        super::native_validation::CarrierShellAdmission,
+    ) {
         (
-            PreparedCarrier<'state>,
-            Option<ProviderCandidateCapture>,
-            Option<ReputationCandidateCapture>,
-        ),
-        (Self, V2ApplyError),
-    > {
-        let readiness = self
-            .service
-            .try_validate_prospective_autoscale_retirement_queue(
-                self.carrier.block(),
-                self.carrier.state(),
-            )
-            .and_then(|()| {
-                self.service
-                    .kura
-                    .validate_native_amx_participant_application_evidence_byte_budget(
-                        self.carrier.native_amx_manifest(),
-                        None,
-                    )
-                    .map_err(V2ApplyService::classify_native_amx_evidence_byte_budget_error)
-            });
-        if let Err(error) = readiness {
-            return Err((self, error));
-        }
-        Ok((self.carrier, self.provider, self.reputation))
+            self.carrier,
+            self.provider,
+            self.reputation,
+            self.shell_admission,
+        )
     }
 }
 
@@ -77,6 +57,17 @@ impl V2ApplyService {
         body: &SignedBlock,
         source: PreparedNativeLaneBatchSourceV1<'state>,
         context: VerifiedHeightContext,
+    ) -> Result<Option<PreparedNativeServiceCandidate<'state>>, V2ApplyError> {
+        let shell_admission = self.reserve_carrier_shells()?;
+        self.prepare_native_source_admitted(body, source, context, shell_admission)
+    }
+
+    pub(super) fn prepare_native_source_admitted<'state>(
+        &'state self,
+        body: &SignedBlock,
+        source: PreparedNativeLaneBatchSourceV1<'state>,
+        context: VerifiedHeightContext,
+        shell_admission: super::native_validation::CarrierShellAdmission,
     ) -> Result<Option<PreparedNativeServiceCandidate<'state>>, V2ApplyError> {
         crate::sumeragi::witness::ensure_state_access_without_exec_witness().map_err(|reason| {
             LocalValidationRefusal::RecoveryRequired(format!(
@@ -114,8 +105,64 @@ impl V2ApplyService {
             carrier,
             provider,
             reputation,
-            service: self,
+            shell_admission,
         }))
+    }
+
+    /// Execute the disjoint genesis or current control source through the common
+    /// authenticated validator, keeping the same pre-execution shell/archive owners.
+    /// The source-class boundary excludes retired payloads and post-genesis direct
+    /// economics before this producer is selected. Common validation still checks
+    /// signatures, commitments, exact State/context, useful work and every control.
+    pub(super) fn prepare_current_control_source_admitted<'state>(
+        &'state self,
+        body: &SignedBlock,
+        context: &VerifiedHeightContext,
+        shell_admission: super::native_validation::CarrierShellAdmission,
+    ) -> Result<PreparedNativeServiceCandidate<'state>, V2ApplyError> {
+        crate::sumeragi::witness::ensure_state_access_without_exec_witness().map_err(|reason| {
+            LocalValidationRefusal::RecoveryRequired(format!(
+                "control service execution recorder ownership conflict: {reason}"
+            ))
+        })?;
+        let archives = self.try_reserve_candidate_archives(context.context(), body)?;
+        let (provider, reputation) = archives
+            .into_captures(self, context.context(), body)
+            .map_err(|(_, error)| error)?;
+        let topology = crate::sumeragi::network_topology::Topology::new(
+            context
+                .context()
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone()),
+        );
+        let mut voting_block = None;
+        #[cfg(test)]
+        self.test_failures
+            .candidate_executions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let carrier =
+            crate::block::ValidBlock::validate_and_prepare_sumeragi_v2_candidate_keep_voting_block(
+                body.clone(),
+                &topology,
+                &self.genesis_account,
+                &TimeSource::new_system(),
+                self.block_cadence,
+                crate::block::valid::SumeragiV2ValidationContext::from_height_context(
+                    context.context(),
+                ),
+                self.state.as_ref(),
+                &mut voting_block,
+            )
+            .map_err(|(failed, error)| {
+                self.classify_validation_failure(None, failed.as_ref(), error.as_ref())
+            })?;
+        Ok(PreparedNativeServiceCandidate {
+            carrier,
+            provider,
+            reputation,
+            shell_admission,
+        })
     }
 
     /// Count actual execution attempts, excluding source and archive refusals.
@@ -138,6 +185,9 @@ impl V2ApplyService {
                 MergeLedgerCommitError::NativeControlValidation(error),
             ) => self.classify_validation_failure(None, body, &error),
             NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::BlockHashAdmission(error),
+            )
+            | NativeCandidatePreparationError::Preparation(
                 MergeLedgerCommitError::BlockHashAdmission(error),
             ) => self.classify_validation_failure(
                 None,

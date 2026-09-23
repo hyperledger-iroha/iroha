@@ -74,19 +74,15 @@ impl Wake for WakeCount {
 impl Drop for Reservation {
     fn drop(&mut self) {
         // The fixture retains one external Arc each. Both original capture
-        // owners must already have dropped before either resource guard does.
+        // owners must already have dropped before the original resource guard does.
         assert_eq!(self.provider.strong_count(), 1);
         assert_eq!(self.reputation.strong_count(), 1);
         self.released.fetch_add(1, Ordering::SeqCst);
     }
 }
 
-type Decision = DecisionBoundCarrierJournals<
-    Reservation,
-    Reservation,
-    DetachedCarrierComponents,
-    KuraWsvCheckpointReceipt,
->;
+type Decision =
+    DecisionBoundCarrierJournals<Reservation, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
 
 struct Fixture {
     // Drop captured values before their external archive handles and directory.
@@ -98,7 +94,6 @@ struct Fixture {
     state_hash: Hash,
     state_generation: u64,
     capture_released: Arc<AtomicUsize>,
-    binding_released: Arc<AtomicUsize>,
 }
 
 fn fixture() -> Box<Fixture> {
@@ -123,7 +118,6 @@ fn fixture() -> Box<Fixture> {
         .unwrap(),
     );
     let capture_released = Arc::new(AtomicUsize::new(0));
-    let binding_released = Arc::new(AtomicUsize::new(0));
     let reservation = |released: &Arc<AtomicUsize>| Reservation {
         released: Arc::clone(released),
         provider: Arc::downgrade(&provider),
@@ -168,9 +162,7 @@ fn fixture() -> Box<Fixture> {
         0,
     );
     let decision = journals
-        .bind_decision(finality, |_| {
-            Ok::<_, Infallible>(reservation(&binding_released))
-        })
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("exact four-validator decision: {:?}", refusal.error));
     state.kura.store_block(decision.block().clone()).unwrap();
     let finality = state
@@ -190,7 +182,6 @@ fn fixture() -> Box<Fixture> {
         state_hash,
         state_generation,
         capture_released,
-        binding_released,
     })
 }
 
@@ -204,7 +195,6 @@ impl Fixture {
         );
         assert_eq!(self.state.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(self.capture_released.load(Ordering::SeqCst), 0);
-        assert_eq!(self.binding_released.load(Ordering::SeqCst), 0);
         drop(self.state.kura.try_publication_lease().unwrap());
     }
 
@@ -367,11 +357,9 @@ fn original_archives_publish_and_exact_retry_preserves_files_without_state_publi
     };
     assert!(!wait.is_released());
     let capture_released = Arc::clone(&fixture.capture_released);
-    let binding_released = Arc::clone(&fixture.binding_released);
     drop(fixture);
     assert!(wait.is_released());
     assert_eq!(capture_released.load(Ordering::SeqCst), 1);
-    assert_eq!(binding_released.load(Ordering::SeqCst), 1);
 }
 
 #[test]

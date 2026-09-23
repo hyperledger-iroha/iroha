@@ -25,13 +25,7 @@ impl SystemUnderTest {
             })
             .collect::<Vec<_>>();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                self.network_id,
-                0,
-                1,
-                u64::MAX,
-                &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(self.network_id, u64::MAX, &roster);
         wire::HeightContext {
             network_id: self.network_id,
             protocol_version: wire::PROTOCOL_VERSION,

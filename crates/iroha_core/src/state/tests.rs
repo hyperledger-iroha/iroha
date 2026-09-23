@@ -26212,10 +26212,8 @@ fn finalize_lane_relay_batch_for_state_test(
     validators.sort_by(|left, right| left.0.cmp(&right.0));
     let_row! { roster = validators .iter() .map(|(validator, _)| wire::ValidatorPower { validator: validator.clone(), power: 1, }) .collect::<Vec<_>>() };
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
             *state.network_id_ref(),
-            0,
-            1,
             height.saturating_add(100),
             &roster,
         );
@@ -41821,7 +41819,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
         [Domain::new(xor_domain).build(&alice_id)],
         accounts,
         [definition],
-        [Asset::new(escrow_asset_id.clone(), 3_u64.into())],
+        [Asset::new(escrow_asset_id.clone(), 3_u64)],
         [],
     );
     seed_snapshot_asset_incarnations(&mut world);

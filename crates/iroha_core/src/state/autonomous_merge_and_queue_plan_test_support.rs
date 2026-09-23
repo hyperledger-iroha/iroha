@@ -584,9 +584,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         );
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id, 0, 1, 100, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,

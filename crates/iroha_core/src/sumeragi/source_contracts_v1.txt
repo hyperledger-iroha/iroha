@@ -2649,14 +2649,13 @@ case|durable_validate_volatile_completion_is_atomic_move_only_and_scheduler_owne
 region|registry_production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|carrier|registry|after|struct DurableValidateCompletion {|before|impl DurableValidateCompletion {
 region|carrier|registry|after|impl DurableValidateCompletion {|before|// DURABLE_VALIDATE_COMPLETION_CARRIER_END
-region|deferred_derive|registry|last|#[derive(|before|pub(in crate::sumeragi) struct DeferredDurableValidateDispatch
 region|prepared_derive|registry|last|#[derive(|before|pub(super) struct PreparedExecutedDurableValidateCompletion<'a>
 region|staged_derive|registry|last|#[derive(|before|pub(super) struct StagedDurableValidateCompletion<'a>
 region|rejected_digest|registry|after|fn rejected_body_completion_digest(|before|fn durable_validate_outcome_kind(
 region|validated_authority|registry|after|fn validate_validated_receipt_authority(|before|fn validated_body_completion_digest(
 region|declarations|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_BEGIN|before|// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_END
 region|implementation|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN|before|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_END
-region|commit|registry|after|pub(super) fn commit(self) -> PublishedDurableValidateCompletion {|before|#[cfg_attr(not(test), allow(dead_code))]
+region|commit|registry|after|pub(super) fn commit(self) -> PublishedDurableValidateCompletion {|before|#[cfg(test)]\nimpl PublishedValidated {
 region|concrete_production|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|entrypoint|concrete_admission|after|pub(super) fn complete_durable_validate_dispatch(|before|/// Prepare one complete signed effect for mandatory replay-bound admission.
 region|waiting_exact|concrete_admission|after|fn waiting_durable_validate_record_is_exact(|before|fn staged_durable_validate_ready_is_exact(
@@ -2702,7 +2701,7 @@ required|declarations|lifecycle_key: LifecycleKey|volatile completion declaratio
 required|declarations|lifecycle_stage: LifecycleStage|volatile completion declarations omitted lifecycle_stage: LifecycleStage
 required|declarations|struct PublishedValidated|volatile completion declarations omitted struct PublishedValidated
 required|declarations|struct PublishedRejected|volatile completion declarations omitted struct PublishedRejected
-required|declarations|struct DeferredDurableValidateDispatch|volatile completion declarations omitted struct DeferredDurableValidateDispatch
+forbidden|declarations|DeferredDurableValidateDispatch|retired sidecar completion cannot regain production ownership
 required|declarations|dispatch: ExecutedDurableValidateDispatch|volatile completion declarations omitted dispatch: ExecutedDurableValidateDispatch
 required|declarations|enum DurableValidateCompletionPublication|volatile completion declarations omitted enum DurableValidateCompletionPublication
 required|declarations|#[allow(variant_size_differences, clippy::large_enum_variant)]|volatile completion declarations omitted #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -2716,7 +2715,6 @@ forbidden|declarations|RuntimeEffectOwnership|volatile completion declarations a
 forbidden|declarations|RuntimeLifecycleOrdinalSource|volatile completion declarations acquired legacy scheduler authority: RuntimeLifecycleOrdinalSource
 forbidden|declarations|SchedulerRank|volatile completion declarations acquired legacy scheduler authority: SchedulerRank
 forbidden|declarations|TurnPlan|volatile completion declarations acquired legacy scheduler authority: TurnPlan
-forbidden|deferred_derive|Clone|DeferredDurableValidateDispatch must remain move-only
 forbidden|prepared_derive|Clone|pub(super) struct PreparedExecutedDurableValidateCompletion<'a> must remain move-only
 forbidden|staged_derive|Clone|pub(super) struct StagedDurableValidateCompletion<'a> must remain move-only
 required|implementation|pub(super) fn stage_executable_carrier|volatile completion implementation omitted pub(super) fn stage_executable_carrier
@@ -2724,7 +2722,7 @@ required|implementation|ConcreteLifecycleWorkKind::DurableValidateBody(incumbent
 required|implementation|ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)|volatile completion implementation omitted ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
 required|implementation|impl Drop for ArmedDurableValidateRollback<'_>|volatile completion implementation omitted the armed rollback Drop guard
 required|implementation|drop(self.restore())|volatile completion implementation omitted drop(self.restore())
-required|implementation|pub(in crate::sumeragi) fn missing_reference|volatile completion implementation omitted pub(in crate::sumeragi) fn missing_reference
+forbidden|implementation|DeferredDurableValidateDispatch|retired sidecar completion cannot regain production ownership
 count|implementation|pub(super) fn commit(|1|volatile completion implementation must expose one guarded commit
 required|commit|let StagedDurableValidateCompletion {\n            mut rollback,\n            publication,\n        } = self;|post-swap guard commit must consume the staged guard and its move-only publication
 required|commit|rollback.armed = false;|post-swap guard commit must disarm the exact rollback owner
@@ -2751,7 +2749,7 @@ count|concrete_production|pub(super) fn complete_durable_validate_dispatch(|1|th
 count|concrete_production|prepare_executed_durable_validate_completion(dispatch)|1|only the coordinator entrypoint may reattach a full dispatch
 required|entrypoint|prepare_executed_durable_validate_completion(dispatch)|completion entrypoint omitted prepare_executed_durable_validate_completion(dispatch)
 required|entrypoint|waiting_durable_validate_record_is_exact|completion entrypoint omitted waiting_durable_validate_record_is_exact
-required|entrypoint|prepared.defer_merge_sidecar()|completion entrypoint omitted prepared.defer_merge_sidecar()
+forbidden|entrypoint|DeferredDurableValidateDispatch|retired sidecar completion cannot regain production ownership
 required|entrypoint|authority.ready_event()|completion entrypoint omitted authority.ready_event()
 required|entrypoint|stage_durable_transaction()|completion entrypoint omitted stage_durable_transaction()
 required|entrypoint|publish_ready(ready_event)|completion entrypoint omitted publish_ready(ready_event)
@@ -2777,7 +2775,7 @@ required|waiting_exact|episode_authority.admits_slots(|waiting completion exactn
 required|waiting_exact|durable_validate_payload_is_exact(record.key, metadata.payload)|waiting completion exactness omitted durable_validate_payload_is_exact(record.key, metadata.payload)
 required|waiting_exact|authority.matches_durable_payload(metadata.payload)|waiting completion exactness omitted authority.matches_durable_payload(metadata.payload)
 required|coordinator_export|DurableValidateCompletionPublication|coordinator lost the reviewed completion-publication re-export
-required|worker_completion|DeferredDurableValidateDispatch|worker completion lost exact deferred sidecar ownership
+forbidden|worker_completion|DeferredDurableValidateDispatch|retired sidecar completion cannot regain production ownership
 required|turn_driver_publication|completion.into_publication_parts()|turn driver must retain dispatch and acknowledgement together
 required|turn_driver_publication|complete_durable_validate_dispatch(|turn driver lost the sole volatile completion transaction
 required|turn_driver_publication|ack.acknowledge_after_publication()|worker completion must be acknowledged only after publication

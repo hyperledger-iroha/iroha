@@ -276,10 +276,8 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("v2-runner-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
             network_id,
-            0,
-            1,
             u64::MAX,
             &roster,
         );
@@ -535,7 +533,7 @@ fn terminal_current_serve_source_retention_retries_without_reopening_runtime() {
     );
 
     assert!(
-        LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        LifecycleProducerClaimDispositionV1::AwaitingNativeSource
             .decided_lane_recovery_permit()
             .is_none(),
         "a non-Apply lane barrier cannot mint terminal response authority"
@@ -548,7 +546,7 @@ fn terminal_current_serve_source_retention_retries_without_reopening_runtime() {
 }
 
 #[test]
-fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work() {
+fn native_source_barrier_preserves_progress_physical_completion_and_dependency_service() {
     let run_inner = include_str!("../v2_runner/lifecycle_run_inner.rs");
     let turn_driver = include_str!("../v2_lifecycle_turn_driver.rs");
     let lane_branch_start = run_inner
@@ -560,16 +558,16 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .expect("ordinary Runtime service follows the lane-only branch");
     let lane_branch = &run_inner[lane_branch_start..lane_branch_end];
     let ingress_gate = lane_branch
-        .find("producer_claim.validate_sidecar_pacemaker_escape_permit()")
-        .expect("the missing-sidecar barrier retains a typed ingress gate");
+        .find("producer_claim.native_source_pacemaker_escape_permit()")
+        .expect("the retained Native-source barrier retains a typed ingress gate");
     let progress_dequeue = lane_branch[ingress_gate..]
-        .find("activated.prepare_validate_sidecar_pacemaker_ingress_turn(permit)")
+        .find("activated.prepare_native_source_pacemaker_ingress_turn(permit)")
         .map(|offset| ingress_gate + offset)
-        .expect("the sidecar barrier admits one sealed global Progress occurrence");
+        .expect("the Native-source barrier admits one sealed global Progress occurrence");
     let pacemaker_gate = lane_branch[progress_dequeue..]
-        .find("producer_claim.validate_sidecar_pacemaker_escape_permit()")
+        .find("producer_claim.native_source_pacemaker_escape_permit()")
         .map(|offset| progress_dequeue + offset)
-        .expect("the missing-sidecar barrier retains a typed runtime gate");
+        .expect("the retained Native-source barrier retains a typed runtime gate");
     let physical_cut = lane_branch[pacemaker_gate..]
         .find(".set_ingress_physical_cut(")
         .map(|offset| pacemaker_gate + offset)
@@ -582,14 +580,14 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .find("executor.step_pacemaker_after_completion_runtime_cut(")
         .map(|offset| completion_cut + offset)
         .expect("the escape services one typed pacemaker turn");
-    let retain_certified_view = lane_branch[pacemaker_step..]
-        .find("lane_work.retain_merge_sidecars_for_global_view(")
+    let reconciled = lane_branch[pacemaker_step..]
+        .find("reconcile_executor_locked_body(executor, services)?")
         .map(|offset| pacemaker_step + offset)
-        .expect("the resulting certified view is reconciled into lane ownership");
-    let generic_sidecar_drive = lane_branch[retain_certified_view..]
-        .find("drive_merge_sidecar_recovery(")
-        .map(|offset| retain_certified_view + offset)
-        .expect("ordinary sidecar recovery follows certified-view reconciliation");
+        .expect("the exact executor projection follows pacemaker progress");
+    let cleanup = lane_branch[reconciled..]
+        .find("executor.acknowledge_runner_decision_cleanup(")
+        .map(|offset| reconciled + offset)
+        .expect("the resulting decision retains its original runner cleanup handoff");
     let capacity_relief = lane_branch[completion_cut..]
         .find("executor.step_completion_capacity_relief_after_cut(")
         .map(|offset| completion_cut + offset)
@@ -600,16 +598,15 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
     assert!(pacemaker_gate < physical_cut);
     assert!(physical_cut < completion_cut);
     assert!(physical_cut < pacemaker_step);
-    assert!(pacemaker_step < retain_certified_view);
-    assert!(retain_certified_view < generic_sidecar_drive);
+    assert!(pacemaker_step < reconciled && reconciled < cleanup);
     assert!(completion_cut < capacity_relief);
     assert!(
         !lane_branch.contains("executor.step_after_completion_runtime_cut("),
-        "the Validate-sidecar barrier must never reopen generic reducer scheduling"
+        "the Native-source barrier must never reopen generic reducer scheduling"
     );
 
     let predicate_start = turn_driver
-        .find("fn selected_ingress_is_validate_sidecar_pacemaker_progress(")
+        .find("fn selected_ingress_is_native_source_pacemaker_progress(")
         .expect("the sealed dequeue retains an explicit wire-family predicate");
     let predicate_end = turn_driver[predicate_start..]
         .find("\n}\n")
@@ -633,6 +630,21 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
             "{fenced} must remain behind ordinary lifecycle ingress"
         );
     }
+    assert!(turn_driver.contains("retained.native_source_recovery().is_some()"));
+    let historical = turn_driver.split_once("fn selected_ingress_is_native_source_historical_request(")
+        .expect("source wait permits only historical peer service").1
+        .split_once("fn prepare_and_dispatch_current_certified_serve").unwrap().0;
+    assert!(historical.contains("CertifiedBodyRequest(request)"));
+    assert!(historical.contains("request.round.height < active_height"));
+    let worker = include_str!("../v2_worker.rs");
+    let transfer = worker.split_once("fn transfer_lifecycle_validate_completion_at(").unwrap().1
+        .split_once("fn transfer_lifecycle_certified_serve_completion_at(").unwrap().0;
+    assert!(transfer.contains("owner.lifecycle_validate != Some(key)"));
+    assert!(transfer.contains("state.owned.remove(position).map(|owner| owner.retained_at)"));
+    let ordinary = include_str!("../v2_runner/ordinary_ingress_consumer.rs");
+    assert!(ordinary.contains("HistoricalBodyServeTask::from_bound_ingress("));
+    assert!(ordinary.contains("block_sync_server.try_enqueue_historical_body(task)"));
+
 }
 
 #[test]
@@ -670,7 +682,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .expect("durable lane preflight gates physical ingress closure");
     let open_preflight = &run_inner[preflight_start..close_start];
     let preflight = open_preflight
-        .find("preflight_finalized_lane_rollover(")
+        .find("preflight_finalized_native_rollover(")
         .expect("the finalized carrier is recovered before closure");
     let incomplete = open_preflight
         .find("if finalization_ready && !rollover_ready")
@@ -679,22 +691,18 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("drain_decided_lane_recovery_ingress(")
         .map(|offset| incomplete + offset)
         .expect("the bounded corridor consumes individually authenticated lane occurrences");
-    let retransmit_cadence = open_preflight[incomplete..]
-        .find("if now >= next_lane_retransmit")
-        .map(|offset| incomplete + offset)
-        .expect("incomplete finalized recovery retains its bounded retransmit cadence");
-    let retransmit = open_preflight[incomplete..]
-        .find("lane_work.schedule_retransmission()?")
-        .map(|offset| incomplete + offset)
-        .expect("incomplete finalized recovery reissues exact decided-lane artifacts");
-    let advance_retransmit_deadline = open_preflight[incomplete..]
-        .find("next_lane_retransmit = deadline_after(now, retransmit_interval)")
-        .map(|offset| incomplete + offset)
-        .expect("finalized recovery advances its retransmit deadline");
-    let dispatch = open_preflight[advance_retransmit_deadline..]
-        .find("dispatch_lane_work_effects(")
-        .map(|offset| advance_retransmit_deadline + offset)
-        .expect("the bounded corridor publishes preflight and retransmission effects");
+    let dispatch = open_preflight[drain..]
+        .find("dispatch_queue_plan_admission_effects(")
+        .map(|offset| drain + offset)
+        .expect("the bounded corridor publishes only retained QueuePlan handoffs");
+    let native_deadline = open_preflight[dispatch..]
+        .find("native.next_deadline()")
+        .map(|offset| dispatch + offset)
+        .expect("the real Native process bounds the next recovery poll");
+    let native_poll = run_inner[..preflight_start]
+        .find("native.poll(")
+        .expect("the original process services physical workers before finality preflight");
+    assert!(native_poll < preflight_start);
     let batch = open_preflight[incomplete..]
         .find("drain_open_preflight_recovery_batch(")
         .map(|offset| incomplete + offset)
@@ -714,11 +722,9 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
     assert!(
         preflight < incomplete
             && incomplete < drain
-            && drain < retransmit_cadence
-            && retransmit_cadence < retransmit
-            && retransmit < advance_retransmit_deadline
-            && advance_retransmit_deadline < dispatch
-            && dispatch < retry
+            && drain < dispatch
+            && dispatch < native_deadline
+            && native_deadline < retry
     );
     let final_output_retry = open_preflight
         .rfind("reconcile_terminal_lane_output_handoffs(")
@@ -747,7 +753,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("drain_finalized_lane_relay_prefix(")
         .expect("closed shared admission leaves a finite lane-relay prefix");
     let dispatch = finite_drain
-        .find("dispatch_lane_work_effects(")
+        .find("dispatch_queue_plan_admission_effects(")
         .expect("the finite prefix publishes only monotonic-safe output");
     let final_output_retry = finite_drain[dispatch..]
         .find("reconcile_terminal_lane_output_handoffs(")
@@ -1828,15 +1834,31 @@ fn finalized_rollover_drains_source_effects_after_handoff_reopens_capacity() {
             continue;
         }
 
-        drain_finalized_lane_work_output(
-            &mut lane_work,
-            &services,
-            &receipt,
-            &artifact,
-            &lane_authority,
-            1,
-        )
-        .expect("durable handoff frees capacity for every retained source effect");
+        assert_ne!(
+            services
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &artifact,
+                    &lane_authority,
+                )
+                .expect("durable global handoff frees the saturated corridor"),
+            0
+        );
+        assert_ne!(
+            dispatch_lane_work_effects_with_progress(&mut lane_work, &services, 1)
+                .expect("the exact retained fixture source enters the freed corridor"),
+            0
+        );
+        assert_ne!(
+            services
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &receipt,
+                    &artifact,
+                    &lane_authority,
+                )
+                .expect("the remaining exact fixture output has durable reconstruction"),
+            0
+        );
         assert_eq!(lane_work.effect_count(), 0);
         assert!(
             !services

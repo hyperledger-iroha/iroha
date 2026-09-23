@@ -294,11 +294,14 @@ impl<C: CurveAffine> StoredPolynomialProviderV1 for Provider<C> {
                     | StoredPolynomialRoleV1::LookupPermuted { lookup, .. }
                     | StoredPolynomialRoleV1::LookupProduct { lookup } => lookup,
                     StoredPolynomialRoleV1::CopyPermutationProduct { set } => set,
-                    StoredPolynomialRoleV1::Instance { column } => column,
+                    StoredPolynomialRoleV1::Instance { column }
+                    | StoredPolynomialRoleV1::KeyFixed { column }
+                    | StoredPolynomialRoleV1::KeyPermutation { column } => column,
                     StoredPolynomialRoleV1::QuotientAliasedPart { part, .. } => part,
                     StoredPolynomialRoleV1::QuotientPiece { piece } => piece,
                     StoredPolynomialRoleV1::VanishingRandom
-                    | StoredPolynomialRoleV1::QuotientNumerator => 0,
+                    | StoredPolynomialRoleV1::QuotientNumerator
+                    | StoredPolynomialRoleV1::KeyMask { .. } => 0,
                 },
                 side,
             },

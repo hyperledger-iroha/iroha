@@ -1192,17 +1192,14 @@ fn verify_kagemusha_mint_finality_vote(
     let Some(payload) = payload else {
         if required {
             return Err(AdapterError::Cryptography(
-                "Kagemusha V1 authoritative Commit vote is missing its Pasta seal share"
-                    .to_owned(),
+                "Kagemusha V1 authoritative Commit vote is missing its Pasta seal share".to_owned(),
             ));
         }
         return Ok(());
     };
     let share =
-        crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(
-            payload,
-        )
-        .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
+        crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(payload)
+            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
         &context.kagemusha_mint_finality_authority,
         context,
@@ -1222,17 +1219,14 @@ fn verify_kagemusha_mint_finality_certificate(
     let Some(payload) = payload else {
         if required {
             return Err(AdapterError::Cryptography(
-                "Kagemusha V1 authoritative CommitQC is missing its Pasta seal bundle"
-                    .to_owned(),
+                "Kagemusha V1 authoritative CommitQC is missing its Pasta seal bundle".to_owned(),
             ));
         }
         return Ok(());
     };
     let bundle =
-        crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_bundle_v1(
-            payload,
-        )
-        .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
+        crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_bundle_v1(payload)
+            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_bundle_v1(
         &context.kagemusha_mint_finality_authority,
         context,

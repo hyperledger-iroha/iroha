@@ -57,6 +57,9 @@ use crate::zk::{
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256ConfigV1, PastaSha256JobsV1},
 };
 
+#[cfg(test)]
+mod bootstrap_gates_tests;
+
 mod epoch_authorization;
 use epoch_authorization::{constrain_authorization_successor, constrain_epoch_authorization};
 
@@ -151,11 +154,12 @@ impl KagemushaMintCertificateWitnessV1 {
             .statement
             .canonical_digest()
             .map_err(|error| error.to_string())?;
-        let signing = self
-            .seal_bundle
-            .message
-            .signing_digest()
-            .map_err(|error| error.to_string())?;
+        let signing = if step == KagemushaMintAuthorityStepV1::Bootstrap {
+            self.seal_bundle.message.bootstrap_binding_digest()
+        } else {
+            self.seal_bundle.message.signing_digest()
+        }
+        .map_err(|error| error.to_string())?;
         let roster = self
             .authority_generation
             .authority_id()
@@ -181,10 +185,12 @@ impl KagemushaMintCertificateWitnessV1 {
         self.authority_generation
             .validate()
             .map_err(|error| format!("invalid mint-finality roster: {error}"))?;
-        self.seal_bundle
-            .message
-            .validate()
-            .map_err(|error| format!("invalid mint-finality seal message: {error}"))?;
+        if step == KagemushaMintAuthorityStepV1::Bootstrap {
+            self.seal_bundle.message.validate_bootstrap()
+        } else {
+            self.seal_bundle.message.validate()
+        }
+        .map_err(|error| format!("invalid mint-finality seal message: {error}"))?;
         self.membership
             .leaf
             .validate()
@@ -701,7 +707,14 @@ where
         message.next_epoch_authorization.is_some(),
     )));
     gate.assert_bit(ctx, next_epoch_present);
-    constrain_equal_if(ctx, gate, next_epoch_present, zero, bootstrap);
+    constrain_bootstrap_message_gates(
+        ctx,
+        gate,
+        bootstrap,
+        top_up_count,
+        block_height,
+        next_epoch_present,
+    );
     let next_epoch_present_byte = PastaSha256ByteV1::range_checked(ctx, &range, next_epoch_present);
     let next_authorization = constrain_epoch_authorization(
         ctx,
@@ -1270,6 +1283,25 @@ fn mark_iroha_hash<F: KagemushaPoseidonFieldV1>(
     bits[0] = PastaSha256BitV1::decompose(ctx, gate, one, 1)[0];
     digest[31] = PastaSha256ByteV1::from_bits_le(ctx, gate, &bits);
     digest
+}
+
+// The selector, unsigned widths, Genesis authorization and disabled validator seals are
+// constrained by the surrounding certificate relation. These three gates isolate the
+// unsigned bootstrap message from both monetary certificates and epoch transitions.
+fn constrain_bootstrap_message_gates<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    bootstrap: AssignedValue<F>,
+    top_up_count: AssignedValue<F>,
+    block_height: AssignedValue<F>,
+    next_epoch_present: AssignedValue<F>,
+) {
+    let bootstrap_count = gate.mul(ctx, Existing(bootstrap), Existing(top_up_count));
+    gate.assert_is_const(ctx, &bootstrap_count, &F::ZERO);
+    let one = ctx.load_constant(F::ONE);
+    constrain_equal_if(ctx, gate, block_height, one, bootstrap);
+    let bootstrap_next = gate.mul(ctx, Existing(bootstrap), Existing(next_epoch_present));
+    gate.assert_is_const(ctx, &bootstrap_next, &F::ZERO);
 }
 
 fn constrain_equal_if<F: KagemushaPoseidonFieldV1>(

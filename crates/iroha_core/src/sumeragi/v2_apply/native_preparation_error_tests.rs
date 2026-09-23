@@ -16,7 +16,7 @@ mod native_preparation_errors {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         fixture.service.queue.set_sumeragi_wake(sender);
-        for origin in 0..3 {
+        for origin in 0..4 {
             for dependency in 0..3 {
                 let release = concread::release::ReleaseNotification::default();
                 let foreign = concread::release::ReleaseNotification::default();
@@ -37,10 +37,13 @@ mod native_preparation_errors {
                     1 => NativeCandidatePreparationError::Execution(
                         MergeLedgerCommitError::BlockHashAdmission(refusal),
                     ),
-                    _ => NativeCandidatePreparationError::Execution(
+                    2 => NativeCandidatePreparationError::Execution(
                         MergeLedgerCommitError::NativeControlValidation(Box::new(
                             BlockValidationError::BlockHashAdmission(refusal),
                         )),
+                    ),
+                    _ => NativeCandidatePreparationError::Preparation(
+                        MergeLedgerCommitError::BlockHashAdmission(refusal),
                     ),
                 };
                 let classified = fixture
@@ -139,7 +142,9 @@ mod native_preparation_errors {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         for error in [
             NativeCandidatePreparationError::Preparation(
-                "empty block: local metadata capture".to_owned(),
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "empty block: local metadata capture".to_owned(),
+                ),
             ),
             NativeCandidatePreparationError::Execution(
                 MergeLedgerCommitError::ExecutionRecorderConflict(

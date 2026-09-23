@@ -80,9 +80,7 @@ mod tests {
             .collect::<Vec<_>>();
         let network_id = test_network_id();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id, 0, 1, 100, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -1812,15 +1810,7 @@ mod tests {
         (
             foreign_context.kagemusha_mint_finality_authorization,
             foreign_context.kagemusha_mint_finality_authority,
-        ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            foreign_context.network_id,
-            foreign_context.epoch,
-            foreign_context
-                .kagemusha_mint_finality_authorization
-                .first_height,
-            foreign_context.epoch_end_height,
-            &foreign_context.roster,
-        );
+        ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(foreign_context.network_id, foreign_context.epoch, foreign_context.epoch_end_height, &foreign_context.roster);
         foreign_context
             .validate()
             .expect("foreign receipt belongs to a separately valid network context");

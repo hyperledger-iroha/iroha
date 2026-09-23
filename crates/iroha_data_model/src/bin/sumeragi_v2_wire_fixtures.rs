@@ -1257,6 +1257,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     #[test]
+    fn initial_context_binds_the_complete_genesis_authorization() {
+        let context = context();
+        let authority = &context.kagemusha_mint_finality_authority;
+        let authorization = &context.kagemusha_mint_finality_authorization;
+        assert_eq!(context.validate(), Ok(()));
+        assert_eq!(context.height, 1);
+        assert_eq!(context.epoch, 0);
+        assert_eq!(authority.generation, 0);
+        assert_eq!(authorization.first_height, context.height);
+        assert_eq!(authorization.last_height, context.epoch_end_height);
+        assert_eq!(
+            authorization.decision,
+            KagemushaMintFinalityEpochDecisionV1::Genesis
+        );
+        assert_eq!(authorization.beacon, BeaconEpochBindingV1::Bootstrap);
+        assert_eq!(
+            authorization.authority_id,
+            authority.authority_id().expect("fixture authority")
+        );
+        assert_eq!(authorization.validate_against_authority(authority), Ok(()));
+    }
+    #[test]
     fn canonical_body_chunks_cover_the_complete_rs16_stripe() {
         let context = context();
         let chunks = canonical_body_chunks(&context).expect("canonical encoded body chunks");

@@ -150,12 +150,152 @@ hashes, branch, HEAD and index match across these builds and runs. The capture
 omits the two artifact OpenAPI mirrors and is not complete compiler-input or
 release sealing.
 
-The disjoint 2,566-control Core migration run is still active. Two beacon
-optional-slot fixtures mutate the epoch endpoint without rebuilding the bound
-mint-finality authority; the off-tree correction constructs both from an explicit
-endpoint and preserves the existing assertions. A governance slash successor
-reports one unavailable ordinary candidate; diagnosis remains open. Two generated
-model instruction rows also remain stale. Source edits remain frozen until the
-current runtime captures end; passing compilation does not close these failures,
-prepared successor activation, production Native ownership cutover, or the
-required unchanged four/seven-validator qualification.
+The disjoint 2,566-control Core migration run subsequently completed with the
+20 actual failures classified below. Passing compilation does not close these
+failures, prepared successor activation, production Native ownership cutover,
+or the required unchanged four/seven-validator qualification.
+
+## September 23 small repair candidate
+
+Build12's disjoint Core migration selection is terminal: 2,546 successful
+controls and 20 actual failures. The original harness summary counted three
+successful child-process wrappers as failures because it expected exactly one
+libtest result row; original logs and summary are preserved, with separate
+classification evidence. Listed source inputs and Git metadata remained unchanged.
+
+The small repair candidate preserves the original assertions while restoring
+complete fixture obligations: matched beacon/mint-authority intervals, actual
+3-of-4 lane certificates and application receipts after global governance
+carriers, retained stake custody and aggregate reserves, original two-lane Kura
+catalogs, exact frozen governance escrow, and native replay-index publication.
+SCCP establishes initial authenticated storage before finalized artifacts are
+inserted. The PLAIN execution path now performs its existing typed-proposal
+exclusion before loading a standalone referendum policy. Strict asset parsing
+retains its precise whitespace refusal. The final two generated instruction
+rows and all three canonical OpenAPI mirrors are corrected. No legacy fallback,
+validation bypass, fabricated availability, staging or unsigned commit is added.
+
+`checkpoint-build13` failed with two test-code typing errors: the State network
+accessor name and an ambiguous escrow quantity conversion. Both are corrected.
+A concurrent merge changed 241 listed inputs, HEAD and the index during that
+build, so its artifacts cannot validate the current checkout. Follow-up inspection
+also repaired the beacon interval/call-site conflict and a duplicated mint-finality
+test declaration without dropping assertions. Formatting completed successfully.
+
+`checkpoint-build14` completed with compiler failures after the merge. It is a
+diagnostic receipt: a concurrent context edit and subsequent repair edits changed
+its captured inputs. The diagnosed production issues include test-gated exports
+now required by retained publication, a missing local-refusal import, a Waker
+borrow, and account rotation removing claim keys from the accrual table. These
+corrections are applied. Authentication fixtures now use the canonical epoch
+constructors and an actual signed beacon pulse; old shadowed helper calls are
+removed. Remaining Native dispatch fixtures are being migrated with real actor
+backpressure and independent lane custody. The next focused Core selection
+includes all 20 earlier actual failures, their related modules and repaired Native runtime boundaries. The 124
+pending-membership formal checks pass (`generation172-small-compile-repair/`
+contains the JUnit receipt); this is separate from Rust/runtime qualification. The large
+staking preparation/SDK/Torii, explicit public-XOR and earlier live-guard test
+drafts remain separate and unapplied. The new source capture includes both
+artifact OpenAPI mirrors; the older build12 receipt remains scoped to its original
+7,631 listed inputs. Fresh compilation and regression results are pending; the
+full original liveness and network qualification goals remain active.
+
+
+`checkpoint-check15` passes the Core production library check with the recorded
+nine-library Core feature set. Four listed inputs changed concurrently, so this
+is diagnostic compilation rather than an unchanged candidate receipt. The
+legacy-codec gate and four exact startup/candidate source checks pass separately.
+The Native dispatch correction now attempts one already-issued output before
+fresh physical ingress. Backpressure retains original packet/ticket custody and
+still permits ingress, clocks and asynchronous workers. Its three restored tests
+use real four-validator source state, body/WAL workers, local Commit generation
+and the actual bounded actor; actor closure must fail before removing the next
+physical row. The patch and source hashes are retained under
+`generation174-native-dispatch`; test compilation and runtime are pending.
+
+
+`checkpoint-build16` completed the nine-library test compilation with exit 0
+in 925.96 seconds. One captured source (`sumeragi/mod.rs`) and the index changed
+during compilation; the retained artifacts are diagnostic, not qualification of
+an unchanged candidate. Its selected model controls pass 435/435 and the Config
+library passes 651/651. Separate final-source joins explicitly record the drift.
+The 438-control Core repair run is still in progress. Its three restored Native
+dispatch controls currently fail at the original fair-ingress ownership handoff,
+before the output-order assertions; this remains a live defect under diagnosis.
+
+The follow-up gossip boundary audit found that dummy-probe sizing no longer
+measured a large frame after canonical cached-body validation was enforced.
+The applied correction uses a bounded maximum search over the actual canonical
+NetworkMessage and signed P2P envelope size counters. New regressions materialize
+and authenticate real direct/broadcast frames at the 256 KiB boundary and retain
+original queue/Kura custody across refusal. The original 160 KiB control remains
+intact, and the body-substitution control now supplies a receive deadline so it
+reaches authentication instead of returning before it. Two mint authorization
+head/retention controls removed during the merge are restored alongside the newer
+bootstrap control. These follow-ups require fresh compilation and runtime.
+
+
+Build16's repair selection is terminal: **430/438 pass**, including every one
+of the earlier 20 actual migration failures. Five failures share the omitted
+Native family in `FairV2IngressOwnershipEvidence::matches_message`; removing only
+the concurrent correction from current source reconstructs build16's exact
+initial `mod.rs` hash. The correction is preserved for build17. Two QueuePlan
+owner fixtures incorrectly changed the execution policy after parent finality;
+an off-tree follow-up establishes both lanes before producing the parent chain.
+One control-only Native publication regression remains under separate diagnosis.
+The original logs and failing source joins remain intact. Build17 includes the
+exact gossip sizing and restored mint/Native assertions; its results are pending.
+
+
+`checkpoint-build17` passes nine-library test compilation in 224.78 seconds
+with all 7,665 listed source inputs unchanged; the Git index changed separately.
+Model 435/435, Config 651/651 and Torii 153/153 (original 21 plus the complete
+OpenAPI module) have successful final source/binary joins. The twelve urgent
+Core controls pass 10/12: all three actual Native dispatch cases, the original
+160 KiB certified gossip and its non-vacuous substitution refusal, frame-cap
+refusals, and all three mint authorization controls pass. Both new signed-frame
+boundary controls correctly detect another missing prefix: Norito `Arc<T>`
+length-delimits its owned value before the NetworkMessage enum field delimiter.
+The count now includes both prefixes; those failures are retained, not relabelled.
+
+Follow-ups are applied: all thirteen QueuePlan owner fixture call sites install
+both lanes before finalizing parents, with all original assertions and a new
+policy-continuity control; control-only publication explicitly preserves the
+original destination-asset absence; an additional Native owned-ingress control
+requires exact signed Control/Decision originals and rejects valid substituted
+messages. Independent review found no QueuePlan candidate defects. Fresh build
+and runtime remain required for these follow-ups. All liveness/network release
+goals remain open.
+
+
+`checkpoint-build18` passes all nine library test builds with source, HEAD and
+index unchanged. Final joins pass for model 435/435, Config 651/651, Torii
+153/153 and all **19 urgent Core controls**. These include every one of the eight
+build16 failures, both real signed gossip boundary controls, preserved 160 KiB
+and substitution cases, exact Control/Decision ownership, and the restored mint
+and QueuePlan policy controls. The reviewed final cleanup removes four unused
+mutable bindings and an unreferenced test-only route helper; no assertion or
+production behavior changes. The next build reruns the original review selection
+plus every QueuePlan control and the added ownership regressions. Full workspace,
+complete resource admission and real four/seven-validator campaigns remain open.
+
+
+`checkpoint-build19` passes nine-library compilation in 81.16 seconds with
+source and Git metadata unchanged. Model 435/435, Config 651/651 and Torii
+153/153 retain successful final joins. The expanded Core review is terminal at
+361/364, including **all original 58 review controls passing**. The three failures
+are obsolete claim-state wording in tests that correctly receive the stricter
+unpaid-accrual custody refusal. Only their expected diagnostic phrases change;
+all preserved-state, exact accrual/reserve and post-settlement deletion assertions
+remain. Their original failures and source receipt are preserved. Build20 will
+verify these precise expectation corrections and repeat the full selected review.
+
+The next real-process gate is the current `sumeragi_v2_runner_isolated` target:
+authoritative four-validator genesis, stopped initial leader, acknowledged
+quorum Hold/release, four-validator restart/final transaction and seven-validator
+two-outage restart/final transaction. Same-source normal and message-control
+daemons must be built and pinned explicitly; the harness can otherwise reuse
+stale artifacts. Current controller coverage lacks Native Control/Decision
+selectors, so existing global network cases cannot qualify Native loss/recovery.
+The bounded controller extension is being prepared separately; no network pass
+or release claim follows from the Core fixture tests.

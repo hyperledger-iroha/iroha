@@ -25,12 +25,8 @@ impl Drop for Reservation {
     }
 }
 
-type Decision = DecisionBoundCarrierJournals<
-    Reservation,
-    Reservation,
-    DetachedCarrierComponents,
-    KuraWsvCheckpointReceipt,
->;
+type Decision =
+    DecisionBoundCarrierJournals<Reservation, DetachedCarrierComponents, KuraWsvCheckpointReceipt>;
 
 struct Fixture {
     decision: Decision,
@@ -65,9 +61,7 @@ fn witness_fixture(foreign: bool) -> Box<Fixture> {
         0,
     );
     let decision = journals
-        .bind_decision(finality, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&released)))
-        })
+        .bind_decision(finality)
         .unwrap_or_else(|refusal| panic!("actual original decision: {:?}", refusal.error));
     state.kura.store_block(decision.block().clone()).unwrap();
     let finality = state
@@ -264,7 +258,7 @@ fn original_witness_promotes_staged_only_proof_and_exact_retry_keeps_final_objec
     fixture.assert_unpublished();
     let released = Arc::clone(&fixture.released);
     drop(fixture);
-    assert_eq!(released.load(Ordering::SeqCst), 2);
+    assert_eq!(released.load(Ordering::SeqCst), 1);
 }
 
 #[test]

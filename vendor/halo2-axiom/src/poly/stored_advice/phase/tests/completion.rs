@@ -8,6 +8,7 @@ use super::*;
 
 mod conversion;
 mod evaluation;
+mod key_roles;
 
 fn reset_blind_drops() {
     BLIND_DROPS.with(|counts| counts.set((0, 0)));

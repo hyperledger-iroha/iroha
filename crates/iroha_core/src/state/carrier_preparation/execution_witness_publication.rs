@@ -18,13 +18,8 @@ pub(crate) enum CarrierExecutionWitnessPublicationError {
     Witness(crate::kura::Error),
 }
 
-impl<Admission, BindingAdmission>
-    DecisionBoundCarrierJournals<
-        Admission,
-        BindingAdmission,
-        DetachedCarrierComponents,
-        KuraWsvCheckpointReceipt,
-    >
+impl<Admission>
+    DecisionBoundCarrierJournals<Admission, DetachedCarrierComponents, KuraWsvCheckpointReceipt>
 {
     /// Materialize the original witness's finalized proof projection.
     ///

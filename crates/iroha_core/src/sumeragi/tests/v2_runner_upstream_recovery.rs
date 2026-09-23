@@ -84,15 +84,7 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     (
         later_context.kagemusha_mint_finality_authorization,
         later_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-        later_context.network_id,
-        later_context.epoch,
-        later_context
-            .kagemusha_mint_finality_authorization
-            .first_height,
-        later_context.epoch_end_height,
-        &later_context.roster,
-    );
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(later_context.network_id, later_context.epoch, later_context.epoch_end_height, &later_context.roster);
     later_context
         .validate()
         .expect("rotated-in context carries its exact mint authority");

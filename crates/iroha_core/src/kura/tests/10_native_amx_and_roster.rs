@@ -2734,13 +2734,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("native-frontier-token-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            network_id,
-            0,
-            1,
-            block.header().height().get(),
-            &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, block.header().height().get(), &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

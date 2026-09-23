@@ -1287,15 +1287,7 @@ fn historical_autonomous_recovery_record_for_kura(
     // Bind the recovery context and its derived mint roster to the signed payload.
     let network_id = payload.network_id;
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            network_id,
-            payload.epoch,
-            (payload.epoch)
-                .checked_add(1)
-                .expect("fixture epoch fits positive heights"),
-            descriptor.proposal_height.saturating_add(100),
-            &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, payload.epoch, descriptor.proposal_height.saturating_add(100), &roster);
     let historical_context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

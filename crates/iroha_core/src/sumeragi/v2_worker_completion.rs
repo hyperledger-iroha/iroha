@@ -359,9 +359,11 @@ impl PreparedLifecycleValidateCompletionV1 {
             super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, .. } => {
                 Some(wait.clone().wait_for_release())
             }
-            super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
+            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
+            | super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
         };
         Err(RetainedLocalLifecycleValidateV1 {
+            native_source_recovered: false,
             dispatch,
             refusal,
             release,
@@ -424,20 +426,12 @@ impl LifecycleValidateCompletionAckV1 {
         self.drop_guard.disarm();
     }
 
-    /// Bind the still-armed owner to a deferred missing-sidecar dispatch.
-    pub(in crate::sumeragi) fn bind_deferred(
-        self,
-        dispatch: DeferredDurableValidateDispatch,
-    ) -> PreparedDeferredLifecycleValidateCompletionV1 {
-        PreparedDeferredLifecycleValidateCompletionV1 {
-            dispatch,
-            ack: self,
-        }
-    }
+
 }
 /// Original Validate dispatch and completion acknowledgement parked on local ownership.
 #[must_use = "local refusal must retain the same dispatch until retry or recovery"]
 pub(in crate::sumeragi) struct RetainedLocalLifecycleValidateV1 {
+    native_source_recovered: bool,
     dispatch: DurableValidateDispatch,
     refusal: super::v2_body_store::LocalValidationRefusal,
     release: Option<concread::release::ReleaseFuture>,
@@ -453,6 +447,25 @@ pub(in crate::sumeragi) enum LocalLifecycleValidateRetryV1 {
     RecoveryRequired(RetainedLocalLifecycleValidateV1),
 }
 impl RetainedLocalLifecycleValidateV1 {
+    /// Borrow the exact authenticated source still owned by the original dispatch.
+    pub(in crate::sumeragi) fn native_source_recovery(&self) -> Option<(
+        wire::BlockSubject, usize, &Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+    )> {
+        match &self.refusal {
+            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { execution_index, authenticated_source, .. }
+                if !self.native_source_recovered => Some((self.dispatch.subject(), *execution_index, authenticated_source)),
+            _ => None,
+        }
+    }
+    /// Only the exact response-settlement receipt can release this source wait.
+    pub(in crate::sumeragi) fn accept_native_source_completion(
+        &mut self, completion: &super::v2_apply::native_validation::NativeSourceRecoveryCompletion,
+    ) -> bool {
+        let Some((subject, index, source)) = self.native_source_recovery() else { return false; };
+        if !completion.matches(subject, index, source) { return false; }
+        self.native_source_recovered = true;
+        true
+    }
     /// Retry only after the original local dependency or worker capacity releases.
     /// The exact dispatch, acknowledgement and lifecycle row stay unchanged.
     pub(in crate::sumeragi) fn retry(mut self) -> LocalLifecycleValidateRetryV1 {
@@ -462,6 +475,10 @@ impl RetainedLocalLifecycleValidateV1 {
         let wake = match &self.refusal {
             LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
             LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
+            LocalValidationRefusal::NativeSourceRecovery { wake, .. } => {
+                if !self.native_source_recovered { return LocalLifecycleValidateRetryV1::Waiting(self); }
+                wake.clone()
+            },
             LocalValidationRefusal::RecoveryRequired(reason) => {
                 self.ack
                     .drop_guard
@@ -494,6 +511,7 @@ impl RetainedLocalLifecycleValidateV1 {
             dispatch,
             refusal,
             release,
+            native_source_recovered,
             mut ack,
         } = self;
         let task = LifecycleValidateTaskV1 {
@@ -517,6 +535,7 @@ impl RetainedLocalLifecycleValidateV1 {
                     wake.wake_by_ref();
                 }
                 let retained = Self {
+                    native_source_recovered,
                     dispatch: task.dispatch,
                     refusal,
                     release: Some(release),
@@ -527,6 +546,7 @@ impl RetainedLocalLifecycleValidateV1 {
             }
             Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(task)) => {
                 let retained = Self {
+                    native_source_recovered,
                     dispatch: task.dispatch,
                     refusal,
                     release,
@@ -539,34 +559,6 @@ impl RetainedLocalLifecycleValidateV1 {
     }
 }
 
-/// Missing-sidecar Validate completion retained under its exact worker/publication owner.
-#[must_use = "deferred lifecycle Validate must register and wake its exact row"]
-pub(in crate::sumeragi) struct PreparedDeferredLifecycleValidateCompletionV1 {
-    dispatch: DeferredDurableValidateDispatch,
-    ack: LifecycleValidateCompletionAckV1,
-}
-impl PreparedDeferredLifecycleValidateCompletionV1 {
-    /// Borrow the sealed address, dependency, wait source, owner, and
-    /// generation that must be published as one durable sidecar registration.
-    pub(in crate::sumeragi) fn sidecar_registration_identity(
-        &self,
-    ) -> Option<
-        crate::sumeragi::v2_lifecycle_coordinator::LifecycleValidateSidecarRegistrationIdentityV1,
-    > {
-        self.dispatch.sidecar_registration_identity(self.ack.key)
-    }
-
-    /// Split the still-armed queue owner from its move-only deferred dispatch.
-    /// This is consumed only after the exact Waiting row has become Ready.
-    pub(in crate::sumeragi) fn into_sidecar_wake_parts(
-        self,
-    ) -> (
-        DeferredDurableValidateDispatch,
-        LifecycleValidateCompletionAckV1,
-    ) {
-        (self.dispatch, self.ack)
-    }
-}
 /// Authority consumed by one successfully settled Certified-Serve completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "the Certified-Serve completion authority must be observed"]
@@ -783,11 +775,35 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
     pub(in crate::sumeragi) fn retry_deferred(self) -> LifecycleDecisionApplyDeferredRetryV1 {
         let Self { guarded, work_ack } = self;
         let (result, mut completion_guard) = (*guarded).into_retry_parts();
-        let LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference } = result else {
+        let LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal } = result else {
             drop(work_ack);
             drop(completion_guard);
             return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
         };
+        let ready = match &refusal {
+            super::v2_body_store::LocalValidationRefusal::PhysicalBusy(busy) => {
+                let mut pending = busy.wait.clone().wait_for_release();
+                std::future::Future::poll(std::pin::Pin::new(&mut pending),
+                    &mut std::task::Context::from_waker(busy.waker())).is_ready()
+            }
+            super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, wake } => {
+                let mut pending = wait.clone().wait_for_release();
+                std::future::Future::poll(std::pin::Pin::new(&mut pending),
+                    &mut std::task::Context::from_waker(&wake)).is_ready()
+            }
+            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. } => false,
+            super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => {
+                drop(work_ack); drop(completion_guard);
+                return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
+            }
+        };
+        if !ready {
+            return LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
+                guarded: Box::new(GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
+                    LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }, completion_guard)),
+                work_ack,
+            });
+        }
         match work_ack.queue.retry_lifecycle_decision_apply(task) {
             Ok(()) => {
                 work_ack.acknowledge_retry_publication();
@@ -798,7 +814,7 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
                 LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
                     guarded: Box::new(
                         GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
-                            LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference },
+                            LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal },
                             completion_guard,
                         ),
                     ),
@@ -988,14 +1004,15 @@ enum V2IoCompletion {
     RecoveredDecisionFetchBodyPersisted(
         Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
     ),
-    Applied(Box<DurableApplyCompletion>),
+    Applied(Box<super::v2_apply::native_validation::PublishedApplyCompletion>),
+    NativeSourceRecovered(super::v2_apply::native_validation::NativeSourceRecoveryCompletion),
     LifecycleDecisionApply(Box<GuardedLifecycleDecisionApplyWorkerResultV1>),
     RecoveredLifecycleSign(Box<GuardedRecoveredLifecycleSignWorkerResultV1>),
     LifecycleValidate(Box<GuardedLifecycleValidateWorkerResultV1>),
     LifecycleCertifiedServe(Box<GuardedLifecycleCertifiedServeWorkerResultV1>),
     ApplyDeferred {
-        work_id: EffectWorkId,
-        reference: CertifiedMergeLedgerReference,
+        task: ApplyTask,
+        refusal: super::v2_body_store::LocalValidationRefusal,
     },
     #[cfg(test)]
     AuxiliaryNoop,
@@ -1087,9 +1104,8 @@ impl V2IoCompletion {
     }
     fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
         match self {
-            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
-                V2IoCompletionAcknowledgement::Work(*work_id)
-            }
+            Self::Signature { work_id, .. } => V2IoCompletionAcknowledgement::Work(*work_id),
+            Self::ApplyDeferred { task, .. } => V2IoCompletionAcknowledgement::Work(task.id()),
             Self::Stored(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::CertifiedFetchBodyPersisted(_) => {
                 V2IoCompletionAcknowledgement::LifecycleWorkRetained
@@ -1108,7 +1124,8 @@ impl V2IoCompletion {
             Self::LifecycleCertifiedServe(_) => {
                 V2IoCompletionAcknowledgement::LifecycleServeRetained
             }
-            Self::CandidateLoaded(_)
+            Self::NativeSourceRecovered(_)
+            | Self::CandidateLoaded(_)
             | Self::CandidateLoadUnavailable { .. }
             | Self::CandidateLoadFailed { .. }
             | Self::Retired
@@ -1456,8 +1473,8 @@ fn report_post_finality_cleanup_warning(
 impl V2IoHandle {
     fn spawn(
         body_store: V2BodyStore,
-        apply_service: V2ApplyService,
-        context: wire::HeightContext,
+        apply_service: super::v2_apply::NativeApplyService,
+        verified_context: super::v2::VerifiedHeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
         kagemusha_mint_finality_authority: Option<
@@ -1468,6 +1485,11 @@ impl V2IoHandle {
         observer_serve_capacity: usize,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
+        let context = verified_context.context().clone();
+        let (apply_service, mut retained_validation) = apply_service.into_parts();
+        if !retained_validation.matches_store(&body_store.instance_identity()) {
+            return Err("worker startup changed its retained validation store".into());
+        }
         let admission = Arc::new(V2IoAdmission::new(
             auxiliary_queue_capacity,
             consensus_queue_capacity,
@@ -1606,48 +1628,44 @@ impl V2IoHandle {
                                             )
                                         })
                                         .map_err(|(error, _task)| error.to_string()),
+                                    V2IoCommand::CompleteNativeSource { subject, request, response } =>
+                                        retained_validation.complete_native_source(subject, &request, &response)
+                                            .map(V2IoCompletion::NativeSourceRecovered)
+                                            .map_err(|error| error.to_string()),
                                     V2IoCommand::LifecycleValidate(task) => {
                                         if !task.matches_exact() {
                                             Err("lifecycle Validate command changed after queue publication"
                                                 .to_owned())
                                         } else {
                                             let key = task.key;
-                                            let result = task.dispatch.execute(
+                                            let result = task.dispatch.execute_retained(
                                                 body_store.as_mut().expect("body store remains live before Retire"),
-                                                |body| apply_service.validate_candidate(&context, body),
+                                                &mut retained_validation,
                                             );
                                             lifecycle_validate_worker_completion(key, result, Arc::clone(&output_guard))
                                         }
                                     }
-                                    V2IoCommand::Apply(task) => match apply_service.execute(
+                                    V2IoCommand::Apply(task) => match apply_service.execute_retained_apply(
                                         &context,
-                                        body_store
-                                            .as_mut()
-                                            .expect("body store remains live before Retire"),
+                                        body_store.as_mut().expect("body store remains live before Retire"),
+                                        &mut retained_validation,
                                         &task,
                                     ) {
                                         Ok(completion) => {
                                             Ok(V2IoCompletion::Applied(Box::new(completion)))
                                         }
-                                        Err(
-                                            super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
-                                                reference,
-                                            },
-                                        ) => Ok(V2IoCompletion::ApplyDeferred {
-                                            work_id: task.id(),
-                                            reference,
-                                        }),
+                                        Err(super::v2_apply::V2ApplyError::LocalValidation(refusal)) =>
+                                            Ok(V2IoCompletion::ApplyDeferred { task, refusal }),
                                         Err(error) if error.requires_restart_recovery() => {
                                             Ok(V2IoCompletion::RecoveryRequired(error.to_string()))
                                         }
                                         Err(error) => Err(error.to_string()),
                                     },
                                     V2IoCommand::LifecycleDecisionApply(task) => apply_service
-                                        .execute_lifecycle_decision_apply(
+                                        .execute_retained_lifecycle_apply(
                                             &context,
-                                            body_store
-                                                .as_mut()
-                                                .expect("body store remains live before Retire"),
+                                            body_store.as_mut().expect("body store remains live before Retire"),
+                                            &mut retained_validation,
                                             task,
                                         )
                                         .map(|result| {
@@ -2054,5 +2072,25 @@ impl V2IoHandle {
                 .map_err(|_| "Sumeragi v2 I/O worker panicked".to_owned())?;
         }
         Ok(())
+    }
+}
+
+/// Probe only the actual original publication dependency before requeueing Apply.
+fn local_apply_refusal_ready(refusal: &super::v2_body_store::LocalValidationRefusal) -> Result<bool, String> {
+    use super::v2_body_store::LocalValidationRefusal;
+    match refusal {
+        LocalValidationRefusal::PhysicalBusy(busy) => {
+            let mut pending = busy.wait.clone().wait_for_release();
+            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
+                &mut std::task::Context::from_waker(busy.waker())).is_ready())
+        }
+        LocalValidationRefusal::QueueRelease { wait, wake } => {
+            let mut pending = wait.clone().wait_for_release();
+            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
+                &mut std::task::Context::from_waker(wake)).is_ready())
+        }
+        LocalValidationRefusal::RecoveryRequired(reason) => Err(reason.clone()),
+        LocalValidationRefusal::NativeSourceRecovery { .. } => Err(
+            "validated Apply lost its original Native source custody".into()),
     }
 }

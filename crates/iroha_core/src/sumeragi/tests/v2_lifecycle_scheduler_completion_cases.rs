@@ -578,13 +578,7 @@ mod recovered_sign_capacity_tests {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id,
-                0,
-                1,
-                u64::MAX,
-                &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,

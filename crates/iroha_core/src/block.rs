@@ -12174,15 +12174,12 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let mint_finality_authority =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+            let (mint_finality_authorization, mint_finality_authority) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     state.network_id,
-                    0,
+                    u64::MAX,
                     &roster,
                 );
-            let mint_finality_authorization = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
-                &mint_finality_authority, u64::MAX,
-            ).expect("cache fixture has exact genesis authorization");
             let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let mut parent_context = wire::HeightContext {
                 network_id: state.network_id,
@@ -12641,10 +12638,8 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -13912,10 +13907,8 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     state.network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -14873,10 +14866,8 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -19483,10 +19474,8 @@ pub(crate) mod valid {
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );

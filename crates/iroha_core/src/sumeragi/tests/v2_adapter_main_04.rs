@@ -1316,13 +1316,24 @@ mod kagemusha_finality_boundary {
         fn new() -> Self {
             let (mut context, keys, pops) = authenticated_context();
             context.epoch_end_height = context.height;
-            context.kagemusha_mint_finality_authorization.last_height = context.height;
-            let next_authority = context.kagemusha_mint_finality_authority.clone();
-            let next_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(&context.kagemusha_mint_finality_authorization, &next_authority, context.height + 100, iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain);
+            context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
+            let next_roster = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+                context.network_id,
+                context.kagemusha_mint_finality_authority.generation + 1,
+                &context.roster,
+            );
+            let next_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &context.kagemusha_mint_finality_authorization,
+            &next_roster,
+            context.height + 100,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
+        );
             context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
                 epoch: context.epoch + 1,
                 kagemusha_mint_finality_authorization: next_authorization,
-                kagemusha_mint_finality_authority: next_authority,
+                kagemusha_mint_finality_authority: next_roster,
                 epoch_end_height: context.height + 100,
                 mode: context.mode,
                 roster: context.roster.clone(),
@@ -1619,10 +1630,10 @@ mod kagemusha_finality_boundary {
         message: &KagemushaMintFinalitySealMessageV1,
     ) -> Vec<(&'static str, KagemushaMintFinalitySealMessageV1)> {
         let changes: [(&str, fn(&mut KagemushaMintFinalitySealMessageV1)); 11] = [
-            ("epoch authorization", |m| {
+            ("finality authority", |m| {
                 m.epoch_authorization.authority_id[0] ^= 1;
                 if let Some(next) = &mut m.next_epoch_authorization {
-                    next.authority_id = m.epoch_authorization.authority_id;
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed authorization identity");
                 }
             }),
             ("validator count", |m| m.validator_count = 7),
@@ -1631,6 +1642,7 @@ mod kagemusha_finality_boundary {
                 m.epoch_authorization.network_id = m.network_id;
                 if let Some(next) = &mut m.next_epoch_authorization {
                     next.network_id = m.network_id;
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed network authorization");
                 }
             }),
             ("height", |m| {
@@ -1638,6 +1650,7 @@ mod kagemusha_finality_boundary {
                 m.epoch_authorization.last_height += 1;
                 if let Some(next) = &mut m.next_epoch_authorization {
                     next.first_height += 1;
+                    next.previous_authorization_id = m.epoch_authorization.authorization_id().expect("changed height authorization");
                 }
             }),
             ("context", |m| {
@@ -1654,10 +1667,7 @@ mod kagemusha_finality_boundary {
             }),
             ("top-up count", |m| m.kagemusha_top_up_count += 1),
             ("next epoch", |m| {
-                m.next_epoch_authorization
-                    .as_mut()
-                    .expect("boundary successor")
-                    .last_height += 1
+                m.next_epoch_authorization.as_mut().expect("boundary successor").last_height += 1
             }),
             ("missing next epoch", |m| m.next_epoch_authorization = None),
         ];

@@ -56,6 +56,185 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Keep the actual State/Kura publication until the process driver takes it.
+    pub(in crate::sumeragi) fn retain_native_publication(
+        &mut self,
+        published: super::v2_apply::PublishedNativeCarrier,
+    ) -> Result<(), super::v2_apply::PublishedNativeCarrier> {
+        if self.pending_native_publication.is_some() {
+            return Err(published);
+        }
+        self.pending_native_publication = Some(published);
+        Ok(())
+    }
+
+    pub(in crate::sumeragi) fn has_native_publication(&self) -> bool {
+        self.pending_native_publication.is_some()
+    }
+
+    /// Move rather than reconstruct the exact completion produced by the worker.
+    pub(in crate::sumeragi) fn take_native_publication(
+        &mut self,
+    ) -> Option<super::v2_apply::PublishedNativeCarrier> {
+        self.pending_native_publication.take()
+    }
+
+    /// Join the exact worker recovery receipt to its still-retained Validate dispatch.
+    pub(in crate::sumeragi) fn drive_native_source_wait(
+        &mut self,
+        retained: &mut RetainedLocalLifecycleValidateV1,
+    ) -> Result<(), String> {
+        if let Some(completion) = self.native_source_completion.as_ref() {
+            if !retained.accept_native_source_completion(completion) {
+                return Err(
+                    "native source receipt does not belong to the retained Validate".into(),
+                );
+            }
+            self.native_source_completion.take();
+            self.native_source_wait.take();
+        }
+        if let Some((subject, execution_index, source)) = retained.native_source_recovery() {
+            if let Some(wait) = self.native_source_wait.as_ref() {
+                if wait.subject != subject
+                    || wait.execution_index != execution_index
+                    || !Arc::ptr_eq(&wait.source, source)
+                {
+                    return Err(
+                        "native source recovery attempted to replace an original Validate owner"
+                            .into(),
+                    );
+                }
+            } else {
+                self.native_source_wait = Some(NativeSourceWait {
+                    subject,
+                    execution_index,
+                    source: Arc::clone(source),
+                    dispatched: false,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Borrow the original request need until its exact response enters the worker.
+    pub(in crate::sumeragi) fn native_source_requirement(
+        &self,
+    ) -> Option<(
+        wire::BlockSubject,
+        usize,
+        Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+    )> {
+        self.native_source_wait
+            .as_ref()
+            .filter(|wait| !wait.dispatched)
+            .map(|wait| (wait.subject, wait.execution_index, Arc::clone(&wait.source)))
+    }
+
+    /// Move an authenticated response into the same worker that retained the candidate.
+    pub(in crate::sumeragi) fn complete_native_source(
+        &mut self,
+        subject: wire::BlockSubject,
+        request: super::v2_transport::AuthenticatedCertifiedBodyRequest,
+        response: super::v2_transport::AuthenticatedCertifiedBodyResponse,
+    ) -> NativeSourceCompletionAdmission {
+        let Some(wait) = self
+            .native_source_wait
+            .as_mut()
+            .filter(|wait| wait.subject == subject && !wait.dispatched)
+        else {
+            return NativeSourceCompletionAdmission::Rejected {
+                request,
+                response,
+                reason: "native source response has no original Validate owner".into(),
+            };
+        };
+        let Some(io) = self.io.as_ref() else {
+            return NativeSourceCompletionAdmission::Rejected {
+                request,
+                response,
+                reason: "native source worker is disconnected".into(),
+            };
+        };
+        let result = io.try_enqueue(V2IoCommand::CompleteNativeSource {
+            subject,
+            request,
+            response,
+        });
+        let (command, reason) = match result {
+            Ok(()) => {
+                wait.dispatched = true;
+                return NativeSourceCompletionAdmission::Accepted;
+            }
+            Err(V2IoTrySendError::Full(command)) => (command, None),
+            Err(V2IoTrySendError::Disconnected(command)) => {
+                (command, Some("native source worker disconnected".into()))
+            }
+            Err(
+                V2IoTrySendError::ConflictingWorkId { command, .. }
+                | V2IoTrySendError::UnreservedLifecycleDecisionApply { command, .. },
+            ) => (
+                command,
+                Some("native source command violated its exact admission identity".into()),
+            ),
+        };
+        let V2IoCommand::CompleteNativeSource {
+            request, response, ..
+        } = command
+        else {
+            unreachable!("I/O admission always returns the same command owner")
+        };
+        match reason {
+            None => NativeSourceCompletionAdmission::Retry { request, response },
+            Some(reason) => NativeSourceCompletionAdmission::Rejected {
+                request,
+                response,
+                reason,
+            },
+        }
+    }
+
+    /// Requeue the original Apply only after its actual local dependency releases.
+    fn retry_local_apply(&mut self) -> Result<(), String> {
+        let Some((task, refusal)) = self.pending_local_apply.take() else {
+            return Ok(());
+        };
+        match local_apply_refusal_ready(&refusal) {
+            Ok(false) => {
+                self.pending_local_apply = Some((task, refusal));
+                return Ok(());
+            }
+            Err(reason) => {
+                self.pending_local_apply = Some((task, refusal));
+                return Err(reason);
+            }
+            Ok(true) => {}
+        }
+        let Some(io) = self.io.as_ref() else {
+            self.pending_local_apply = Some((task, refusal));
+            return Err("retained Apply lost its worker".into());
+        };
+        let (command, reason) = match io.try_enqueue(V2IoCommand::Apply(task)) {
+            Ok(()) => return Ok(()),
+            Err(V2IoTrySendError::Full(command)) => (command, None),
+            Err(V2IoTrySendError::Disconnected(command)) => (
+                command,
+                Some("retained Apply worker disconnected".to_owned()),
+            ),
+            Err(
+                V2IoTrySendError::ConflictingWorkId { command, .. }
+                | V2IoTrySendError::UnreservedLifecycleDecisionApply { command, .. },
+            ) => (
+                command,
+                Some("retained Apply changed original work identity".to_owned()),
+            ),
+        };
+        let V2IoCommand::Apply(task) = command else {
+            unreachable!("I/O admission returns the original command");
+        };
+        self.pending_local_apply = Some((task, refusal));
+        reason.map_or(Ok(()), Err)
+    }
+
     /// Linearize one Runtime step after the physical Completion prefix.
     ///
     /// `RetryCompletion` leaves Runtime untouched and sends the outer driver
@@ -1133,10 +1312,9 @@ impl ProductionV2Services {
     /// Start the ordered I/O adapter for one immutable height context.
     #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn start(
-        context: wire::HeightContext,
+        verified_context: super::v2::VerifiedHeightContext,
         initial_tag: EventTag,
         durable_decided_subject: Option<wire::BlockSubject>,
-        validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
@@ -1164,6 +1342,7 @@ impl ProductionV2Services {
             super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let apply_service = V2ApplyService::new(
             Arc::clone(&state),
             queue,
@@ -1175,11 +1354,16 @@ impl ProductionV2Services {
             events_sender,
             validator_set_pops.clone(),
         );
+        let apply_service = super::v2_apply::NativeApplyService::new(
+            apply_service,
+            &body_store,
+            verified_context.clone(),
+        )
+        .map_err(|error| error.to_string())?;
         Self::start_inner(
-            context,
+            verified_context,
             initial_tag,
             durable_decided_subject,
-            validator_set_pops,
             local_peer,
             local_validator,
             None,
@@ -1205,10 +1389,9 @@ impl ProductionV2Services {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn start_with_apply_service(
         _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
-        context: wire::HeightContext,
+        verified_context: super::v2::VerifiedHeightContext,
         initial_tag: EventTag,
         durable_decided_subject: Option<wire::BlockSubject>,
-        validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         kagemusha_mint_finality_authority: Option<
@@ -1220,7 +1403,7 @@ impl ProductionV2Services {
         payload_store_identity: CertifiedServePayloadStoreInstanceIdentity,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
-        apply_service: V2ApplyService,
+        apply_service: super::v2_apply::NativeApplyService,
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
@@ -1231,6 +1414,8 @@ impl ProductionV2Services {
             super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
+        let context = verified_context.context().clone();
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         if !state.matches_kura_instance(&kura)
             || !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)
         {
@@ -1240,10 +1425,9 @@ impl ProductionV2Services {
             );
         }
         Self::start_inner(
-            context,
+            verified_context,
             initial_tag,
             durable_decided_subject,
-            validator_set_pops,
             local_peer,
             local_validator,
             kagemusha_mint_finality_authority,
@@ -1328,10 +1512,9 @@ impl ProductionV2Services {
 
     #[allow(clippy::too_many_arguments)]
     fn start_inner(
-        context: wire::HeightContext,
+        verified_context: super::v2::VerifiedHeightContext,
         initial_tag: EventTag,
         durable_decided_subject: Option<wire::BlockSubject>,
-        validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         kagemusha_mint_finality_authority: Option<
@@ -1343,7 +1526,7 @@ impl ProductionV2Services {
         lifecycle_payload_store_identity: Option<CertifiedServePayloadStoreInstanceIdentity>,
         state: Arc<crate::state::State>,
         kura: Arc<crate::kura::Kura>,
-        apply_service: V2ApplyService,
+        apply_service: super::v2_apply::NativeApplyService,
         consensus_io_capacity: usize,
         auxiliary_io_capacity: usize,
         orphan_chunk_capacity: usize,
@@ -1354,6 +1537,8 @@ impl ProductionV2Services {
             super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
+        let context = verified_context.context().clone();
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let construction_guard = Arc::clone(&output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
@@ -1427,7 +1612,7 @@ impl ProductionV2Services {
         let io = V2IoHandle::spawn(
             body_store,
             apply_service,
-            context.clone(),
+            verified_context,
             key_pair.clone(),
             local_validator,
             kagemusha_mint_finality_authority,
@@ -1461,6 +1646,10 @@ impl ProductionV2Services {
             max_merge_sidecar_deferrals: consensus_io_capacity,
             local_completions: VecDeque::new(),
             held_io_completion: None,
+            pending_native_publication: None,
+            pending_local_apply: None,
+            native_source_wait: None,
+            native_source_completion: None,
             next_completion_source: CompletionSource::Io,
             locked_candidate_acquisition: None,
             next_locked_candidate_acquisition_id: 0,
@@ -3158,6 +3347,9 @@ impl ProductionV2Services {
             let reason = self.output_guard.restart_error();
             return Err(executor.external_service_failed(&reason, self));
         }
+        if let Err(reason) = self.retry_local_apply() {
+            return Err(executor.external_service_failed(reason, self));
+        }
         let mut count = 0usize;
         let mut attempts = 0usize;
         let mut worker_completion_deferred = false;
@@ -3276,12 +3468,45 @@ impl ProductionV2Services {
                             });
                     }
                     PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::NativeSourceRecovered(completion),
+                        ..
+                    } => {
+                        let Some(wait) = self.native_source_wait.as_ref() else {
+                            return Err(executor.external_service_failed(
+                                "native source receipt has no retained Validate owner",
+                                self,
+                            ));
+                        };
+                        if !wait.dispatched
+                            || !completion.matches(wait.subject, wait.execution_index, &wait.source)
+                            || self.native_source_completion.is_some()
+                        {
+                            return Err(executor.external_service_failed(
+                                "native source receipt changed original Validate identity",
+                                self,
+                            ));
+                        }
+                        self.native_source_completion = Some(completion);
+                    }
+                    PendingServiceCompletion::Io {
                         completion: V2IoCompletion::Applied(completion),
                         ..
                     } => {
                         let source_height = completion.artifact().height;
                         let source_block_hash = completion.artifact().block_hash;
-                        let disposition = executor.complete_application(*completion, self)?;
+                        let super::v2_apply::native_validation::PublishedApplyCompletion {
+                            completion,
+                            published,
+                        } = *completion;
+                        if let Err(_original) = self.retain_native_publication(published) {
+                            return Err(executor.external_service_failed(
+                                "one height returned a second actual State publication",
+                                self,
+                            ));
+                        }
+                        // Physical State publication already happened. Retain its
+                        // actual owner even if executor acknowledgement fails.
+                        let disposition = executor.complete_application(completion, self)?;
                         if disposition == CompletionDisposition::Accepted {
                             self.kura_replica_advert_refresh
                                 .note_durable_tip(
@@ -3292,11 +3517,16 @@ impl ProductionV2Services {
                         }
                     }
                     PendingServiceCompletion::Io {
-                        completion: V2IoCompletion::ApplyDeferred { work_id, reference },
+                        completion: V2IoCompletion::ApplyDeferred { task, refusal },
                         ..
                     } => {
-                        let _ = executor
-                            .defer_application_for_merge_sidecar(work_id, &reference, self)?;
+                        if self.pending_local_apply.is_some() {
+                            return Err(executor.external_service_failed(
+                                "second Apply bypassed its original local dependency owner",
+                                self,
+                            ));
+                        }
+                        self.pending_local_apply = Some((task, refusal));
                     }
                     #[cfg(test)]
                     PendingServiceCompletion::Io {
@@ -3894,6 +4124,7 @@ impl ProductionV2Services {
                 }
                 V2IoCommand::LifecycleValidate(_) => &mut queued_command_kinds.validates,
                 V2IoCommand::Apply(_) => &mut queued_command_kinds.applies,
+                V2IoCommand::CompleteNativeSource { .. } => &mut queued_command_kinds.validates,
                 V2IoCommand::LifecycleDecisionApply(_) => {
                     &mut queued_command_kinds.decision_applies
                 }
@@ -4384,14 +4615,56 @@ impl ProductionV2Services {
         operation.complete();
         Ok(pending_remains)
     }
-    /// After exact Kura/finality authority, transfer finalized height-local,
-    /// durable lane, Kura-backed response, and exact-scope sidecar output to
-    /// reconstruction; manual or cross-scope output stays owned.
+    /// Transfer global output only after original Native publication and settlement.
+    pub(crate) fn handoff_native_height_output_to_durable_reconstruction(
+        &self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+        authority: &super::v2_runner::NativeFinalizedOutputAuthority<'_>,
+    ) -> Result<usize, String> {
+        authority.authenticate(&self.state, receipt, artifact)?;
+        self.handoff_applied_height_output_inner(receipt, artifact, None)
+    }
+
+    /// Seal the exact global corridor while retaining the actual published owner.
+    pub(crate) fn seal_native_height_output_handoff(
+        &self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+        authority: &super::v2_runner::NativeFinalizedOutputAuthority<'_>,
+    ) -> Result<DurableExactOutputHandoffReceipt, String> {
+        authority.authenticate(&self.state, receipt, artifact)?;
+        self.seal_applied_height_output_inner(receipt, artifact, None)
+    }
+
+    #[cfg(test)]
     pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(
         &self,
         receipt: &KuraV2CommitReceipt,
         artifact: &wire::finality::V2FinalityArtifact,
-        durable_lane_authority: &DurableLaneRolloverAuthority,
+        authority: &DurableLaneRolloverAuthority,
+    ) -> Result<usize, String> {
+        self.handoff_applied_height_output_inner(receipt, artifact, Some(authority))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seal_applied_height_output_handoff(
+        &self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+        authority: &DurableLaneRolloverAuthority,
+    ) -> Result<DurableExactOutputHandoffReceipt, String> {
+        self.seal_applied_height_output_inner(receipt, artifact, Some(authority))
+    }
+
+    /// After exact Kura/finality authority, transfer finalized height-local,
+    /// durable lane, Kura-backed response, and exact-scope sidecar output to
+    /// reconstruction; manual or cross-scope output stays owned.
+    fn handoff_applied_height_output_inner(
+        &self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+        durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
     ) -> Result<usize, String> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -4409,7 +4682,7 @@ impl ProductionV2Services {
                 pending.pending_kura_replica_advert_heights()?;
             let retired = pending.handoff_applied_height_to_durable_reconstruction(
                 artifact,
-                Some(durable_lane_authority),
+                durable_lane_authority,
                 Some(self.kura.as_ref()),
             )?;
             (retired, retired_kura_replica_advert_heights)
@@ -4433,11 +4706,11 @@ impl ProductionV2Services {
     }
     /// After lane handoff quiesces, revalidate authority, perform the final
     /// atomic handoff, require emptiness, seal enqueue, and mint one receipt.
-    pub(crate) fn seal_applied_height_output_handoff(
+    fn seal_applied_height_output_inner(
         &self,
         receipt: &KuraV2CommitReceipt,
         artifact: &wire::finality::V2FinalityArtifact,
-        durable_lane_authority: &DurableLaneRolloverAuthority,
+        durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
     ) -> Result<DurableExactOutputHandoffReceipt, String> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -4448,7 +4721,7 @@ impl ProductionV2Services {
             let mut pending = self.lock_pending_exact_output()?;
             let retired = pending.handoff_applied_height_to_durable_reconstruction(
                 artifact,
-                Some(durable_lane_authority),
+                durable_lane_authority,
                 Some(self.kura.as_ref()),
             )?;
             if pending.is_pending() {

@@ -1344,6 +1344,10 @@ fn verify_successor_bridge_finality_proof(
         .map_or_else(
             || {
                 context.epoch == parent.height_context.epoch
+                    && context.kagemusha_mint_finality_authorization
+                        == parent.height_context.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == parent.height_context.kagemusha_mint_finality_authority
                     && context.epoch_end_height == parent.height_context.epoch_end_height
                     && context.roster == parent.height_context.roster
                     && context.quorum == parent.height_context.quorum
@@ -1352,6 +1356,10 @@ fn verify_successor_bridge_finality_proof(
             },
             |snapshot| {
                 context.epoch == snapshot.epoch
+                    && context.kagemusha_mint_finality_authorization
+                        == snapshot.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == snapshot.kagemusha_mint_finality_authority
                     && context.epoch_end_height == snapshot.epoch_end_height
                     && context.mode == snapshot.mode
                     && context.roster == snapshot.roster
@@ -3191,6 +3199,11 @@ mod tests {
             .finality_artifact
             .height_context
             .epoch_end_height += 1;
+        substituted
+            .finality_artifact
+            .height_context
+            .kagemusha_mint_finality_authorization
+            .last_height += 1;
         resign_v2_proof(
             &mut substituted,
             parent
@@ -3210,6 +3223,89 @@ mod tests {
             Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
             "cheap authenticated-schedule rejection must precede hostile BLS work"
         );
+    }
+    #[test]
+    fn successor_rejects_resigned_mint_authority_and_authorization_substitutions() {
+        use crate::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,
+        };
+
+        for boundary in [false, true] {
+            let initial = make_boundary_v2_fixture("mint-authority-substitution");
+            let parent = if boundary {
+                initial
+            } else {
+                V2Fixture {
+                    proof: make_successor_v2_proof(&initial),
+                    keys: initial.successor_keys.expect("activated successor keys"),
+                    successor_keys: None,
+                }
+            };
+            let child = make_successor_v2_proof(&parent);
+            let network_id = parent.proof.finality_artifact.height_context.network_id;
+            let context_anchor = parent.proof.finality_artifact.context_id();
+            let signing_keys = parent.successor_keys.as_deref().unwrap_or(&parent.keys);
+            for substitution in 0..7 {
+                let mut substituted = child.clone();
+                let context = &mut substituted.finality_artifact.height_context;
+                let authority = &mut context.kagemusha_mint_finality_authority;
+                let authorization = &mut context.kagemusha_mint_finality_authorization;
+                match substitution {
+                    0 => {
+                        let first = authority.validators[0].eq_proof_public_key;
+                        authority.validators[0].eq_proof_public_key =
+                            authority.validators[1].eq_proof_public_key;
+                        authority.validators[1].eq_proof_public_key = first;
+                        authorization.authority_id = authority.authority_id().unwrap();
+                    }
+                    1 => {
+                        authority.generation += 1;
+                        authorization.authority_generation = authority.generation;
+                        authorization.authority_id = authority.authority_id().unwrap();
+                    }
+                    2 | 3 => {
+                        let BeaconEpochBindingV1::Installed(binding) = &mut authorization.beacon
+                        else {
+                            panic!("successor fixture requires the installed beacon binding");
+                        };
+                        if substitution == 2 {
+                            binding.session_id[0] ^= 0x80;
+                        } else {
+                            binding.transcript_hash[0] ^= 0x80;
+                        }
+                    }
+                    4 => authorization.previous_authorization_id[0] ^= 0x80,
+                    5 => authorization.transition_id[0] ^= 0x80,
+                    6 => {
+                        authorization.decision =
+                            KagemushaMintFinalityEpochDecisionV1::RetainAndCancel
+                    }
+                    _ => unreachable!(),
+                }
+                resign_v2_proof(&mut substituted, signing_keys);
+                verify_bridge_finality_proof(&substituted, &network_id)
+                    .expect("substitution remains internally consistent with real BLS signatures");
+
+                let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
+                verifier
+                    .verify(&parent.proof)
+                    .expect("authenticated parent");
+                assert_eq!(
+                    verifier.verify(&substituted),
+                    Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
+                    "boundary={boundary}, substitution={substitution}",
+                );
+                substituted.finality_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
+                assert_eq!(
+                    verifier.verify(&substituted),
+                    Err(BridgeFinalityVerifyError::SuccessorContextMismatch),
+                    "authenticated authority rejection must precede hostile child BLS work",
+                );
+                verifier
+                    .verify(&child)
+                    .expect("rejected substitution leaves progress unchanged");
+            }
+        }
     }
     #[test]
     fn rotated_boundary_rejects_old_permuted_pops_and_old_key_signatures() {

@@ -58,9 +58,12 @@ now fills bounded intervals directly from mask coefficients, constant/bitset/raw
 fixed columns and permutation target IDs. It uses constant-size decoding scratch
 without allocating a full column, and clears the entire output on invalid input,
 I/O failure or unwind. Original-source authentication and failure poisoning remain
-the consuming owner's responsibility; the reader supplies neither proof authority
-nor coefficient/coset transforms. Stored proving and normal Core generation still
-retain dense keys pending consuming indexed-owner integration.
+the consuming owner's responsibility. The additional coefficient reader reuses a
+caller-owned guarded column and the original normalized transform. A private
+adapter seals that column into an exact fixed/permutation/mask storage role;
+role identity and a sealed snapshot alone supply no key-source authority. Stored
+proving and normal Core generation still retain dense keys pending consuming
+indexed-owner integration.
 
 The authenticated Core indexed-key owner and encrypted polynomial store are
 present but remain separate from normal production proof entry points: the six
@@ -130,14 +133,28 @@ activation must stay enforced throughout this work.
 
 ## Current validation boundary — 2026-09-22
 
-The later indexed-reader candidate passes the same **18 functions in default and
-no-multicore builds (36 executions)**: four new reader tests and fourteen structured
-codec regressions. All 262 captured inputs match across both windows and the
-0.311 s non-test library check, which reuses a fresh Cargo artifact. The
-[indexed-reader note](../docs/history/2026-09-22/kagemusha-readiness/indexed-reader-validation.md)
-records this separate candidate. A consecutive-target regression across the
-n−1→n permutation-coset boundary is staged under the shared vendor-source hold;
-it is not applied or qualified by these tests.
+The fresh Kotlin/JVM KAGEMUSHA selection executes **57 tests: 33 pass, 24 fail,
+zero skipped**, with all 699 captured SDK/build/fixture inputs unchanged. Every
+failure reports unavailable ABI-23 native account-address validation; these are
+not evidence of 24 distinct product assertion defects. The
+[Kotlin validation note](../docs/history/2026-09-22/kagemusha-readiness/kotlin-core-validation.md)
+records the actual JDK 21 command, all JUnit results and exact hashes. A
+current-source native bridge rebuild and rerun are required; this snapshot does
+not bind the Rust native dependency graph or qualify JNI/device execution.
+
+The current indexed-key batch passes the same **79 functions in default and
+no-multicore builds (158 executions)**, with zero failures or ignored tests. All
+267 captured inputs match across both test windows and the passing 3.569 s
+non-test library check. Coverage includes the installed n−1→n permutation-coset
+regression, coefficient conversion, guarded snapshot errors/unwinds, exact key
+roles, advice-role rejection and the prior guarded-inner proof selection. The
+[indexed-key batch note](../docs/history/2026-09-22/kagemusha-readiness/indexed-key-batch-validation.md)
+records exact scopes and hashes. The two new actual Core store-role tests are
+installed but await the separately coordinated root-graph checks. This does not
+qualify consuming indexed-owner integration, Core monetary proofs or hardware.
+
+The earlier 18-function indexed-reader selection remains a separate captured
+candidate in the [reader note](../docs/history/2026-09-22/kagemusha-readiness/indexed-reader-validation.md).
 
 The preceding guarded-inner candidate passes the same **27 distinct test functions in
 default and no-multicore builds: 54 executions, zero failures or ignored tests**.

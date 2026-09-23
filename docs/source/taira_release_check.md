@@ -581,3 +581,16 @@ exits, including failure. Unchanged counts mean no new completed artifacts have
 been observed; they do not imply a stalled compiler. Shipping binaries retain their separate
 feature graph, excluding test-only fixtures; shared source changes can require
 both graphs to rebuild in the same warm target directory.
+
+### Mutable focused source changes
+
+Focused development diagnostics observe Git HEAD, the binary tracked diff and
+content hashes of nonignored untracked files before work begins. They recheck that
+observation before each subsequent source-check, metadata, codegen, configuration,
+focused-runtime and network phase, and before final success. A change stops the
+diagnostic at that boundary; a running child finishes normally, and no child is
+killed or restarted. Start a new explicit check against the intended source.
+Unchanged tracked files are represented by Git HEAD and its diff, rather than
+rehashing the entire tree. This is a race detector, not proof of the source consumed
+by Cargo; it provides no release qualification. Immutable `prepare` retains its
+existing authenticated source and complete gates.

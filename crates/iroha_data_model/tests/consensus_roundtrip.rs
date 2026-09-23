@@ -73,6 +73,29 @@ fn mint_finality_authority(
     }
 }
 
+fn mint_finality_genesis_authorization(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    last_height: u64,
+) -> KagemushaMintFinalityEpochAuthorizationV1 {
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: authority.network_id,
+        epoch: 0,
+        first_height: 1,
+        last_height,
+        authority_generation: authority.generation,
+        authority_id: authority.authority_id().expect("valid fixture authority"),
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: KagemushaMintFinalityEpochDecisionV1::Genesis,
+    };
+    authorization
+        .validate_against_authority(authority)
+        .expect("valid fixture genesis authorization");
+    authorization
+}
+
 fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
     SumeragiV2GenesisContextParameters::recommended()
 }
@@ -251,38 +274,60 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
     roster.sort();
     let height = rng.next_u64().max(2);
     let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
-    let epoch = rng.next_u64().max(1);
-    let authority = mint_finality_authority(network_id, 0, &roster);
-    // This randomized codec fixture carries a shape-valid retained schedule; it
-    // does not attempt to synthesize an arbitrary-length certified history.
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1,
-        network_id,
-        epoch,
-        first_height: 2,
-        last_height: height,
-        authority_generation: authority.generation,
-        authority_id: authority
-            .authority_id()
-            .expect("valid randomized authority"),
-        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-            session_id: [7; 32],
-            transcript_hash: [8; 32],
-        }),
-        previous_authorization_id: [0x33; 32],
-        transition_id: [0; 32],
-        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+    let authorization_case = rng.next_u64() % 3;
+    let incumbent = mint_finality_authority(network_id, 0, &roster);
+    let (mint_finality_authorization, mint_finality_authority) = if authorization_case == 0 {
+        (
+            mint_finality_genesis_authorization(&incumbent, height),
+            incumbent,
+        )
+    } else {
+        let previous = mint_finality_genesis_authorization(&incumbent, 1);
+        let retained = authorization_case == 1;
+        let authority = if retained {
+            incumbent
+        } else {
+            mint_finality_authority(network_id, 1, &roster)
+        };
+        let authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 1,
+            first_height: 2,
+            last_height: height,
+            authority_generation: authority.generation,
+            authority_id: authority
+                .authority_id()
+                .expect("valid fixture successor authority"),
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: [0xB1; 32],
+                transcript_hash: [0xB2; 32],
+            }),
+            previous_authorization_id: previous
+                .authorization_id()
+                .expect("valid fixture predecessor"),
+            transition_id: if retained { [0; 32] } else { [0xB3; 32] },
+            decision: if retained {
+                KagemushaMintFinalityEpochDecisionV1::Retain
+            } else {
+                KagemushaMintFinalityEpochDecisionV1::Activate
+            },
+        };
+        authorization
+            .validate_against_authority(&authority)
+            .expect("valid successor authority binding");
+        authorization
+            .validate_successor(&previous)
+            .expect("contiguous fixture authorization");
+        (authorization, authority)
     };
-    authorization
-        .validate_against_authority(&authority)
-        .expect("shape-valid codec schedule");
     let context = HeightContext {
         network_id,
         protocol_version: V2_PROTOCOL_VERSION,
         height,
-        epoch,
-        kagemusha_mint_finality_authorization: authorization,
-        kagemusha_mint_finality_authority: authority,
+        epoch: mint_finality_authorization.epoch,
+        kagemusha_mint_finality_authorization: mint_finality_authorization,
+        kagemusha_mint_finality_authority: mint_finality_authority,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,

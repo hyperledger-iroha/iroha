@@ -2649,7 +2649,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600,"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw"}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload

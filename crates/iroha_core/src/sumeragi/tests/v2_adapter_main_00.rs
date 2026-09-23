@@ -79,9 +79,7 @@ fn context() -> wire::HeightContext {
     roster.sort();
     let network_id = test_network_id(0x61);
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            network_id, 0, 1, 100, &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
     wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -167,9 +165,7 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         .collect::<Vec<_>>();
     let network_id = test_network_id(0x62);
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            network_id, 0, 1, 100, &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -408,15 +404,16 @@ fn aggregate_verification_rejects_signer_without_aligned_pop() {
 fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_voting() {
     let (mut context, _keys, proofs) = authenticated_context();
     context.epoch_end_height = context.height;
-    context.kagemusha_mint_finality_authorization.last_height = context.height;
+    context.kagemusha_mint_finality_authorization.last_height = context.epoch_end_height;
     let next_epoch = context.epoch + 1;
     let kagemusha_mint_finality_authority = context.kagemusha_mint_finality_authority.clone();
-    let kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    let kagemusha_mint_finality_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &context.kagemusha_mint_finality_authorization,
             &kagemusha_mint_finality_authority,
             context.height + 10,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
             iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Retain,
+            [0; 32],
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: next_epoch,

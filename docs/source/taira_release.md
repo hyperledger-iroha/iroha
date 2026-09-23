@@ -60,9 +60,11 @@ request records diagnostic options, not the inherited environment or credentials
 `--focus-regression`, `--native-check-scope`, `--native-linker` and the existing
 warm-lane selection work the same way in background mode.
 
-`check-status` prints JSON and starts no work. Exit status is 0 for `passed`, 2
-for `running`, and 1 for `failed` or `incomplete`. Running means the worker or an
-inherited child still holds the session lock. A missing final result after all
+`check-status` prints compact JSON and starts no work. `request_path` points to
+the immutable full request, and `focused_regression_count` reports the number of
+explicit selectors (zero for an unfocused check); the selector list is not repeated.
+Exit status is 0 for `passed`, 2 for `running`, and 1 for `failed` or `incomplete`.
+Running means the worker or an inherited child still holds the session lock. A missing final result after all
 holders exit means incomplete, including worker interruption; a recorded PID
 never decides status. The existing Cargo lane lock remains inherited throughout
 native work. No status command kills, restarts or resumes a process. Inspect the

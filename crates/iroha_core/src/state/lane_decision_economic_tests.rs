@@ -70,6 +70,8 @@ struct NativeEconomicStateSetup {
     fee_asset: AssetId,
     // Fixture input consumed before transaction signing and first admission.
     fee_intent: Option<iroha_data_model::transaction::FeePaymentIntent>,
+    // Real governed policy instructions, executed before first admission.
+    genesis_instructions: Vec<InstructionBox>,
 }
 
 // Do not inline the large constructor into a caller that acquires WorldBlock.
@@ -191,6 +193,7 @@ fn native_economic_state_setup(
         destination,
         fee_asset,
         fee_intent: None,
+        genesis_instructions: Vec::new(),
     }
 }
 
@@ -254,6 +257,32 @@ fn native_economic_fixture_from_state(
     )
 }
 
+// Keep policy execution and its transaction frame out of the large admission
+// constructor. Every instruction uses the actual ISI implementation, including
+// permission checks and canonical authority-policy history creation.
+#[inline(never)]
+fn native_economic_commit_genesis_overlay(
+    state: &State,
+    genesis: &SignedBlock,
+    instructions: Vec<InstructionBox>,
+) {
+    use crate::smartcontracts::Execute as _;
+
+    let mut block = state.block(genesis.header());
+    if !instructions.is_empty() {
+        let mut transaction = block.transaction();
+        for instruction in instructions {
+            instruction
+                .execute(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID, &mut transaction)
+                .expect("execute governed archive prerequisites before Native admission");
+        }
+        transaction.apply();
+    }
+    block
+        .commit_world_overlay_for_testing()
+        .expect("seed actual genesis policies and asset incarnations before metadata publication");
+}
+
 // Only pointer-sized State custody remains live while the actual genesis,
 // admission and finality producers acquire their original nested writers.
 #[inline(never)]
@@ -283,6 +312,7 @@ fn native_economic_fixture_from_state_with_initializer(
         destination,
         fee_asset,
         fee_intent,
+        genesis_instructions,
     } = setup;
     // Convenience State fixtures install default markers eagerly. Follow the
     // actual startup order here, then apply only the usual test runtime limits.
@@ -313,10 +343,7 @@ fn native_economic_fixture_from_state_with_initializer(
     // is still empty, using the production finalizer at this exact header.
     // The generic metadata helper publishes the hash before commit, so it cannot
     // retrospectively supply this genesis-only authority.
-    state
-        .block(genesis.header())
-        .commit_world_overlay_for_testing()
-        .expect("seed actual genesis asset incarnations before metadata publication");
+    native_economic_commit_genesis_overlay(&state, &genesis, genesis_instructions);
     let expected_incarnation = AxtAssetIncarnationV1::derive(
         &state.network_id,
         source.definition(),

@@ -829,15 +829,7 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         "fixture finality artifacts must form a contiguous chain"
     );
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-            network_id,
-            epoch,
-            (epoch)
-                .checked_add(1)
-                .expect("fixture epoch fits positive heights"),
-            epoch_end_height,
-            &roster,
-        );
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, epoch, epoch_end_height, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -918,13 +910,13 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
             .signers
             .iter()
             .map(|index| {
-                // Match the deterministic keys admitted by mint_finality_authorization_and_authority.
+                // Match the deterministic generation keys admitted by the complete authorization fixture.
                 let seed_byte = 0xA0_u8
                     .wrapping_add(u8::try_from(*index).expect("fixture signer fits one byte"));
                 let signer = KagemushaMintFinalitySignerV1::from_seed(
                     zeroize::Zeroizing::new([seed_byte; 32]),
                     *index,
-                    epoch,
+                    &context.kagemusha_mint_finality_authority,
                 )
                 .expect("admit deterministic Kura fixture mint-finality signer");
                 sign_kagemusha_mint_finality_seal_v1(&signer, &message)

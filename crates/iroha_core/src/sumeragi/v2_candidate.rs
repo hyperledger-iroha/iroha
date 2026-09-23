@@ -545,8 +545,8 @@ impl V2CandidateAssembler {
     /// retains the immutable driver handoff across errors; once preparation is
     /// complete, all its waits and evidence return beside the assembly outcome.
     /// No State execution, validation vote, publication or Apply occurs here.
-    /// TODO: connect this entry point together with the retained consumer at the
-    /// process-lived runner cutover; Native ingress remains closed until then.
+    /// The process-lived candidate worker returns this original preparation on
+    /// every outcome; source waits never become ordinary execution or empty work.
     pub(crate) fn assemble_native(
         &self,
         request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
@@ -2478,10 +2478,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id,
-                0,
-                1,
                 u64::MAX,
                 &roster,
             );

@@ -776,36 +776,21 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     let mut boundary_context = adapter.context.clone();
     boundary_context.epoch = current_epoch;
     boundary_context.epoch_end_height = boundary_context.height;
-    let next_epoch = current_epoch.checked_add(1).expect("successor epoch");
-    (
-        boundary_context.kagemusha_mint_finality_authorization,
-        boundary_context.kagemusha_mint_finality_authority,
-    ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-        boundary_context.network_id,
-        current_epoch,
-        current_epoch.checked_add(1).expect("positive epoch height"),
-        boundary_context.height,
-        &boundary_context.roster,
-    );
-    let kagemusha_mint_finality_authority =
-        crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            boundary_context.network_id,
-            boundary_context
-                .kagemusha_mint_finality_authority
-                .generation
-                .checked_add(1)
-                .expect("next authority generation"),
-            &successor_roster,
+    (boundary_context.kagemusha_mint_finality_authorization, boundary_context.kagemusha_mint_finality_authority) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+            boundary_context.network_id, current_epoch, boundary_context.height, &boundary_context.roster,
         );
-    let kagemusha_mint_finality_authorization =
-        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    let next_epoch = current_epoch.checked_add(1).expect("successor epoch");
+    let kagemusha_mint_finality_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
+        boundary_context.network_id, boundary_context.kagemusha_mint_finality_authority.generation + 1, &successor_roster,
+    );
+    let kagemusha_mint_finality_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &boundary_context.kagemusha_mint_finality_authorization,
             &kagemusha_mint_finality_authority,
-            boundary_context
-                .height
-                .checked_add(epoch_length.get())
-                .expect("successor epoch end height"),
+            boundary_context.height.checked_add(epoch_length.get()).expect("successor epoch end height"),
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
             iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
+            [0x73; 32],
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: next_epoch,

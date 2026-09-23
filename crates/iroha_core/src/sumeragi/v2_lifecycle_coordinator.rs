@@ -314,8 +314,7 @@ pub(crate) use selector::{
     certified_fetch_preledger_productive_ingress_token,
 };
 pub(in crate::sumeragi) use validate_sidecar::{
-    CancelledLifecycleValidateSidecarV1, LifecycleValidateSidecarDriveV1,
-    LifecycleValidateSidecarRegistrationIdentityV1, RegisteredLifecycleValidateSidecarWaitV1,
+    CancelledLifecycleValidateSidecarV1, LifecycleValidateSidecarRegistrationIdentityV1,
 };
 #[cfg_attr(
     not(test),
@@ -376,14 +375,14 @@ pub(crate) use work_registry::{
     RecoveredWalValidateRegistryCut, RecoveredWalValidateRegistryJoinError,
 };
 pub(in crate::sumeragi) use work_registry::{
-    DeferredDurableValidateDispatch, DurableValidateCompletionPublication, DurableValidateDispatch,
-    ExecutedDurableValidateDispatch, LiveValidateApplyRegistryReservation,
-    LiveValidateApplyWorkProjectionPermit, LiveValidateReportRegistryReservation,
-    LiveValidateReportWorkProjectionPermit, LiveValidateSignRegistryReservation,
-    LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
-    PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
-    PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
-    ReadyValidateSuccessorV1, ReadyValidatedExecutorCatalogAuthorityV1,
+    DurableValidateCompletionPublication, DurableValidateDispatch, ExecutedDurableValidateDispatch,
+    LiveValidateApplyRegistryReservation, LiveValidateApplyWorkProjectionPermit,
+    LiveValidateReportRegistryReservation, LiveValidateReportWorkProjectionPermit,
+    LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
+    PreparedLiveValidateApplyRegistryWork, PreparedLiveValidateReportRegistryWork,
+    PreparedLiveValidateSignRegistryWork, PreparedReadyDurableValidateAdapterPreview,
+    ReadyDurableValidateAdapterPreviewError, ReadyValidateSuccessorV1,
+    ReadyValidatedExecutorCatalogAuthorityV1,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.
@@ -430,7 +429,7 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     body_store: Option<crate::sumeragi::v2_body_store::V2BodyStore>,
     body_store_identity: Option<crate::sumeragi::v2_body_store::V2BodyStoreInstanceIdentity>,
     kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
-    apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>,
+    apply_service: Option<crate::sumeragi::v2_apply::NativeApplyService>,
     adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
     owner_open_successor:
         Option<ledger::AuthenticatedRecoveredOwnerOpenSuccessorV1>,
@@ -469,7 +468,7 @@ impl ProductionLifecycleOwnerV1 {
     pub(in crate::sumeragi) fn with_recovered_kura_binding_and_apply_service(
         mut self,
         binding: crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1,
-        apply_service: crate::sumeragi::v2_apply::V2ApplyService,
+        apply_service: crate::sumeragi::v2_apply::NativeApplyService,
     ) -> Self {
         assert!(self.kura_binding.is_none());
         assert!(self.apply_service.is_none());

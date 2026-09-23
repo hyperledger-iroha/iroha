@@ -4462,8 +4462,8 @@ mod tests {
         let network_id =
             crate::sumeragi::synthetic_network_id("certified-serve-payload-store-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id, 0, 1, 100, &roster,
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
             );
         let context = wire::HeightContext {
             network_id,
@@ -4620,8 +4620,8 @@ mod tests {
         let network_id =
             crate::sumeragi::synthetic_network_id("certified-serve-payload-recovery-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
-                network_id, 0, 1, 100, &roster,
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
             );
         let context = wire::HeightContext {
             network_id,

@@ -22,11 +22,9 @@ use iroha_config::parameters::{
     },
     defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
-    account::AccountId,
-    isi::InstructionBox,
     nexus::{DataSpaceCatalog, LaneCatalog, LaneVisibility},
     transaction::{
         SignedTransaction,
@@ -89,7 +87,6 @@ const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
-const TX_GOSSIP_FRAME_PROBE_KEY_SEED: &[u8] = b"iroha:tx-gossip-frame-probe:v1";
 fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> BTreeSet<LaneId> {
     nexus
         .lane_catalog
@@ -223,62 +220,54 @@ struct PeerRecentSuppressionEntry {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     expires_tick: u64,
 }
+/// Count canonical NetworkMessage framing before asking the P2P owner to count
+/// its authenticated relay and Data envelopes. No transaction bytes or signatures
+/// are constructed for sizing; the variant retains its Arc-owned field framing.
+fn tx_gossip_data_frame_len(
+    self_peer_id: &PeerId,
+    target: Option<&PeerId>,
+    gossip_len: usize,
+) -> Option<usize> {
+    let flags = ncore::default_encode_flags();
+    // Norito Arc<T> length-delimits its owned T. The enum variant then
+    // length-delimits that Arc field, so both prefixes belong to the frame.
+    let owned_len = ncore::len_prefix_len_with_flags(gossip_len, flags).checked_add(gossip_len)?;
+    let payload_len = core::mem::size_of::<u32>()
+        .checked_add(ncore::len_prefix_len_with_flags(owned_len, flags))?
+        .checked_add(owned_len)?;
+    let frame_len = iroha_p2p::network::data_frame_wire_len_from_payload_len::<NetworkMessage>(
+        self_peer_id,
+        target,
+        payload_len,
+    );
+    // The canonical P2P owner uses MAX for invalid identities or overflow.
+    (frame_len != usize::MAX).then_some(frame_len)
+}
 fn tx_gossip_frame_payload_cap(
     network_cfg: &NetworkConfig,
-    network_id: &NetworkId,
     self_peer_id: &PeerId,
     max_peer_id: &PeerId,
 ) -> usize {
     let plaintext_cap = network_cfg
         .max_frame_bytes_tx_gossip
         .min(iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes));
-    if plaintext_cap == 0 {
-        return 0;
-    }
-    let dummy_keypair = tx_gossip_frame_probe_keypair();
-    let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
-    let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
-        *network_id,
-        dummy_authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(std::iter::empty::<InstructionBox>())
-    .try_sign(dummy_keypair.private_key())
-    {
-        Ok(transaction) => transaction,
-        Err(err) => {
-            iroha_logger::warn!(
-                %err,
-                "failed to sign transaction gossip frame-size probe"
-            );
-            return 0;
+    let mut low = 0usize;
+    let mut high = plaintext_cap;
+    // The complete canonical envelope is monotone, including every compact
+    // length-prefix transition. A small probe cannot supply constant overhead
+    // for a larger frame. At most usize::BITS count-only steps are needed.
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        let fits = tx_gossip_data_frame_len(self_peer_id, Some(max_peer_id), mid)
+            .zip(tx_gossip_data_frame_len(self_peer_id, None, mid))
+            .is_some_and(|(direct, broadcast)| direct.max(broadcast) <= plaintext_cap);
+        if fits {
+            low = mid;
+        } else {
+            high = mid - 1;
         }
-    };
-    let probe_payload_len = plaintext_cap;
-    let payload = Arc::new(vec![0u8; probe_payload_len]);
-    let probe_gossip = TransactionGossip {
-        txs: vec![GossipTransaction::with_encoded(dummy_signed, payload)],
-        routes: vec![GossipRoute {
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-        }],
-        plans: vec![RoutingPlan::single(RoutingDecision::default())],
-        plane: GossipPlane::Public,
-    };
-    let gossip_len = probe_gossip
-        .encoded_len_exact()
-        .or_else(|| probe_gossip.encoded_len_hint())
-        .unwrap_or(0);
-    let payload = NetworkMessage::TransactionGossiper(Arc::new(probe_gossip));
-    let direct_len =
-        iroha_p2p::network::data_frame_wire_len(self_peer_id, Some(max_peer_id), &payload);
-    let broadcast_len = iroha_p2p::network::data_frame_wire_len(self_peer_id, None, &payload);
-    let envelope_len = direct_len.max(broadcast_len).saturating_sub(gossip_len);
-    plaintext_cap.saturating_sub(envelope_len)
-}
-fn tx_gossip_frame_probe_keypair() -> KeyPair {
-    KeyPair::try_from_seed(TX_GOSSIP_FRAME_PROBE_KEY_SEED.to_vec(), Algorithm::Ed25519)
-        .expect("fixed transaction gossip frame probe Ed25519 seed must derive")
+    }
+    low
 }
 fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -571,12 +560,7 @@ impl TransactionGossiper {
         );
         // Keep gossip batches below the plaintext per-topic cap while respecting the encrypted
         // frame ceiling and the P2P message envelope overhead.
-        let tx_frame_cap = tx_gossip_frame_payload_cap(
-            network_cfg,
-            state.network_id_ref(),
-            &self_peer_id,
-            &max_peer_id,
-        );
+        let tx_frame_cap = tx_gossip_frame_payload_cap(network_cfg, &self_peer_id, &max_peer_id);
         let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         let peer_recent_ring = vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS];
         Self {
@@ -4884,27 +4868,26 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(gossiper.gossip_priority(), Priority::High);
     }
     #[test]
-    fn tx_gossip_frame_probe_keypair_uses_checked_ed25519_derivation() {
-        let keypair = tx_gossip_frame_probe_keypair();
+    fn tx_gossip_frame_cap_rejects_invalid_identities_overflow_and_empty_capacity() {
+        let key = KeyPair::try_from_seed(vec![0xE3; 32], Algorithm::BlsNormal).unwrap();
+        let peer = PeerId::new(key.public_key().clone());
+        let foreign_key = KeyPair::try_from_seed(vec![0xE4; 32], Algorithm::Ed25519).unwrap();
+        let foreign = PeerId::new(foreign_key.public_key().clone());
+        let mut config = test_network_config(socket_addr!(127.0.0.1:0));
+        assert!(tx_gossip_frame_payload_cap(&config, &peer, &peer) > 0);
+        assert_eq!(tx_gossip_frame_payload_cap(&config, &foreign, &peer), 0);
+        assert_eq!(tx_gossip_frame_payload_cap(&config, &peer, &foreign), 0);
         assert_eq!(
-            keypair
-                .public_key()
-                .try_algorithm()
-                .expect("checked probe public key algorithm"),
-            Algorithm::Ed25519
+            tx_gossip_data_frame_len(&peer, Some(&peer), usize::MAX),
+            None
         );
-        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(std::iter::empty::<InstructionBox>())
-        .try_sign(keypair.private_key())
-        .expect("checked transaction gossip frame probe signing");
-        transaction
-            .verify_signature()
-            .expect("transaction gossip frame probe signature should verify");
+        config.max_frame_bytes_tx_gossip = 0;
+        assert_eq!(tx_gossip_frame_payload_cap(&config, &peer, &peer), 0);
+        config.max_frame_bytes_tx_gossip = 1;
+        assert_eq!(tx_gossip_frame_payload_cap(&config, &peer, &peer), 0);
+        config.max_frame_bytes_tx_gossip = 256 * 1024;
+        config.max_frame_bytes = 0;
+        assert_eq!(tx_gossip_frame_payload_cap(&config, &peer, &peer), 0);
     }
     #[test]
     fn ram_lfe_policy_signer_uses_checked_ed25519_generation() {
@@ -4950,12 +4933,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         network_cfg.max_frame_bytes_tx_gossip = 1024;
         let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
         let max_peer_id = self_peer_id.clone();
-        let expected = tx_gossip_frame_payload_cap(
-            &network_cfg,
-            state.network_id_ref(),
-            &self_peer_id,
-            &max_peer_id,
-        );
+        let expected = tx_gossip_frame_payload_cap(&network_cfg, &self_peer_id, &max_peer_id);
         let network = IrohaNetwork::closed_for_tests();
         let gossiper = TransactionGossiper::from_config(
             Config {

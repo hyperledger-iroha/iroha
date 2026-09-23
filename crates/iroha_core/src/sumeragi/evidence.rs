@@ -1480,10 +1480,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let network_id = test_network_id(b"sumeragi-v2-evidence-genesis");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-                crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
-                    0,
-                    1,
                     u64::MAX,
                     &roster,
                 );
@@ -1534,10 +1532,9 @@ mod tests {
             (
                 fixture.context.kagemusha_mint_finality_authorization,
                 fixture.context.kagemusha_mint_finality_authority,
-            ) = crate::kagemusha_v1_test_fixtures::mint_finality_authorization_and_authority(
+            ) = crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
                 fixture.context.network_id,
                 epoch,
-                first_height,
                 fixture.context.epoch_end_height,
                 &fixture.context.roster,
             );
@@ -1929,6 +1926,11 @@ mod tests {
         state: &State,
         evidence: SumeragiV2EquivocationEvidence,
     ) -> Hash {
+        let recorded_at_height = evidence
+            .context
+            .height
+            .checked_add(1)
+            .expect("fixture admission follows evidence height");
         let key = v2_evidence_admission_key(&evidence);
         let recorded_height = evidence.context.height + 1;
         let mut records = state.world.consensus_evidence.block();
