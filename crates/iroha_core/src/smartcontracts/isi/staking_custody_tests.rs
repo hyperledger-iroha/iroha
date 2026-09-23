@@ -7,6 +7,7 @@ fn register_custody_fixture(
 ) -> (AccountId, AccountId, AssetId) {
     let (validator, delegator, escrow, definition) = prepare_accounts(stx);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(amount)),
         lane_id: lane,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -173,9 +174,9 @@ fn staking_custody_and_rewards_share_one_additive_reserve_floor() {
             .contains("reserved public-lane")
     );
     ClaimPublicLaneRewards {
+        claim_plan: fixture_reward_claim_plan(&stx, lane, &(validator), None),
         lane_id: lane,
         account: validator,
-        upto_epoch: None,
     }
     .execute(&key.1, &mut stx)
     .unwrap();
@@ -205,6 +206,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
         let (validator, _, _, definition) = prepare_accounts(&mut stx);
         stx.nexus.staking.stake_escrow_account_id = validator.to_string();
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(10_000_u64)),
             lane_id: lane,
             peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
@@ -234,12 +236,17 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     state_block.drain_transfer_transcripts();
     let key = (lane, validator.clone());
     let share_key = stake_key(lane, &validator, &validator);
-    let instruction = BondPublicLaneStake {
-        lane_id: lane,
-        validator: validator.clone(),
-        staker: validator.clone(),
-        amount: Quantity::one(),
-        metadata: Metadata::default(),
+    let instruction = {
+        let mut stx = state_block.transaction();
+        stx.nexus = nexus.clone();
+        BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one()),
+            lane_id: lane,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            amount: Quantity::one(),
+            metadata: Metadata::default(),
+        }
     };
     {
         let mut stx = state_block.transaction();
@@ -322,6 +329,7 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
     let lane = LaneId::new(17);
     let (validator, sink, asset) = register_custody_fixture(&mut stx, lane, 1_000);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(&stx, &sink, Quantity::from(500_u64)),
         lane_id: lane,
         peer_id: validator_peer_id(&sink),
         validator: sink.clone(),
@@ -346,6 +354,7 @@ fn staking_failed_slash_restores_exact_custody_preimages() {
     let reserve_before = stx.world.public_lane_stake_reserves.get(&asset).cloned();
     let funding = stx.world.assets.remove(asset.clone()).unwrap();
     let instruction = SlashPublicLaneValidator {
+        monetary_plan: fixture_slash_plan(&stx, lane, &(validator), 1, Quantity::from(100_u64)),
         lane_id: lane,
         validator,
         offence_height: 1,
@@ -447,6 +456,7 @@ fn staking_failed_mature_unbond_restores_exact_custody_preimages() {
         let reserve_before = stx.world.public_lane_stake_reserves.get(&asset).cloned();
         let funding = stx.world.assets.remove(asset.clone()).unwrap();
         let instruction = FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(&stx, lane, &validator, &validator, request_id),
             lane_id: lane,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -541,6 +551,7 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
         let key = (lane, validator.clone());
         let custody_before = stx.world.public_lane_stake_custody.get(&key).cloned();
         let error = BondPublicLaneStake {
+            monetary_plan: fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one()),
             lane_id: lane,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -559,6 +570,7 @@ fn staking_unbond_uses_original_custody_after_configuration_and_alias_changes() 
             stx.nexus.staking.stake_asset_id = "retired#nexus".to_owned();
         }
         FinalizePublicLaneUnbond {
+            monetary_plan: fixture_unbond_plan(&stx, lane, &validator, &validator, request_id),
             lane_id: lane,
             validator: validator.clone(),
             staker: validator.clone(),
@@ -694,6 +706,7 @@ fn staking_mode_owner_change_rejects_pending_custody_without_blocking_withdrawal
         &Quantity::from(9_000_u64)
     );
     FinalizePublicLaneUnbond {
+        monetary_plan: fixture_unbond_plan(&stx, lane, &validator, &validator, request_id),
         lane_id: lane,
         validator: validator.clone(),
         staker: validator.clone(),

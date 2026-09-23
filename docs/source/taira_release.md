@@ -419,7 +419,7 @@ public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
 `canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
 mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
 the native consensus genesis hash from the signed wire's SHA256. An incomplete
-four-file bundle is rejected; prepare a fresh complete output. Repeating an
+five-file bundle is rejected; prepare a fresh complete output. Repeating an
 identical complete request verifies the retained bundle without replacing it.
 The explicit `--canary-public-key PATH` alternative is mutually exclusive with
 `--intent` and reads only that public key.
@@ -445,34 +445,47 @@ Next run `iroha taira public-reset prepare-epoch-supervisor-plan --intent
 `--validator-client-config`, `--validator-operator-key`, `--onboarding-token`,
 four `--validator-unit`, `--edge-unit` and `--known-hosts` paths; full scope also
 supplies `--inrou-stage-dir`. Supply explicit `--host-slug`,
-`--authorization until-stopped`, `--payment-asset`, `--transaction-fee-maximum`,
-`--first-epoch`, `--batch-epochs`, `--operation-timeout-ms`,
-`--provision-timeout-ms`, `--timeout-ms`, and four original paths through singular
-`--epoch-seed-source`. Choose `--prior-state absent` only for admitted absence;
+`--authorization until-stopped`, `--first-epoch`, `--timeout-ms`, and
+`--prior-state`. Choose `--prior-state absent` only for admitted absence;
 `running` or `stopped` also requires the exact `--prior-plan PATH`. Publish to a
-fresh `--output-dir`. The native producer derives trust and the entire supervisor
-plan from held actual inputs; it accepts no computed credential hashes or manual
-observation-trust file. The output is the public `supervisor-plan.json`,
+fresh `--output-dir`. The native producer derives observation trust and the
+supervisor plan from held actual inputs. Its closed read-only policy contains
+`schema_version: 1`, `intent` (`authorization: until_stopped`, network ID,
+administrator account and first epoch), `release_source_commit`, `iroha_sha256`
+and `observation_trust_sha256`. It accepts no computed credential hashes or
+manual observation-trust file. The output is the public `supervisor-plan.json`,
 `supervisor-binding.json` and `observation-trust.json` bundle.
 
 `public-reset assemble --intent PATH` and `authorize` require the same
 `--public-inputs DIR`, `--maintenance-admin-config PATH`,
-`--epoch-supervisor-plan PATH`, plural `--epoch-seed-sources` with four original
-paths, `--beacon-inputs PATH` and four ordered `--beacon-validator-unit` paths,
-along with their other local inputs. Native assembly independently rederives the
-context, credential joins, request, seat map and required signed plans. Apply
-uses the runtime administrator path and singular `--epoch-seed-source` flag.
-The same-release artifact closure includes Kagami. The existing execution,
-source, config and authorization checks remain required; the reset's finite
-lease does not imply ongoing maintenance authorization. See the
+`--epoch-supervisor-plan PATH`, `--beacon-inputs PATH` and four ordered
+`--beacon-validator-unit` paths, along with their other local inputs. Native
+assembly independently rederives the context, credential joins, request, seat
+map and required signed plans. Apply uses the runtime administrator path. The
+same-release artifact closure includes Kagami. The existing execution, source,
+config and authorization checks remain required; the reset's finite lease does
+not imply ongoing maintenance authorization. See the
 [maintained retry caller](taira_retry.md) for the exact current path records and
 preparation order.
+
 The signed genesis must leave room for onboarding, funding, the canary's real
-QueuePlan admission and execution carriers, and certificate installation before
-the first mandatory pulse. Finalization uses the authenticated observed height.
-The sole threshold-key certificate uses signed Ordinary admission, retaining its
-exact next-height and current-roster quorum checks; other public transactions
-continue to use QueuePlanSynced admission.
+QueuePlan admission and execution carriers, real DKG completion, and the
+certificate installation before the first mandatory beacon pulse. Finalization
+uses the authenticated observed height. The sole threshold-key certificate uses
+signed Ordinary admission with exact next-height and current-roster quorum
+checks; other public transactions continue to use QueuePlanSynced admission.
+The certificate must be committed on all four validators, followed by all four
+`BeaconActivate` provider installations before `EpochSupervisorStart` and the
+restart proof. Epoch retention then observes complete authenticated Retain
+transitions on real finalized workload blocks; it never creates empty blocks.
+For a direct bounded qualification, `iroha taira epoch-maintenance maintain`
+takes `--trust PATH`, `--journal-dir DIR`, `--stop-after-epoch N` and
+`--timeout-ms MS`; `status` takes the same flags and reauthenticates existing
+retained evidence. The installed unit runs `epoch-maintenance supervise` with
+`--policy PATH`, `--trust PATH`, `--journal-dir DIR` and `--timeout-ms MS`.
+`supervisor-status` additionally authenticates the worker's `--boot-id`, `--pid`
+and `--start-time-ticks`. All four commands observe finalized state; none
+submits a transaction.
 
 Public validator client settings can reference the native-generated
 `runtime/taira-runtime-signers/peerN.private_key` sidecar through
@@ -522,16 +535,14 @@ For a routine update of the existing four-validator Taira installation, first us
 `iroha taira public-reset prepare-epoch-update` to produce the typed preparation.
 Supply the actual `--deployment`, `--prepared-result`, `--trust`, an explicit
 fresh `--operation`, `--authorization until-stopped`, `--administrator`,
-`--payment-asset`, `--transaction-fee-maximum`, `--first-epoch`, `--batch-epochs`,
-`--operation-timeout-ms`, `--provision-timeout-ms`, `--worker-timeout-ms`, and four
-original sorted seed paths through `--original-seed-sources`. Select the actual
+`--first-epoch` and `--worker-timeout-ms`. Select the actual
 `--original-service-state`, desired `--successor-service-state` and separate
 `--installed-state`. An occupied original requires its exact `--before-binding`;
 a present installed state requires its exact `--installed-binding`. Explicit
-absence forbids the corresponding binding. The native command reads public inputs
-only and writes `preparation.json`, `after-binding.json` and `inputs.json` into a
-fresh `--output` directory. It neither fabricates prior state nor materializes
-credentials. Use the same operation in every following phase.
+absence forbids the corresponding binding. Publish `preparation.json`,
+`after-binding.json` and `inputs.json` to a fresh `--output` directory. This
+command reads public inputs only and neither fabricates prior state nor
+materializes credentials. Use the same operation in every following phase.
 
 Prepare the exact same-release binaries at that operation's immutable release path:
 
@@ -545,12 +556,11 @@ Prepare the exact same-release binaries at that operation's immutable release pa
 Then invoke that admitted candidate `bin/iroha` to materialize the immutable
 supervisor generation. The preparation wrapper binds the same operation, original
 and desired service states, original and actually installed unit bindings, and
-successor policy/unit/custody. Its required `original_seed_sources` contains four
-exact sorted `{validator, path}` references to the original validator seed files.
-The native helper retains those exact bytes; it never generates replacement
-seeds. Existing generations may select the already retained original files. The
-operator supplies already-open administrator and HTTP private input descriptors;
-Python does not read or hash any credential or seed contents:
+the successor policy, unit and executable identity. The native helper validates
+the administrator and HTTP operator credentials and journals the generation;
+it does not provision validator seeds or submit epoch transactions. The operator
+supplies already-open administrator and HTTP private input descriptors; Python
+does not read or hash their contents:
 
     /absolute/runtime/release-COMMIT-update-0123456789abcdef0123456789abcdef/bin/iroha \
       taira public-reset epoch-supervisor-host materialize \
@@ -594,7 +604,8 @@ not need to create another block to pass.
 The operation is explicit and determines the immutable candidate binary paths;
 there is no random operation fallback. The required public supervisor wrapper
 binds the exact raw policy, current observation trust, custody references, fixed
-unit, same-release CLI/Kagami, and native provisioning receipt. Its original
+unit, same-release CLI and the native `native_provisioning_receipt` for
+the materialized generation. Its original
 `before` binding and `original_service_state` remain immutable across recovery;
 `installed` separately records the unit actually published. The required
 `successor_service_state` preserves an existing running or stopped state and
@@ -604,9 +615,9 @@ The policy grants explicit ongoing `until_stopped` epoch maintenance; a finite
 reset lease does not grant this authority. The administrator is a separately
 provisioned genesis-authorized client, distinct from canary and HTTP identities.
 Only the native `public-reset epoch-supervisor-host materialize` boundary consumes
-inherited administrator-config and HTTP-operator-key descriptors or seed custody.
-Python handles public bindings and receipts only. Existing original trust and
-once-per-epoch journals remain unchanged.
+inherited administrator-config and HTTP-operator-key descriptors. Python handles
+public bindings and receipts only. Existing original trust and once-per-epoch
+retention journals remain unchanged.
 
 The updater holds `/var/lib/taira-epoch-supervisor/.deployment.lock` throughout
 the transition and rejects any retained `.reset-owner.json` without clearing it.

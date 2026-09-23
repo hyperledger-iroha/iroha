@@ -123,37 +123,41 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply runs the prepared application canary and its fresh beacon ceremony
-before readiness-dependent four-peer convergence, then qualifies prepared application mutations
-and one validator restart for signed `core_testnet` scope. The `full_inrou` scope
-also requires Inrou runtime health and all four ordered restart waves through
-these direct endpoints before staging or switching the public edge. The same retained
-mutations and restart evidence flow into the release proof. After cutover,
-`EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
-remain before public cutover; a failed rollback remains resumable and must be
-verified complete before another attempt is admitted.
+Native apply runs the prepared application canary and the real four-validator
+DKG ceremony before readiness-dependent four-peer convergence. The committed
+certificate is installed, then all four `BeaconActivate` actions install the
+matching provider custody before `EpochSupervisorStart` or restart proof. The
+supervisor observes authenticated epoch retention; it does not submit a carrier
+transaction. `core_testnet` qualifies prepared application mutations and one
+validator restart. `full_inrou` also requires Inrou runtime health and all four
+ordered restart waves through the direct endpoints before staging or switching
+the public edge. The same retained mutations and restart evidence flow into the
+release proof. After cutover, `EdgeVerify` proves public HTTPS, discovery and
+doctor checks. Candidate failures remain before public cutover; a failed rollback
+remains resumable and must be verified complete before another attempt is
+admitted.
 
-The guest's required `epoch_supervisor` object has exactly these fields:
-`host_slug`, `authorization` (`until_stopped`), `payment_asset`,
-`transaction_fee_maximum` (native quantity text), `first_epoch`, `batch_epochs`
-(2–256), `operation_timeout_ms`, `provision_timeout_ms`, `timeout_ms`,
-`prior_state` (`absent`, `running` or `stopped`), and `prior_plan`. All timeout
-values and the first epoch are explicit positive integers. `prior_plan` is
-explicit `null` for absence; occupied states require `{ "path": "...",
-"sha256": "..." }` naming the exact native predecessor plan. Its bytes and state
-must match the original predecessor retained in the rolled-back inventory.
-The failed candidate's plan cannot stand in for that predecessor.
+The guest's required `epoch_supervisor` object has exactly six fields:
+`host_slug` (one of the four validators), `authorization` (`until_stopped`),
+`first_epoch`, `timeout_ms`, `prior_state` (`absent`, `running` or `stopped`),
+and `prior_plan`. The first epoch and timeout are explicit positive integers.
+`prior_plan` is explicit `null` for absence; occupied states require
+`{ "path": "...", "sha256": "..." }` naming the exact native predecessor plan.
+Its bytes and state must match the original predecessor retained in the
+rolled-back inventory. The failed candidate's plan cannot stand in for that
+predecessor. The generated read-only policy binds the network, administrator,
+first epoch, source commit, CLI SHA-256 and observation-trust SHA-256.
 
 The preceding assembly's `native-local-args.json` is a closed, ordered path list:
 `--public-inputs`, `--runtime-client-config`, `--maintenance-admin-config`,
-`--epoch-seed-sources` (four paths), `--epoch-supervisor-plan`,
-`--validator-client-config` (four paths), `--validator-operator-key`,
-`--onboarding-token`, optional `--inrou-stage-dir` for full scope,
-`--validator-unit` (four paths), `--edge-unit`, and `--known-hosts`.
-The public bundle remains `<prep>/public-inputs`; the supervisor path identifies
-the exact generated plan embedded in that inventory. Administrator, original
-seed and predecessor paths are protected from public-import cleanup. Seed paths
-must match the plan's original sorted native PeerId mapping, not FD199 copies.
+`--epoch-supervisor-plan`, `--validator-client-config` (four paths),
+`--validator-operator-key`, `--onboarding-token`, optional
+`--inrou-stage-dir` for full scope, `--validator-unit` (four paths),
+`--edge-unit`, and `--known-hosts`. The public bundle remains
+`<prep>/public-inputs`; the supervisor path identifies the exact generated
+plan embedded in that inventory. Administrator and predecessor paths are
+protected from public-import cleanup. Validator seed files are not supervisor
+inputs.
 
 Each attempt runs this sequence:
 
@@ -168,11 +172,13 @@ Each attempt runs this sequence:
    Check its nonce and exact four-seat census, then use the pinned renderer and
    separately authenticated retained unit hashes to produce the four mode0644
    FD200 units selecting `beacon.toml`.
-4. Run `prepare-epoch-supervisor-plan --intent ...` with the fresh bundle, actual
-   native context paths, explicit ongoing owner intent and singular
-   `--epoch-seed-source` with four original paths. Native code reads credentials,
-   checks the separate administrator's signed-genesis grant and admitted origin,
-   and atomically publishes `epoch-supervisor/supervisor-plan.json`,
+4. Run `prepare-epoch-supervisor-plan --intent ...` with the fresh bundle,
+   actual native context paths, and explicit `--host-slug`,
+   `--authorization until-stopped`, `--first-epoch`, `--timeout-ms`,
+   `--prior-state`, optional `--prior-plan`, and fresh `--output-dir`. Native
+   code reads the administrator and HTTP operator credentials, checks the
+   separate administrator's signed-genesis grant and admitted origin, and
+   atomically publishes `epoch-supervisor/supervisor-plan.json`,
    `supervisor-binding.json` and `observation-trust.json`.
 5. Run `assemble --intent ...`, then `authorize` with the exact same current
    assembly arguments. Native assembly independently rederives the context,
@@ -182,12 +188,12 @@ Each attempt runs this sequence:
 `native-local-args.json` records the newly generated supervisor plan for the next
 attempt while retaining the original preparation paths. A separate
 `native-assembly-args.json` selects the fresh public bundle, generated supervisor
-plan, beacon request and four final units. Apply receives the actual runtime
-paths, including `--maintenance-admin-config` and singular
-`--epoch-seed-source`; it receives no generated-plan, public-bundle or unit flags.
-Python reads only public plans, intent and unit bytes. Native code owns all
-credential, administrator config and seed admission. Missing current inputs or a
-failed preparation stops before authorization or apply.
+plan, beacon request and four final units. Apply receives runtime paths,
+including `--maintenance-admin-config`; it receives no generated plan, public
+bundle, beacon request or unit flags. Python reads only public plans, intent
+and unit bytes. Native code owns credential and administrator-config admission.
+Missing current inputs or a failed preparation stops before authorization or
+apply.
 
 After apply, seed continuity and boot checks first require the exact native
 completed and deployment-proven receipts. They bind each owner-only beacon

@@ -846,7 +846,7 @@ fn recover_stale_prepare_decision_crash_fixture(
         LifecycleRunnerRankTarget::Ingress,
         |runner| {
             assert!(matches!(
-                launched.drive_ingress_turn(runner),
+                launched.drive_ingress_turn(runner, false),
                 ProductionLifecycleIngressTurnV1::Selected(
                     ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued,
                 )

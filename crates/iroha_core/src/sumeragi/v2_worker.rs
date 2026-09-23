@@ -45,7 +45,7 @@ use super::{
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask,
         CompletionDisposition, ConsensusBroadcastDisposition, ConsensusSignTask,
-        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
+        EffectExecutorError, EffectExecutorStatus, EffectRuntime,
         EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
         PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
         PreparedLifecycleDecisionApplyExecutorDispatchV1, V2EffectExecutor, V2EffectServices,

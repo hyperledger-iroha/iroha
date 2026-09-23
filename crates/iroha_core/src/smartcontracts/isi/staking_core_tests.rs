@@ -346,6 +346,7 @@ fn configure_reward_fixture(
     stx.nexus.staking.slash_sink_account_id = sink.to_string();
     register_peer_for_account(stx, &validator);
     RegisterPublicLaneValidator {
+        monetary_plan: fixture_registration_plan(&stx, &validator, (initial_stake.clone()).clone()),
         lane_id,
         peer_id: validator_peer_id(&validator),
         validator: validator.clone(),
@@ -437,6 +438,7 @@ fn complete_staking_committee(stx: &mut StateTransaction<'_, '_>, lane_id: LaneI
         .execute(&ALICE_ID, stx)
         .expect("fund committee stake");
         RegisterPublicLaneValidator {
+            monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(1_000_u64)),
             lane_id,
             peer_id,
             validator: validator.clone(),

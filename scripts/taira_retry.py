@@ -445,24 +445,17 @@ def fresh_inventory(previous, attempt_id, nonce):
 
 def validate_supervisor_intent(value):
     """Ongoing authority and original service state are explicit owner inputs."""
-    fields = {"host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
-              "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
-              "timeout_ms", "prior_state", "prior_plan"}
+    fields = {"host_slug", "authorization", "first_epoch", "timeout_ms",
+              "prior_state", "prior_plan"}
     require(isinstance(value, dict) and set(value) == fields,
             "exact explicit epoch supervisor intent required")
     require(value["authorization"] == "until_stopped"
             and value["host_slug"] in {f"taira-validator-{i}" for i in range(1, 5)}
             and value["prior_state"] in ("absent", "running", "stopped"),
             "explicit ongoing authority, selected host and prior state required")
-    for key in ("payment_asset", "transaction_fee_maximum"):
-        require(isinstance(value[key], str) and 0 < len(value[key]) <= 1024
-                and not any(c.isspace() or ord(c) < 32 for c in value[key])
-                and not value[key].startswith("-"), "invalid public supervisor intent: " + key)
-    for key in ("first_epoch", "operation_timeout_ms", "provision_timeout_ms", "timeout_ms"):
+    for key in ("first_epoch", "timeout_ms"):
         require(type(value[key]) is int and 1 <= value[key] <= 2**64 - 1,
                 "positive finite native supervisor bound required: " + key)
-    require(type(value["batch_epochs"]) is int and 2 <= value["batch_epochs"] <= 256,
-            "native supervisor batch must be within 2..256")
     prior = value["prior_plan"]
     require((value["prior_state"] == "absent") == (prior is None),
             "occupied predecessor requires an exact pinned prior plan")
@@ -478,7 +471,7 @@ def validate_supervisor_intent(value):
 
 
 def validate_supervisor_inputs(plan, inventory, arguments):
-    """Join retained public plans and original seed paths before retirement; no secret IO."""
+    """Join the exact retained public plan and predecessor before retirement; no secret IO."""
     intent = validate_supervisor_intent(plan.get("epoch_supervisor"))
     retained = inventory.get("epoch_supervisor")
     require(isinstance(retained, dict)
@@ -487,11 +480,9 @@ def validate_supervisor_inputs(plan, inventory, arguments):
     path = arguments["--epoch-supervisor-plan"][0]
     require(decode(public_record(path, owner=0, private=True)) == retained,
             "retained supervisor path does not identify the inventory's exact native plan")
-    originals = retained.get("original_seed_sources")
-    require(isinstance(originals, list) and len(originals) == 4
-            and all(isinstance(row, dict) and set(row) == {"validator", "path"} for row in originals)
-            and arguments["--epoch-seed-sources"] == [row["path"] for row in originals],
-            "original seed paths differ from the retained sorted native mapping")
+    require(not {"original_seed_sources", "custody_bytes", "custody_sha256", "custody_path",
+                 "kagami_sha256"}.intersection(retained),
+            "retired rotation custody is not an epoch retention input")
     require(intent["prior_state"] == retained.get("prior_state"),
             "explicit prior service state differs from completed rollback authority")
     prior = retained.get("prior")
@@ -3758,7 +3749,6 @@ def local_arguments(raw, qualification_scope):
         ("--public-inputs", 1),
         ("--runtime-client-config", 1),
         ("--maintenance-admin-config", 1),
-        ("--epoch-seed-sources", 4),
         ("--epoch-supervisor-plan", 1),
         ("--validator-client-config", 4),
         ("--validator-operator-key", 1),
@@ -3800,8 +3790,7 @@ def apply_arguments(arguments, qualification_scope):
              "--validator-operator-key", "--onboarding-token"]
     if qualification_scope == "full_inrou":
         flags.append("--inrou-stage-dir")
-    return ([item for flag in flags for item in [flag, *arguments[flag]]]
-            + ["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
+    return [item for flag in flags for item in [flag, *arguments[flag]]]
 
 
 def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft, previous, logs):
@@ -3877,12 +3866,9 @@ def prepare_supervisor_arguments(cli, assembly, plan, static_args, arguments, in
     argv = [*cli, "prepare-epoch-supervisor-plan", "--intent", assembly / "topology-intent.json",
             "--public-inputs", assembly / "public-inputs"]
     argv.extend(item for flag in context_flags for item in [flag, *arguments[flag]])
-    for key in ("host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
-                "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
-                "timeout_ms", "prior_state"):
+    for key in ("host_slug", "authorization", "first_epoch", "timeout_ms", "prior_state"):
         argv.extend(["--" + key.replace("_", "-"),
                      "until-stopped" if key == "authorization" else str(policy[key])])
-    argv.extend(["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
     if policy["prior_plan"] is not None:
         argv.extend(["--prior-plan", policy["prior_plan"]["path"]])
     argv.extend(["--output-dir", output])
@@ -3893,8 +3879,9 @@ def prepare_supervisor_arguments(cli, assembly, plan, static_args, arguments, in
             and value.get("schema") == "iroha.taira.public-reset.epoch-supervisor-plan.v1"
             and value.get("host_slug") == policy["host_slug"]
             and value.get("prior_state") == policy["prior_state"]
-            and value.get("original_seed_sources") == previous["epoch_supervisor"]["original_seed_sources"],
-            "native supervisor output differs from explicit host, state or original custody")
+            and not {"original_seed_sources", "custody_bytes", "custody_sha256", "custody_path",
+                     "kagami_sha256"}.intersection(value),
+            "native supervisor output differs from explicit host, state or retention schema")
     derived = list(derived_args)
     derived[derived.index("--epoch-supervisor-plan") + 1] = str(generated)
     current_static = list(static_args)
@@ -4167,7 +4154,7 @@ def configure_protocols(
                 "trusted_public_key", "ssh_identity", "known_hosts")),
             *(Path(path) for key in ("--runtime-client-config", "--validator-client-config",
                 "--validator-operator-key", "--onboarding-token", "--maintenance-admin-config",
-                "--epoch-seed-sources", "--epoch-supervisor-plan") for path in arguments[key]),
+                "--epoch-supervisor-plan") for path in arguments[key]),
             *([Path(plan["epoch_supervisor"]["prior_plan"]["path"])]
               if plan["epoch_supervisor"]["prior_plan"] is not None else []),
         )],

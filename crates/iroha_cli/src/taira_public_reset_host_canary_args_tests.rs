@@ -77,7 +77,6 @@ fn coordinator_write_canary_argv_passes_child_validation_for_all_core_actions() 
         let transport = OpenSshTransport {
             admitted: &admitted,
             runtime: RuntimeCustody {
-                epoch_seed_sources: Vec::new(),
                 maintenance_admin_config: None,
                 client_config: pin_owner_private_file(&config_path, "client fixture")
                     .expect("pin client fixture"),

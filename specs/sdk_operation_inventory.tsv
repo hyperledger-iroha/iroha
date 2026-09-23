@@ -106,7 +106,7 @@ application.nfts_get	GET	/v1/nfts	public	optional_canonical_account_signature	da
 application.nfts_query_post	POST	/v1/nfts/query	public	optional_canonical_account_signature	dataspace_visible	compute	http	feature(app_api)	true	true	false	true
 application.notify_devices_delete	DELETE	/v1/notify/devices	public	canonical_account_signature	authenticated_account	mutation	http	all(app_api,push)	true	true	false	true
 application.notify_devices_post	POST	/v1/notify/devices	public	canonical_account_signature	authenticated_account	mutation	http	all(app_api,push)	true	true	false	true
-application.offline_asset_registration_get	GET	/v1/offline/assets/{asset_definition_id}/registration	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.offline_asset_registration_get	GET	/v1/assets/definitions/{asset}/registration	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.parameters_get	GET	/v1/parameters	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 application.proofs_query_post	POST	/v1/proofs/query	public	canonical_signed_body	authenticated_account	compute	http	feature(app_api)	true	true	false	false
 application.ram_lfe_program_policies_get	GET	/v1/ram-lfe/program-policies	public	torii_default	public	read	http	feature(app_api)	true	true	false	false

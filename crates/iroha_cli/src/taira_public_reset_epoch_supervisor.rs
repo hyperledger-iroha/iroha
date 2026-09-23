@@ -24,14 +24,11 @@ pub(in super::super) struct EpochSupervisorPlanV1 {
     pub(in super::super) journal_dir: String,
     pub(in super::super) release_source_commit: String,
     pub(in super::super) iroha_sha256: String,
-    pub(in super::super) kagami_sha256: String,
+    pub(in super::super) cli_path: String,
     pub(in super::super) policy_sha256: String,
     pub(in super::super) policy_bytes: Vec<u8>,
     pub(in super::super) observation_trust_sha256: String,
     pub(in super::super) observation_trust_bytes: Vec<u8>,
-    pub(in super::super) custody_sha256: String,
-    pub(in super::super) custody_bytes: Vec<u8>,
-    pub(in super::super) original_seed_sources: Vec<SeedV1>,
     pub(in super::super) unit_sha256: String,
     pub(in super::super) unit_bytes: Vec<u8>,
     pub(in super::super) admin_config_path: String,
@@ -40,7 +37,6 @@ pub(in super::super) struct EpochSupervisorPlanV1 {
     pub(in super::super) http_operator_key_sha256: String,
     pub(in super::super) policy_path: String,
     pub(in super::super) trust_path: String,
-    pub(in super::super) custody_path: String,
     pub(in super::super) timeout_ms: u64,
     pub(in super::super) prior_state: String,
     #[norito(required)]
@@ -58,13 +54,11 @@ pub(in super::super) struct PriorEpochSupervisorV1 {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(super) struct NativePolicyV1 {
-    pub(super) schema_version: u32,
+    pub(super) schema_version: u8,
     pub(super) intent: OngoingIntentV1,
     pub(super) release_source_commit: String,
     pub(super) iroha_sha256: String,
-    pub(super) kagami: KagamiV1,
     pub(super) observation_trust_sha256: String,
-    pub(super) provision_timeout_ms: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -72,31 +66,8 @@ pub(super) struct OngoingIntentV1 {
     pub(super) authorization: String,
     pub(super) network_id: NetworkId,
     pub(super) administrator: AccountId,
-    pub(super) payment_asset: AssetDefinitionId,
-    pub(super) transaction_fee_maximum: iroha_primitives::numeric::Quantity,
     pub(super) first_epoch: u64,
-    pub(super) batch_epochs: u64,
-    pub(super) operation_timeout_ms: u64,
 }
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(super) struct KagamiV1 {
-    pub(super) path: String,
-    pub(super) sha256: String,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(super) struct SeedCustodyV1 {
-    pub(super) schema_version: u32,
-    pub(super) seeds: Vec<SeedV1>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub(in super::super) struct SeedV1 {
-    pub(in super::super) validator: PeerId,
-    pub(in super::super) path: String,
-}
-
 /// Public worker identity emitted by the native supervisor, not caller authority.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -138,10 +109,6 @@ fn literal_path(value: &str) -> Result<()> {
     }
     Ok(())
 }
-// NetworkId display uses #checksum in native JSON seed paths; these never enter unit argv.
-fn seed_literal_path(value: &str) -> Result<()> {
-    literal_path(&value.replace('#', "a"))
-}
 fn public_bytes(bytes: &[u8], expected: &str) -> Result<()> {
     digest(expected)?;
     if bytes.is_empty() || bytes.len() > PUBLIC_LIMIT || sha256_hex(bytes) != expected {
@@ -169,16 +136,13 @@ pub(super) fn validate_public_generation(plan: &EpochSupervisorPlanV1) -> Result
             "epoch supervisor fixed service or finite invocation differs"
         ));
     }
-    for hash in [&plan.iroha_sha256, &plan.kagami_sha256] {
-        digest(hash)?;
-    }
+    digest(&plan.iroha_sha256)?;
     for (bytes, hash) in [
         (&plan.policy_bytes, &plan.policy_sha256),
         (
             &plan.observation_trust_bytes,
             &plan.observation_trust_sha256,
         ),
-        (&plan.custody_bytes, &plan.custody_sha256),
         (&plan.unit_bytes, &plan.unit_sha256),
     ] {
         public_bytes(bytes, hash)?;
@@ -189,7 +153,6 @@ pub(super) fn validate_public_generation(plan: &EpochSupervisorPlanV1) -> Result
         (&plan.http_operator_key_path, "http-operator.key"),
         (&plan.policy_path, "policy.json"),
         (&plan.trust_path, "trust.json"),
-        (&plan.custody_path, "custody.json"),
     ] {
         literal_path(actual)?;
         if actual != &format!("{generation}/{name}") {
@@ -203,54 +166,17 @@ pub(super) fn validate_public_generation(plan: &EpochSupervisorPlanV1) -> Result
         || policy.intent.authorization != "until_stopped"
         || policy.release_source_commit != plan.release_source_commit
         || policy.iroha_sha256 != plan.iroha_sha256
-        || policy.kagami.sha256 != plan.kagami_sha256
         || policy.observation_trust_sha256 != plan.observation_trust_sha256
-        || policy.provision_timeout_ms == 0
-        || policy.intent.operation_timeout_ms == 0
-        || !(2..=256).contains(&policy.intent.batch_epochs)
-        || policy.intent.transaction_fee_maximum <= iroha_primitives::numeric::Quantity::zero()
         || policy.release_source_commit.len() != 40
         || policy
             .release_source_commit
             .bytes()
             .any(|v| !v.is_ascii_digit() && !(b'a'..=b'f').contains(&v))
         || policy.intent.first_epoch == 0
-        || policy
-            .intent
-            .first_epoch
-            .checked_add(policy.intent.batch_epochs - 1)
-            .is_none()
     {
         return Err(eyre!("epoch supervisor explicit ongoing policy differs"));
     }
-    literal_path(&policy.kagami.path)?;
-    let custody: SeedCustodyV1 = json::from_slice(&plan.custody_bytes)?;
-    if custody.schema_version != 1
-        || custody.seeds.len() != 4
-        || custody
-            .seeds
-            .windows(2)
-            .any(|rows| rows[0].validator >= rows[1].validator)
-    {
-        return Err(eyre!(
-            "epoch supervisor custody requires four distinct sorted public seed references"
-        ));
-    }
-    let mut paths = BTreeSet::new();
-    for row in custody.seeds {
-        seed_literal_path(&row.path)?;
-        if !paths.insert(row.path) {
-            return Err(eyre!(
-                "epoch supervisor seed reference is invalid or duplicated"
-            ));
-        }
-    }
-    let cli = Path::new(&policy.kagami.path)
-        .parent()
-        .ok_or_else(|| eyre!("Kagami directory missing"))?
-        .join("iroha");
-    if plan.unit_bytes != render_unit(plan, cli.to_str().ok_or_else(|| eyre!("CLI is not UTF-8"))?)?
-    {
+    if plan.unit_bytes != render_unit(plan, &plan.cli_path)? {
         return Err(eyre!(
             "epoch supervisor unit differs from fixed native argv and lifecycle policy"
         ));
@@ -341,68 +267,13 @@ pub(super) fn validate_plan_context(
     let release = Path::new(&nominated.service_root)
         .join("releases")
         .join(&revision.commit);
-    let expected_kagami = release.join("bin/kagami");
-    if Path::new(&policy.kagami.path) != expected_kagami {
-        return Err(eyre!(
-            "epoch supervisor Kagami is outside the exact reset release"
-        ));
-    }
-    let custody: SeedCustodyV1 = json::from_slice(&plan.custody_bytes)?;
-    if plan.original_seed_sources.len() != 4
-        || plan
-            .original_seed_sources
-            .iter()
-            .map(|row| &row.validator)
-            .collect::<Vec<_>>()
-            != custody
-                .seeds
-                .iter()
-                .map(|row| &row.validator)
-                .collect::<Vec<_>>()
-    {
-        return Err(eyre!(
-            "original seed source mapping must name the same exact sorted four peers"
-        ));
-    }
-    let mut originals = BTreeSet::new();
-    for source in &plan.original_seed_sources {
-        seed_literal_path(&source.path)?;
-        if !originals.insert(&source.path) {
-            return Err(eyre!("original seed source paths are not distinct"));
-        }
-    }
-    let roster = clients
-        .iter()
-        .map(|v| v.peer_id.parse::<PeerId>())
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    if custody
-        .seeds
-        .iter()
-        .map(|v| v.validator.clone())
-        .collect::<BTreeSet<_>>()
-        != roster
-    {
-        return Err(eyre!(
-            "epoch supervisor seed references differ from admitted consensus roster"
-        ));
-    }
-    for (index, seed) in custody.seeds.iter().enumerate() {
-        if seed.path
-            != format!(
-                "{STATE_ROOT}/seeds/{}/peer{index}.seed",
-                policy.intent.network_id
-            )
-        {
-            return Err(eyre!(
-                "epoch seed custody destination differs from fixed persistent original mapping"
-            ));
-        }
-    }
     let cli = artifact(&nominated.artifacts, "iroha_cli")?;
-    let kagami = artifact(&nominated.artifacts, "kagami")?;
-    if cli.sha256 != plan.iroha_sha256 || kagami.sha256 != plan.kagami_sha256 {
+    if Path::new(&plan.cli_path) != release.join("bin/iroha")
+        || plan.cli_path != cli.remote_path
+        || cli.sha256 != plan.iroha_sha256
+    {
         return Err(eyre!(
-            "epoch supervisor executables differ from the same-release closure"
+            "epoch supervisor CLI differs from the exact signed release"
         ));
     }
     for validator in validators {
@@ -436,8 +307,6 @@ pub(super) fn render_unit(plan: &EpochSupervisorPlanV1, cli: &str) -> Result<Vec
         &plan.admin_config_path,
         "--operator-private-key-file",
         &plan.http_operator_key_path,
-        "--fee-payer",
-        "authority",
         "taira",
         "epoch-maintenance",
         "supervise",
@@ -445,8 +314,6 @@ pub(super) fn render_unit(plan: &EpochSupervisorPlanV1, cli: &str) -> Result<Vec
         &plan.policy_path,
         "--trust",
         &plan.trust_path,
-        "--custody",
-        &plan.custody_path,
         "--journal-dir",
         JOURNAL_DIR,
         "--timeout-ms",
@@ -663,13 +530,12 @@ pub(super) fn protects_prior_release(plan: &EpochSupervisorPlanV1, path: &Path) 
     let Some(prior) = predecessor(plan)? else {
         return Ok(false);
     };
-    let policy = validate_generation(&prior)?;
-    let release = Path::new(&policy.kagami.path)
+    validate_generation(&prior)?;
+    let release = Path::new(&prior.cli_path)
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| eyre!("epoch supervisor tool release root missing"))?;
-    // validate_generation binds the Kagami path and its exact bin/iroha sibling
-    // to the prior policy and unit. Keep the complete containing release.
+    // The signed plan binds the CLI pathname, policy and unit. Keep its complete release.
     Ok(release.starts_with(path) || path.starts_with(release))
 }
 
@@ -823,15 +689,10 @@ pub(super) fn materialize_stream(admitted: &HostAdmission, body: &mut impl Read)
     nominated(admitted)?;
     require_owner(admitted)?;
     let guard = require_forward_pause(admitted)?;
-    let mut header = [0_u8; 48];
+    let mut header = [0_u8; 16];
     body.read_exact(&mut header)?;
     let administrator_len = u64::from_be_bytes(header[..8].try_into()?);
     let operator_len = u64::from_be_bytes(header[8..16].try_into()?);
-    for length in header[16..].chunks_exact(8) {
-        if u64::from_be_bytes(length.try_into()?) != 32 {
-            return Err(eyre!("original epoch seed frame is not exact32 bytes"));
-        }
-    }
     if administrator_len == 0
         || administrator_len > iroha_config_base::toml::MAX_TOML_SOURCE_BYTES
         || operator_len == 0
@@ -845,10 +706,6 @@ pub(super) fn materialize_stream(admitted: &HostAdmission, body: &mut impl Read)
     let mut operator = zeroize::Zeroizing::new(vec![0; usize::try_from(operator_len)?]);
     body.read_exact(&mut administrator)?;
     body.read_exact(&mut operator)?;
-    let mut seeds = zeroize::Zeroizing::new([[0_u8; 32]; 4]);
-    for seed in seeds.iter_mut() {
-        body.read_exact(seed)?;
-    }
     require_stream_eof(body)?;
     let plan = &admitted.inventory.epoch_supervisor;
     if sha256_hex(&administrator) != plan.admin_config_sha256
@@ -859,16 +716,7 @@ pub(super) fn materialize_stream(admitted: &HostAdmission, body: &mut impl Read)
         ));
     }
     ensure_action_deadline(admitted)?;
-    let policy = validate_generation(plan)?;
-    let custody: SeedCustodyV1 = json::from_slice(&plan.custody_bytes)?;
-    for (index, bytes) in seeds.iter().enumerate() {
-        let path = epoch_seed_custody::retain_original(policy.intent.network_id, index, bytes)?;
-        if path != Path::new(&custody.seeds[index].path) {
-            return Err(eyre!(
-                "retained original seed destination differs from admitted mapping"
-            ));
-        }
-    }
+    validate_generation(plan)?;
     epoch_generation::materialize_reset_generation(
         plan,
         &administrator,
@@ -1219,8 +1067,6 @@ fn status_arguments(
         plan.admin_config_path.clone(),
         "--operator-private-key-file".to_owned(),
         plan.http_operator_key_path.clone(),
-        "--fee-payer".to_owned(),
-        "authority".to_owned(),
         "taira".to_owned(),
         "epoch-maintenance".to_owned(),
         "supervisor-status".to_owned(),
@@ -1248,7 +1094,7 @@ pub(super) fn status_generation(
     plan: &EpochSupervisorPlanV1,
     deadline: Instant,
 ) -> Result<json::Value> {
-    let policy = validate_generation(plan)?;
+    validate_generation(plan)?;
     let before = epoch_generation::observe_generation(plan, deadline)?;
     let remaining = u64::try_from(
         deadline
@@ -1258,7 +1104,7 @@ pub(super) fn status_generation(
     if remaining == 0 {
         return Err(eyre!("epoch supervisor status deadline elapsed"));
     }
-    let cli = Path::new(&policy.kagami.path).with_file_name("iroha");
+    let cli = Path::new(&plan.cli_path);
     verify_regular_hash(&cli, &plan.iroha_sha256)?;
     let args = status_arguments(plan, &before, remaining);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -1564,10 +1410,6 @@ pub(in super::super) fn fixture_plan(
         .unwrap()
         .sha256
         .clone();
-    let kagami_sha256 = artifact(&nominated.artifacts, "kagami")
-        .unwrap()
-        .sha256
-        .clone();
     let trust = crate::taira_dataspace_deploy::DeploymentTrustV1 {
         genesis_public_key: iroha_test_samples::ALICE_KEYPAIR.public_key().clone(),
         genesis_signed_wire_hex: "00".into(),
@@ -1593,53 +1435,15 @@ pub(in super::super) fn fixture_plan(
             network_id: administrator.network_id.parse().unwrap(),
             administrator: AccountId::parse_encoded(&administrator.account_id)
                 .expect("canonical fixture administrator"),
-            payment_asset: crate::taira::DEFAULT_GAS_ASSET_ID.parse().unwrap(),
-            transaction_fee_maximum: iroha_primitives::numeric::Quantity::from(100_u32),
             first_epoch: 1,
-            batch_epochs: 2,
-            operation_timeout_ms: 180_000,
         },
         release_source_commit: revision.commit.clone(),
         iroha_sha256: iroha_sha256.clone(),
-        kagami: KagamiV1 {
-            path: format!("{release}/bin/kagami"),
-            sha256: kagami_sha256.clone(),
-        },
         observation_trust_sha256: sha256_hex(&trust),
-        provision_timeout_ms: 180_000,
     };
     let policy_bytes = json::to_json(&policy).unwrap().into_bytes();
     let policy_sha256 = sha256_hex(&policy_bytes);
     let generation = format!("{STATE_ROOT}/generations/{policy_sha256}");
-    let mut seeds = clients
-        .iter()
-        .map(|v| SeedV1 {
-            validator: v.peer_id.parse().unwrap(),
-            path: format!("{STATE_ROOT}/seeds/{}.seed", v.slug),
-        })
-        .collect::<Vec<_>>();
-    seeds.sort_by(|a, b| a.validator.cmp(&b.validator));
-    for (index, seed) in seeds.iter_mut().enumerate() {
-        seed.path = format!(
-            "{STATE_ROOT}/seeds/{}/peer{index}.seed",
-            policy.intent.network_id
-        );
-    }
-
-    let original_seed_sources = seeds
-        .iter()
-        .enumerate()
-        .map(|(index, seed)| SeedV1 {
-            validator: seed.validator.clone(),
-            path: format!("/private/runtime/mint-finality-signers/peer{index}.seed"),
-        })
-        .collect();
-    let custody = json::to_json(&SeedCustodyV1 {
-        schema_version: 1,
-        seeds,
-    })
-    .unwrap()
-    .into_bytes();
     let mut plan = EpochSupervisorPlanV1 {
         schema: PLAN_SCHEMA.into(),
         host_slug: nominated.slug.clone(),
@@ -1648,14 +1452,11 @@ pub(in super::super) fn fixture_plan(
         journal_dir: JOURNAL_DIR.into(),
         release_source_commit: revision.commit.clone(),
         iroha_sha256,
-        kagami_sha256,
+        cli_path: format!("{release}/bin/iroha"),
         policy_sha256,
         policy_bytes,
         observation_trust_sha256: sha256_hex(&trust),
         observation_trust_bytes: trust,
-        custody_sha256: sha256_hex(&custody),
-        custody_bytes: custody,
-        original_seed_sources,
         unit_sha256: String::new(),
         unit_bytes: Vec::new(),
         admin_config_path: format!("{generation}/administrator.toml"),
@@ -1664,7 +1465,6 @@ pub(in super::super) fn fixture_plan(
         http_operator_key_sha256: "6".repeat(64),
         policy_path: format!("{generation}/policy.json"),
         trust_path: format!("{generation}/trust.json"),
-        custody_path: format!("{generation}/custody.json"),
         timeout_ms: 3_600_000,
         prior_state: "absent".into(),
         prior: None,
@@ -1687,7 +1487,7 @@ pub(super) fn fixture_prior_generation(
     prior.release_source_commit = "7".repeat(40);
     let mut policy: NativePolicyV1 = json::from_slice(&prior.policy_bytes).unwrap();
     policy.release_source_commit = prior.release_source_commit.clone();
-    policy.kagami.path = release.join("bin/kagami").display().to_string();
+    prior.cli_path = release.join("bin/iroha").display().to_string();
     prior.policy_bytes = json::to_json(&policy).unwrap().into_bytes();
     prior.policy_sha256 = sha256_hex(&prior.policy_bytes);
     let generation = format!("{STATE_ROOT}/generations/{}", prior.policy_sha256);
@@ -1695,7 +1495,6 @@ pub(super) fn fixture_prior_generation(
     prior.http_operator_key_path = format!("{generation}/http-operator.key");
     prior.policy_path = format!("{generation}/policy.json");
     prior.trust_path = format!("{generation}/trust.json");
-    prior.custody_path = format!("{generation}/custody.json");
     prior.unit_bytes = render_unit(&prior, release.join("bin/iroha").to_str().unwrap()).unwrap();
     prior.unit_sha256 = sha256_hex(&prior.unit_bytes);
     validate_generation(&prior).unwrap();
@@ -1759,7 +1558,7 @@ mod tests {
                 3 => plan.prior_state = "unknown".into(),
                 4 | 5 => {}
                 6 => prior.host_slug = "taira-validator-2".into(),
-                7 => prior.kagami_sha256 = "9".repeat(64),
+                7 => prior.iroha_sha256 = "9".repeat(64),
                 8 => prior.policy_bytes.push(b' '),
                 9 => prior.unit_bytes.push(b' '),
                 _ => unreachable!(),
@@ -1792,7 +1591,7 @@ mod tests {
     }
 
     #[test]
-    fn unit_matches_independent_python_golden_and_exact_native_argv() {
+    fn unit_matches_exact_native_retention_argv_and_lifecycle_golden() {
         let inventory = super::super::super::sample_inventory_fixture();
         let mut plan = inventory.epoch_supervisor;
         let generation = format!("{STATE_ROOT}/generations/{}", "a".repeat(64));
@@ -1800,7 +1599,6 @@ mod tests {
         plan.http_operator_key_path = format!("{generation}/http-operator.key");
         plan.policy_path = format!("{generation}/policy.json");
         plan.trust_path = format!("{generation}/trust.json");
-        plan.custody_path = format!("{generation}/custody.json");
         plan.timeout_ms = 3_600_000;
         let cli = format!(
             "/srv/taira/runtime/release-{}-update-{}/bin/iroha",
@@ -1810,13 +1608,64 @@ mod tests {
         let bytes = render_unit(&plan, &cli).unwrap();
         assert_eq!(
             sha256_hex(&bytes),
-            "3413b43dbd5b81acb3f825589d387b3f0cfe40a5debe4d2c7d0264841d5ab1a6"
+            "d4c2016116ee21fc956178040789b2e9ff4196ecabc78d2b01c3ed966425c427"
         );
         let unit = std::str::from_utf8(&bytes).unwrap();
         assert!(unit.contains("RestartPreventExitStatus=3 4 7\n"));
-        assert!(unit.contains(
-            "\"--fee-payer\" \"authority\" \"taira\" \"epoch-maintenance\" \"supervise\""
-        ));
+        assert!(!unit.contains("--custody") && !unit.contains("--fee-payer"));
+        assert!(unit.contains("\"taira\" \"epoch-maintenance\" \"supervise\""));
+    }
+    #[test]
+    fn retention_plan_rejects_retired_rotation_fields() {
+        let plan = super::super::super::sample_inventory_fixture().epoch_supervisor;
+        for field in [
+            "kagami_sha256",
+            "custody_bytes",
+            "custody_sha256",
+            "original_seed_sources",
+            "custody_path",
+        ] {
+            let mut value: json::Value = json::from_slice(&json::to_vec(&plan).unwrap()).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::Null);
+            assert!(
+                json::from_slice::<EpochSupervisorPlanV1>(&json::to_vec(&value).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        for field in ["kagami", "provision_timeout_ms"] {
+            let mut value: json::Value = json::from_slice(&plan.policy_bytes).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::Null);
+            assert!(
+                json::from_slice::<NativePolicyV1>(&json::to_vec(&value).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        for field in [
+            "payment_asset",
+            "transaction_fee_maximum",
+            "batch_epochs",
+            "operation_timeout_ms",
+        ] {
+            let mut value: json::Value = json::from_slice(&plan.policy_bytes).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .get_mut("intent")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), json::Value::Null);
+            assert!(
+                json::from_slice::<NativePolicyV1>(&json::to_vec(&value).unwrap()).is_err(),
+                "{field}"
+            );
+        }
     }
     #[test]
     fn first_install_pause_requires_genuine_manager_absence() {
@@ -1909,8 +1758,7 @@ mod tests {
             wrong.http_operator_key_path = format!("{generation}/http-operator.key");
             wrong.policy_path = format!("{generation}/policy.json");
             wrong.trust_path = format!("{generation}/trust.json");
-            wrong.custody_path = format!("{generation}/custody.json");
-            let cli = Path::new(&policy.kagami.path).with_file_name("iroha");
+            let cli = Path::new(&wrong.cli_path);
             wrong.unit_bytes = render_unit(&wrong, cli.to_str().unwrap()).unwrap();
             wrong.unit_sha256 = sha256_hex(&wrong.unit_bytes);
             assert!(validate_generation(&wrong).is_err());
@@ -1920,14 +1768,14 @@ mod tests {
     }
 
     #[test]
-    fn plan_rejects_wrong_administrator_origin_and_seed_role_mapping() {
+    fn plan_rejects_wrong_administrator_origin_and_duplicate_roster_mapping() {
         let inventory = super::super::super::sample_inventory_fixture();
         validate_plan(&inventory).unwrap();
         let mut wrong = inventory.clone();
         wrong.maintenance_admin_identity.torii_origin = "https://unselected.example/".into();
         assert!(validate_plan(&wrong).is_err());
         let mut wrong = inventory;
-        wrong.epoch_supervisor.original_seed_sources.swap(0, 1);
+        wrong.validator_clients[0].peer_id = wrong.validator_clients[1].peer_id.clone();
         assert!(validate_plan(&wrong).is_err());
     }
     #[test]
@@ -1942,7 +1790,7 @@ mod tests {
         };
         let args = status_arguments(&plan, &worker, 1234);
         assert_eq!(
-            &args[6..9],
+            &args[4..7],
             ["taira", "epoch-maintenance", "supervisor-status"]
         );
         assert!(
@@ -1951,7 +1799,7 @@ mod tests {
                 .any(|v| v == "supervise" || v == "--custody" || v == "apply")
         );
         assert_eq!(
-            &args[15..],
+            &args[13..],
             [
                 "--boot-id",
                 worker.boot_id.as_str(),

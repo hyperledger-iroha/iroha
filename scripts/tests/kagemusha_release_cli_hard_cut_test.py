@@ -65,22 +65,13 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         command_names = re.findall(r'#\[command\(name = "([^"]+)"\)\]', command_source)
         self.assertEqual(
             command_names,
-            ["authenticate-release-v1", "derive-mint-finality-next-epoch-v1", "derive-mint-finality-epoch-schedule-v1"],
+            ["authenticate-release-v1"],
         )
         self.assertIn(
             "Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer)",
             command_source,
         )
-        self.assertRegex(
-            command_source,
-            r"Command::DeriveMintFinalityNextEpochV1\(args\) => \{\s*"
-            r"derive_mint_finality_next_epoch_v1::run\(args, writer\)",
-        )
-        self.assertRegex(
-            command_source,
-            r"Command::DeriveMintFinalityEpochScheduleV1\(args\) => \{\s*"
-            r"derive_mint_finality_next_epoch_v1::run_schedule\(args, writer\)",
-        )
+        self.assertNotIn("derive_mint_finality_next_epoch_v1", command_source)
         for field in (
             "recursive_profile",
             "artifact_root",

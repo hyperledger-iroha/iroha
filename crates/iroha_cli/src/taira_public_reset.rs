@@ -131,6 +131,10 @@ pub(crate) struct PublicReset {
 enum PublicResetCommand {
     /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
     DispatcherTransition(host::dispatcher_transition::DispatcherTransition),
+    /// Capture the stopped installed runtime into a private typed transition input.
+    CaptureDispatcherCurrentRuntime(
+        host::dispatcher_transition::prepare::capture::CaptureDispatcherCurrentRuntime,
+    ),
     /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
     PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
@@ -235,9 +239,6 @@ struct PublicResetApply {
     /// Separately authorized owner-private maintenance administrator; never the canary config.
     #[arg(long, value_name = "PATH")]
     maintenance_admin_config: Option<PathBuf>,
-    /// Four original mint-finality seeds, ordered by the signed sorted validator mapping.
-    #[arg(long, value_name = "PATH", num_args = 4)]
-    epoch_seed_source: Vec<PathBuf>,
     /// Four ordered validator read configs for forward work, Canary or RestartProof recovery;
     /// other recovery steps ignore these paths.
     #[arg(long, value_name = "PATH", num_args = 4)]
@@ -335,13 +336,7 @@ impl PublicResetApply {
             .qualification_scope
             .validate_stage_argument(self.inrou_stage_dir.as_deref())?;
         let inrou_stage_dir = self.inrou_stage_dir.clone();
-        if self.epoch_seed_source.len() != 4 {
-            return Err(eyre!(
-                "forward execution requires four --epoch-seed-source paths"
-            ));
-        }
         Ok(host::RuntimeCanaryInputs {
-            epoch_seed_sources: self.epoch_seed_source.clone(),
             maintenance_admin_config: self
                 .maintenance_admin_config
                 .clone()
@@ -364,6 +359,9 @@ impl PublicReset {
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
             PublicResetCommand::DispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::CaptureDispatcherCurrentRuntime(args) => {
+                return args.run(&mut output);
+            }
             PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
             PublicResetCommand::PrepareEpochSupervisorPlan(args) => {
                 host::epoch_reset_inputs::prepare(args)?;
@@ -6021,7 +6019,6 @@ mod executor_model {
                 validator_operator_key: Some(unavailable.join("operator.key")),
                 runtime_client_config: Some(unavailable.join("runtime.toml")),
                 maintenance_admin_config: Some(unavailable.join("maintenance.toml")),
-                epoch_seed_source: Vec::new(),
                 validator_client_config: validator_configs.clone(),
                 onboarding_token: Some(unavailable.join("onboarding-token")),
                 inrou_stage_dir: Some(unavailable.join("inrou-stage")),

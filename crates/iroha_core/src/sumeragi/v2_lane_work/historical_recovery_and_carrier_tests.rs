@@ -1555,12 +1555,16 @@ fn historical_missing_canonical_block_schedules_authenticated_retry_then_complet
         BTreeSet::from([retired_request_hash]),
         "completion publishes one exact cancellation identity"
     );
+    crate::sumeragi::v2_runner::apply_retired_historical_recovery_requests(
+        &mut adapter,
+        &services,
+    )
+    .expect("cancel the exact completed historical request before global output retry");
     assert!(
         !reconcile_terminal_lane_output_handoffs(
             LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
                 .decided_lane_recovery_permit()
                 .expect("settled Apply mints terminal handoff authority"),
-            &mut adapter,
             &services,
             1,
         )

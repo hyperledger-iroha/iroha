@@ -30,9 +30,6 @@ pub(super) struct LocalInputs {
     /// Separate native maintenance owner; authenticated genesis must register and grant it.
     #[arg(long, value_name = "PATH")]
     maintenance_admin_config: PathBuf,
-    /// Original held seed files, in the exact signed sorted validator mapping.
-    #[arg(long, value_name = "PATH", num_args = 4)]
-    epoch_seed_sources: Vec<PathBuf>,
     /// Closed public single-service plan including explicit until-stopped policy and exact bytes.
     #[arg(long, value_name = "PATH")]
     epoch_supervisor_plan: PathBuf,
@@ -253,7 +250,6 @@ fn derive_inventory_from_intent(
         &context.public_inputs.genesis_public_key,
     )?;
     host::epoch_supervisor::validate_plan(&inventory)?;
-    validate_original_epoch_seed_sources(&inventory, inputs)?;
     let operator_key =
         host::pin_validator_operator_key(&inputs.validator_operator_key, &inventory)?;
     validate_inventory(&inventory)?;
@@ -306,48 +302,6 @@ fn validate_validator_pin_fee_asset(
         return Err(eyre!(
             "validator SoraFS pin fee asset differs from the inventory faucet asset"
         ));
-    }
-    Ok(())
-}
-
-/// Admit separate administrator material only through native pinned config custody.
-/// Public genesis permission evidence is a prerequisite, not a substitute for the
-/// supervisor worker's fresh effective-permission check before every dispatch.
-/// Pin original seeds by custody and identity only. Public artifacts never contain seed digests.
-fn validate_original_epoch_seed_sources(
-    inventory: &InventoryV1,
-    inputs: &LocalInputs,
-) -> Result<()> {
-    let sources = &inventory.epoch_supervisor.original_seed_sources;
-    if inputs.epoch_seed_sources.len() != 4 || sources.len() != 4 {
-        return Err(eyre!(
-            "epoch supervisor requires four explicitly mapped original seed files"
-        ));
-    }
-    let mut paths = BTreeSet::new();
-    #[cfg(unix)]
-    let mut inodes = BTreeSet::new();
-    for (path, source) in inputs.epoch_seed_sources.iter().zip(sources) {
-        if path != Path::new(&source.path) || !paths.insert(path) {
-            return Err(eyre!(
-                "original epoch seed path differs from the signed public mapping"
-            ));
-        }
-        let input = pin_owner_private_file(path, "original epoch seed")?;
-        if input.snapshot.len != 32 || path.canonicalize()? != *path {
-            return Err(eyre!(
-                "original epoch seed must be a canonical direct 32-byte private file"
-            ));
-        }
-        #[cfg(unix)]
-        if input.snapshot.mode & 0o7777 != 0o600
-            || !inodes.insert((input.snapshot.dev, input.snapshot.ino))
-        {
-            return Err(eyre!(
-                "original epoch seeds require distinct owner0600 files"
-            ));
-        }
-        revalidate_pinned(&input, "original epoch seed")?;
     }
     Ok(())
 }

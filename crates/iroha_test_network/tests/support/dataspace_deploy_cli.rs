@@ -828,7 +828,20 @@ pub(super) async fn run_paid_deployment(
 #[test]
 fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::Account, isi::Register};
+    use iroha_data_model::{
+        account::Account,
+        asset::{AssetDefinitionId, AssetId},
+        isi::Register,
+    };
+    let stake_asset_id = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("nexus", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let escrow_account_id = AccountId::new(
+        KeyPair::from_seed(vec![25; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
     let mut instructions = Vec::<InstructionBox>::new();
     let mut peers = BTreeSet::new();
     let mut expected = BTreeMap::new();
@@ -854,6 +867,11 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
                     account.clone(),
                     100_u32.into(),
                     Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), account.clone()),
+                        AssetId::new(stake_asset_id.clone(), escrow_account_id.clone()),
+                        100_u32.into(),
+                    ),
                 )
                 .into(),
             );

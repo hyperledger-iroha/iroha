@@ -1,7 +1,4 @@
-//! Fail-closed KAGEMUSHA V1 release authentication and public authority provisioning.
-
-#[cfg(unix)]
-mod derive_mint_finality_next_epoch_v1;
+//! Fail-closed KAGEMUSHA V1 release authentication.
 
 use crate::{Outcome, RunArgs, json_macros::JsonDeserialize};
 use clap::{Args as ClapArgs, Subcommand};
@@ -111,7 +108,7 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 56] = [
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 
-/// Authenticate the first-release format or derive a public next-epoch authority parameter.
+/// Authenticate the first-release KAGEMUSHA release format.
 #[derive(Debug, ClapArgs)]
 pub struct Args {
     #[command(subcommand)]
@@ -123,14 +120,6 @@ enum Command {
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
-    /// Derive the typed next-epoch parameter from four inherited private seed blocks.
-    #[cfg(unix)]
-    #[command(name = "derive-mint-finality-next-epoch-v1")]
-    DeriveMintFinalityNextEpochV1(derive_mint_finality_next_epoch_v1::Args),
-    /// Derive a bounded public epoch-maintenance schedule from one inherited seed pipe.
-    #[cfg(unix)]
-    #[command(name = "derive-mint-finality-epoch-schedule-v1")]
-    DeriveMintFinalityEpochScheduleV1(derive_mint_finality_next_epoch_v1::ScheduleArgs),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -174,14 +163,6 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer),
-            #[cfg(unix)]
-            Command::DeriveMintFinalityNextEpochV1(args) => {
-                derive_mint_finality_next_epoch_v1::run(args, writer)
-            }
-            #[cfg(unix)]
-            Command::DeriveMintFinalityEpochScheduleV1(args) => {
-                derive_mint_finality_next_epoch_v1::run_schedule(args, writer)
-            }
         }
     }
 }

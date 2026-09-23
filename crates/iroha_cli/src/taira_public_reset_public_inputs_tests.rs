@@ -247,7 +247,8 @@ fn execute_fixture_genesis(
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -377,7 +378,7 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
                         DomainId::parse_fully_qualified("nexus.universal").unwrap(),
                     ))
                     .into(),
-                    Register::account(Account::new(escrow)).into(),
+                    Register::account(Account::new(escrow.clone())).into(),
                     Register::asset_definition(AssetDefinition::new(
                         stake_asset.clone(),
                         "Fixture stake",
@@ -405,6 +406,11 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
                             validator.clone(),
                             Quantity::from(1_u64),
                             Metadata::default(),
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset.clone(), validator.clone()),
+                                AssetId::new(stake_asset.clone(), escrow.clone()),
+                                Quantity::from(1_u64),
+                            ),
                         )
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),

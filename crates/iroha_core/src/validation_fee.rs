@@ -4609,33 +4609,80 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn monetary_staking_remains_closed_under_ds_validation_fee_policy() {
-        use iroha_data_model::isi::staking::{
-            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
-            PublicLaneCandidateAuthorization, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
-            RegisterPublicLaneValidator, SlashPublicLaneValidator,
+    fn monetary_staking_fee_instructions(policy: &ValidationFeePolicyV1) -> Vec<InstructionBox> {
+        use iroha_data_model::{
+            isi::staking::{
+                BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
+                PublicLaneCandidateAuthorization, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
+                RegisterPublicLaneValidator, SlashPublicLaneValidator,
+            },
+            nexus::{
+                PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1,
+                PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+                PublicLaneRegistrationPreconditionV1, PublicLaneRewardClaimPlanV1,
+                PublicLaneRewardClaimSourceV1, PublicLaneRewardRecord, PublicLaneRewardRecordRefV1,
+                PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneSlashPreconditionV1,
+                PublicLaneUnbondPreconditionV1, PublicLaneUnbonding,
+                public_lane_reward_record_commitment, public_lane_unbonding_commitment,
+            },
         };
         use iroha_model_base::{peer::PeerId, topology::LaneId};
 
-        let policy = policy(&account(3));
         let lane_id = LaneId::SINGLE;
         let peer_key = KeyPair::try_from_seed(vec![41; 32], Algorithm::BlsNormal).unwrap();
-        let registration = RegisterPublicLaneValidator::new(
+        let source_asset = AssetId::of(policy.ds_asset_id.clone(), account(1));
+        let escrow_asset = AssetId::of(policy.ds_asset_id.clone(), account(2));
+        let plan = |source_asset, destination_asset, precondition| PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(policy.network_id),
+            valid_until_height: 100,
+            source_asset,
+            destination_asset,
+            amount: Quantity::one(),
+            precondition,
+        };
+        let mut registration = RegisterPublicLaneValidator::new(
             lane_id,
             account(1),
             PeerId::new(peer_key.public_key().clone()),
             account(1),
             Quantity::one(),
             Metadata::default(),
+            plan(
+                source_asset.clone(),
+                escrow_asset.clone(),
+                PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+                    activation_height: 1,
+                }),
+            ),
         );
-        let candidate_authorization = PublicLaneCandidateAuthorization::new(
-            validation_fee_test_network_id(),
-            registration.clone(),
-            10,
-        );
-        let instructions: Vec<InstructionBox> = vec![
-            registration.clone().into(),
+        let ordinary_registration = registration.clone();
+        registration.monetary_plan.precondition =
+            PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+                activation_height: 10,
+            });
+        let candidate_authorization =
+            PublicLaneCandidateAuthorization::new(policy.network_id, registration.clone(), 10);
+        let request = PublicLaneUnbonding {
+            request_id: Hash::new(b"staking fee fixture unbond"),
+            amount: Quantity::one(),
+            release_at_ms: 1000,
+            slashable_through_height: 1,
+            liability_release_height: 2,
+        };
+        let reward = PublicLaneRewardRecord {
+            lane_id,
+            epoch: 0,
+            asset: escrow_asset.clone(),
+            total_reward: Quantity::one(),
+            shares: vec![PublicLaneRewardShare {
+                account: account(1),
+                role: PublicLaneRewardRole::Validator,
+                amount: Quantity::one(),
+            }],
+            metadata: Metadata::default(),
+        };
+        vec![
+            ordinary_registration.into(),
             RegisterPublicLaneCandidate {
                 registration,
                 activation_height: 10,
@@ -4654,13 +4701,29 @@ pub(crate) mod tests {
                 staker: account(1),
                 amount: Quantity::one(),
                 metadata: Metadata::default(),
+                monetary_plan: plan(
+                    source_asset.clone(),
+                    escrow_asset.clone(),
+                    PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+                        activation_height: 1,
+                        peer_id: PeerId::new(peer_key.public_key().clone()),
+                    }),
+                ),
             }
             .into(),
             FinalizePublicLaneUnbond {
                 lane_id,
                 validator: account(1),
                 staker: account(1),
-                request_id: Hash::new(b"staking fee fixture unbond"),
+                request_id: request.request_id,
+                monetary_plan: plan(
+                    escrow_asset.clone(),
+                    source_asset.clone(),
+                    PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+                        activation_height: 1,
+                        request_hash: public_lane_unbonding_commitment(&request).unwrap(),
+                    }),
+                ),
             }
             .into(),
             SlashPublicLaneValidator {
@@ -4671,33 +4734,220 @@ pub(crate) mod tests {
                 amount: Quantity::one(),
                 reason_code: "double_sign".to_owned(),
                 metadata: Metadata::default(),
+                monetary_plan: plan(
+                    escrow_asset.clone(),
+                    AssetId::of(policy.ds_asset_id.clone(), account(4)),
+                    PublicLaneMonetaryPreconditionV1::Slash(PublicLaneSlashPreconditionV1 {
+                        activation_height: 1,
+                        slashable_exposure: Quantity::one(),
+                    }),
+                ),
             }
             .into(),
             RecordPublicLaneRewards {
                 lane_id,
-                epoch: 0,
-                reward_asset: AssetId::new(policy.ds_asset_id.clone(), account(1)),
-                total_reward: Quantity::one(),
-                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                    account: account(2),
-                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Quantity::one(),
-                }],
-                metadata: Metadata::default(),
+                epoch: reward.epoch,
+                reward_asset: reward.asset.clone(),
+                total_reward: reward.total_reward.clone(),
+                shares: reward.shares.clone(),
+                metadata: reward.metadata.clone(),
             }
             .into(),
             ClaimPublicLaneRewards {
                 lane_id,
                 account: account(1),
-                upto_epoch: Some(0),
+                claim_plan: PublicLaneRewardClaimPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Network(policy.network_id),
+                    valid_until_height: 100,
+                    expected_state: None,
+                    records: vec![PublicLaneRewardRecordRefV1 {
+                        epoch: reward.epoch,
+                        record_hash: public_lane_reward_record_commitment(&reward).unwrap(),
+                    }],
+                    sources: vec![PublicLaneRewardClaimSourceV1 {
+                        source_asset: escrow_asset,
+                        destination_asset: source_asset,
+                        expected_accrued: None,
+                        payout: Quantity::one(),
+                    }],
+                },
             }
             .into(),
-        ];
-        for instruction in instructions {
-            assert!(matches!(
+        ]
+    }
+
+    #[test]
+    fn monetary_staking_signed_effects_require_separate_validation_fees() {
+        let policy = policy(&account(3));
+        for (index, instruction) in monetary_staking_fee_instructions(&policy)
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
                 native_instruction_ds_effect_disposition(&instruction, &policy.ds_asset_id),
-                NativeInstructionDsEffectDisposition::RejectKnownDsCapable(_),
-            ));
+                NativeInstructionDsEffectDisposition::AuthenticatedStakingEffects,
+            );
+            let is_record = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::staking::RecordPublicLaneRewards>()
+                .is_some();
+            let mut collection = TransferCollection {
+                contexts: Vec::new(),
+                transfers: Vec::new(),
+                multisig_fee_markers: Vec::new(),
+            };
+            staking_effects::collect_signed_staking_effects(&instruction, 2, 3, &mut collection)
+                .unwrap();
+            assert_eq!(collection.transfers.len(), usize::from(!is_record));
+            if let Some(principal) = collection.transfers.first() {
+                let (source, destination) = match index {
+                    0..=2 => (account(1), account(2)),
+                    3 | 6 => (account(2), account(1)),
+                    4 => (account(2), account(4)),
+                    _ => unreachable!("reward recording has no transfer"),
+                };
+                assert_eq!(principal.context_index, 2);
+                assert_eq!(principal.instruction_index, 3);
+                assert_eq!(principal.entry_index, Some(0));
+                assert_eq!(principal.source_account_id, source);
+                assert_eq!(principal.destination_account_id, destination);
+                assert_eq!(principal.asset_definition_id, policy.ds_asset_id);
+                assert_eq!(principal.amount, Quantity::one());
+                assert!(!principal.explicit_fee_eligible);
+                assert_eq!(
+                    enforce_policy(
+                        &tx(1, vec![instruction.clone()], metadata_for(&policy)),
+                        &policy,
+                    ),
+                    Err(ValidationFeeAdmissionError::MissingFee {
+                        required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+                    })
+                );
+                assert_eq!(
+                    enforce_policy(
+                        &tx(
+                            1,
+                            vec![instruction.clone()],
+                            metadata_for_fee_batch_entry(&policy, 0, 0)
+                        ),
+                        &policy,
+                    ),
+                    Err(ValidationFeeAdmissionError::NativePrincipalCannotPayFee {
+                        instruction_index: 0,
+                        entry_index: Some(0),
+                    })
+                );
+            } else {
+                assert_eq!(
+                    enforce_policy(
+                        &tx(1, vec![instruction.clone()], Metadata::default()),
+                        &policy
+                    ),
+                    Ok(())
+                );
+            }
+            let ordinary_transfer = transfer(
+                &account(1),
+                &policy.ds_asset_id,
+                Quantity::one(),
+                &account(5),
+            );
+            let fee_units = if is_record {
+                TEST_VALIDATION_FEE_MINOR_UNITS
+            } else {
+                2 * TEST_VALIDATION_FEE_MINOR_UNITS
+            };
+            let fee = transfer(
+                &account(1),
+                &policy.ds_asset_id,
+                minor_units(fee_units),
+                &account(3),
+            );
+            assert_eq!(
+                enforce_policy(
+                    &tx(
+                        1,
+                        vec![instruction, ordinary_transfer, fee],
+                        metadata_for_fee_instruction(&policy, 2)
+                    ),
+                    &policy
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn monetary_staking_rejects_malformed_signed_plans_even_with_explicit_fee() {
+        use iroha_data_model::isi::staking::{
+            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
+            RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
+            SlashPublicLaneValidator,
+        };
+        let policy = policy(&account(3));
+        for instruction in monetary_staking_fee_instructions(&policy) {
+            macro_rules! altered {
+                ($ty:ty, $value:ident, $change:expr) => {
+                    if let Some($value) = instruction.as_any().downcast_ref::<$ty>() {
+                        let mut $value = $value.clone();
+                        $change;
+                        Some(InstructionBox::from($value))
+                    } else {
+                        None
+                    }
+                };
+            }
+            let malformed = altered!(
+                RegisterPublicLaneValidator,
+                value,
+                value.monetary_plan.amount = Quantity::from(2_u32)
+            )
+            .or_else(|| {
+                altered!(
+                    RegisterPublicLaneCandidate,
+                    value,
+                    value.activation_height = 11
+                )
+            })
+            .or_else(|| {
+                altered!(
+                    BondPublicLaneStake,
+                    value,
+                    value.monetary_plan.source_asset =
+                        AssetId::of(policy.ds_asset_id.clone(), account(9))
+                )
+            })
+            .or_else(|| {
+                altered!(
+                    FinalizePublicLaneUnbond,
+                    value,
+                    value.monetary_plan.destination_asset =
+                        AssetId::of(policy.ds_asset_id.clone(), account(9))
+                )
+            })
+            .or_else(|| {
+                altered!(
+                    SlashPublicLaneValidator,
+                    value,
+                    value.monetary_plan.amount = Quantity::from(2_u32)
+                )
+            })
+            .or_else(|| {
+                altered!(
+                    RecordPublicLaneRewards,
+                    value,
+                    value.total_reward = Quantity::from(2_u32)
+                )
+            })
+            .or_else(|| {
+                altered!(
+                    ClaimPublicLaneRewards,
+                    value,
+                    value.claim_plan.sources[0].destination_asset =
+                        AssetId::of(policy.ds_asset_id.clone(), account(9))
+                )
+            })
+            .expect("all monetary fixture families covered");
             let fee = transfer(
                 &account(1),
                 &policy.ds_asset_id,
@@ -4708,12 +4958,34 @@ pub(crate) mod tests {
                 enforce_policy(
                     &tx(
                         1,
-                        vec![instruction, fee],
+                        vec![malformed, fee],
                         metadata_for_fee_instruction(&policy, 1)
                     ),
-                    &policy,
+                    &policy
                 ),
-                Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement { .. }),
+                Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn monetary_staking_opaque_effects_reject_principal_reserves_and_dust() {
+        let policy = policy(&account(3));
+        let mut instructions = monetary_staking_fee_instructions(&policy);
+        let mut dust = instructions
+            .last()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::staking::ClaimPublicLaneRewards>()
+            .unwrap()
+            .clone();
+        dust.claim_plan.sources[0].payout = Quantity::zero();
+        instructions.push(dust.into());
+        for instruction in instructions {
+            assert!(matches!(
+                reject_opaque_fee_asset_effects(&account(1), &[instruction], &policy.ds_asset_id, None),
+                Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
+                    | Err(ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement { .. })
             ));
         }
     }

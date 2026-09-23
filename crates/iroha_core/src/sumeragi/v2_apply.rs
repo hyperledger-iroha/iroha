@@ -11,7 +11,7 @@ use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
     v2::VerifiedHeightContext,
-    v2_body_store::{BodyValidationBusy, BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
+    v2_body_store::{BodyValidationBusy, BodyValidationError, LocalValidationRefusal, V2BodyStore, ValidatedBodyReceipt},
     v2_core::{
         CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
         IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
@@ -3536,7 +3536,7 @@ mod native_preparation;
 
 /// Production retained Native validation and its finite shell policy.
 pub(crate) mod native_validation;
-pub(crate) use native_validation::{CarrierShellAdmission, NativeApplyService, OwnedNativeCarrierValidator, PublishedNativeCarrier};
+pub(crate) use native_validation::{NativeApplyService, PublishedNativeCarrier};
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {

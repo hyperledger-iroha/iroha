@@ -352,7 +352,23 @@
             "metadata": {},
             "peer_id": "ea0130A1DB3124CEBD4A5A9BBC968D3988FFC0DF0B8E50F9650554FD8599E7D7F07A7C8F7F1CFE1B2CBC397661A48363188EED",
             "stake_account": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
-            "validator": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2"
+            "validator": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
+            "monetary_plan": {
+              "network_scope": {
+                "kind": "genesis",
+                "value": null
+              },
+              "valid_until_height": 1,
+              "source_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
+              "destination_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "amount": "10000",
+              "precondition": {
+                "kind": "registration",
+                "value": {
+                  "activation_height": 1
+                }
+              }
+            }
           }
         },
         {
@@ -387,7 +403,23 @@
             "metadata": {},
             "peer_id": "ea013095F9E716AB9F2F0670D588FBFA5420AC598CFFB58F0AEF969543D7BBCF81CE132A2A20E813A1CC0647B4B179B76B09CD",
             "stake_account": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
-            "validator": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7"
+            "validator": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
+            "monetary_plan": {
+              "network_scope": {
+                "kind": "genesis",
+                "value": null
+              },
+              "valid_until_height": 1,
+              "source_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
+              "destination_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "amount": "10000",
+              "precondition": {
+                "kind": "registration",
+                "value": {
+                  "activation_height": 1
+                }
+              }
+            }
           }
         },
         {
@@ -422,7 +454,23 @@
             "metadata": {},
             "peer_id": "ea01309753D5AA860989AD67EC4FB2A14558A879AACC538A4C656CCDF2FE8D646CD5B6DF7E32F397A91CD371951645D89ED917",
             "stake_account": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
-            "validator": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5"
+            "validator": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
+            "monetary_plan": {
+              "network_scope": {
+                "kind": "genesis",
+                "value": null
+              },
+              "valid_until_height": 1,
+              "source_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
+              "destination_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "amount": "10000",
+              "precondition": {
+                "kind": "registration",
+                "value": {
+                  "activation_height": 1
+                }
+              }
+            }
           }
         },
         {
@@ -457,7 +505,23 @@
             "metadata": {},
             "peer_id": "ea013089E0110B3F07AB1CEFAC930756E4DBC25E37D606E4D03513BF4C744DA0F6134DE8B7E52749511C823C230672F736C304",
             "stake_account": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
-            "validator": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R"
+            "validator": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
+            "monetary_plan": {
+              "network_scope": {
+                "kind": "genesis",
+                "value": null
+              },
+              "valid_until_height": 1,
+              "source_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
+              "destination_asset": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "amount": "10000",
+              "precondition": {
+                "kind": "registration",
+                "value": {
+                  "activation_height": 1
+                }
+              }
+            }
           }
         },
         {

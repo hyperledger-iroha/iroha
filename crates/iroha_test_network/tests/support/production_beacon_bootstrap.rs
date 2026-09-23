@@ -881,7 +881,7 @@ fn verify_pulse(
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
         epoch_length == 11,
-        "fixture must exercise real maintenance merge at mandatory height 10"
+        "fixture must exercise real canary merge at mandatory height 10"
     );
     let maintenance_tree: MerkleTree<TransactionEntrypoint> =
         [maintenance_entrypoint_hash].into_iter().collect();
@@ -911,15 +911,15 @@ fn verify_pulse(
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact native maintenance
-        // transaction as Applied on all four peers. Bind it to the sole leaf of
+        // The fixture has authenticated this exact signed canary
+        // as Applied in local and global state on all four peers. Bind it to the sole leaf of
         // the execution-bearing merge at the mandatory pulse height, excluding
         // unrelated transactions, QueuePlan admissions and anchor padding.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
         let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("first maintenance transaction did not execute on the mandatory pulse carrier")
+            eyre!("signed retention canary did not execute on the mandatory pulse carrier")
         })?;
         ensure!(
             reference.execution_batch_hash.is_some()
@@ -928,7 +928,7 @@ fn verify_pulse(
                 && block.external_entrypoint_count() == 0
                 && context.queue_plan_admissions.is_empty()
                 && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native maintenance merge"
+            "mandatory pulse carrier is not the exact one-transaction retention canary merge"
         );
         // Canonical QueuePlan admissions and autonomous anchors are genuine
         // protocol content even when they contain no external transaction row.
@@ -1548,10 +1548,10 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
         maintenance = Some(match driver {
             epoch_maintenance::Driver::Finite => epoch_maintenance::Maintenance::start(&cli, &prepared, epoch_trust)?,
             #[cfg(target_os = "linux")]
-            epoch_maintenance::Driver::Supervised => epoch_maintenance::Maintenance::start_supervisor(&cli, &kagami, &prepared, epoch_trust, build_identity)?,
+            epoch_maintenance::Driver::Supervised => epoch_maintenance::Maintenance::start_supervisor(&cli, &prepared, epoch_trust, build_identity)?,
         });
         let maintenance_deadline = Instant::now() + PHASE_BUDGET;
-        let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(maintenance_deadline).await?;
+        let maintenance_entrypoint_hash = maintenance.as_mut().unwrap().first_progress(&clients, maintenance_deadline).await?;
         wait_for_exact_height(&clients, 10, maintenance_deadline).await?;
         // Paid deployment still verifies its exact three signed operations and
         // all-four finality; it does not carry or drive operator maintenance.
@@ -1560,6 +1560,7 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
             root: &directory.join("paid-deployment"), genesis_wire: &genesis_wire,
             genesis_public_key: &prepared.genesis_public_key, peer_configs: &peer_configs, clients: &clients,
         }).await?;
+        maintenance.as_mut().unwrap().first_retention(Instant::now() + PHASE_BUDGET).await?;
         {
             let mut runtime = Runtime { directory, daemon: &daemon, roster: &prepared.roster,
                 ceremony: &ceremony, api, clients: &clients, peers: &mut peers, run: 2 };
@@ -1567,6 +1568,7 @@ async fn run_fresh_custody_bootstrap(driver: epoch_maintenance::Driver) -> Resul
             both_public_sequences(&mut runtime, &peer_configs, &prepared.routed_client).await?;
         }
         let operator = maintenance.as_mut().unwrap();
+        operator.await_current_retention(&clients, Instant::now() + PHASE_BUDGET).await?;
         operator.stop(Instant::now() + Duration::from_secs(30)).await?;
         operator.verify(&prepared, &clients, Instant::now() + PHASE_BUDGET).await?;
         peers.stop(Instant::now() + PHASE_BUDGET).await?;

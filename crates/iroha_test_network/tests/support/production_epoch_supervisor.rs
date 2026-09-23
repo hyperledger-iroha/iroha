@@ -1,5 +1,5 @@
 //! Linux acceptance of the shipping worker in the existing four-peer workload.
-//! Public journal evidence is compared exactly; only native Kagami reads seeds.
+//! Public receipts and process ownership survive restart without mint-custody access.
 use super::*;
 use iroha_core::release_identity::BuildIdentity;
 
@@ -54,7 +54,6 @@ impl Identity {
 
 pub(super) struct Supervisor {
     policy: PathBuf,
-    custody: PathBuf,
     policy_sha256: String,
     worker: PathBuf,
     original_files: Vec<(PathBuf, Vec<u8>)>,
@@ -87,7 +86,6 @@ fn binary_digest(path: &Path) -> Result<String> {
 
 pub(super) fn start(
     binary: &Path,
-    kagami: &Path,
     prepared: &prepare::Prepared,
     trust: PathBuf,
     build_identity: BuildIdentity,
@@ -96,7 +94,6 @@ pub(super) fn start(
     let journal = directory.join("epoch-maintenance");
     fs::create_dir(&journal)?;
     fs::set_permissions(&journal, fs::Permissions::from_mode(0o700))?;
-    let schedule: Value = json::from_slice(&fs::read(&prepared.epoch_schedule)?)?;
     let owner = iroha::config::Config::load_file(directory.join("client.toml"))
         .map_err(|error| eyre!("native administrator config: {error:?}"))?;
     let policy = norito::json!({
@@ -104,38 +101,15 @@ pub(super) fn start(
         "intent":{
             "authorization":"until_stopped", "network_id":(prepared.network_id),
             "administrator":(owner.account),
-            "payment_asset":(field(&schedule,"payment_asset")?),
-            "transaction_fee_maximum":(field(&schedule,"transaction_fee_maximum")?),
-            "first_epoch":1, "batch_epochs":2, "operation_timeout_ms":180000
+            "first_epoch":1
         },
         "release_source_commit":(build_identity.release_source_commit()?),
         "iroha_sha256":(binary_digest(binary)?),
-        "kagami":{"path":(kagami.to_str().ok_or_else(|| eyre!("Kagami fixture path is not UTF-8"))?),"sha256":(binary_digest(kagami)?)},
-        "observation_trust_sha256":(hex(&iroha_crypto::sha256(fs::read(&trust)?))),
-        "provision_timeout_ms":180000
+        "observation_trust_sha256":(hex(&iroha_crypto::sha256(fs::read(&trust)?)))
     });
-    let mut seeds = BTreeMap::new();
-    for index in 0..4 {
-        let peer = config(&directory.join(format!("peer{index}.toml")))?
-            .common
-            .peer
-            .id;
-        ensure!(
-            seeds
-                .insert(
-                    peer,
-                    directory.join(format!("runtime/mint-finality-signers/peer{index}.seed"))
-                )
-                .is_none(),
-            "duplicate fixture validator custody"
-        );
-    }
-    let custody = norito::json!({"schema_version":1,"seeds":(seeds.iter().map(|(validator,path)| -> Result<Value> {
-        Ok(norito::json!({"validator":validator,"path":(path.to_str().ok_or_else(|| eyre!("fixture seed path is not UTF-8"))?)}))}).collect::<Result<Vec<_>>>()?)});
     let policy_bytes = json::to_vec(&policy)?;
     let state = Supervisor {
         policy: journal.join("fixture-policy.json"),
-        custody: journal.join("fixture-custody.json"),
         policy_sha256: hex(&iroha_crypto::sha256(&policy_bytes)),
         worker: journal.join(format!("epoch-worker-{}", prepared.network_id)),
         original_files: Vec::new(),
@@ -143,13 +117,11 @@ pub(super) fn start(
         restarted_identity: None,
     };
     private_file(&state.policy, &policy_bytes)?;
-    private_file(&state.custody, &json::to_vec(&custody)?)?;
     let child = worker_command(binary, &directory, &trust, &journal, &state, "first")?.spawn()?;
     Ok(Maintenance {
         binary: binary.into(),
         directory,
         trust,
-        schedule: prepared.epoch_schedule.clone(),
         journal,
         network: prepared.network_id,
         child,
@@ -172,8 +144,6 @@ fn worker_command(
         .arg(&state.policy)
         .arg("--trust")
         .arg(trust)
-        .arg("--custody")
-        .arg(&state.custody)
         .arg("--journal-dir")
         .arg(journal)
         .arg("--timeout-ms")
@@ -261,8 +231,9 @@ async fn ready(
             field(&report, "worker")? == &identity.value()
                 && text(&report, "policy_sha256")? == state.policy_sha256
                 && field(&report, "initial_completion")? == field(&receipt, "completion")?
-                && field(field(&report, "current_completion")?, "target_epoch")?.as_u64()
-                    == Some(1),
+                && field(field(&report, "current_completion")?, "completed_epoch")?
+                    .as_u64()
+                    .is_some_and(|epoch| epoch >= 1),
             "native active-worker status did not verify the initial actual target"
         );
         ensure!(
@@ -279,20 +250,15 @@ fn immutable_files(
     maintenance: &Maintenance,
     state: &Supervisor,
 ) -> Result<Vec<(PathBuf, Vec<u8>)>> {
-    let mut paths = [
-        "plan.json",
-        "trust.json",
-        "prepared.json",
-        "submitted.json",
-        "submission-result.json",
-        "completion.json",
-    ]
-    .map(|name| maintenance.operation(1).join(name))
-    .to_vec();
-    paths.extend([
+    // The observer never signs or dispatches. Its original trust and first
+    // proof receipt, and the workload's sole signed canary, are immutable.
+    let paths = [
+        maintenance.retention().join("trust.json"),
+        maintenance.completion(1),
+        maintenance.journal.join("pulse-canary.signed.nrt"),
+        maintenance.journal.join("pulse-canary-applied.json"),
         state.worker.join("plan.json"),
-        state.worker.join("schedule-1.json"),
-    ]);
+    ];
     paths
         .into_iter()
         .map(|path| {
@@ -429,7 +395,7 @@ pub(super) async fn restart(maintenance: &mut Maintenance, deadline: Instant) ->
 
 pub(super) fn verify(maintenance: &Maintenance, state: &Supervisor, height: u64) -> Result<()> {
     ensure!(
-        maintenance.stopped && height >= 2 * EPOCH_LENGTH,
+        maintenance.stopped && height > 2 * EPOCH_LENGTH,
         "Linux supervisor acceptance requires two actual epoch transitions"
     );
     ensure!(
@@ -439,52 +405,35 @@ pub(super) fn verify(maintenance: &Maintenance, state: &Supervisor, height: u64)
         "supervisor restart was not exercised"
     );
     unchanged(&state.original_files)?;
-    let first: Value = json::from_slice(&fs::read(state.worker.join("schedule-1.json"))?)?;
-    let second: Value = json::from_slice(&fs::read(state.worker.join("schedule-2.json"))?)?;
-    let full: Value = json::from_slice(&fs::read(&maintenance.schedule)?)?;
-    let parameters = |value: &Value| -> Result<Vec<Parameter>> {
-        Ok(json::from_value(field(value, "parameters")?.clone())?)
-    };
-    let (first_parameters, second_parameters, full_parameters) = (
-        parameters(&first)?,
-        parameters(&second)?,
-        parameters(&full)?,
-    );
-    ensure!(
-        first_parameters.len() == 2
-            && second_parameters.len() == 2
-            && first_parameters == full_parameters[..2]
-            && second_parameters == full_parameters[1..3]
-            && first_parameters[1] == second_parameters[0]
-            && field(&first, "genesis_roster")? == field(&second, "genesis_roster")?
-            && field(&first, "genesis_roster")? == field(&full, "genesis_roster")?,
-        "native rolling schedule did not renew [1,2] to [2,3] with exact genesis binding and overlap"
-    );
-    // Stopping may interrupt only receipt publication. Reuse the native
-    // Status results just authenticated by the shared final audit.
     let verified: Vec<Value> = json::from_slice(&fs::read(
         maintenance
             .journal
             .join("fixture-verified-completions.json"),
     )?)?;
-    for epoch in [2, 3] {
-        ensure!(
-            verified
-                .iter()
-                .any(|receipt| receipt.get("target_epoch").and_then(Value::as_u64) == Some(epoch)),
-            "second rolling batch has not completed genuine next-epoch work"
-        );
+    ensure!(
+        verified.len() >= 2,
+        "restarted observer did not verify two actual Retain epochs"
+    );
+    for pair in verified.windows(2) {
+        verify_receipt_continuity(&pair[0], &pair[1])?;
     }
+    let first = &verified[0];
+    let last = verified.last().unwrap();
+    ensure!(
+        field(first, "completed_epoch")?.as_u64() == Some(1)
+            && field(last, "completed_epoch")?.as_u64() == Some((height - 1) / EPOCH_LENGTH),
+        "restarted observer omitted a finalized retained epoch"
+    );
     private_file(
         &maintenance
             .journal
-            .join("supervisor-renewal-verification.json"),
-        &json::to_vec(
-            &norito::json!({"schema_version":1,"network_id":(maintenance.network),
-            "final_height":height,"batch_epochs":2,"first_schedule":[1,2],"second_schedule":[2,3],
-            "overlap_equal":true,"retained_dispatch_unchanged":true,
-            "worker":(state.restarted_identity.as_ref().unwrap().value())}),
-        )?,
+            .join("supervisor-retention-verification.json"),
+        &json::to_vec(&norito::json!({
+            "schema_version":1,"network_id":(maintenance.network),"final_height":height,
+            "first_completion":first,"last_completion":last,
+            "retained_authority_and_beacon_unchanged":true,"original_evidence_unchanged":true,
+            "worker":(state.restarted_identity.as_ref().unwrap().value())
+        }))?,
     )?;
     Ok(())
 }

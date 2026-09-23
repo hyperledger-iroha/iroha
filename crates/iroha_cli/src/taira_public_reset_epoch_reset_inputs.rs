@@ -6,11 +6,10 @@
 
 use super::super::{MaintenanceAdminIdentityV1, inputs, public_inputs};
 use super::epoch_supervisor::{
-    EpochSupervisorPlanV1, JOURNAL_DIR, KagamiV1, NativePolicyV1, OngoingIntentV1,
-    PriorEpochSupervisorV1, STATE_ROOT, SeedCustodyV1, SeedV1, UNIT_NAME,
+    EpochSupervisorPlanV1, JOURNAL_DIR, NativePolicyV1, OngoingIntentV1, PriorEpochSupervisorV1,
+    STATE_ROOT, UNIT_NAME,
 };
 use super::*;
-use iroha_primitives::numeric::Quantity;
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum OngoingAuthorization {
@@ -44,23 +43,10 @@ pub(in super::super) struct PrepareEpochSupervisorPlan {
     /// Required explicit ongoing authority; never inferred from the reset's finite lease.
     #[arg(long, value_enum)]
     authorization: OngoingAuthorization,
-    #[arg(long)]
-    payment_asset: AssetDefinitionId,
-    #[arg(long)]
-    transaction_fee_maximum: Quantity,
     #[arg(long, value_parser=clap::value_parser!(u64).range(1..))]
     first_epoch: u64,
-    #[arg(long, value_parser=clap::value_parser!(u16).range(2..=256))]
-    batch_epochs: u16,
-    #[arg(long, value_parser=clap::value_parser!(u64).range(1..))]
-    operation_timeout_ms: u64,
-    #[arg(long, value_parser=clap::value_parser!(u64).range(1..))]
-    provision_timeout_ms: u64,
     #[arg(long, value_parser=clap::value_parser!(u64).range(1..))]
     timeout_ms: u64,
-    /// Four original source paths in sorted native PeerId order. No seed file is opened here.
-    #[arg(long, value_name = "PATH", num_args = 4, required = true)]
-    epoch_seed_source: Vec<PathBuf>,
     #[arg(long, value_enum)]
     prior_state: PriorState,
     /// Exact immediate predecessor plan, required for running/stopped and forbidden for absent.
@@ -143,23 +129,17 @@ fn build_plan(
         (args.prior_state == PriorState::Absent) == prior_bytes.is_none(),
         "explicit predecessor state requires exact predecessor bytes, or absence",
     )?;
-    require(
-        args.epoch_seed_source.len() == 4,
-        "exactly four original seed source paths are required",
-    )?;
     let selected = context
         .validators
         .iter()
         .find(|row| row.slug == args.host_slug)
         .ok_or_else(|| eyre!("selected supervisor host is not a reset validator"))?;
     let cli = artifact(&selected.artifacts, "iroha_cli")?;
-    let kagami = artifact(&selected.artifacts, "kagami")?;
     let release = Path::new(&selected.service_root)
         .join("releases")
         .join(&context.revision.commit);
     require(
-        Path::new(&cli.remote_path) == release.join("bin/iroha")
-            && Path::new(&kagami.remote_path) == release.join("bin/kagami"),
+        Path::new(&cli.remote_path) == release.join("bin/iroha"),
         "supervisor native paths differ from the selected reset release",
     )?;
     let administrator = AccountId::parse_encoded(&context.maintenance_admin_identity.account_id)?;
@@ -183,56 +163,17 @@ fn build_plan(
             .into(),
             network_id: public.network_id,
             administrator,
-            payment_asset: args.payment_asset.clone(),
-            transaction_fee_maximum: args.transaction_fee_maximum.clone(),
             first_epoch: args.first_epoch,
-            batch_epochs: u64::from(args.batch_epochs),
-            operation_timeout_ms: args.operation_timeout_ms,
         },
         release_source_commit: context.revision.commit.clone(),
         iroha_sha256: cli.sha256.clone(),
-        kagami: KagamiV1 {
-            path: kagami.remote_path.clone(),
-            sha256: kagami.sha256.clone(),
-        },
         observation_trust_sha256: sha256_hex(&trust_bytes),
-        provision_timeout_ms: args.provision_timeout_ms,
     };
     let policy_bytes = json::to_vec(&policy)?;
     let policy_sha256 = sha256_hex(&policy_bytes);
     let generation = Path::new(STATE_ROOT)
         .join("generations")
         .join(&policy_sha256);
-    let peers = context
-        .validator_clients
-        .iter()
-        .map(|row| row.peer_id.parse::<PeerId>())
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    require(
-        peers.len() == 4,
-        "original seed mapping requires four distinct typed peers",
-    )?;
-    let mut originals = Vec::with_capacity(4);
-    let mut retained = Vec::with_capacity(4);
-    for (index, (validator, path)) in peers.into_iter().zip(&args.epoch_seed_source).enumerate() {
-        originals.push(SeedV1 {
-            validator: validator.clone(),
-            path: path
-                .to_str()
-                .ok_or_else(|| eyre!("original seed path is not UTF8"))?
-                .into(),
-        });
-        retained.push(SeedV1 {
-            validator,
-            path: epoch_seed_custody::destination(public.network_id, index)?
-                .to_string_lossy()
-                .into_owned(),
-        });
-    }
-    let custody_bytes = json::to_vec(&SeedCustodyV1 {
-        schema_version: 1,
-        seeds: retained,
-    })?;
     let mut plan = EpochSupervisorPlanV1 {
         schema: "iroha.taira.public-reset.epoch-supervisor-plan.v1".into(),
         host_slug: args.host_slug.clone(),
@@ -241,14 +182,11 @@ fn build_plan(
         journal_dir: JOURNAL_DIR.into(),
         release_source_commit: context.revision.commit.clone(),
         iroha_sha256: cli.sha256.clone(),
-        kagami_sha256: kagami.sha256.clone(),
+        cli_path: cli.remote_path.clone(),
         policy_sha256,
         policy_bytes,
         observation_trust_sha256: sha256_hex(&trust_bytes),
         observation_trust_bytes: trust_bytes,
-        custody_sha256: sha256_hex(&custody_bytes),
-        custody_bytes,
-        original_seed_sources: originals,
         unit_sha256: String::new(),
         unit_bytes: Vec::new(),
         admin_config_path: generation
@@ -266,10 +204,6 @@ fn build_plan(
             .to_string_lossy()
             .into_owned(),
         trust_path: generation.join("trust.json").to_string_lossy().into_owned(),
-        custody_path: generation
-            .join("custody.json")
-            .to_string_lossy()
-            .into_owned(),
         timeout_ms: args.timeout_ms,
         prior_state: args.prior_state.as_str().into(),
         prior: prior_bytes.map(|bytes| PriorEpochSupervisorV1 {

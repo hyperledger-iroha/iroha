@@ -77,7 +77,7 @@ pub(crate) fn mint_finality_genesis_for_authority(
 }
 
 /// Build a complete generation-zero authority and explicit genesis authorization.
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn mint_finality_genesis_authorization(
     network_id: NetworkId,
     last_height: u64,

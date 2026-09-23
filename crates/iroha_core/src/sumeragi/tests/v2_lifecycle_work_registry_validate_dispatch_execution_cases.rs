@@ -4204,9 +4204,8 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
             &keys,
             local_validator,
         );
-    // This batch exercises the production dispatch path. Retain the sole
-    // consumer of actual bounded actor queues so post_recoverable checks its
-    // wire, topology, FIFO and byte owners instead of a closed test handle.
+    // Keep a live bounded actor receiver during the batch so an unexpected
+    // recovery response is observable instead of disappearing into a test handle.
     let mut actor_admissions = batch.then(|| {
         let local_peer = fixture.verified.context().roster[local_validator as usize]
             .validator
@@ -4394,10 +4393,15 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
         super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
     ));
     if decided_recovery {
-        let native_state = std::sync::Arc::new(crate::state::State::new_for_testing(
-            crate::state::World::default(), std::sync::Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-        ));
+        let native_state = std::sync::Arc::new(
+            crate::state::State::new_with_chain_and_network_id_for_testing(
+                crate::state::World::default(),
+                std::sync::Arc::clone(&kura),
+                crate::query::store::LiveQueryStore::start_test(),
+                "v2-lane-work-display-name".into(),
+                fixture.verified.context().network_id,
+            ),
+        );
         let mut native = NativeSourceLifecycleProcessGuard(Some(
             crate::sumeragi::v2_runner::native_process::NativeRunnerProcess::new(
                 native_state, std::sync::Arc::clone(&output_guard), validator.clone(),
@@ -4551,7 +4555,6 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
         } else {
             [(1, 1), (1, 0)]
         };
-        let mut admitted_output_posts = 0;
         for (expected_drained, remaining) in turns {
             let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
                 let directive = executor.local_proposal_directive().expect("read actual executor Decision");
@@ -4571,17 +4574,11 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
             assert_eq!(drained, expected_drained);
             assert_eq!(ingress.len(), remaining);
             if let Some(actor) = actor_admissions.as_mut() {
-                admitted_output_posts += actor.drain_posts(|post| {
-                    assert!(
-                        fixture
-                            .verified
-                            .context()
-                            .roster
-                            .iter()
-                            .any(|entry| entry.validator == post.peer_id),
-                        "recovery output must retain an exact committee target"
-                    );
-                });
+                assert_eq!(
+                    actor.drain_posts(|_| panic!("retired recovery ingress emitted actor output")),
+                    0,
+                    "Kura advert admission and volatile request retirement have no response"
+                );
             }
             assert_eq!(
                 ingress.state.lock().last_admission_ordinal,
@@ -4609,19 +4606,6 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
                 "recovery cannot step the reducer or append safety work"
             );
             assert!(!output_guard.restart_required());
-        }
-        if batch {
-            assert!(
-                admitted_output_posts > 0,
-                "the batch must cross real actor admission and release its consumed output leases"
-            );
-            assert_eq!(
-                actor_admissions
-                    .as_mut()
-                    .expect("retain live actor owner")
-                    .drain_posts(|_| { panic!("the recovery turn left an unobserved actor post") }),
-                0
-            );
         }
         assert_eq!(
             keeper_kura

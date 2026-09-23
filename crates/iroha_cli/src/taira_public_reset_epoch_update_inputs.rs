@@ -6,9 +6,7 @@
 use super::*;
 use crate::taira_dataspace_deploy::{DeploymentTrustV1, validate_deployment_trust};
 use epoch_generation::{BindingV1, PreparationV1};
-use epoch_supervisor::{
-    EpochSupervisorPlanV1, KagamiV1, NativePolicyV1, OngoingIntentV1, SeedCustodyV1, SeedV1,
-};
+use epoch_supervisor::{EpochSupervisorPlanV1, NativePolicyV1, OngoingIntentV1};
 
 /// Produce the exact public preparation consumed by epoch-supervisor-host materialize.
 #[derive(clap::Args, Debug)]
@@ -39,22 +37,9 @@ pub(in super::super) struct PrepareEpochUpdate {
     #[arg(long)]
     administrator: String,
     #[arg(long)]
-    payment_asset: String,
-    #[arg(long)]
-    transaction_fee_maximum: String,
-    #[arg(long)]
     first_epoch: u64,
     #[arg(long)]
-    batch_epochs: u64,
-    #[arg(long)]
-    operation_timeout_ms: u64,
-    #[arg(long)]
-    provision_timeout_ms: u64,
-    #[arg(long)]
     worker_timeout_ms: u64,
-    /// Four original file references in sorted native PeerId order; never opened here.
-    #[arg(long, num_args = 4, value_name = "PATH")]
-    original_seed_sources: Vec<PathBuf>,
     /// Fresh owner-private directory; publication never replaces an existing bundle.
     #[arg(long)]
     output: PathBuf,
@@ -150,7 +135,6 @@ struct OutputV1 {
     preparation: ReferenceV1,
     after_binding: ReferenceV1,
     credential_contents_read: bool,
-    seed_contents_read: bool,
     host_contacted: bool,
     native_materialization_required: bool,
 }
@@ -292,49 +276,6 @@ fn validate_prepared(value: &PreparedV1, current: &str) -> Result<()> {
     }
     Ok(())
 }
-fn seed_references(
-    trust: &DeploymentTrustV1,
-    paths: &[PathBuf],
-    network: NetworkId,
-) -> Result<(Vec<SeedV1>, SeedCustodyV1)> {
-    let mut peers: Vec<_> = trust.peers.iter().map(|p| p.peer_id.clone()).collect();
-    peers.sort();
-    require(
-        peers.len() == 4 && peers.windows(2).all(|p| p[0] < p[1]) && paths.len() == 4,
-        "exact four sorted native validators and source references required",
-    )?;
-    let mut original = Vec::new();
-    let mut retained = Vec::new();
-    let mut seen = BTreeSet::new();
-    for (index, (validator, source)) in peers.into_iter().zip(paths).enumerate() {
-        let path = source
-            .to_str()
-            .ok_or_else(|| eyre!("seed source path must be UTF-8"))?;
-        public_path(path)?;
-        require(
-            seen.insert(path.to_owned()),
-            "original seed source references must be distinct",
-        )?;
-        original.push(SeedV1 {
-            validator: validator.clone(),
-            path: path.into(),
-        });
-        retained.push(SeedV1 {
-            validator,
-            path: format!(
-                "{}/seeds/{network}/peer{index}.seed",
-                epoch_supervisor::STATE_ROOT
-            ),
-        });
-    }
-    Ok((
-        original,
-        SeedCustodyV1 {
-            schema_version: 1,
-            seeds: retained,
-        },
-    ))
-}
 fn validate_binding(binding: &BindingV1, deployment: &DeploymentV1, baseline: bool) -> Result<()> {
     let plan = epoch_generation::as_public_plan(binding, "stopped")?;
     require(
@@ -367,16 +308,11 @@ fn unchanged_authority(before: &BindingV1, after: &BindingV1) -> Result<()> {
     require(
         old.intent.network_id == new.intent.network_id
             && old.intent.administrator == new.intent.administrator
-            && old.intent.payment_asset == new.intent.payment_asset
-            && old.intent.transaction_fee_maximum == new.intent.transaction_fee_maximum
             && old.intent.first_epoch == new.intent.first_epoch
-            && old.intent.batch_epochs == new.intent.batch_epochs
-            && old.intent.operation_timeout_ms == new.intent.operation_timeout_ms
             && old_trust.genesis_public_key == new_trust.genesis_public_key
             && old_trust.genesis_signed_wire_hex == new_trust.genesis_signed_wire_hex
-            && origins(&old_trust) == origins(&new_trust)
-            && before.custody_bytes == after.custody_bytes,
-        "update cannot change original authority, genesis, roster, origins or retained seed custody",
+            && origins(&old_trust) == origins(&new_trust),
+        "update cannot change original authority, genesis, roster, origins or observation intent",
     )
 }
 
@@ -427,8 +363,6 @@ impl PrepareEpochUpdate {
         {
             validate_binding(binding, deployment, baseline)?;
         }
-        let (original_seed_sources, custody) =
-            seed_references(trust, &self.original_seed_sources, deployment.network_id)?;
         let release = format!(
             "{}/release-{}-{}/bin",
             deployment.runtime_root, prepared.commit, self.operation
@@ -439,20 +373,11 @@ impl PrepareEpochUpdate {
                 authorization: "until_stopped".into(),
                 network_id: deployment.network_id,
                 administrator: AccountId::parse_encoded(&self.administrator)?,
-                payment_asset: self.payment_asset.parse()?,
-                transaction_fee_maximum: self.transaction_fee_maximum.parse()?,
                 first_epoch: self.first_epoch,
-                batch_epochs: self.batch_epochs,
-                operation_timeout_ms: self.operation_timeout_ms,
             },
             release_source_commit: prepared.commit.clone(),
             iroha_sha256: prepared.artifacts[1].sha256.clone(),
-            kagami: KagamiV1 {
-                path: format!("{release}/kagami"),
-                sha256: prepared.artifacts[3].sha256.clone(),
-            },
             observation_trust_sha256: sha256_hex(trust_bytes),
-            provision_timeout_ms: self.provision_timeout_ms,
         };
         let policy_bytes = json::to_vec(&policy)?;
         let policy_sha256 = sha256_hex(&policy_bytes);
@@ -460,7 +385,6 @@ impl PrepareEpochUpdate {
             "{}/generations/{policy_sha256}",
             epoch_supervisor::STATE_ROOT
         );
-        let custody_bytes = json::to_vec(&custody)?;
         // Public projection only. Credential digests are absent, never invented or output.
         // The materializer derives and validates actual private custody before its receipt.
         let mut plan = EpochSupervisorPlanV1 {
@@ -471,14 +395,11 @@ impl PrepareEpochUpdate {
             journal_dir: epoch_supervisor::JOURNAL_DIR.into(),
             release_source_commit: prepared.commit.clone(),
             iroha_sha256: policy.iroha_sha256.clone(),
-            kagami_sha256: policy.kagami.sha256.clone(),
+            cli_path: format!("{release}/iroha"),
             policy_sha256,
             policy_bytes,
             observation_trust_sha256: sha256_hex(trust_bytes),
             observation_trust_bytes: trust_bytes.to_vec(),
-            custody_sha256: sha256_hex(&custody_bytes),
-            custody_bytes,
-            original_seed_sources: Vec::new(),
             unit_sha256: String::new(),
             unit_bytes: Vec::new(),
             admin_config_path: format!("{generation}/administrator.toml"),
@@ -487,7 +408,6 @@ impl PrepareEpochUpdate {
             http_operator_key_sha256: String::new(),
             policy_path: format!("{generation}/policy.json"),
             trust_path: format!("{generation}/trust.json"),
-            custody_path: format!("{generation}/custody.json"),
             timeout_ms: self.worker_timeout_ms,
             prior_state: self.original_service_state.clone(),
             prior: None,
@@ -506,7 +426,6 @@ impl PrepareEpochUpdate {
             before,
             installed,
             after,
-            original_seed_sources,
         })
     }
 
@@ -540,7 +459,6 @@ impl PrepareEpochUpdate {
             preparation: reference(&self.output.join("preparation.json"), &preparation_bytes)?,
             after_binding: reference(&self.output.join("after-binding.json"), &binding_bytes)?,
             credential_contents_read: false,
-            seed_contents_read: false,
             host_contacted: false,
             native_materialization_required: true,
         };

@@ -487,10 +487,6 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
             .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
         maintenance_admin_config: absent.join("maintenance-admin.toml"),
-        epoch_seed_sources: VALIDATOR_SLUGS
-            .iter()
-            .map(|slug| absent.join(format!("{slug}.seed")))
-            .collect(),
         epoch_supervisor_plan: absent.join("epoch-supervisor.json"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()
@@ -558,7 +554,6 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .collect(),
         runtime_client_config: absent.join("runtime-client.toml"),
         maintenance_admin_config: absent.join("maintenance-admin.toml"),
-        epoch_seed_sources: Vec::new(),
         epoch_supervisor_plan: absent.join("epoch-supervisor.json"),
         validator_client_config: VALIDATOR_SLUGS
             .iter()

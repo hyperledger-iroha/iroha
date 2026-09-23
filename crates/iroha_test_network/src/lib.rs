@@ -8402,7 +8402,7 @@ impl NetworkBuilder {
                 ALICE_ID.clone(),
                 BOB_ID.clone(),
                 CARPENTER_ID.clone(),
-                gas_account_id,
+                gas_account_id.clone(),
             ] {
                 bootstrap_tx.push(
                     Mint::asset_quantity(
@@ -8424,6 +8424,12 @@ impl NetworkBuilder {
                         stake_account: validator_id.clone(),
                         initial_stake: stake_amount.clone(),
                         metadata: Metadata::default(),
+                        monetary_plan:
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                                AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                                stake_amount.clone(),
+                            ),
                     }
                     .into(),
                 );
@@ -17184,7 +17190,7 @@ mod tests {
                         .into(),
                         Mint::asset_quantity(
                             stake_amount.clone(),
-                            AssetId::new(stake_asset_id, ALICE_ID.clone()),
+                            AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
                         )
                         .into(),
                     ];
@@ -17194,8 +17200,13 @@ mod tests {
                             ALICE_ID.clone(),
                             peer_id,
                             ALICE_ID.clone(),
-                            stake_amount,
+                            stake_amount.clone(),
                             Metadata::default(),
+                            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                                AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                                AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                                stake_amount,
+                            ),
                         )
                         .into(),
                         ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),

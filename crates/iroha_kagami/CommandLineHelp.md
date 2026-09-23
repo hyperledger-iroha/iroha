@@ -12,7 +12,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
 * [`kagami kagemusha authenticate-release-v1`↴](#kagami-kagemusha-authenticate-release-v1)
-* [`kagami kagemusha derive-mint-finality-next-epoch-v1`↴](#kagami-kagemusha-derive-mint-finality-next-epoch-v1)
 * [`kagami genesis`↴](#kagami-genesis)
 * [`kagami genesis sign`↴](#kagami-genesis-sign)
 * [`kagami genesis generate`↴](#kagami-genesis-generate)
@@ -276,8 +275,6 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 ###### **Subcommands:**
 
 * `authenticate-release-v1` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
-* `derive-mint-finality-next-epoch-v1` — Derive one typed next-epoch parameter from four inherited private seed blocks
-* `derive-mint-finality-epoch-schedule-v1` — Derive a bounded public epoch-maintenance schedule from one inherited seed pipe
 
 
 
@@ -302,17 +299,6 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `--native-artifact <PATH>` — Exact c-jni library whose bytes must match the native-artifact manifest
 
 
-
-## `kagami kagemusha derive-mint-finality-next-epoch-v1`
-
-Derive one typed public parameter without submitting a transaction.
-
-**Usage:** `kagami kagemusha derive-mint-finality-next-epoch-v1 --network-id <NETWORK_ID> --epoch <EPOCH> --validator <PEER_ID> --seed-fd <FD>`
-
-* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
-* `--epoch <EPOCH>` — Positive target epoch
-* `--validator <PEER_ID>` — Repeat exactly four BLS-normal voters in strictly increasing PeerId order
-* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly four independent nonzero 32-byte seed blocks in voter order, followed by EOF
 
 ## `kagami kagemusha derive-mint-finality-epoch-schedule-v1`
 

@@ -407,6 +407,11 @@ impl StrictReplayFixture {
                         validator.clone(),
                         iroha_primitives::numeric::Quantity::from(1_000_u64),
                         iroha_model_base::metadata::Metadata::default(),
+                        iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                            AssetId::of(definition.clone(), validator.clone()),
+                            AssetId::of(definition.clone(), genesis_account.clone()),
+                            iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        ),
                     ))
                     .append_instruction(ActivatePublicLaneValidator::new(
                         iroha_model_base::topology::LaneId::SINGLE,

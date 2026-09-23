@@ -46,7 +46,6 @@ pub(super) struct Prepared {
     pub network_id: NetworkId,
     pub genesis_public_key: PublicKey,
     pub routed_client: PathBuf,
-    pub epoch_schedule: PathBuf,
 }
 
 // One real funded account gives the retained explicit-route contract an
@@ -581,15 +580,6 @@ pub(super) async fn prepare(
         Instant::now() < deadline,
         "beacon fixture deadline after genesis preparation"
     );
-    let epoch_schedule = super::epoch_maintenance::prepare_schedule(
-        &directory,
-        kagami,
-        &roster,
-        network_id,
-        &genesis_public_key,
-        deadline,
-    )
-    .await?;
     Ok(Prepared {
         directory,
         genesis_directory,
@@ -598,6 +588,5 @@ pub(super) async fn prepare(
         network_id,
         genesis_public_key,
         routed_client,
-        epoch_schedule,
     })
 }

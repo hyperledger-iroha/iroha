@@ -25,13 +25,46 @@ from unittest.mock import MagicMock, patch
 # Linux additionally selects OpenSSH, native worker identity and three generation
 # controls; its beacon network selector replaces the corresponding Mac selector.
 EXPECTED_BEACON_NETWORK_TEST = (
-    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
+    'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_retains_and_resumes_after_owned_restart'
     if sys.platform == "linux" else
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1616 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1780 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1623 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1787 + PLATFORM_REGRESSION_COUNT
+
+REWARD_ACCOUNTING_SOURCE_TESTS = {
+    'domain.rs': ('smartcontracts::isi::domain::tests::', (
+        'unregister_account_rejects_retained_reward_processing_cursor',
+        'unregister_account_rejects_when_account_is_reward_claim_asset_owner',
+        'unregister_asset_definition_ignores_mismatched_public_lane_reward_record',
+    )),
+    'multisig.rs': ('smartcontracts::isi::multisig::tests::', (
+        'rekey_public_lane_reward_cursors_and_unpaid_sources_preserve_scope_and_quantity',
+    )),
+    'staking_rewards.rs': ('smartcontracts::isi::staking::rewards::tests::', (
+        'outstanding_rewards_retains_processed_dust_in_its_exact_source',
+    )),
+    'staking_reward_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'reward_epoch_zero_is_claimable_once',
+        'reward_dust_accumulates_until_paid',
+        'reward_reserve_blocks_transfer_and_burn_but_releases_paid_rewards',
+        'reward_failed_payment_restores_claim_and_reserve',
+        'reward_obligation_audit_rejects_corrupt_record_keys',
+        'reward_claim_uses_recorded_custody_after_fee_policy_changes',
+        'reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
+        'reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    )),
+    'staking.rs': ('smartcontracts::isi::staking::tests::', (
+        'claim_rewards_transfers_and_marks_epoch',
+        'claim_rewards_defers_dust_without_marking_paid',
+        'claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
+        'claim_rewards_accepts_i105_fee_sink',
+    )),
+    'staking_custody_tests.rs': ('smartcontracts::isi::staking::tests::', (
+        'staking_custody_and_rewards_share_one_additive_reserve_floor',
+    )),
+}
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -76,6 +109,159 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_signed_monetary_authority_controls_are_source_bound_and_required(self):
+        source = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
+        self.assertIn('include!("staking_monetary_fixture_tests.rs");',
+                      (source / "staking.rs").read_text())
+        names = re.findall(r"#\[test\]\s*fn\s+(\w+)\s*\(",
+                           (source / "staking_monetary_fixture_tests.rs").read_text())
+        self.assertCountEqual(names, (
+            "registration_rejects_changed_signed_monetary_fields_without_custody_writes",
+            "reward_claim_rejects_changed_record_source_and_entitlement_without_payment",
+        ))
+        expected = ["smartcontracts::isi::staking::tests::" + name for name in names]
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("monetary_authority_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            self.assertCountEqual([name for _, names in selected_gate.CORE_MONETARY_AUTHORITY_STAGES
+                                   for name in names], expected)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                startup = [name for _, names in selected_gate.CORE_ADMISSION_STARTUP_STAGES for name in names]
+                for regression in expected:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(selected.count(regression), 1)
+                        self.assertEqual(startup.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual([name for _, names in focused["core"] for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_retention_selectors_cover_the_actual_closed_source_census(self):
+        root = SCRIPT.resolve().parents[1]
+        cli = root / "crates/iroha_cli/src"
+        bindings = (
+            ("taira_dataspace_deploy.rs", "taira_epoch_maintenance.rs", "epoch_maintenance"),
+            ("taira_epoch_maintenance.rs", "taira_epoch_supervisor.rs", "supervisor"),
+            ("taira_epoch_maintenance.rs", "taira_epoch_retention_tests.rs", "tests"),
+            ("taira_epoch_supervisor.rs", "taira_epoch_supervisor_retention_tests.rs", "tests"),
+            ("taira_public_reset_host.rs", "taira_public_reset_epoch_supervisor.rs", "epoch_supervisor"),
+            ("taira_public_reset_host.rs", "taira_public_reset_epoch_reset_inputs.rs", "epoch_reset_inputs"),
+            ("taira_public_reset_host.rs", "taira_public_reset_epoch_update_inputs.rs", "epoch_update_inputs"),
+            ("taira_public_reset_epoch_reset_inputs.rs", "taira_public_reset_epoch_reset_inputs_tests.rs", "tests"),
+            ("taira_public_reset_epoch_update_inputs.rs", "taira_public_reset_epoch_update_inputs_tests.rs", "tests"),
+        )
+        for parent, child, module in bindings:
+            self.assertRegex((cli / parent).read_text(),
+                             r'#\[path = "' + re.escape(child) + r'"\]\s*(?:pub\([^)]*\)\s+)?mod '
+                             + re.escape(module) + r';')
+        self.assertRegex((cli / "taira_public_reset_epoch_supervisor.rs").read_text(),
+                         r'#\[cfg\(test\)\]\s*mod tests\s*\{')
+        sources = (
+            ("taira_epoch_retention_tests.rs", "taira_dataspace_deploy::epoch_maintenance::tests::", 11),
+            ("taira_epoch_supervisor_retention_tests.rs", "taira_dataspace_deploy::epoch_maintenance::supervisor::tests::", 9),
+            ("taira_public_reset_epoch_supervisor.rs", "taira_public_reset::host::epoch_supervisor::tests::", 10),
+            ("taira_public_reset_epoch_reset_inputs_tests.rs", "taira_public_reset::host::epoch_reset_inputs::tests::", 5),
+            ("taira_public_reset_epoch_update_inputs_tests.rs", "taira_public_reset::host::epoch_update_inputs::tests::", 6),
+        )
+        def test_names(source):
+            return re.findall(r"#\[test\]\s*(?:#\[[^\n]+\]\s*)*(?:async\s+)?fn\s+(\w+)\s*\(", source)
+        census = {}
+        for filename, prefix, count in sources:
+            names = test_names((cli / filename).read_text())
+            self.assertEqual(len(names), count, filename)
+            self.assertEqual(len(set(names)), count, filename)
+            census[prefix] = [prefix + name for name in names]
+        network = root / "crates/iroha_test_network/tests/support"
+        self.assertRegex((network / "production_beacon_bootstrap.rs").read_text(),
+                         r'#\[path = "production_epoch_maintenance.rs"\]\s*mod epoch_maintenance;')
+        network_source = (network / "production_epoch_maintenance.rs").read_text()
+        network_prefix = "production_beacon_bootstrap::epoch_maintenance::"
+        network_names = [network_prefix + name for name in test_names(network_source)]
+        self.assertEqual(len(network_names), 2)
+        self.assertEqual(len(set(network_names)), 2)
+        self.assertRegex(network_source,
+                         r'#\[cfg\(target_os = "linux"\)\]\s*#\[tokio::test[^\n]*\]\s*'
+                         r'async fn production_epoch_supervisor_retains_and_resumes_after_owned_restart\s*\(')
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("retention_census_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                selected = selected_gate.qualification_stages(scope)
+                cli_names = [name for _, names in selected["cli"] for name in names]
+                for prefix, expected in census.items():
+                    with self.subTest(platform=platform, scope=scope, prefix=prefix):
+                        self.assertCountEqual([name for name in cli_names if name.startswith(prefix)], expected)
+                        for regression in expected:
+                            listing = "\n".join(name + ": test" for name in cli_names if name != regression)
+                            with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                                selected_gate.require_tests(listing, selected["cli"])
+                self.assertFalse(any("::epoch_seed_custody::" in name for name in cli_names))
+                expected_network = network_names + ([selected_gate.BEACON_NETWORK_TEST]
+                                                      if platform == "linux" else [])
+                actual_network = [name for _, names in selected["network"] for name in names
+                                  if name.startswith(network_prefix)]
+                self.assertCountEqual(actual_network, expected_network)
+
+    def test_reward_accounting_repairs_are_required_once_in_both_scopes(self):
+        required = [prefix + name for prefix, names in REWARD_ACCOUNTING_SOURCE_TESTS.values()
+                    for name in names]
+        self.assertEqual(len(required), 18)
+        self.assertEqual(len(set(required)), 18)
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("reward_accounting_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            registered = [name for _, names in selected_gate.CORE_REWARD_ACCOUNTING_STAGES
+                          for name in names]
+            self.assertEqual(registered, required)
+            startup = [name for _, names in selected_gate.CORE_ADMISSION_STARTUP_STAGES
+                       for name in names]
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["core"]
+                selected = [name for _, names in stages for name in names]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(startup.count(regression), 1)
+                        self.assertEqual(selected.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("core=" + regression,))
+                        self.assertEqual(tuple(focused), ("core",))
+                        self.assertEqual([name for _, names in focused["core"] for name in names],
+                                         [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_reward_accounting_selectors_follow_actual_module_and_include_paths(self):
+        root = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/smartcontracts/isi"
+        module = (root / "mod.rs").read_text()
+        for child in ("domain", "multisig", "staking"):
+            self.assertIn("pub mod " + child + ";", module)
+        staking = (root / "staking.rs").read_text()
+        self.assertRegex(staking, r'#\[path = "staking_rewards\.rs"\]\s*mod rewards;')
+        for child in ("staking_reward_tests.rs", "staking_custody_tests.rs"):
+            self.assertIn('include!("' + child + '");', staking)
+        for child in ("domain.rs", "multisig.rs", "staking.rs", "staking_rewards.rs"):
+            self.assertRegex((root / child).read_text(), r'#\[cfg\(test\)\]\s*mod tests\s*\{')
+        registered = [name for _, names in gate.CORE_REWARD_ACCOUNTING_STAGES for name in names]
+        expected = []
+        # This verifies selected names in their explicit source/module owners; it
+        # does not claim these eighteen exhaust every staking or account test.
+        for child, (prefix, names) in REWARD_ACCOUNTING_SOURCE_TESTS.items():
+            source = (root / child).read_text()
+            for name in names:
+                with self.subTest(source=child, test=name):
+                    self.assertEqual(len(re.findall(r"#\[test\]\s*fn\s+" + re.escape(name) + r"\s*\(", source)), 1)
+                    expected.append(prefix + name)
+        self.assertEqual(registered, expected)
+
     def test_current_runner_and_monetary_repairs_are_required_in_all_scopes(self):
         required = {'core': ['sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes',
           'sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently',
@@ -1175,18 +1361,15 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_both_scopes_require_epoch_maintenance_controls_before_network_startup(self):
         required = {
             "cli": (
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_schedule_rejects_wrong_epoch_network_and_membership',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_waits_for_actual_epoch_and_preserves_carrier_deadline',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_preparation_binds_single_parameter_fee_and_original_lifetime',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_journal_preserves_one_dispatch_across_schedule_renewal',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_staking_preflight_rejects_fallback_and_changed_tenure',
+                'taira_dataspace_deploy::epoch_maintenance::tests::automatic_retention_requires_actual_successor_and_complete_unchanged_authority',
+                'taira_dataspace_deploy::epoch_maintenance::tests::retention_cursor_is_independent_of_valid_quorum_witness_and_unchanged_reproposal',
+                'taira_dataspace_deploy::epoch_maintenance::tests::retention_parser_exposes_no_seeds_provisioner_fee_or_mutating_commands',
                 'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_repeat_current_preserves_freshness_and_advancing_contract',
                 'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_restart_transport_never_masks_fixed_peer_identity',
             ),
             "network": (
                 'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
-                'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
-                'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+                'production_beacon_bootstrap::epoch_maintenance::retained_authorization_requires_exact_keys_beacon_interval_and_predecessor',
                 'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
                 'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
             ),
@@ -1221,15 +1404,12 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'kura::beacon_history::tests::beacon_history_cli_exposes_explicit_bounded_scope',
             ),
             'cli': (
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_partial_initialization_never_replaces_retained_dispatch',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_readiness_rechecks_transition_after_completion_wait',
-                'taira_dataspace_deploy::epoch_maintenance::tests::epoch_maintenance_retains_original_trust_across_explicit_release_observation',
+                'taira_dataspace_deploy::epoch_maintenance::tests::partial_retention_initialization_never_replaces_evidence_or_renews_deadlines',
+                'taira_dataspace_deploy::epoch_maintenance::tests::retention_restart_reauthenticates_immutable_receipt_original_trust_and_cursor',
+                'taira_dataspace_deploy::epoch_maintenance::tests::retention_preserves_original_trust_across_explicit_release_and_rejects_identity_drift',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_status_parser_has_no_seed_or_mutation_inputs',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_policy_schedule_and_custody_reject_wrong_public_authority',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_readiness_names_bind_policy_and_process_incarnation',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_rolling_batches_retain_one_epoch_overlap_and_checked_bounds',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_custody_rejects_changed_shared_and_wrong_length_seed_files',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_worker_lock_and_cursor_preserve_exclusive_restart_state',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::retention_input_custody_rejects_mutation_shared_links_and_writable_ancestors',
                 'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_excludes_active_worker_until_drop',
                 'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_absence_is_read_only_and_revalidated',
                 'taira_dataspace_deploy::epoch_maintenance::tests::epoch_supervisor_journal_guard_never_repairs_missing_lock',
@@ -1266,10 +1446,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'taira_public_reset::host::epoch_supervisor::tests::epoch_public_admission_scopes_taira_and_restores_foreign_caller_profile',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_accepts_exact_public_inputs_without_files',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_foreign_origin_and_taira_profile',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_and_missing_genesis_grant',
+                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_administrator_identity_drift',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_shared_operator_key',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_trust_and_network',
-                'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_rejects_changed_custody',
                 'taira_dataspace_deploy::epoch_maintenance::supervisor::tests::epoch_supervisor_generation_admission_requires_bounded_closed_schemas',
                 'taira_public_reset::executor_model::tests::epoch_supervisor_pause_and_start_are_explicit_ordered_barriers',
                 'taira_public_reset::executor_model::tests::epoch_supervisor_pause_failure_prevents_validator_stop',
@@ -1277,19 +1456,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 'taira_public_reset::executor_model::tests::old_inventory_shape_and_seven_artifact_closure_are_rejected',
                 'taira_public_reset::inputs::tests::maintenance_grant_requires_registration_and_survives_no_revocation',
                 'taira_public_reset::inputs::tests::ongoing_supervisor_authorization_is_explicit_and_separate_from_reset_expiry',
-                'taira_public_reset::host::epoch_supervisor::tests::unit_matches_independent_python_golden_and_exact_native_argv',
+                'taira_public_reset::host::epoch_supervisor::tests::unit_matches_exact_native_retention_argv_and_lifecycle_golden',
                 'taira_public_reset::host::epoch_supervisor::tests::first_install_pause_requires_genuine_manager_absence',
-                'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_seed_role_mapping',
+                'taira_public_reset::host::epoch_supervisor::tests::plan_rejects_wrong_administrator_origin_and_duplicate_roster_mapping',
+                'taira_public_reset::host::epoch_supervisor::tests::retention_plan_rejects_retired_rotation_fields',
                 'taira_public_reset::host::epoch_supervisor::tests::status_argv_contains_only_readonly_native_operation_and_exact_worker',
                 'taira_public_reset::host::epoch_supervisor::tests::paths_reject_expansion_and_finite_reset_aliases',
                 'taira_public_reset::host::epoch_supervisor::tests::native_status_rejects_previous_worker_or_changed_manager_incarnation',
                 'taira_public_reset::host::tests::epoch_supervisor_host_frontier_has_one_pause_and_one_post_beacon_start',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_rejects_shared_wrong_mode_length_and_symlink',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_held_descriptor_rejects_rebinding_and_changed_content',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_retention_is_exact_idempotent_and_never_overwrites',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_invalid_body_does_not_create_retained_paths',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_fifo_is_rejected_without_waiting_for_a_writer',
-                'taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_partial_staging_never_becomes_or_blocks_final',
             ),
             "kagami": (
                 'kura::beacon_history::tests::beacon_history_separates_external_and_time_execution_roots_without_weakening_results',
@@ -1340,14 +1514,13 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_public_producer_controls_replace_stale_names_and_remain_required(self):
         required = (
             "taira_dataspace_deploy::tests::journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions",
-            "taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions",
             "taira_public_reset::inputs::tests::validator_faucet_policy_requires_enabled_exact_signed_intent",
             "taira_public_reset::inputs::tests::pinned_validator_configs_reject_faucet_policy_mismatch_before_dispatch",
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
-            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_retention_policy_unit_and_update_binding',
             'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds',
-            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution',
+            'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_rejects_unmapped_cli_and_admin_genesis_substitution',
             'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_requires_explicit_until_stopped_cli_intent',
             'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_publication_is_atomic_and_never_replaces',
             'taira_public_reset::host::epoch_update_inputs::tests::epoch_update_inputs_first_install_derives_exact_native_closure_without_private_files',
@@ -1409,7 +1582,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         openssh = "taira_public_reset::host::tests::openssh_parent_pinned_inputs_survive_descriptor_sweep_without_network"
         fixtures = {
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
-            "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
+            "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_retains_and_resumes_after_owned_restart',
         }
         portable_counts = (
             EXPECTED_BASIC_REGRESSION_COUNT - PLATFORM_REGRESSION_COUNT,
@@ -1569,8 +1742,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
             "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
             'production_beacon_bootstrap::epoch_maintenance::production_epoch_driver_admits_required_build_identity_before_setup',
-            'production_beacon_bootstrap::epoch_maintenance::production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody',
-            'production_beacon_bootstrap::epoch_maintenance::production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound',
+            'production_beacon_bootstrap::epoch_maintenance::retained_authorization_requires_exact_keys_beacon_interval_and_predecessor',
             'production_beacon_bootstrap::canary_receipt::failed_canary_receipts_are_retained_before_parse_and_outcome_checks',
             'production_beacon_bootstrap::canary_receipt::retained_canary_receipt_requires_every_binding_and_applied_height',
             EXPECTED_BEACON_NETWORK_TEST,
@@ -2544,11 +2716,11 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     focused_regressions=requested, environment=self.env, lock_fds=(91,))
             self.assertEqual(self.metadata.call_args_list, compile.call_args_list)
             self.assertEqual(compile.call_args_list[0].kwargs["harnesses"], portable)
-            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "core", "network", "cli"))
+            self.assertEqual(compile.call_args_list[1].kwargs["harnesses"], ("config", "data-model", "core", "network", "cli"))
             self.assertIs(compile.call_args_list[0].args[1], compile.call_args_list[1].args[1])
             self.assertTrue(all(call.kwargs["lock_fds"] == (91,) for call in compile.call_args_list))
             first_exit = events.index(("exit", portable))
-            self.assertGreater(events.index(("metadata", ("config", "core", "network", "cli"))), first_exit)
+            self.assertGreater(events.index(("metadata", ("config", "data-model", "core", "network", "cli"))), first_exit)
             self.assertEqual(executed[:2], [(name, names[name]) for name in portable])
             mandatory = [("config", name) for _, tests in gate.CONFIG_STAGES for name in tests]
             self.assertEqual(executed[2:2 + len(mandatory)], mandatory)
@@ -2559,7 +2731,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             self.assertEqual(len(executed), len(set(executed)))
             checkpoint.assert_not_called()
             self.assertIn("portable diagnostic Cargo graph: mv-admitted-map, concread", output.getvalue())
-            self.assertIn("remaining diagnostic Cargo graph: config, core, network, cli", output.getvalue())
+            self.assertIn("remaining diagnostic Cargo graph: config, data-model, core, network, cli", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertFalse(active)
         self.metadata.side_effect = None
@@ -2670,6 +2842,27 @@ class FocusedPrequalificationTests(unittest.TestCase):
         focused = gate.focused_regression_stages("basic", ("core=" + self.core,))
         self.assertEqual([name for _, names in focused["core"] for name in names], [self.core])
 
+    def test_core_only_and_core_model_focus_keep_one_compile_graph(self):
+        model = gate.MODEL_MONETARY_CODEC_STAGES[0][1][0]
+        graphs = []
+        for requested, expected_runtime in (
+            (("core=" + self.core,), {"core"}),
+            (("core=" + self.core, "data-model=" + model), {"core", "data-model"}),
+        ):
+            copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+            with patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(gate, "run_config_checks"), \
+                 patch.object(gate, "run_stages") as runtime, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                gate.run_prequalification(Path("/mutable"), focused_regressions=requested,
+                                          environment=self.env, lock_fds=())
+            self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
+            self.metadata.reset_mock()
+            graphs.append(compile.call_args.kwargs["harnesses"])
+            self.assertEqual({call.args[0] for call in runtime.call_args_list}, expected_runtime)
+        self.assertEqual(graphs, [("config", "data-model", "core")] * 2)
+
     def test_prequalification_checks_only_requested_harnesses_while_qualification_keeps_complete_graph(self):
         for scope in gate.QUALIFICATION_SCOPES:
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
@@ -2690,8 +2883,9 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     focused_regressions=("core=" + self.core,), environment=self.env, lock_fds=(91,))
             compile.assert_called_once()
             self.metadata.assert_called_once_with(*compile.call_args.args, **compile.call_args.kwargs)
+            self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
             self.metadata.reset_mock()
-            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core"))
+            self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "data-model", "core"))
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (91,))
             self.assertIn("network", complete_graph, "immutable qualification still compiles network")
             self.assertIn("proof-flows", complete_graph, "immutable qualification keeps its full graph")
@@ -2761,7 +2955,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                                       environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list], ["config", "core"])
         self.assertEqual([test for _, tests in run.call_args_list[1].args[3] for test in tests], [selected])
-        self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("core")])
+        self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("data-model"), unittest.mock.call("core")])
         network.assert_not_called()
 
     def test_pending_kura_failure_stops_all_remaining_focused_execution(self):
@@ -2809,7 +3003,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list],
                          ["/copies/config", "/copies/core", "/copies/core", "/copies/cli"])
-        self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core", "network", "cli"))
+        self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "data-model", "core", "network", "cli"))
         self.assertEqual(failed.exception.failures, ("/copies/core failed", "/copies/cli failed"))
         self.assertEqual([call.kwargs for call in run.call_args_list], [{}, {}, {}, {"batch": True}])
         network.assert_not_called()
@@ -2868,6 +3062,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                     "core=" + self.core,), environment=self.env, lock_fds=(91,))
         self.assertEqual(order, ["metadata", "build"])
         self.assertEqual(self.metadata.call_args, compile.call_args)
+        self.assertTrue(compile.call_args.kwargs["normal_core_library_probe"])
         config.assert_not_called()
         run.assert_not_called()
         network.assert_not_called()
@@ -4282,6 +4477,25 @@ class NativeTestBatchBuildTests(unittest.TestCase):
                     gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names)
                 spawn.assert_not_called()
 
+    def test_core_probe_codegen_keeps_the_metadata_feature_without_building_the_example(self):
+        names = ("config", "data-model", "core")
+        with patch.object(gate, "_build_harnesses") as build:
+            gate.compile_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                        lock_fds=(77,), normal_core_library_probe=True)
+        command = build.call_args.args[1]
+        self.assertEqual(command, [
+            "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test",
+            "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
+            "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_core",
+            "--test", "taira_config_contracts", "--lib",
+            "--features", "iroha_core/iroha-core-tests", "--no-run",
+            "--message-format=json-render-diagnostics",
+        ])
+        self.assertNotIn("--example", command)
+        self.assertIs(build.call_args.args[2], self.env)
+        self.assertEqual(build.call_args.args[3], names)
+        self.assertEqual(build.call_args.args[4], (77,))
+
     def test_metadata_and_codegen_report_implicit_targets_without_selecting_their_artifacts(self):
         names = ("config", "core", "network")
         events = [CargoBuildProgressTests.event(gate.HARNESS_TARGETS[name][1],
@@ -4417,6 +4631,71 @@ class NativeTestMetadataCheckTests(unittest.TestCase):
             isolate.assert_not_called()
             self.assertIn("full harness compilation remains required", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    @staticmethod
+    def probe_artifact(name, kind, *, test=False, features=None):
+        if features is None:
+            features = ["iroha-core-tests"] if name == "iroha_core" and kind == "lib" else []
+        return json.dumps({"reason": "compiler-artifact", "target": {
+            "name": name, "kind": [kind]}, "profile": {"test": test},
+            "features": features,
+            "executable": None, "filenames": ["/warm/metadata.rmeta"]}) + "\n"
+
+    def test_core_only_probe_checks_normal_library_in_one_warm_metadata_graph(self):
+        names = ("config", "data-model", "core")
+        lines = "".join(self.artifact(name) for name in names)
+        lines += self.probe_artifact("iroha_core", "lib")
+        lines += self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "example")
+        output = io.StringIO()
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
+             contextlib.redirect_stdout(output):
+            gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                      lock_fds=(77, 88), normal_core_library_probe=True)
+        self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(spawn.call_args.args[0], [
+            "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "check",
+            "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
+            "-p", "iroha_config", "-p", "iroha_data_model", "-p", "iroha_core",
+            "--test", "taira_config_contracts", "--lib", "--example", "race_prover",
+            "--features", "iroha_core/iroha-core-tests", "--profile", "test",
+            "--message-format=json-render-diagnostics",
+        ])
+        self.assertIs(spawn.call_args.kwargs["env"], self.env)
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
+        for forbidden in ("--tests", "--all-targets", "--target-dir", "--jobs", "-j"):
+            self.assertNotIn(forbidden, spawn.call_args.args[0])
+        self.assertIn("normal Core library checked", output.getvalue())
+
+    def test_core_only_probe_requires_normal_library_and_exact_example_artifacts(self):
+        names = ("config", "data-model", "core")
+        selected = "".join(self.artifact(name) for name in names)
+        normal = self.probe_artifact("iroha_core", "lib")
+        example = self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "example")
+        cases = (
+            (example, "omitted normal Core library"),
+            (self.artifact("core") + example, "omitted normal Core library"),
+            (self.probe_artifact("iroha_core", "bin") + example, "omitted normal Core library"),
+            (self.probe_artifact("iroha_core", "lib", features=[]) + example,
+             "normal Core library omitted fixture feature"),
+            (normal, "omitted Core library probe example"),
+            (normal + self.probe_artifact(gate.CORE_NORMAL_LIBRARY_PROBE_EXAMPLE, "bin"),
+             "omitted Core library probe example"),
+        )
+        for observations, message in cases:
+            with self.subTest(message=message, observations=observations), \
+                 patch.object(gate.subprocess, "Popen",
+                              return_value=self.process(selected + observations)), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, message):
+                    gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=names,
+                                              normal_core_library_probe=True)
+
+    def test_core_only_probe_requires_core_selection_before_cargo(self):
+        with patch.object(gate.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(gate.CheckError, "requires the Core harness"):
+                gate.check_test_harnesses(Path("/frozen"), self.env, harnesses=("config",),
+                                          normal_core_library_probe=True)
+        spawn.assert_not_called()
 
     def test_metadata_requires_every_selected_test_target_not_normal_library_artifacts(self):
         names = ("core", "cli", "network")

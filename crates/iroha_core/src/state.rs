@@ -431,11 +431,11 @@ pub(crate) use lane_decision_batch::NativeExecutionCustody;
 )]
 mod native_lane_batch_replay;
 mod native_lane_fastpq;
-pub(crate) use native_lane_batch_replay::PreparedNativeLaneBatchSourceV1;
-#[cfg(test)]
 pub(crate) use native_lane_batch_replay::{
-    NativeLaneBatchReplayV1, NativeLaneBatchSourcePreparationV1,
+    NativeLaneBatchSourcePreparationV1, PreparedNativeLaneBatchSourceV1,
 };
+#[cfg(test)]
+pub(crate) use native_lane_batch_replay::NativeLaneBatchReplayV1;
 #[cfg_attr(
     not(test),
     expect(

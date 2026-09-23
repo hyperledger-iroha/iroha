@@ -146,7 +146,7 @@ fn route_multilane_genesis_post_topology_transactions(
         .into(),
         Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
-            AssetId::new(fee_asset_id.clone(), gas_account_id),
+            AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
         )
         .into(),
     ];
@@ -177,6 +177,11 @@ fn route_multilane_genesis_post_topology_transactions(
                     validator_id.clone(),
                     Quantity::from(ROUTE_VALIDATOR_STAKE),
                     Metadata::default(),
+                    iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                        AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                        AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                        Quantity::from(ROUTE_VALIDATOR_STAKE),
+                    ),
                 )
                 .into(),
             );

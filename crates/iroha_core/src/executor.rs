@@ -10075,6 +10075,11 @@ mod tests {
         let stx = block.transaction();
         let lane = iroha_model_base::topology::LaneId::SINGLE;
         let peer = iroha_model_base::peer::PeerId::new(authority.expect_single_signatory().clone());
+        let stake_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("staking", "universal").unwrap(),
+            "stake".parse().unwrap(),
+        );
+        let escrow = checked_account_id();
         let instructions: [InstructionBox; 3] = [
             RegisterPublicLaneValidator::new(
                 lane,
@@ -10083,6 +10088,20 @@ mod tests {
                 authority.clone(),
                 Quantity::from(1_u64),
                 Metadata::default(),
+                iroha_data_model::nexus::PublicLaneMonetaryPlanV1 {
+                    network_scope: iroha_data_model::nexus::PublicLaneMonetaryScopeV1::Network(
+                        *state.network_id_ref(),
+                    ),
+                    valid_until_height: 2,
+                    source_asset: AssetId::of(stake_asset.clone(), authority.clone()),
+                    destination_asset: AssetId::of(stake_asset, escrow),
+                    amount: Quantity::one(),
+                    precondition: iroha_data_model::nexus::PublicLaneMonetaryPreconditionV1::Registration(
+                        iroha_data_model::nexus::PublicLaneRegistrationPreconditionV1 {
+                            activation_height: 2,
+                        },
+                    ),
+                },
             )
             .into(),
             ActivatePublicLaneValidator::new(lane, authority.clone()).into(),
@@ -10113,6 +10132,53 @@ mod tests {
         let staker = checked_account_id();
         let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
+        use iroha_data_model::nexus::{
+            PublicLaneBondPreconditionV1, PublicLaneMonetaryPlanV1,
+            PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryScopeV1,
+            PublicLaneRewardClaimPlanV1, PublicLaneUnbondPreconditionV1, PublicLaneUnbonding,
+            public_lane_unbonding_commitment,
+        };
+        // This test checks dispatch and self-authority, while Core separately
+        // authenticates these exact tenure, custody and withdrawal bindings.
+        let stake_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("staking", "universal").unwrap(),
+            "stake".parse().unwrap(),
+        );
+        let escrow = checked_account_id();
+        let staker_asset = AssetId::of(stake_asset.clone(), staker.clone());
+        let escrow_asset = AssetId::of(stake_asset, escrow);
+        let network_scope = PublicLaneMonetaryScopeV1::Network(
+            executor_test_network_id(b"public lane user dispatch"),
+        );
+        let request = PublicLaneUnbonding {
+            request_id,
+            amount: Quantity::one(),
+            release_at_ms: 1,
+            slashable_through_height: 1,
+            liability_release_height: 2,
+        };
+        let bond_plan = PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 2,
+            source_asset: staker_asset.clone(),
+            destination_asset: escrow_asset.clone(),
+            amount: Quantity::one(),
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneBondPreconditionV1 {
+                activation_height: 1,
+                peer_id: peer.clone(),
+            }),
+        };
+        let unbond_plan = PublicLaneMonetaryPlanV1 {
+            network_scope,
+            valid_until_height: 2,
+            source_asset: escrow_asset,
+            destination_asset: staker_asset,
+            amount: request.amount.clone(),
+            precondition: PublicLaneMonetaryPreconditionV1::Unbond(PublicLaneUnbondPreconditionV1 {
+                activation_height: 1,
+                request_hash: public_lane_unbonding_commitment(&request).unwrap(),
+            }),
+        };
         let instructions: [InstructionBox; 5] = [
             RebindPublicLaneValidatorPeer::new(
                 iroha_model_base::topology::LaneId::SINGLE,
@@ -10126,6 +10192,7 @@ mod tests {
                 staker: staker.clone(),
                 amount: Quantity::from(1_u32),
                 metadata: Metadata::default(),
+                monetary_plan: bond_plan,
             }
             .into(),
             SchedulePublicLaneUnbond {
@@ -10142,12 +10209,19 @@ mod tests {
                 validator,
                 staker: staker.clone(),
                 request_id,
+                monetary_plan: unbond_plan,
             }
             .into(),
             ClaimPublicLaneRewards {
                 lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 account: staker,
-                upto_epoch: None,
+                claim_plan: PublicLaneRewardClaimPlanV1 {
+                    network_scope,
+                    valid_until_height: 2,
+                    expected_state: None,
+                    records: Vec::new(),
+                    sources: Vec::new(),
+                },
             }
             .into(),
         ];

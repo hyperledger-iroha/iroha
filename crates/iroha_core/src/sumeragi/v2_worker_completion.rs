@@ -789,7 +789,7 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
             super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, wake } => {
                 let mut pending = wait.clone().wait_for_release();
                 std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                    &mut std::task::Context::from_waker(wake)).is_ready()
+                    &mut std::task::Context::from_waker(&wake)).is_ready()
             }
             super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. } => false,
             super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => {
@@ -2087,7 +2087,7 @@ fn local_apply_refusal_ready(refusal: &super::v2_body_store::LocalValidationRefu
         LocalValidationRefusal::QueueRelease { wait, wake } => {
             let mut pending = wait.clone().wait_for_release();
             Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                &mut std::task::Context::from_waker(wake)).is_ready())
+                &mut std::task::Context::from_waker(&wake)).is_ready())
         }
         LocalValidationRefusal::RecoveryRequired(reason) => Err(reason.clone()),
         LocalValidationRefusal::NativeSourceRecovery { .. } => Err(

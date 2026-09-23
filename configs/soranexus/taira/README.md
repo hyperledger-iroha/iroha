@@ -501,13 +501,10 @@ of a predecessor supervisor. For `running` or `stopped`, select that exact
 `--prior-state` and supply its exact `--prior-plan PATH`; never substitute the
 failed candidate for the original predecessor.
 
-The four client configs and initial/final units are in validator order. Original
-seed paths instead use the native sorted PeerId order, which can differ from slot
-order. Set `epoch_seed_sources` to those four retained source paths, never FD199
-launch copies. Set `payment_asset`, `transaction_fee_maximum`, `first_epoch`,
-`batch_epochs`, `operation_timeout_ms`, `provision_timeout_ms`, and
-`supervisor_timeout_ms` to the explicit reviewed ongoing intent and finite bounds;
-do not infer a first epoch from wall-clock time. `batch_epochs` is 2–256.
+The four client configs and initial/final units are in validator order. Select
+`first_epoch` from the authenticated network state and an explicit bounded
+`timeout_ms`; do not infer an epoch from wall-clock time. The installed supervisor
+observes finalized Retain transitions and does not submit epoch transactions.
 This example uses `full_inrou`; omit `--inrou-stage-dir` for `core_testnet`.
 
 ```bash
@@ -533,19 +530,13 @@ reset_context_inputs=(
   --intent /private/runtime/taira-public-reset/topology-intent.json \
   "${reset_context_inputs[@]}" \
   --host-slug taira-validator-1 --authorization until-stopped \
-  --payment-asset "$payment_asset" \
-  --transaction-fee-maximum "$transaction_fee_maximum" \
-  --first-epoch "$first_epoch" --batch-epochs "$batch_epochs" \
-  --operation-timeout-ms "$operation_timeout_ms" \
-  --provision-timeout-ms "$provision_timeout_ms" \
+  --first-epoch "$first_epoch" \
   --timeout-ms "$supervisor_timeout_ms" \
-  --epoch-seed-source "${epoch_seed_sources[@]}" \
   --prior-state absent \
   --output-dir /private/runtime/taira-public-reset/epoch-supervisor
 reset_local_inputs=(
   "${reset_context_inputs[@]}"
   --epoch-supervisor-plan /private/runtime/taira-public-reset/epoch-supervisor/supervisor-plan.json
-  --epoch-seed-sources "${epoch_seed_sources[@]}"
   --beacon-inputs /private/runtime/taira-public-reset/beacon-inputs.json
   --beacon-validator-unit /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-1.service
     /private/runtime/taira-public-reset/beacon-units/iroha3d-taira-validator-2.service
@@ -569,9 +560,10 @@ The supervisor producer atomically publishes `supervisor-plan.json`,
 `supervisor-binding.json` and `observation-trust.json`; no manual trust/hash joins
 are required. Assembly independently rederives the context and validates both
 generated plans. These local preparation commands do not contact the named hosts.
-Apply takes `--maintenance-admin-config` and singular `--epoch-seed-source` with
-the same four original paths; generated plans, public bundles and unit arguments
-belong only to assembly/authorization.
+Apply takes `--maintenance-admin-config` for the signed forward workload;
+generated plans, public bundles and unit arguments belong only to
+assembly/authorization. Epoch retention observes finalized workload blocks and
+does not create empty blocks.
 
 Review the assembled inventory before authorizing it. `authorize` revalidates the
 complete local inputs and signs the retained inventory file bytes; editing or

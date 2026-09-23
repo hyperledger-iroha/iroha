@@ -2390,7 +2390,7 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         ("/v1/nft-offers", "NftOfferListResponseV1"),
         ("/v1/nft-offers/{offer_id}", "NftSaleRecordV1"),
         (
-            "/v1/offline/assets/{asset_definition_id}/registration",
+            "/v1/assets/definitions/{asset}/registration",
             "OfflineAssetRegistrationV1",
         ),
     ] {

@@ -441,13 +441,14 @@ pub struct PublicLanePendingReward {
     pub lane_id: LaneId,
     /// Account that will receive the payout.
     pub account: AccountId,
-    /// Asset identifier used for the payout.
+    /// Exact custody source asset for both retained accrual and new reward shares.
     pub asset: AssetId,
-    /// Latest epoch that was already claimed (0 when none).
-    pub last_claimed_epoch: u64,
-    /// Latest epoch included in `amount`.
-    pub pending_through_epoch: u64,
-    /// Total amount available to claim up to `pending_through_epoch`.
+    /// Last reward epoch processed for this lane and recipient; `None` includes epoch zero.
+    pub processed_through_epoch: Option<u64>,
+    /// Latest unprocessed reward epoch for this exact asset included in `amount`.
+    /// `None` means the obligation consists only of retained, previously processed dust.
+    pub latest_unprocessed_epoch: Option<u64>,
+    /// Unpaid obligation, including retained dust that may be below the payout threshold.
     pub amount: Quantity,
 }
 #[cfg(test)]

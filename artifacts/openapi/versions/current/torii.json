@@ -32291,11 +32291,11 @@
             "type": "string"
           },
           "amount": {
-            "description": "Reward amount available to claim (decimal string).",
+            "description": "Unpaid reward obligation, including retained dust below the payout threshold (decimal string).",
             "type": "string"
           },
           "asset": {
-            "description": "Asset identifier for the reward payouts.",
+            "description": "Exact custody source asset identifier for the unpaid reward.",
             "type": "string"
           },
           "lane_id": {
@@ -32303,23 +32303,29 @@
             "format": "uint64",
             "type": "integer"
           },
-          "last_claimed_epoch": {
-            "description": "Latest epoch that was already claimed (0 when none).",
+          "processed_through_epoch": {
+            "description": "Last reward epoch processed for this lane and recipient; null includes epoch zero.",
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
-          "pending_through_epoch": {
-            "description": "Latest epoch included in `amount`.",
+          "latest_unprocessed_epoch": {
+            "description": "Latest unprocessed reward epoch for this exact asset included in amount; null when the obligation contains only retained dust.",
             "format": "uint64",
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "lane_id",
           "account",
           "asset",
-          "last_claimed_epoch",
-          "pending_through_epoch",
+          "processed_through_epoch",
+          "latest_unprocessed_epoch",
           "amount"
         ],
         "type": "object"
@@ -59404,6 +59410,108 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/assets/definitions/{asset}/registration": {
+      "get": {
+        "description": "One StateView binds the canonical immutable asset address, registration incarnation, exact scale and nonzero committed height/hash/time. This projection is not an ownership certificate or native enrollment capability. Optional canonical authentication applies dataspace visibility; an inaccessible or absent asset returns 404.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset",
+            "required": true,
+            "schema": {
+              "description": "Canonical immutable asset-definition address emitted by AssetDefinitionId; aliases are separate identifiers.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineAssetRegistrationV1"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The selector is not an exact canonical immutable asset-definition address.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The asset is absent or not visible to the caller.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Committed registration evidence is unavailable (offline_asset_registration_unavailable).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read the current committed asset-registration incarnation.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.offline_asset_registration_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/assets/transfer": {
       "post": {
         "description": "Prepare canonical unsigned TransactionPayload bytes plus their exact signing message with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
@@ -81769,7 +81877,7 @@
             }
           },
           {
-            "description": "Upper bound (inclusive) for reward epochs to include.",
+            "description": "Inclusive cap on new, unprocessed reward records; retained dust remains visible even when its processing cursor exceeds this value.",
             "in": "query",
             "name": "upto_epoch",
             "required": false,
@@ -82881,108 +82989,6 @@
           "stableRouteId": "application.notify_devices_post"
         },
         "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/assets/{asset_definition_id}/registration": {
-      "get": {
-        "description": "One StateView binds the canonical immutable asset address, registration incarnation, exact scale and nonzero committed height/hash/time. This projection is not an ownership certificate or native enrollment capability. Optional canonical authentication applies dataspace visibility; an inaccessible or absent asset returns 404.",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "asset_definition_id",
-            "required": true,
-            "schema": {
-              "description": "Canonical immutable asset-definition address emitted by AssetDefinitionId; aliases are separate identifiers.",
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAssetRegistrationV1"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The selector is not an exact canonical immutable asset-definition address.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The asset is absent or not visible to the caller.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Committed registration evidence is unavailable (offline_asset_registration_unavailable).",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Read the current committed asset-registration incarnation.",
-        "tags": [
-          "Assets"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "dataspace_visible",
-          "authentication": "optional_canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "application.offline_asset_registration_get"
-        },
-        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/operator/auth/credentials": {

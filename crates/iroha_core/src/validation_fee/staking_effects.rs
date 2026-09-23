@@ -14,7 +14,7 @@ pub(super) fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return Some(<$ty>::WIRE_ID);
+                return iroha_data_model::isi::instruction_wire_id(instruction);
             }
         )+};
     }

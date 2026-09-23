@@ -6,13 +6,14 @@ fn signed_candidate(
     stake: u64,
     lane_id: LaneId,
 ) -> RegisterPublicLaneCandidate {
-    let registration = RegisterPublicLaneValidator::new(
+    let mut registration = RegisterPublicLaneValidator::new(
         lane_id,
         validator.clone(),
         PeerId::new(peer_key.public_key().clone()),
         validator.clone(),
         Quantity::from(stake),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(stake)),
     );
     let registered = stx
         .world
@@ -39,6 +40,10 @@ fn signed_candidate(
             .get(),
     )
     .expect("election height");
+    registration.monetary_plan.precondition =
+        PublicLaneMonetaryPreconditionV1::Registration(PublicLaneRegistrationPreconditionV1 {
+            activation_height,
+        });
     let authorization = PublicLaneCandidateAuthorization::new(
         *stx.network_id(),
         registration.clone(),
@@ -197,6 +202,7 @@ fn activation_requires_validator_authority_after_genesis() {
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("registration");
@@ -292,6 +298,7 @@ fn pending_rebind_requires_network_bound_replacement_peer_consent() {
         validator.clone(),
         Quantity::from(1000_u64),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("register owner-bound peer");
@@ -479,6 +486,7 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
         validator.clone(),
         2000_u64.into(),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(2000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator before topology freeze");
@@ -510,6 +518,13 @@ fn global_pool_guard_preserves_safe_unbonds_and_rejects_exit_or_minimum_crossing
         .expect_err("self withdrawal below minimum changes global eligibility");
     assert!(error.to_string().contains("prepared epoch key transition"));
     BondPublicLaneStake {
+        monetary_plan: fixture_bond_plan(
+            &stx,
+            lane_id,
+            &validator,
+            &delegator,
+            Quantity::from(100_u64),
+        ),
         lane_id,
         validator: validator.clone(),
         staker: delegator.clone(),
@@ -558,6 +573,7 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
         validator.clone(),
         1000_u64.into(),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");
@@ -567,6 +583,13 @@ fn global_pool_guard_rejects_bond_restoring_under_minimum_global_candidate() {
     // A governance minimum increase is external to ordinary owner staking.
     stx.nexus.staking.min_validator_stake = 2000_u64.into();
     let error = BondPublicLaneStake {
+        monetary_plan: fixture_bond_plan(
+            &stx,
+            lane_id,
+            &validator,
+            &validator,
+            Quantity::from(1000_u64),
+        ),
         lane_id,
         validator: validator.clone(),
         staker: validator.clone(),
@@ -601,6 +624,7 @@ fn global_pool_guard_checks_later_tenure_union_and_allows_permanent_redundancy()
         validator.clone(),
         1000_u64.into(),
         Metadata::default(),
+        fixture_registration_plan(&stx, &validator, Quantity::from(1000_u64)),
     )
     .execute(&validator, &mut stx)
     .expect("seed retained validator");

@@ -1,9 +1,9 @@
 //! Native custody and public observation for the one fixed epoch supervisor.
 //! No service start/stop, seed derivation, transaction dispatch, or reset authority lives here.
 
-use super::epoch_supervisor::{EpochSupervisorPlanV1, STATE_ROOT, UNIT_NAME};
 #[cfg(target_os = "linux")]
 use super::epoch_supervisor::JOURNAL_DIR;
+use super::epoch_supervisor::{EpochSupervisorPlanV1, STATE_ROOT, UNIT_NAME};
 use super::*;
 
 /// Root-only public generation operations; private material is accepted only by descriptor.
@@ -153,7 +153,6 @@ pub(super) struct UnitSpecV1 {
     pub(super) operator_key: String,
     pub(super) policy: String,
     pub(super) trust: String,
-    pub(super) custody: String,
     pub(super) journal_dir: String,
     pub(super) timeout_ms: u64,
 }
@@ -163,7 +162,6 @@ pub(super) struct BindingV1 {
     pub(super) schema_version: u32,
     pub(super) release_source_commit: String,
     pub(super) iroha_sha256: String,
-    pub(super) kagami_sha256: String,
     pub(super) network_id: String,
     pub(super) unit_spec: UnitSpecV1,
     pub(super) unit_bytes: String,
@@ -172,8 +170,6 @@ pub(super) struct BindingV1 {
     pub(super) policy_sha256: String,
     pub(super) observation_trust_bytes: String,
     pub(super) observation_trust_sha256: String,
-    pub(super) custody_bytes: String,
-    pub(super) custody_sha256: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -187,7 +183,6 @@ pub(super) struct PreparationV1 {
     #[norito(required)]
     pub(super) installed: Option<BindingV1>,
     pub(super) after: BindingV1,
-    pub(super) original_seed_sources: Vec<epoch_supervisor::SeedV1>,
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -327,13 +322,11 @@ pub(super) fn as_public_plan(binding: &BindingV1, original: &str) -> Result<Epoc
         journal_dir: spec.journal_dir.clone(),
         release_source_commit: binding.release_source_commit.clone(),
         iroha_sha256: binding.iroha_sha256.clone(),
-        kagami_sha256: binding.kagami_sha256.clone(),
+        cli_path: spec.cli.clone(),
         policy_sha256: binding.policy_sha256.clone(),
         policy_bytes: binding.policy_bytes.as_bytes().to_vec(),
         observation_trust_sha256: binding.observation_trust_sha256.clone(),
         observation_trust_bytes: binding.observation_trust_bytes.as_bytes().to_vec(),
-        custody_sha256: binding.custody_sha256.clone(),
-        custody_bytes: binding.custody_bytes.as_bytes().to_vec(),
         unit_sha256: binding.unit_sha256.clone(),
         unit_bytes: binding.unit_bytes.as_bytes().to_vec(),
         admin_config_path: spec.admin_config.clone(),
@@ -342,19 +335,13 @@ pub(super) fn as_public_plan(binding: &BindingV1, original: &str) -> Result<Epoc
         http_operator_key_sha256: String::new(),
         policy_path: spec.policy.clone(),
         trust_path: spec.trust.clone(),
-        custody_path: spec.custody.clone(),
         timeout_ms: spec.timeout_ms,
-        original_seed_sources: Vec::new(),
         prior_state: original.into(),
         prior: None,
     };
     let policy = epoch_supervisor::validate_public_generation(&plan)?;
-    let cli = Path::new(&policy.kagami.path)
-        .parent()
-        .ok_or_else(|| eyre!("Kagami parent absent"))?
-        .join("iroha");
     require(
-        cli == Path::new(&spec.cli) && policy.intent.network_id.to_string() == binding.network_id,
+        policy.intent.network_id.to_string() == binding.network_id,
         "epoch CLI/network binding differs",
     )?;
     super::super::validate_lower_hex("epoch release commit", &binding.release_source_commit, 40)?;
@@ -373,19 +360,14 @@ pub(super) fn binding_from_public_plan(plan: &EpochSupervisorPlanV1) -> Result<B
         schema_version: 1,
         release_source_commit: plan.release_source_commit.clone(),
         iroha_sha256: plan.iroha_sha256.clone(),
-        kagami_sha256: plan.kagami_sha256.clone(),
         network_id: policy.intent.network_id.to_string(),
         unit_spec: UnitSpecV1 {
             schema_version: 1,
-            cli: Path::new(&policy.kagami.path)
-                .with_file_name("iroha")
-                .to_string_lossy()
-                .into_owned(),
+            cli: plan.cli_path.clone(),
             admin_config: plan.admin_config_path.clone(),
             operator_key: plan.http_operator_key_path.clone(),
             policy: plan.policy_path.clone(),
             trust: plan.trust_path.clone(),
-            custody: plan.custody_path.clone(),
             journal_dir: plan.journal_dir.clone(),
             timeout_ms: plan.timeout_ms,
         },
@@ -395,8 +377,6 @@ pub(super) fn binding_from_public_plan(plan: &EpochSupervisorPlanV1) -> Result<B
         policy_sha256: plan.policy_sha256.clone(),
         observation_trust_bytes: String::from_utf8(plan.observation_trust_bytes.clone())?,
         observation_trust_sha256: plan.observation_trust_sha256.clone(),
-        custody_bytes: String::from_utf8(plan.custody_bytes.clone())?,
-        custody_sha256: plan.custody_sha256.clone(),
     })
 }
 
@@ -432,9 +412,7 @@ mod linux {
         policy_sha256: String,
         release_source_commit: String,
         iroha_sha256: String,
-        kagami_sha256: String,
         observation_trust_sha256: String,
-        custody_sha256: String,
         unit_sha256: String,
         administrator: AdministratorV1,
         admin_config_sha256: String,
@@ -559,14 +537,8 @@ mod linux {
         ensure_pinned_unchanged(path, "epoch executable", &file, &snapshot)
     }
     fn validate_executables(plan: &EpochSupervisorPlanV1) -> Result<()> {
-        let policy = epoch_supervisor::validate_generation(plan)?;
-        let kagami = Path::new(&policy.kagami.path);
-        let cli = kagami
-            .parent()
-            .ok_or_else(|| eyre!("Kagami parent absent"))?
-            .join("iroha");
-        executable(&cli, &plan.iroha_sha256)?;
-        executable(kagami, &plan.kagami_sha256)?;
+        epoch_supervisor::validate_generation(plan)?;
+        executable(Path::new(&plan.cli_path), &plan.iroha_sha256)?;
         require(
             crate::compiled_build_identity()?.release_source_commit()?
                 == plan.release_source_commit,
@@ -583,96 +555,10 @@ mod linux {
             .join("generations")
             .join(&plan.policy_sha256)
     }
-    fn seeds(plan: &EpochSupervisorPlanV1) -> Result<()> {
-        let custody: epoch_supervisor::SeedCustodyV1 = json::from_slice(&plan.custody_bytes)?;
-        let mut inodes = BTreeSet::new();
-        let policy = epoch_supervisor::validate_generation(plan)?;
-        for (index, seed) in custody.seeds.into_iter().enumerate() {
-            let path = Path::new(&seed.path);
-            require(
-                path == epoch_seed_custody::destination(policy.intent.network_id, index)?,
-                "epoch custody must use the retained original seed destination",
-            )?;
-            require(
-                !path.starts_with("/root")
-                    && !path.starts_with("/home")
-                    && !path.starts_with(Path::new(STATE_ROOT).join("generations"))
-                    && !path
-                        .components()
-                        .any(|c| c.as_os_str() == ".public-reset-control-v1"),
-                "original seed is inaccessible to the fixed unit or belongs to finite reset storage",
-            )?;
-            require_root_no_symlink_ancestors(path, "original epoch seed")?;
-            let metadata = fs::symlink_metadata(path)?;
-            require(
-                metadata.is_file()
-                    && !metadata.file_type().is_symlink()
-                    && metadata.uid() == 0
-                    && metadata.gid() == 0
-                    && metadata.mode() & 0o7777 == 0o600
-                    && metadata.nlink() == 1
-                    && metadata.len() == 32
-                    && path.canonicalize()? == path
-                    && inodes.insert((metadata.dev(), metadata.ino())),
-                "original epoch seeds require four distinct direct root0600 32-byte files",
-            )?;
-            // Deliberately no open/read/hash: original seed bytes remain worker custody.
-        }
-        Ok(())
-    }
-    fn retain_original_sources(
-        plan: &EpochSupervisorPlanV1,
-        sources: &[epoch_supervisor::SeedV1],
-    ) -> Result<()> {
-        let policy = epoch_supervisor::validate_generation(plan)?;
-        let custody: epoch_supervisor::SeedCustodyV1 = json::from_slice(&plan.custody_bytes)?;
-        require(
-            sources.len() == 4
-                && sources
-                    .iter()
-                    .map(|s| &s.validator)
-                    .eq(custody.seeds.iter().map(|s| &s.validator)),
-            "original seed sources must match the exact sorted admitted four validators",
-        )?;
-        let mut identities = BTreeSet::new();
-        let mut held = Vec::with_capacity(4);
-        for (index, source) in sources.iter().enumerate() {
-            require(
-                Path::new(&custody.seeds[index].path)
-                    == epoch_seed_custody::destination(policy.intent.network_id, index)?,
-                "original seed destination differs from fixed retained custody",
-            )?;
-            let original = epoch_seed_custody::OriginalSeed::open(Path::new(&source.path))?;
-            require(
-                identities.insert(original.identity()),
-                "original epoch seed sources are aliased",
-            )?;
-            held.push(original);
-        }
-        let bytes = held
-            .iter()
-            .map(epoch_seed_custody::OriginalSeed::read)
-            .collect::<Result<Vec<_>>>()?;
-        for (index, bytes) in bytes.iter().enumerate() {
-            held[index].revalidate()?;
-            let retained = epoch_seed_custody::retain_original(
-                policy.intent.network_id,
-                index,
-                bytes.as_ref(),
-            )?;
-            require(
-                retained == Path::new(&custody.seeds[index].path),
-                "native original retention changed its admitted destination",
-            )?;
-            held[index].revalidate()?;
-        }
-        Ok(())
-    }
     fn public_files(plan: &EpochSupervisorPlanV1) -> Vec<(&str, &[u8])> {
         vec![
             ("policy.json", &plan.policy_bytes),
             ("trust.json", &plan.observation_trust_bytes),
-            ("custody.json", &plan.custody_bytes),
             ("unit.service", &plan.unit_bytes),
         ]
     }
@@ -714,12 +600,11 @@ mod linux {
         )
         .map_err(|_| eyre!("epoch administrator failed native strict config admission"))?;
         let operator: KeyPair = crate::operator_key::parse_operator_private_key(http)?;
-        // Native owner supplies this pure seam. It validates the native policy/trust/custody,
-        // signed genesis administrator grant, roster and explicitly admitted candidate origin.
+        // The native observer validates the policy, signed trust, network/account identity,
+        // separate HTTP operator and explicitly admitted candidate origin.
         crate::taira_dataspace_deploy::epoch_maintenance::supervisor_generation_admission(
             &plan.policy_bytes,
             &plan.observation_trust_bytes,
-            &plan.custody_bytes,
             &config,
             &operator,
         )?;
@@ -770,13 +655,8 @@ mod linux {
         )?;
         let http = private_bytes(Path::new(&plan.http_operator_key_path), 4096)?;
         let admitted = admit_private(plan, &admin, &http)?;
-        seeds(plan)?;
-        let policy = epoch_supervisor::validate_generation(plan)?;
-        executable(Path::new(&policy.kagami.path), &plan.kagami_sha256)?;
-        executable(
-            &Path::new(&policy.kagami.path).with_file_name("iroha"),
-            &plan.iroha_sha256,
-        )?;
+        epoch_supervisor::validate_generation(plan)?;
+        executable(Path::new(&plan.cli_path), &plan.iroha_sha256)?;
         check_deadline(until)?;
         Ok(admitted)
     }
@@ -790,7 +670,6 @@ mod linux {
         check_deadline(until)?;
         epoch_supervisor::validate_generation(plan)?;
         let admitted = admit_private(plan, admin, http)?;
-        seeds(plan)?;
         validate_executables(plan)?;
         check_deadline(until)?;
         ensure_root_private_directory(Path::new(STATE_ROOT))?;
@@ -997,18 +876,13 @@ mod linux {
         Ok(())
     }
     fn expected_argv(plan: &EpochSupervisorPlanV1) -> Result<Vec<String>> {
-        let policy = epoch_supervisor::validate_generation(plan)?;
+        epoch_supervisor::validate_generation(plan)?;
         Ok(vec![
-            Path::new(&policy.kagami.path)
-                .with_file_name("iroha")
-                .to_string_lossy()
-                .into_owned(),
+            plan.cli_path.clone(),
             "--config".into(),
             plan.admin_config_path.clone(),
             "--operator-private-key-file".into(),
             plan.http_operator_key_path.clone(),
-            "--fee-payer".into(),
-            "authority".into(),
             "taira".into(),
             "epoch-maintenance".into(),
             "supervise".into(),
@@ -1016,8 +890,6 @@ mod linux {
             plan.policy_path.clone(),
             "--trust".into(),
             plan.trust_path.clone(),
-            "--custody".into(),
-            plan.custody_path.clone(),
             "--journal-dir".into(),
             plan.journal_dir.clone(),
             "--timeout-ms".into(),
@@ -1153,9 +1025,7 @@ mod linux {
             policy_sha256: plan.policy_sha256.clone(),
             release_source_commit: plan.release_source_commit.clone(),
             iroha_sha256: plan.iroha_sha256.clone(),
-            kagami_sha256: plan.kagami_sha256.clone(),
             observation_trust_sha256: plan.observation_trust_sha256.clone(),
-            custody_sha256: plan.custody_sha256.clone(),
             unit_sha256: plan.unit_sha256.clone(),
             administrator,
             admin_config_sha256: plan.admin_config_sha256.clone(),
@@ -1174,7 +1044,6 @@ mod linux {
             "http-operator.key",
             "policy.json",
             "trust.json",
-            "custody.json",
             "unit.service",
         ]
         .into_iter()
@@ -1195,9 +1064,7 @@ mod linux {
                 && receipt.unit_sha256 == binding.unit_sha256
                 && receipt.release_source_commit == binding.release_source_commit
                 && receipt.iroha_sha256 == binding.iroha_sha256
-                && receipt.kagami_sha256 == binding.kagami_sha256
-                && receipt.observation_trust_sha256 == binding.observation_trust_sha256
-                && receipt.custody_sha256 == binding.custody_sha256,
+                && receipt.observation_trust_sha256 == binding.observation_trust_sha256,
             "epoch provisioning receipt does not bind the selected generation",
         )?;
         let plan = as_plan(
@@ -1333,11 +1200,10 @@ mod linux {
                 sha256_hex(&http),
                 &input.original_service_state,
             )?;
-            // Fully admit public/private authority before retaining any original seed.
+            // Admit the complete public closure and separate credentials before publication.
             admit_private(&plan, &admin, &http)?;
             validate_executables(&plan)?;
             check_deadline(until)?;
-            retain_original_sources(&plan, &input.original_seed_sources)?;
             let (administrator, http_operator_public_key) =
                 materialize(&plan, &admin, &http, until)?;
             let receipt = GenerationReceiptV1 {
@@ -1349,9 +1215,7 @@ mod linux {
                 policy_sha256: plan.policy_sha256.clone(),
                 release_source_commit: plan.release_source_commit.clone(),
                 iroha_sha256: plan.iroha_sha256.clone(),
-                kagami_sha256: plan.kagami_sha256.clone(),
                 observation_trust_sha256: plan.observation_trust_sha256.clone(),
-                custody_sha256: plan.custody_sha256.clone(),
                 unit_sha256: plan.unit_sha256.clone(),
                 administrator,
                 admin_config_sha256: plan.admin_config_sha256.clone(),
@@ -1511,9 +1375,6 @@ mod linux {
                 successor_service_state: "stopped".into(),
                 before: None,
                 installed: None,
-                original_seed_sources: super::super::super::super::sample_inventory_fixture()
-                    .epoch_supervisor
-                    .original_seed_sources,
                 after,
             };
             let bytes = json::to_vec(&preparation).unwrap();
@@ -1522,13 +1383,13 @@ mod linux {
             let object = value.as_object_mut().unwrap();
             object.remove("installed");
             assert!(json::from_slice::<PreparationV1>(&json::to_vec(&value).unwrap()).is_err());
-            let mut without_sources: json::Value = json::from_slice(&bytes).unwrap();
-            without_sources
-                .as_object_mut()
-                .unwrap()
-                .remove("original_seed_sources");
+            let mut with_retired_sources: json::Value = json::from_slice(&bytes).unwrap();
+            with_retired_sources.as_object_mut().unwrap().insert(
+                "original_seed_sources".into(),
+                json::Value::Array(Vec::new()),
+            );
             assert!(
-                json::from_slice::<PreparationV1>(&json::to_vec(&without_sources).unwrap())
+                json::from_slice::<PreparationV1>(&json::to_vec(&with_retired_sources).unwrap())
                     .is_err()
             );
             let mut value: json::Value = json::from_slice(&bytes).unwrap();
@@ -1685,7 +1546,6 @@ mod completed_wrapper_tests {
                 before: None,
                 installed: None,
                 after,
-                original_seed_sources: inventory.epoch_supervisor.original_seed_sources,
             },
             receipt,
         )

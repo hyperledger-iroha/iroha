@@ -1,17 +1,19 @@
-//! Genuine bounded epoch maintenance runs independently of application operations.
-//! Only native Kagami handles seed derivation; only the shipping CLI dispatches.
+//! Authenticated automatic epoch retention under a genuine four-peer application workload.
+//! The shipping observer is read-only; signed canaries provide useful nonempty work.
 use super::*;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     NetworkId,
     bridge::BridgeFinalityVerifier,
-    isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-    parameter::{Parameter, system::KagemushaMintFinalityNextEpochParameterV1},
-    transaction::SignedTransaction,
+    isi::kagemusha_v1::{
+        BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+        KagemushaMintFinalityAuthorityGenerationV1 as Authority,
+        KagemushaMintFinalityEpochAuthorizationV1 as Authorization,
+        KagemushaMintFinalityEpochDecisionV1 as Decision,
+    },
 };
 use iroha_model_base::peer::PeerId;
-use iroha_version::codec::DecodeVersioned as _;
-use std::{collections::BTreeMap, io::Write, num::NonZeroU64};
+use std::{collections::BTreeMap, num::NonZeroU64};
 
 #[cfg(target_os = "linux")]
 #[path = "production_epoch_supervisor.rs"]
@@ -44,65 +46,16 @@ impl Driver {
 }
 
 const EPOCH_LENGTH: u64 = 11;
-const SCHEDULE_EPOCHS: u64 = 8;
-// The existing fifteen application operations, at most eight real maintenance
-// operations, and five retained replay/snapshot restart phases each retain
-// their own original 180-second bound. This is only the monitor's outer bound.
-const MONITOR_PHASES: u32 = 15 + SCHEDULE_EPOCHS as u32 + 5;
+const OBSERVED_EPOCHS: u64 = 8;
+// Existing application operations, one signed pulse canary and retained replay/
+// snapshot phases keep their original deadlines. This only bounds the observer.
+const MONITOR_PHASES: u32 = 29;
 
-fn seed_pipe() -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
-    // nix::pipe2 is unavailable on macOS. Protect both owned ends immediately,
-    // before supplying seed bytes or spawning any child.
-    let descriptors = nix::unistd::pipe()?;
-    for descriptor in [&descriptors.0, &descriptors.1] {
-        let flags = nix::fcntl::FdFlag::from_bits_truncate(nix::fcntl::fcntl(
-            descriptor,
-            nix::fcntl::FcntlArg::F_GETFD,
-        )?);
-        nix::fcntl::fcntl(
-            descriptor,
-            nix::fcntl::FcntlArg::F_SETFD(flags | nix::fcntl::FdFlag::FD_CLOEXEC),
-        )?;
-    }
-    Ok(descriptors)
-}
-
-fn copy_fixture_seed(path: &Path, output: &mut impl Write) -> Result<()> {
-    let before = fs::symlink_metadata(path)?;
-    ensure!(
-        before.is_file()
-            && !before.file_type().is_symlink()
-            && before.uid() == nix::unistd::geteuid().as_raw()
-            && before.mode() & 0o777 == 0o600
-            && before.nlink() == 1
-            && before.len() == 32,
-        "invalid original fixture mint-finality seed custody"
-    );
-    let mut input = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(path)?;
-    let stamp = |m: &fs::Metadata| (m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec());
-    ensure!(
-        stamp(&input.metadata()?) == stamp(&before),
-        "seed changed before owned pipe transfer"
-    );
-    ensure!(
-        std::io::copy(&mut std::io::Read::take(&mut input, 33), output)? == 32,
-        "seed length changed during owned pipe transfer"
-    );
-    ensure!(
-        stamp(&input.metadata()?) == stamp(&before),
-        "seed changed during owned pipe transfer"
-    );
-    Ok(())
-}
-
-fn signed_genesis_roster(
+fn signed_genesis_authority(
     directory: &Path,
     network: NetworkId,
     public_key: &PublicKey,
-) -> Result<KagemushaMintFinalityEpochRosterV1> {
+) -> Result<Authority> {
     let (hash, metadata) = iroha_core::release_identity::genesis_identity(
         &fs::read(directory.join("genesis.signed.nrt"))?,
         public_key,
@@ -113,158 +66,73 @@ fn signed_genesis_roster(
     );
     Ok(metadata
         .kagemusha_mint_finality
-        .epoch_roster
+        .authority_generation
         .bind_network_id(network)?)
 }
 
-fn schedule_parameters(
-    bytes: &[u8],
-    network: NetworkId,
-    roster: &[PeerId],
-    genesis_roster: &KagemushaMintFinalityEpochRosterV1,
-) -> Result<Vec<KagemushaMintFinalityNextEpochParameterV1>> {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let value: Value = json::from_slice(bytes)?;
+fn verify_retained_authorization(
+    previous: &Authorization,
+    successor: &Authorization,
+    authority: &Authority,
+    genesis: &Authority,
+    installed: BeaconEpochBindingV1,
+) -> Result<()> {
+    previous.validate_against_authority(genesis)?;
+    successor.validate_against_authority(authority)?;
+    successor.validate_successor(previous)?;
+    let first = successor
+        .epoch
+        .checked_mul(EPOCH_LENGTH)
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| eyre!("retained epoch first height overflow"))?;
+    let last = first
+        .checked_add(EPOCH_LENGTH - 1)
+        .ok_or_else(|| eyre!("retained epoch last height overflow"))?;
     ensure!(
-        field(&value, "schema_version")?.as_u64() == Some(1)
-            && json::from_value::<NetworkId>(field(&value, "network_id")?.clone())? == network,
-        "native epoch schedule belongs to another schema or network"
+        authority == genesis
+            && genesis.generation == 0
+            && genesis.validators.len() == 4
+            && successor.decision == Decision::Retain
+            && successor.transition_id == [0; 32]
+            && successor.first_height == first
+            && successor.last_height == last
+            && matches!(installed, BeaconEpochBindingV1::Installed(_))
+            && successor.beacon == installed,
+        "retention changed the exact signed authority, interval, decision or installed beacon"
     );
-    let derived_genesis: KagemushaMintFinalityEpochRosterV1 =
-        json::from_value(field(&value, "genesis_roster")?.clone())?;
-    ensure!(
-        derived_genesis == *genesis_roster
-            && genesis_roster.network_id == network
-            && genesis_roster.epoch == 0,
-        "native epoch schedule was not derived from the signed genesis mint seeds"
-    );
-    let parameters: Vec<Parameter> = json::from_value(field(&value, "parameters")?.clone())?;
-    ensure!(
-        parameters.len() == SCHEDULE_EPOCHS as usize,
-        "native epoch schedule has the wrong bound"
-    );
-    let expected = roster.iter().cloned().collect::<BTreeSet<_>>();
-    ensure!(
-        expected.len() == 4,
-        "epoch schedule requires four distinct genesis validators"
-    );
-    parameters
-        .into_iter()
-        .enumerate()
-        .map(|(index, parameter)| {
-            let Parameter::Custom(custom) = parameter else {
-                return Err(eyre!("epoch schedule contains a non-custom parameter"));
-            };
-            let parameter =
-                KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&custom)
-                    .ok_or_else(|| {
-                        eyre!("native epoch schedule contains an invalid roster parameter")
-                    })?;
-            ensure!(
-                parameter.roster.network_id == network
-                    && parameter.roster.epoch == index as u64 + 1
-                    && parameter.roster.validators.len() == 4
-                    && parameter
-                        .roster
-                        .validators
-                        .iter()
-                        .map(|entry| entry.validator.clone())
-                        .collect::<BTreeSet<_>>()
-                        == expected,
-                "native epoch schedule has a gap, foreign network or different voters"
-            );
-            Ok(parameter)
-        })
-        .collect()
+    Ok(())
 }
 
-pub(super) async fn prepare_schedule(
-    directory: &Path,
-    kagami: &Path,
-    roster: &[PeerId],
-    network: NetworkId,
-    genesis_public_key: &PublicKey,
-    deadline: Instant,
-) -> Result<PathBuf> {
-    let mut ordered = BTreeMap::new();
-    let mut payment_asset = None;
-    for index in 0..4 {
-        let native = config(&directory.join(format!("peer{index}.toml")))?;
-        ensure!(
-            ordered
-                .insert(native.common.peer.id.clone(), index)
-                .is_none(),
-            "duplicate native validator"
-        );
-        if let Some(expected) = &payment_asset {
-            ensure!(
-                expected == &native.nexus.fees.fee_asset_id,
-                "validator payment assets differ"
-            );
-        } else {
-            payment_asset = Some(native.nexus.fees.fee_asset_id.clone());
-        }
-    }
+fn verify_receipt_continuity(previous: &Value, next: &Value) -> Result<()> {
+    let epoch = field(previous, "completed_epoch")?
+        .as_u64()
+        .ok_or_else(|| eyre!("retained receipt epoch is not an integer"))?;
+    let prior: Vec<Authorization> =
+        json::from_value(field(previous, "authorization_chain")?.clone())?;
+    let chain: Vec<Authorization> = json::from_value(field(next, "authorization_chain")?.clone())?;
     ensure!(
-        ordered.keys().cloned().collect::<BTreeSet<_>>() == roster.iter().cloned().collect(),
-        "seed sources do not match authenticated genesis voters"
+        field(next, "completed_epoch")?.as_u64() == epoch.checked_add(1)
+            && field(next, "previous_cursor_id")? == field(previous, "cursor_id")?
+            && field(next, "network_id")? == field(previous, "network_id")?
+            && field(next, "authority")? == field(previous, "authority")?
+            && field(next, "authority_generation")? == field(previous, "authority_generation")?
+            && field(next, "authority_id")? == field(previous, "authority_id")?
+            && field(next, "beacon_binding")? == field(previous, "beacon_binding")?
+            && chain.len() == prior.len() + 1
+            && chain[..prior.len()] == prior,
+        "retention receipt replay, gap, authority substitution or prefix rewrite"
     );
-    let (read, write) = seed_pipe()?;
-    let mut write = File::from(write);
-    // This tiny pipe is filled only inside the runtime fixture; no secret is
-    // formatted, logged, returned, or written into the public schedule.
-    for index in ordered.values() {
-        copy_fixture_seed(
-            &directory.join(format!("runtime/mint-finality-signers/peer{index}.seed")),
-            &mut write,
-        )?;
-    }
-    drop(write);
-    let mut derive = command(kagami, directory);
-    derive
-        .args([
-            "kagemusha",
-            "derive-mint-finality-epoch-schedule-v1",
-            "--network-id",
-        ])
-        .arg(network.to_string())
-        .args([
-            "--epoch",
-            "1",
-            "--epoch-count",
-            "8",
-            "--seed-fd",
-            "197",
-            "--payment-asset",
-        ])
-        .arg(payment_asset.ok_or_else(|| eyre!("native payment asset absent"))?)
-        .args(["--transaction-fee-maximum", "100"])
-        .stderr(private_file(
-            &directory.join("epoch-schedule.stderr.log"),
-            &[],
-        )?);
-    for peer in ordered.keys() {
-        derive.arg("--validator").arg(peer.to_string());
-    }
-    inherit(&mut derive, &[(read.as_raw_fd(), 197)])?;
-    let bytes = run(derive, deadline).await?;
-    drop(read);
-    let genesis_roster = signed_genesis_roster(
-        &directory.join("final-genesis"),
-        network,
-        genesis_public_key,
-    )?;
-    schedule_parameters(&bytes, network, roster, &genesis_roster)?;
-    let path = directory.join("epoch-schedule.json");
-    private_file(&path, &bytes)?;
-    Ok(path)
+    let preceding = prior
+        .last()
+        .ok_or_else(|| eyre!("retained receipt omitted authorization chain"))?;
+    chain.last().unwrap().validate_successor(preceding)?;
+    Ok(())
 }
 
 pub(super) struct Maintenance {
     binary: PathBuf,
     directory: PathBuf,
     trust: PathBuf,
-    schedule: PathBuf,
     journal: PathBuf,
     network: NetworkId,
     child: Child,
@@ -286,17 +154,11 @@ impl Maintenance {
         child
             .args(["maintain", "--trust"])
             .arg(&trust)
-            .arg("--schedule")
-            .arg(&prepared.epoch_schedule)
             .arg("--journal-dir")
             .arg(&journal)
-            .args([
-                "--stop-after-epoch",
-                "8",
-                "--operation-timeout-ms",
-                "180000",
-                "--timeout-ms",
-            ])
+            .arg("--stop-after-epoch")
+            .arg(OBSERVED_EPOCHS.to_string())
+            .arg("--timeout-ms")
             .arg((PHASE_BUDGET * MONITOR_PHASES).as_millis().to_string())
             .stdout(private_file(&journal.join("stdout.log"), &[])?)
             .stderr(private_file(&journal.join("stderr.log"), &[])?);
@@ -304,7 +166,6 @@ impl Maintenance {
             binary: binary.into(),
             directory,
             trust,
-            schedule: prepared.epoch_schedule.clone(),
             journal,
             network: prepared.network_id,
             child: child.spawn()?,
@@ -316,14 +177,12 @@ impl Maintenance {
     #[cfg(target_os = "linux")]
     pub(super) fn start_supervisor(
         binary: &Path,
-        kagami: &Path,
         prepared: &prepare::Prepared,
         trust: PathBuf,
         build_identity: iroha_core::release_identity::BuildIdentity,
     ) -> Result<Self> {
-        supervisor::start(binary, kagami, prepared, trust, build_identity)
+        supervisor::start(binary, prepared, trust, build_identity)
     }
-
     fn base_command(binary: &Path, directory: &Path) -> Command {
         let mut child = command(binary, directory);
         child
@@ -332,108 +191,251 @@ impl Maintenance {
             .arg(directory.join("client.toml"))
             .arg("--operator-private-key-file")
             .arg(directory.join("runtime/operator-signer.key"))
-            .args(["--fee-payer", "authority", "taira", "epoch-maintenance"]);
+            .args(["taira", "epoch-maintenance"]);
         child
     }
-    fn operation(&self, epoch: u64) -> PathBuf {
-        self.journal.join(format!("epoch-{}-{epoch}", self.network))
+    fn retention(&self) -> PathBuf {
+        self.journal.join(format!("retention-{}", self.network))
+    }
+    fn completion(&self, epoch: u64) -> PathBuf {
+        self.retention().join(format!("epoch-{epoch}.json"))
+    }
+    fn retained_epoch_ready(&self, epoch: u64) -> Result<bool> {
+        if !self.completion(epoch).try_exists()? {
+            return Ok(false);
+        }
+        let cursor = self.retention().join("cursor.json");
+        if !cursor.try_exists()? {
+            return Ok(false);
+        }
+        let cursor: Value = json::from_slice(&fs::read(cursor)?)?;
+        ensure!(
+            field(&cursor, "schema_version")?.as_u64() == Some(1)
+                && json::from_value::<NetworkId>(field(&cursor, "network_id")?.clone())?
+                    == self.network,
+            "native retention cursor changed its schema or network"
+        );
+        Ok(field(&cursor, "completed_epoch")?
+            .as_u64()
+            .is_some_and(|completed| completed >= epoch))
     }
     async fn status(&self, epoch: u64, deadline: Instant) -> Result<Value> {
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            ensure!(
-                !remaining.is_zero(),
-                "epoch status exceeded its original deadline"
-            );
-            let mut child = Self::base_command(&self.binary, &self.directory);
-            child
-                .args(["status", "--trust"])
-                .arg(&self.trust)
-                .arg("--schedule")
-                .arg(&self.schedule)
-                .arg("--journal-dir")
-                .arg(&self.journal)
-                .arg("--target-epoch")
-                .arg(epoch.to_string())
-                .arg("--timeout-ms")
-                .arg(remaining.as_millis().to_string());
-            let bytes = run(child, deadline).await?;
-            // Status is strictly read-side. A typed Pending result never
-            // authorizes resubmission or a fresh transaction.
-            let value: Value = json::from_slice(&bytes)?;
-            ensure!(
-                field(&value, "target_epoch")?.as_u64() == Some(epoch)
-                    && json::from_value::<NetworkId>(field(&value, "network_id")?.clone())?
-                        == self.network,
-                "native epoch status changed its selected network or target"
-            );
-            if value
-                .get("applied_height")
-                .and_then(Value::as_u64)
-                .is_some()
-            {
-                return Ok(value);
-            }
-            ensure!(
-                value.get("state").and_then(Value::as_str) == Some("pending"),
-                "native epoch status returned neither verified completion nor typed Pending"
-            );
-            sleep(Duration::from_millis(200)).await;
-        }
-    }
-    fn transaction(&self, epoch: u64) -> Result<SignedTransaction> {
-        let value: Value =
-            json::from_slice(&fs::read(self.operation(epoch).join("prepared.json"))?)?;
-        let wire = text(&value, "signed_transaction_wire_hex")?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
         ensure!(
-            wire.len() % 2 == 0 && wire.is_ascii(),
-            "invalid native maintenance wire"
+            !remaining.is_zero(),
+            "retention audit exceeded its original deadline"
         );
-        let bytes = (0..wire.len())
-            .step_by(2)
-            .map(|index| u8::from_str_radix(&wire[index..index + 2], 16))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        ensure!(hex(&bytes) == wire, "noncanonical native maintenance wire");
-        Ok(SignedTransaction::decode_all_versioned(&bytes)?)
+        let retained = fs::read(self.completion(epoch))?;
+        let mut child = Self::base_command(&self.binary, &self.directory);
+        child
+            .args(["status", "--trust"])
+            .arg(&self.trust)
+            .arg("--journal-dir")
+            .arg(&self.journal)
+            .arg("--stop-after-epoch")
+            .arg(epoch.to_string())
+            .arg("--timeout-ms")
+            .arg(remaining.as_millis().to_string());
+        let receipt: Value = json::from_slice(&run(child, deadline).await?)?;
+        ensure!(
+            field(&receipt, "schema_version")?.as_u64() == Some(1)
+                && field(&receipt, "completed_epoch")?.as_u64() == Some(epoch)
+                && field(&receipt, "observed_height")?.as_u64() == Some(epoch * EPOCH_LENGTH + 1)
+                && json::from_value::<NetworkId>(field(&receipt, "network_id")?.clone())?
+                    == self.network,
+            "native retention receipt changed its authenticated network, epoch or first height"
+        );
+        ensure!(
+            fs::read(self.completion(epoch))? == retained
+                && receipt == json::from_slice::<Value>(&retained)?,
+            "read-only verification changed the retained epoch receipt"
+        );
+        Ok(receipt)
     }
-    /// Provisional owned-child progress only. Overall acceptance always
-    /// reauthenticates epoch1 with native Status after the monitor is stopped.
+    /// Supply one real signed canary and retain its exact nonempty pulse carrier.
     pub(super) async fn first_progress(
         &mut self,
+        clients: &[iroha::client::Client],
         deadline: Instant,
     ) -> Result<HashOf<TransactionEntrypoint>> {
-        let transaction = timeout_at(deadline, async {
-            while !self.operation(1).join("completion.json").try_exists()? {
+        ensure!(clients.len() == 4, "retention canary needs four validators");
+        let before = status_height(clients, deadline).await?;
+        ensure!(
+            before < EPOCH_LENGTH - 1,
+            "the signed-genesis pulse height has already passed before its canary"
+        );
+        let client = clients[0].with_request_deadline(deadline.into_std());
+        let account = client.account_client()?;
+        let mut payload = account.prepare_transaction(
+            AccountTransactionDraft::new(
+                vec![
+                    InstructionBox::from(iroha_data_model::isi::Log::new(
+                        iroha_data_model::Level::INFO,
+                        "verify automatic retained-authority epoch progression".to_owned(),
+                    )),
+                ],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+        )?;
+        let quote = account
+            .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "retention canary quote changed payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        let transaction = account.sign_transaction(payload)?;
+        transaction.verify_signature()?;
+        ensure!(
+            transaction.network_id() == Some(&self.network),
+            "canary belongs to another network"
+        );
+        let wire = transaction.encode_wire_v1()?;
+        let wire_path = self.journal.join("pulse-canary.signed.nrt");
+        private_file(&wire_path, &wire)?;
+        File::open(&self.journal)?.sync_all()?;
+        let expected = transaction.hash();
+        ensure!(
+            timeout_at(deadline, account.submit_transaction_and_wait(&transaction)).await??
+                == expected,
+            "canary submission changed its retained transaction hash"
+        );
+        let expected_hex = hex(expected.as_ref());
+        let height = timeout_at(deadline, async {
+            loop {
+                let observations = try_join_all(clients.iter().map(|observer| async {
+                    let observer = observer.with_request_deadline(deadline.into_std());
+                    let global = observer
+                        .fetch_transaction_status_response_global(expected)
+                        .await?;
+                    let blocks = validator_status_until(&observer, deadline).await?.blocks;
+                    let local = iroha_test_network::read_on_dedicated_thread(move || {
+                        observer.get_transaction_status_response_local(expected)
+                    })
+                    .await?;
+                    Ok::<_, eyre::Report>((blocks, global, local))
+                }))
+                .await?;
+                let applied = observations.iter().all(|(blocks, global, local)| {
+                    [("global", global), ("local", local)]
+                        .iter()
+                        .all(|(scope, response)| {
+                            response.as_ref().is_some_and(|response| {
+                                response.hash == expected_hex
+                                    && response.scope == *scope
+                                    && response.resolved_from == "state"
+                                    && response.status.kind == "Applied"
+                                    && response
+                                        .status
+                                        .block_height
+                                        .is_some_and(|height| height > before && *blocks >= height)
+                            })
+                        })
+                });
+                if applied {
+                    let height = observations[0]
+                        .1
+                        .as_ref()
+                        .unwrap()
+                        .status
+                        .block_height
+                        .unwrap();
+                    ensure!(
+                        observations.iter().all(|(_, global, local)| global
+                            .as_ref()
+                            .unwrap()
+                            .status
+                            .block_height
+                            == Some(height)
+                            && local.as_ref().unwrap().status.block_height == Some(height)),
+                        "four validators disagree on retained canary execution"
+                    );
+                    return Ok::<_, eyre::Report>(height);
+                }
                 ensure!(
                     self.child.try_wait()?.is_none(),
-                    "native epoch monitor exited before first completion"
+                    "retention observer exited during canary execution"
                 );
                 sleep(Duration::from_millis(200)).await;
             }
-            // The child can still hold its exclusive journal lock briefly
-            // after installing this receipt. Do not race a Status process here.
-            // This barrier cannot authorize final success or replace the final
-            // stopped-monitor native proof audit.
-            let receipt: Value = json::from_slice(&fs::read(self.operation(1).join("completion.json"))?)?;
-            let transaction = self.transaction(1)?;
-            transaction.verify_signature()?;
-            ensure!(field(&receipt, "schema_version")?.as_u64() == Some(1)
-                && field(&receipt, "target_epoch")?.as_u64() == Some(1)
-                && json::from_value::<NetworkId>(field(&receipt, "network_id")?.clone())? == self.network
-                && transaction.network_id() == Some(&self.network)
-                && text(&receipt, "transaction_hash")? == hex(transaction.hash().as_ref())
-                && field(&receipt, "applied_height")?.as_u64() == Some(10),
-                "first maintenance progress differs from the exact retained network/transaction/pulse height");
-            Ok::<_, eyre::Report>(transaction.hash_as_entrypoint())
         })
         .await
-        .wrap_err("first genuine epoch maintenance exceeded the original phase deadline")??;
+        .wrap_err("canary exceeded its original execution deadline")??;
+        ensure!(
+            fs::read(&wire_path)? == wire,
+            "retained canary changed after its sole dispatch"
+        );
+        private_file(
+            &self.journal.join("pulse-canary-applied.json"),
+            &json::to_vec(&norito::json!({
+                "schema_version":1,"network_id":(self.network),"transaction_hash":expected_hex,
+                "applied_height":height,"signed_wire_sha256":(hex(&iroha_crypto::sha256(&wire))),
+                "four_peer_local_and_global_applied":true
+            }))?,
+        )?;
+        ensure!(
+            height == EPOCH_LENGTH - 1,
+            "the exact canary did not carry the signed-genesis mandatory pulse"
+        );
+        Ok(transaction.hash_as_entrypoint())
+    }
+    /// Observe the first activated Retain after the application crosses its boundary.
+    pub(super) async fn first_retention(&mut self, deadline: Instant) -> Result<()> {
+        timeout_at(deadline, async {
+            while !self.retained_epoch_ready(1)? {
+                ensure!(
+                    self.child.try_wait()?.is_none(),
+                    "observer exited before retained epoch one"
+                );
+                sleep(Duration::from_millis(200)).await;
+            }
+            self.status(1, deadline).await?;
+            Ok::<_, eyre::Report>(())
+        })
+        .await
+        .wrap_err("first actual Retain exceeded the original phase deadline")??;
         #[cfg(target_os = "linux")]
         if self.supervisor.is_some() {
             supervisor::restart(self, deadline).await?;
         }
-        Ok(transaction)
+        Ok(())
     }
+    /// Catch up to the fixed application tip before terminating the owned observer.
+    pub(super) async fn await_current_retention(
+        &mut self,
+        clients: &[iroha::client::Client],
+        deadline: Instant,
+    ) -> Result<()> {
+        let height = status_height(clients, deadline).await?;
+        let epoch = height.saturating_sub(1) / EPOCH_LENGTH;
+        ensure!(
+            (2..OBSERVED_EPOCHS).contains(&epoch),
+            "application must reach two retained epochs within the observer bound"
+        );
+        timeout_at(deadline, async {
+            while !self.retained_epoch_ready(epoch)? {
+                ensure!(
+                    self.child.try_wait()?.is_none(),
+                    "observer exited before the application tip"
+                );
+                sleep(Duration::from_millis(200)).await;
+            }
+            self.status(epoch, deadline).await?;
+            ensure!(
+                status_height(clients, deadline).await? == height,
+                "read-only retention catch-up generated unexpected ledger work"
+            );
+            Ok::<_, eyre::Report>(())
+        })
+        .await
+        .wrap_err("retention observer did not reach the fixed application tip")?
+    }
+
     pub(super) async fn stop(&mut self, deadline: Instant) -> Result<()> {
         if self.stopped {
             return Ok(());
@@ -441,13 +443,13 @@ impl Maintenance {
         if let Some(status) = self.child.try_wait()? {
             ensure!(
                 status.success(),
-                "native epoch maintenance failed; inspect retained monitor stderr"
+                "native retention observer failed; inspect retained stderr"
             );
         } else {
             self.child.start_kill()?;
             timeout_at(deadline, self.child.wait())
                 .await
-                .wrap_err("owned epoch monitor failed to stop")??;
+                .wrap_err("owned observer failed to stop")??;
         }
         self.stopped = true;
         Ok(())
@@ -458,86 +460,50 @@ impl Maintenance {
         clients: &[iroha::client::Client],
         deadline: Instant,
     ) -> Result<()> {
-        let genesis_roster = signed_genesis_roster(
-            &prepared.genesis_directory,
-            self.network,
-            &prepared.genesis_public_key,
-        )?;
-        let parameters = schedule_parameters(
-            &fs::read(&self.schedule)?,
-            self.network,
-            &prepared.roster,
-            &genesis_roster,
-        )?;
+        ensure!(self.stopped, "stop observer before final read-only audit");
+        let height = status_height(clients, deadline).await?;
+        let completed = height.saturating_sub(1) / EPOCH_LENGTH;
         ensure!(
-            self.stopped,
-            "operator must be stopped before the final read-only audit"
+            (2..OBSERVED_EPOCHS).contains(&completed),
+            "qualification must cross two real epochs within its explicit observation bound"
         );
-        let mut completed = BTreeSet::new();
         let mut receipts = Vec::new();
-        for epoch in 1..=SCHEDULE_EPOCHS {
-            let completion = self.operation(epoch).join("completion.json");
-            if !self.operation(epoch).join("submitted.json").try_exists()? {
-                ensure!(
-                    !completion.try_exists()?,
-                    "completion exists without a retained dispatch claim"
-                );
-                continue;
-            }
-            // Cancellation may interrupt only receipt publication. Native
-            // status authenticates the retained transaction without creating
-            // journal files or re-dispatching; keep that proof result here.
-            let receipt = self.status(epoch, deadline).await?;
-            if completion.try_exists()? {
-                ensure!(
-                    receipt == json::from_slice::<Value>(&fs::read(completion)?)?,
-                    "native status changed retained maintenance completion"
-                );
-            }
-            ensure!(
-                field(&receipt, "applied_height")?
-                    .as_u64()
-                    .is_some_and(|height| height > 1 && height < epoch * EPOCH_LENGTH),
-                "maintenance did not execute before its exact epoch boundary"
-            );
-            completed.insert(epoch);
-            receipts.push(receipt);
+        for epoch in 1..=completed {
+            receipts.push(self.status(epoch, deadline).await?);
+        }
+        for pair in receipts.windows(2) {
+            verify_receipt_continuity(&pair[0], &pair[1])?;
         }
         private_file(
             &self.journal.join("fixture-verified-completions.json"),
             &json::to_vec(&receipts)?,
         )?;
-        let height = status_height(clients, deadline).await?;
-        ensure!(
-            height < SCHEDULE_EPOCHS * EPOCH_LENGTH,
-            "fixture exceeded its explicit epoch schedule bound"
-        );
-        ensure!(
-            (1..=height / EPOCH_LENGTH).all(|epoch| completed.contains(&epoch)),
-            "crossed epoch lacks authenticated completed maintenance"
-        );
         #[cfg(target_os = "linux")]
         if let Some(supervisor) = &self.supervisor {
             supervisor::verify(self, supervisor, height)?;
         }
-        verify_boundary_chain(prepared, clients, &parameters, height, deadline).await
+        verify_boundary_chain(prepared, clients, height, deadline).await
     }
 }
 
 async fn verify_boundary_chain(
     prepared: &prepare::Prepared,
     clients: &[iroha::client::Client],
-    parameters: &[KagemushaMintFinalityNextEpochParameterV1],
     height: u64,
     deadline: Instant,
 ) -> Result<()> {
     let genesis = iroha_genesis::decode_signed_genesis(&fs::read(
         prepared.genesis_directory.join("genesis.signed.nrt"),
     )?)?;
+    let authority = signed_genesis_authority(
+        &prepared.genesis_directory,
+        prepared.network_id,
+        &prepared.genesis_public_key,
+    )?;
     let pops = iroha_genesis::signed_genesis_validator_pops(&genesis)?;
     let network = prepared.network_id;
     let genesis_hash = genesis.hash();
-    let mut expected_roster = pops
+    let expected_roster = pops
         .into_iter()
         .map(|(key, pop)| (PeerId::new(key), pop))
         .collect::<BTreeMap<_, _>>();
@@ -545,7 +511,7 @@ async fn verify_boundary_chain(
         expected_roster.len() == 4,
         "genesis proof authority is not four peers"
     );
-    let (roster, pops): (Vec<_>, Vec<_>) = std::mem::take(&mut expected_roster)
+    let (roster, pops): (Vec<_>, Vec<_>) = expected_roster
         .into_iter()
         .map(|(validator, pop)| {
             (
@@ -557,74 +523,86 @@ async fn verify_boundary_chain(
             )
         })
         .unzip();
-    let tips = try_join_all(clients.iter().enumerate().map(|(index, client)| {
-        let client = client.clone();
-        let roster = roster.clone();
-        let pops = pops.clone();
-        let parameters = parameters.to_vec();
-        let path = prepared
+    let bundle: Value = json::from_slice(&fs::read(
+        prepared
             .directory
-            .join(format!("epoch-boundary-proof-peer{index}.json"));
+            .join("beacon-ceremony/public-bundle.json"),
+    )?)?;
+    let record: beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
+        json::from_value(field(&bundle, "record")?.clone())?;
+    record.validate()?;
+    ensure!(
+        record.session.network_id == network,
+        "installed ceremony belongs to another network"
+    );
+    let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+        session_id: record.session.session_id,
+        transcript_hash: record.session.transcript_hash,
+    });
+    let tips = try_join_all(clients.iter().enumerate().map(|(index, client)| {
+        let client = client.clone(); let roster = roster.clone(); let pops = pops.clone();
+        let authority = authority.clone();
+        let path = prepared.directory.join(format!("epoch-boundary-proof-peer{index}.json"));
         iroha_test_network::read_on_dedicated_thread(move || {
             let bounded = || -> Result<iroha::client::Client> {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                ensure!(
-                    !remaining.is_zero(),
-                    "epoch proof chain exceeded its original audit deadline"
-                );
+                ensure!(!remaining.is_zero(), "epoch proof chain exceeded original audit deadline");
                 let mut builder = client.to_builder();
-                builder.torii_request_timeout =
-                    iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
+                builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
                 Ok(builder.build()?)
             };
-            let (first, hash) =
-                bounded()?.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), network)?;
-            ensure!(
-                hash == genesis_hash
-                    && first.block_header.hash() == genesis_hash
-                    && first.finality_artifact.height_context.roster == roster
-                    && first.finality_artifact.validator_set_pops == pops,
-                "epoch proof chain is not anchored to exact signed genesis authority"
-            );
-            let mut verifier =
-                BridgeFinalityVerifier::with_context(network, first.finality_artifact.context_id());
+            let (first, hash) = bounded()?.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), network)?;
+            let first_context = &first.finality_artifact.height_context;
+            let mut previous = first_context.kagemusha_mint_finality_authorization;
+            ensure!(hash == genesis_hash && first.block_header.hash() == genesis_hash
+                && first_context.roster == roster && first.finality_artifact.validator_set_pops == pops
+                && first_context.kagemusha_mint_finality_authority == authority
+                && previous.decision == Decision::Genesis && previous.epoch == 0
+                && previous.first_height == 1 && previous.last_height == EPOCH_LENGTH,
+                "proof chain is not anchored to the exact signed genesis authority");
+            previous.validate_against_authority(&authority)?;
+            let mut verifier = BridgeFinalityVerifier::with_context(network, first.finality_artifact.context_id());
             verifier.verify(&first)?;
             let mut proofs = vec![first];
             for next in 2..=height {
-                let proof = bounded()?.get_next_bridge_finality_proof(
-                    NonZeroU64::new(next).unwrap(),
-                    &mut verifier,
-                )?;
-                if next % EPOCH_LENGTH == 0 {
-                    let target = next / EPOCH_LENGTH;
-                    let transition = proof
-                        .finality_artifact
-                        .height_context
-                        .next_epoch_snapshot
-                        .as_ref()
-                        .ok_or_else(|| eyre!("authenticated epoch boundary omitted next roster"))?;
-                    ensure!(
-                        transition.epoch == target
-                            && transition.kagemusha_mint_finality_epoch_roster
-                                == parameters[(target - 1) as usize].roster,
-                        "authenticated epoch transition differs from native seed-derived schedule"
-                    );
+                let proof = bounded()?.get_next_bridge_finality_proof(NonZeroU64::new(next).unwrap(), &mut verifier)?;
+                let context = &proof.finality_artifact.height_context;
+                let current = context.kagemusha_mint_finality_authorization;
+                ensure!(context.kagemusha_mint_finality_authority == authority
+                    && context.roster == roster && proof.finality_artifact.validator_set_pops == pops
+                    && current.epoch == (next - 1) / EPOCH_LENGTH,
+                    "retained current context changed paired keys, voters, proofs or scheduling epoch");
+                if current.epoch == previous.epoch {
+                    ensure!(current == previous, "authorization changed within its certified epoch");
+                } else {
+                    verify_retained_authorization(&previous, &current,
+                        &context.kagemusha_mint_finality_authority, &authority, installed)?;
                 }
+                if next % EPOCH_LENGTH == 0 {
+                    let transition = context.next_epoch_snapshot.as_ref()
+                        .ok_or_else(|| eyre!("authenticated epoch boundary omitted next authority"))?;
+                    ensure!(transition.epoch == next / EPOCH_LENGTH
+                        && transition.roster == roster && transition.validator_set_pops == pops,
+                        "retained boundary changed its exact consensus voters or proofs");
+                    verify_retained_authorization(&current, &transition.kagemusha_mint_finality_authorization,
+                        &transition.kagemusha_mint_finality_authority, &authority, installed)?;
+                } else {
+                    ensure!(context.next_epoch_snapshot.is_none(), "nonboundary context has a successor snapshot");
+                }
+                previous = current;
                 proofs.push(proof);
             }
             let tip = proofs.last().unwrap().block_header.hash();
             private_file(&path, &json::to_vec(&proofs)?)?;
             Ok(tip)
         })
-    }))
-    .await?;
+    })).await?;
     ensure!(
         tips.len() == 4 && tips.iter().all(|tip| *tip == tips[0]),
         "epoch proof tips differ across validators"
     );
     Ok(())
 }
-
 #[test]
 fn production_epoch_driver_admits_required_build_identity_before_setup() -> Result<()> {
     use iroha_core::release_identity::{BuildIdentity, BuildIdentityError};
@@ -674,43 +652,12 @@ fn production_epoch_driver_admits_required_build_identity_before_setup() -> Resu
 }
 
 #[test]
-fn production_epoch_seed_pipe_rejects_shared_or_wrong_length_custody() -> Result<()> {
-    let (read, write) = seed_pipe()?;
-    for descriptor in [&read, &write] {
-        let flags = nix::fcntl::fcntl(descriptor, nix::fcntl::FcntlArg::F_GETFD)?;
-        assert_ne!(
-            flags & nix::fcntl::FdFlag::FD_CLOEXEC.bits(),
-            0,
-            "original pipe descriptors must not survive exec alongside the sole inherited target"
-        );
-    }
-    drop((read, write));
-    let root = tempfile::tempdir()?;
-    let path = root.path().join("seed");
-    private_file(&path, &[7; 32])?;
-    let mut output = Vec::new();
-    copy_fixture_seed(&path, &mut output)?;
-    assert_eq!(output, vec![7; 32]);
-    fs::hard_link(&path, root.path().join("alias"))?;
-    assert!(copy_fixture_seed(&path, &mut Vec::new()).is_err());
-    fs::remove_file(root.path().join("alias"))?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
-    assert!(copy_fixture_seed(&path, &mut Vec::new()).is_err());
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-    fs::write(&path, [7; 31])?;
-    assert!(copy_fixture_seed(&path, &mut Vec::new()).is_err());
-    Ok(())
-}
-
-#[test]
-fn production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound() -> Result<()> {
+fn retained_authorization_requires_exact_keys_beacon_interval_and_predecessor() -> Result<()> {
     use iroha_crypto::{Algorithm, Hash};
-    use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-    };
+    use iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1;
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-        b"epoch-fixture-schedule",
+        b"retained-epoch-fixture",
     )));
     let mut roster = (1..=4u8)
         .map(|marker| {
@@ -722,97 +669,147 @@ fn production_epoch_schedule_requires_exact_network_roster_and_contiguous_bound(
         })
         .collect::<Vec<_>>();
     roster.sort();
-    let parameters = (1..=SCHEDULE_EPOCHS).map(|epoch| {
-        let validators = roster.iter().enumerate().map(|(index, peer)| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[index as u8 + 1;32], epoch, peer.clone()).map_err(|error| eyre!("native test keys: {error:?}"))
-        }).collect::<Result<Vec<_>>>()?;
-        Ok(Parameter::Custom(KagemushaMintFinalityNextEpochParameterV1 {
-            roster: KagemushaMintFinalityEpochRosterV1 { version: KAGEMUSHA_CHAIN_VERSION_V1, network_id: network, epoch, validators }
-        }.into_custom_parameter()))
-    }).collect::<Result<Vec<_>>>()?;
-    let genesis_roster = KagemushaMintFinalityEpochRosterV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1, network_id: network, epoch: 0,
+    let authority = Authority {
+        version: KAGEMUSHA_CHAIN_VERSION_V1, network_id: network, generation: 0,
         validators: roster.iter().enumerate().map(|(index, peer)| {
             iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[index as u8 + 1; 32], 0, peer.clone()).map_err(|error| eyre!("native genesis keys: {error:?}"))
+                &[index as u8 + 1; 32], 0, peer.clone()).map_err(|error| eyre!("fixture keys: {error:?}"))
         }).collect::<Result<Vec<_>>>()?,
     };
-    let native = norito::json!({"schema_version":1, "network_id":network, "genesis_roster":genesis_roster, "parameters":parameters});
-    assert_eq!(
-        schedule_parameters(&json::to_vec(&native)?, network, &roster, &genesis_roster)?.len(),
-        8
+    let genesis = Authorization {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id: network,
+        epoch: 0,
+        first_height: 1,
+        last_height: EPOCH_LENGTH,
+        authority_generation: 0,
+        authority_id: authority.authority_id()?,
+        beacon: BeaconEpochBindingV1::Bootstrap,
+        previous_authorization_id: [0; 32],
+        transition_id: [0; 32],
+        decision: Decision::Genesis,
+    };
+    let installed = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+        session_id: [7; 32],
+        transcript_hash: [8; 32],
+    });
+    let first = Authorization {
+        epoch: 1,
+        first_height: 12,
+        last_height: 22,
+        beacon: installed,
+        previous_authorization_id: genesis.authorization_id()?,
+        decision: Decision::Retain,
+        ..genesis
+    };
+    verify_retained_authorization(&genesis, &first, &authority, &authority, installed)?;
+    let second = Authorization {
+        epoch: 2,
+        first_height: 23,
+        last_height: 33,
+        previous_authorization_id: first.authorization_id()?,
+        ..first
+    };
+    verify_retained_authorization(&first, &second, &authority, &authority, installed)?;
+    // Public receipt linkage is independently checked after the native CLI has
+    // authenticated both proof prefixes. No stored cursor grants authority.
+    let receipt = |authorization: Authorization,
+                   chain: Vec<Authorization>,
+                   previous: Option<&str>,
+                   cursor: &str| {
+        norito::json!({
+            "network_id":network,"completed_epoch":(authorization.epoch),
+            "authority":authority,"authority_generation":0,"authority_id":(authority.authority_id().unwrap()),
+            "beacon_binding":installed,"authorization_chain":chain,
+            "previous_cursor_id":previous,"cursor_id":cursor
+        })
+    };
+    let one = receipt(first, vec![genesis, first], None, "first");
+    let two = receipt(
+        second,
+        vec![genesis, first, second],
+        Some("first"),
+        "second",
     );
-    let foreign = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-        b"different-epoch-fixture",
-    )));
+    verify_receipt_continuity(&one, &two)?;
     assert!(
-        schedule_parameters(&json::to_vec(&native)?, foreign, &roster, &genesis_roster).is_err()
+        verify_receipt_continuity(&one, &one).is_err(),
+        "replayed receipt"
     );
-    assert!(
-        schedule_parameters(
-            &json::to_vec(&native)?,
-            network,
-            &roster[..3],
-            &genesis_roster
-        )
-        .is_err()
-    );
-    let mut gap = native.clone();
-    gap.get_mut("parameters")
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .swap(1, 2);
-    assert!(schedule_parameters(&json::to_vec(&gap)?, network, &roster, &genesis_roster).is_err());
-    let mut substituted = native.clone();
-    let mut other_keys = genesis_roster.clone();
-    other_keys.validators[0] =
+    for (key, replacement) in [
+        ("previous_cursor_id", Value::from("foreign")),
+        ("completed_epoch", Value::from(3_u64)),
+        ("authority_id", json::to_value(&[99_u8; 32])?),
+        ("authority_generation", Value::from(1_u64)),
+        (
+            "authorization_chain",
+            json::to_value(&vec![genesis, second])?,
+        ),
+        (
+            "beacon_binding",
+            json::to_value(&BeaconEpochBindingV1::Bootstrap)?,
+        ),
+    ] {
+        let mut bad = two.clone();
+        *bad.get_mut(key).unwrap() = replacement;
+        assert!(
+            verify_receipt_continuity(&one, &bad).is_err(),
+            "receipt field {key}"
+        );
+    }
+    for case in 0..9 {
+        let mut bad = second;
+        match case {
+            0 => bad.epoch += 1,
+            1 => bad.first_height += 1,
+            2 => bad.last_height += 1,
+            3 => bad.previous_authorization_id = genesis.authorization_id()?,
+            4 => bad.authority_generation += 1,
+            5 => bad.authority_id[0] ^= 1,
+            6 => {
+                bad.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                    session_id: [9; 32],
+                    transcript_hash: [8; 32],
+                })
+            }
+            7 => {
+                bad.decision = Decision::RetainAndCancel;
+                bad.transition_id = [1; 32];
+            }
+            _ => {
+                bad.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                    Hash::new(b"foreign-network"),
+                ))
+            }
+        }
+        assert!(
+            verify_retained_authorization(&first, &bad, &authority, &authority, installed).is_err(),
+            "case {case}"
+        );
+    }
+    let mut replaced = authority.clone();
+    replaced.validators[0] =
         iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
             &[99; 32],
             0,
             roster[0].clone(),
         )
-        .map_err(|error| eyre!("substituted seed keys: {error:?}"))?;
-    *substituted.get_mut("genesis_roster").unwrap() = json::to_value(&other_keys)?;
+        .map_err(|error| eyre!("substituted keys: {error:?}"))?;
+    let resigned = Authorization {
+        authority_id: replaced.authority_id()?,
+        ..second
+    };
     assert!(
-        schedule_parameters(
-            &json::to_vec(&substituted)?,
-            network,
-            &roster,
-            &genesis_roster
-        )
-        .is_err()
+        verify_retained_authorization(&first, &resigned, &replaced, &authority, installed).is_err()
     );
-    let mut absent_genesis = native.clone();
-    absent_genesis
-        .as_object_mut()
-        .unwrap()
-        .remove("genesis_roster");
-    assert!(
-        schedule_parameters(
-            &json::to_vec(&absent_genesis)?,
-            network,
-            &roster,
-            &genesis_roster
-        )
-        .is_err()
-    );
-    let mut missing = native;
-    missing
-        .get_mut("parameters")
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-        .pop();
-    assert!(
-        schedule_parameters(&json::to_vec(&missing)?, network, &roster, &genesis_roster).is_err()
-    );
+    let mut short = authority.clone();
+    short.validators.pop();
+    assert!(verify_retained_authorization(&first, &second, &short, &authority, installed).is_err());
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn production_epoch_supervisor_renews_and_resumes_after_owned_restart() -> Result<()> {
+async fn production_epoch_supervisor_retains_and_resumes_after_owned_restart() -> Result<()> {
     super::run_fresh_custody_bootstrap(Driver::Supervised).await
 }

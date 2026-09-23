@@ -8,8 +8,6 @@ pub(super) mod dispatcher_transition;
 pub(super) mod epoch_generation;
 #[path = "taira_public_reset_epoch_reset_inputs.rs"]
 pub(super) mod epoch_reset_inputs;
-#[path = "taira_public_reset_epoch_seed_custody.rs"]
-pub(super) mod epoch_seed_custody;
 #[path = "taira_public_reset_epoch_supervisor.rs"]
 pub(super) mod epoch_supervisor;
 #[path = "taira_public_reset_epoch_update_inputs.rs"]
@@ -12286,7 +12284,6 @@ fn sync_directory(path: &Path) -> Result<()> {
 pub(super) struct RuntimeCanaryInputs {
     pub(super) client_config: PathBuf,
     pub(super) maintenance_admin_config: PathBuf,
-    pub(super) epoch_seed_sources: Vec<PathBuf>,
     pub(super) validator_client_configs: Vec<PathBuf>,
     pub(super) validator_operator_key: PathBuf,
     pub(super) onboarding_token: PathBuf,
@@ -12297,7 +12294,6 @@ pub(super) struct RuntimeCanaryInputs {
 struct RuntimeCustody {
     client_config: super::PinnedInput,
     maintenance_admin_config: Option<super::PinnedInput>,
-    epoch_seed_sources: Vec<epoch_seed_custody::OriginalSeed>,
     validator_client_configs: Vec<super::PinnedInput>,
     validator_operator_key: Option<super::PinnedInput>,
     onboarding_token: Option<super::PinnedInput>,
@@ -12363,10 +12359,7 @@ impl RuntimeCustody {
                 "epoch generation credentials differ from signed input digests"
             ));
         }
-        if self.epoch_seed_sources.len() != 4 {
-            return Err(eyre!("recovery has no original epoch seed custody"));
-        }
-        let mut header = Vec::with_capacity(48);
+        let mut header = Vec::with_capacity(16);
         let mut files = Vec::new();
         for (input, maximum) in [
             (
@@ -12384,11 +12377,6 @@ impl RuntimeCustody {
             let mut file = input.file.try_clone()?;
             file.rewind()?;
             files.push((file, input.snapshot.len));
-        }
-        for seed in &self.epoch_seed_sources {
-            seed.revalidate()?;
-            header.extend_from_slice(&32_u64.to_be_bytes());
-            files.push((seed.stream_file()?, 32));
         }
         Ok((header, files))
     }
@@ -12418,27 +12406,6 @@ impl RuntimeCustody {
             &inputs.maintenance_admin_config,
             &admitted.inventory,
         )?;
-        if inputs.epoch_seed_sources.len() != 4
-            || inputs
-                .epoch_seed_sources
-                .iter()
-                .zip(&admitted.inventory.epoch_supervisor.original_seed_sources)
-                .any(|(path, expected)| path != Path::new(&expected.path))
-        {
-            return Err(eyre!(
-                "runtime original seed source mapping differs from signed sorted peer mapping"
-            ));
-        }
-        let mut seed_identities = BTreeSet::new();
-        let mut epoch_seed_sources = Vec::new();
-        for path in &inputs.epoch_seed_sources {
-            let source = epoch_seed_custody::OriginalSeed::open(path)?;
-            if !seed_identities.insert(source.identity()) {
-                return Err(eyre!("original seed source descriptors alias one inode"));
-            }
-            epoch_seed_sources.push(source);
-        }
-
         admitted
             .inventory
             .qualification_scope
@@ -12556,7 +12523,6 @@ impl RuntimeCustody {
             client_config,
             validator_client_configs,
             maintenance_admin_config: Some(maintenance_admin_config),
-            epoch_seed_sources,
             validator_operator_key: Some(validator_operator_key),
             onboarding_token: Some(onboarding_token),
             inrou,
@@ -12574,9 +12540,6 @@ impl RuntimeCustody {
         revalidate_pinned(&self.client_config, "Taira runtime client config")?;
         if let Some(input) = &self.maintenance_admin_config {
             epoch_supervisor::validate_runtime_administrator(input, &admitted.inventory)?;
-        }
-        for source in &self.epoch_seed_sources {
-            source.revalidate()?;
         }
 
         if require_onboarding_token {
@@ -12803,7 +12766,6 @@ impl RuntimeCustody {
             validator_operator_key,
             onboarding_token: None,
             maintenance_admin_config: None,
-            epoch_seed_sources: Vec::new(),
             inrou,
             fee_args,
         })
@@ -23678,7 +23640,9 @@ time.sleep(30)
             faucet.insert("http_status".to_owned(), 503_u64.into());
             disabled.as_object_mut().expect("doctor object").insert(
                 "warnings".to_owned(),
-                norito::json!(["account_faucet_policy: Account faucet disabled; funding is unavailable"]),
+                norito::json!([
+                    "account_faucet_policy: Account faucet disabled; funding is unavailable"
+                ]),
             );
             validate_common_report(&disabled, "taira_doctor", public_root)
                 .expect("a warning-only report passes the common envelope checks");

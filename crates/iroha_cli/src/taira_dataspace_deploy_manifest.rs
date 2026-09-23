@@ -198,6 +198,18 @@ mod tests {
     }
 
     fn instructions(peers: &[finality::PeerV1]) -> Vec<InstructionBox> {
+        let stake_asset = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+        )
+        .expect("configured stake asset");
+        let escrow =
+            iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
+                &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+                Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+            )
+            .expect("configured genesis staking escrow")
+            .to_account_id()
+            .unwrap();
         peers
             .iter()
             .zip(130..134)
@@ -211,6 +223,17 @@ mod tests {
                         account.clone(),
                         Quantity::from(1_u64),
                         Metadata::default(),
+                        iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                            iroha_data_model::asset::AssetId::of(
+                                stake_asset.clone(),
+                                account.clone(),
+                            ),
+                            iroha_data_model::asset::AssetId::of(
+                                stake_asset.clone(),
+                                escrow.clone(),
+                            ),
+                            Quantity::one(),
+                        ),
                     )
                     .into(),
                     ActivatePublicLaneValidator::new(LaneId::SINGLE, account).into(),
@@ -387,6 +410,7 @@ mod tests {
                 amount: Quantity::from(1_u64),
                 reason_code: "double_sign".into(),
                 metadata: Metadata::default(),
+                monetary_plan: register.monetary_plan.clone(),
             }
             .into(),
         ];

@@ -1,3 +1,4 @@
+//! Tests for public retention supervisor plan inputs.
 use super::*;
 
 /// Structural plan fixture only. Production prepare() derives the entire public
@@ -31,18 +32,8 @@ fn fixture() -> (
         },
         host_slug: old.host_slug.clone(),
         authorization: OngoingAuthorization::UntilStopped,
-        payment_asset: policy.intent.payment_asset,
-        transaction_fee_maximum: policy.intent.transaction_fee_maximum,
         first_epoch: policy.intent.first_epoch,
-        batch_epochs: u16::try_from(policy.intent.batch_epochs).unwrap(),
-        operation_timeout_ms: policy.intent.operation_timeout_ms,
-        provision_timeout_ms: policy.provision_timeout_ms,
         timeout_ms: old.timeout_ms,
-        epoch_seed_source: old
-            .original_seed_sources
-            .iter()
-            .map(|s| PathBuf::from(&s.path))
-            .collect(),
         prior_state: PriorState::Absent,
         prior_plan: None,
         output_dir: "/public/new-output".into(),
@@ -88,7 +79,7 @@ fn view<'a>(
 }
 
 #[test]
-fn reset_producer_derives_exact_policy_unit_custody_and_update_binding() {
+fn reset_producer_derives_exact_retention_policy_unit_and_update_binding() {
     let _guard = ChainDiscriminantGuard::enter(super::super::super::CHAIN_DISCRIMINANT);
     let (args, context, public) = fixture();
     let plan = build_plan(&args, &view(&context, &public), None).unwrap();
@@ -99,19 +90,11 @@ fn reset_producer_derives_exact_policy_unit_custody_and_update_binding() {
     let policy: NativePolicyV1 = json::from_slice(&plan.policy_bytes).unwrap();
     assert_eq!(policy.intent.authorization, "until_stopped");
     assert_eq!(policy.intent.first_epoch, args.first_epoch);
-    let cli = Path::new(&policy.kagami.path).with_file_name("iroha");
+    let cli = Path::new(&plan.cli_path);
     assert_eq!(
         plan.unit_bytes,
         epoch_supervisor::render_unit(&plan, cli.to_str().unwrap()).unwrap()
     );
-    let custody: SeedCustodyV1 = json::from_slice(&plan.custody_bytes).unwrap();
-    for (index, row) in custody.seeds.iter().enumerate() {
-        assert_eq!(
-            Path::new(&row.path),
-            epoch_seed_custody::destination(public.network_id, index).unwrap()
-        );
-        assert_eq!(row.validator, plan.original_seed_sources[index].validator);
-    }
     let binding = epoch_generation::binding_from_plan(&plan).unwrap();
     let restored = epoch_generation::as_plan(
         &binding,
@@ -132,23 +115,28 @@ fn reset_producer_rejects_implicit_prior_and_invalid_ongoing_bounds() {
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
     args.prior_state = PriorState::Absent;
     assert!(build_plan(&args, &view(&context, &public), Some(b"{}".to_vec())).is_err());
-    args.first_epoch = u64::MAX;
+    args.first_epoch = 0;
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
     args.first_epoch = 1;
-    args.batch_epochs = 1;
+    args.timeout_ms = 0;
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
-    args.batch_epochs = 2;
+    args.timeout_ms = 1000;
     context.epoch_supervisor.http_operator_key_sha256 = "0".repeat(64);
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
 }
 
 #[test]
-fn reset_producer_rejects_unmapped_sources_and_admin_genesis_substitution() {
+fn reset_producer_rejects_unmapped_cli_and_admin_genesis_substitution() {
     let _guard = ChainDiscriminantGuard::enter(super::super::super::CHAIN_DISCRIMINANT);
-    let (mut args, mut context, public) = fixture();
-    args.epoch_seed_source[1] = args.epoch_seed_source[0].clone();
+    let (args, mut context, public) = fixture();
+    context.validators[0]
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.role == "iroha_cli")
+        .unwrap()
+        .remote_path = "/unmapped/bin/iroha".into();
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
-    let (args, _, _) = fixture();
+    let (args, mut context, _) = fixture();
     context.maintenance_admin_identity.genesis_hash = "a".repeat(64);
     assert!(build_plan(&args, &view(&context, &public), None).is_err());
     let (_, mut context, _) = fixture();
@@ -196,25 +184,10 @@ fn reset_producer_requires_explicit_until_stopped_cli_intent() {
         "/public/known-hosts".into(),
         "--host-slug".into(),
         args.host_slug,
-        "--payment-asset".into(),
-        args.payment_asset.to_string(),
-        "--transaction-fee-maximum".into(),
-        args.transaction_fee_maximum.to_string(),
         "--first-epoch".into(),
         "1".into(),
-        "--batch-epochs".into(),
-        "2".into(),
-        "--operation-timeout-ms".into(),
-        "1000".into(),
-        "--provision-timeout-ms".into(),
-        "1000".into(),
         "--timeout-ms".into(),
         "1000".into(),
-        "--epoch-seed-source".into(),
-        "/original/0.seed".into(),
-        "/original/1.seed".into(),
-        "/original/2.seed".into(),
-        "/original/3.seed".into(),
         "--prior-state".into(),
         "absent".into(),
         "--output-dir".into(),
@@ -227,6 +200,12 @@ fn reset_producer_requires_explicit_until_stopped_cli_intent() {
     // The clean first invocation supplies native paths, never a computed hash,
     // prior trust export or plan-dependent inventory draft.
     for removed in [
+        "--epoch-seed-source",
+        "--payment-asset",
+        "--transaction-fee-maximum",
+        "--batch-epochs",
+        "--operation-timeout-ms",
+        "--provision-timeout-ms",
         "--inventory-draft",
         "--observation-trust",
         "--http-operator-key-sha256",

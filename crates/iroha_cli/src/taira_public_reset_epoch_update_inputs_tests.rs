@@ -41,16 +41,8 @@ fn fixture() -> (
         trust: "/public/trust.json".into(),
         authorization: "until-stopped".into(),
         administrator: AccountId::new(genesis.public_key().clone()).to_string(),
-        payment_asset: crate::taira::DEFAULT_GAS_ASSET_ID.into(),
-        transaction_fee_maximum: "100".into(),
         first_epoch: 1,
-        batch_epochs: 2,
-        operation_timeout_ms: 180_000,
-        provision_timeout_ms: 180_000,
         worker_timeout_ms: 6_000_000,
-        original_seed_sources: (0..4)
-            .map(|i| PathBuf::from(format!("/unopened-originals/peer{i}.seed")))
-            .collect(),
         output: "/public/update-inputs".into(),
     };
     let deployment = DeploymentV1 {
@@ -145,7 +137,6 @@ fn epoch_update_inputs_first_install_derives_exact_native_closure_without_privat
         )
     );
     assert_eq!(output.after.iroha_sha256, prepared.artifacts[1].sha256);
-    assert_eq!(output.after.kagami_sha256, prepared.artifacts[3].sha256);
     assert_eq!(output.after.observation_trust_bytes.as_bytes(), raw);
     assert!(
         output
@@ -161,13 +152,14 @@ fn epoch_update_inputs_first_install_derives_exact_native_closure_without_privat
     );
     assert!(epoch_supervisor::validate_generation(&plan).is_err());
     assert!(plan.admin_config_sha256.is_empty() && plan.http_operator_key_sha256.is_empty());
-    assert_eq!(output.original_seed_sources.len(), 4);
-    assert!(
-        output
-            .original_seed_sources
-            .windows(2)
-            .all(|p| p[0].validator < p[1].validator)
-    );
+    for field in ["original_seed_sources", "custody"] {
+        let mut value: json::Value = json::from_slice(&json::to_vec(&output).unwrap()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), json::Value::Null);
+        assert!(json::from_slice::<PreparationV1>(&json::to_vec(&value).unwrap()).is_err());
+    }
     let decoded: PreparationV1 = json::from_slice(&json::to_vec(&output).unwrap()).unwrap();
     assert_eq!(decoded.after.policy_sha256, output.after.policy_sha256);
 }
@@ -329,10 +321,6 @@ fn epoch_update_inputs_rejects_rebased_authority_trust_and_seed_sources() {
         args.build(&deployment, &prepared, &trust, &changed, Some(first), None)
             .is_err()
     );
-    args.original_seed_sources[1] = args.original_seed_sources[0].clone();
-    assert!(seed_references(&trust, &args.original_seed_sources, deployment.network_id).is_err());
-    args.original_seed_sources[1] = "/original/../alias.seed".into();
-    assert!(seed_references(&trust, &args.original_seed_sources, deployment.network_id).is_err());
     trust.genesis_signed_wire_hex = "00".into();
     assert!(validate_deployment_trust(&trust, deployment.network_id).is_err());
 }

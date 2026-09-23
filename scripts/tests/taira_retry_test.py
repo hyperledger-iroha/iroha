@@ -42,7 +42,7 @@ def beacon_input_fixture(draft):
 
 
 def supervisor_intent_fixture():
-    return {"host_slug":"taira-validator-1","authorization":"until_stopped", "payment_asset":"xor#sora", "transaction_fee_maximum":"1", "first_epoch":2, "batch_epochs":2, "operation_timeout_ms":1000,"provision_timeout_ms":1000,"timeout_ms":5000,"prior_state":"absent","prior_plan":None}
+    return {"host_slug":"taira-validator-1","authorization":"until_stopped", "first_epoch":2, "timeout_ms":5000,"prior_state":"absent","prior_plan":None}
 
 
 def complete_previous_fixture(value=None):
@@ -88,7 +88,7 @@ def complete_previous_fixture(value=None):
     for a in edge["artifacts"]:a.setdefault("remote_path","/srv/taira/edge/releases/"+revision["commit"]+"/bin/iroha")
     for key in ("faucet_policy","fee_intent","canary_onboarding_request","cleanup","timeouts"):value.setdefault(key,{"synthetic_selected_intent":True})
     value.setdefault("beacon_bootstrap",{"old_signed_session":"must not enter topology"})
-    value.setdefault("epoch_supervisor",{"schema":"iroha.taira.public-reset.epoch-supervisor-plan.v1","host_slug":"taira-validator-1","prior_state":"absent","prior":None,"original_seed_sources":[{"validator":f"peer-{i}","path":f"/public-fixture/epoch-seed-sources-{i}"} for i in range(4)],"policy_sha256":"7"*64})
+    value.setdefault("epoch_supervisor",{"schema":"iroha.taira.public-reset.epoch-supervisor-plan.v1","host_slug":"taira-validator-1","prior_state":"absent","prior":None,"policy_sha256":"7"*64})
     value.setdefault("maintenance_admin_identity",{"old_identity":"must not enter topology"})
     for key in ("maintenance_admin_config_sha256","runtime_client_config_sha256","onboarding_token_sha256","validator_client_configs_sha256","artifact_closure_sha256"):value.setdefault(key,"9"*64)
     return value
@@ -1067,7 +1067,6 @@ class RetryTests(unittest.TestCase):
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
             ("--maintenance-admin-config", 1),
-            ("--epoch-seed-sources", 4),
             ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
@@ -1091,7 +1090,7 @@ class RetryTests(unittest.TestCase):
         del missing_key[offset:offset + 2]
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(missing_key).encode(), "full_inrou")
-        for flag,count in (("--maintenance-admin-config",1),("--epoch-seed-sources",4),("--epoch-supervisor-plan",1)):
+        for flag,count in (("--maintenance-admin-config",1),("--epoch-supervisor-plan",1)):
             incomplete=list(args);at=incomplete.index(flag);del incomplete[at:at+count+1]
             with self.subTest(flag=flag),self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(incomplete).encode(),"full_inrou")
         bad=list(args);bad.insert(0,"--http-operator-key-sha256");bad.insert(1,"a"*64)
@@ -1397,16 +1396,15 @@ class BeaconArgumentTests(unittest.TestCase):
 
     def test_apply_arguments_exclude_all_assembly_only_inputs_in_both_scopes(self):
         inputs = {flag: ["/path/" + flag[2:]] for flag in (
-            "--runtime-client-config", "--maintenance-admin-config", "--epoch-seed-sources", "--epoch-supervisor-plan", "--validator-client-config", "--validator-operator-key",
+            "--runtime-client-config", "--maintenance-admin-config", "--epoch-supervisor-plan", "--validator-client-config", "--validator-operator-key",
             "--onboarding-token", "--inrou-stage-dir", "--public-inputs", "--validator-unit",
             "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
-        inputs["--epoch-seed-sources"]=[f"/path/seed-{i}" for i in range(4)]
         for scope in ("core_testnet", "full_inrou"):
             result = retry.apply_arguments(inputs, scope)
             self.assertIn("--maintenance-admin-config",result)
             self.assertNotIn("--epoch-seed-sources",result)
             self.assertNotIn("--epoch-supervisor-plan",result)
-            self.assertEqual(result[result.index("--epoch-seed-source")+1:result.index("--epoch-seed-source")+5],inputs["--epoch-seed-sources"])
+            self.assertNotIn("--epoch-seed-source", result)
             self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
             for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
                 self.assertNotIn(flag, result)
@@ -1519,7 +1517,7 @@ class CoreScopeTests(unittest.TestCase):
     def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
         args = []
         for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
-                            ("--maintenance-admin-config", 1), ("--epoch-seed-sources", 4), ("--epoch-supervisor-plan", 1),
+                            ("--maintenance-admin-config", 1), ("--epoch-supervisor-plan", 1),
                             ("--validator-client-config", 4), ("--validator-operator-key", 1),
                             ("--onboarding-token", 1), ("--validator-unit", 4),
                             ("--edge-unit", 1), ("--known-hosts", 1)):
@@ -1642,7 +1640,6 @@ class WorkflowTests(unittest.TestCase):
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
             ("--maintenance-admin-config", 1),
-            ("--epoch-seed-sources", 4),
             ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
@@ -1781,8 +1778,8 @@ class WorkflowTests(unittest.TestCase):
         if phase in ("assemble", "apply"):
             self.assertIn("--maintenance-admin-config",argv)
             self.assertEqual("--epoch-supervisor-plan" in argv,phase=="assemble")
-            self.assertEqual("--epoch-seed-sources" in argv,phase=="assemble")
-            self.assertEqual("--epoch-seed-source" in argv,phase=="apply")
+            self.assertNotIn("--epoch-seed-sources", argv)
+            self.assertNotIn("--epoch-seed-source", argv)
             self.assertEqual("--public-inputs" in argv, phase == "assemble")
             self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
             self.assertIn("--validator-operator-key", argv)
@@ -1812,22 +1809,20 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("--intent",argv)
             topology=json.loads(Path(argv[argv.index("--intent")+1]).read_bytes())
             self.assertEqual(topology,expected_topology(self.inventory,directory.parent.parent.name,topology["authorization_nonce"]))
-            for flag in ("--maintenance-admin-config","--runtime-client-config","--validator-client-config","--validator-operator-key","--onboarding-token","--validator-unit","--edge-unit","--known-hosts","--epoch-seed-source"):
+            for flag in ("--maintenance-admin-config","--runtime-client-config","--validator-client-config","--validator-operator-key","--onboarding-token","--validator-unit","--edge-unit","--known-hosts"):
                 self.assertIn(flag,argv)
             for flag in ("--beacon-inputs","--beacon-validator-unit","--epoch-supervisor-plan","--epoch-seed-sources"):
                 self.assertNotIn(flag,argv)
             self.assertEqual(argv[argv.index("--authorization")+1],"until-stopped")
             policy = self.plan["epoch_supervisor"]
-            for key in ("host_slug", "payment_asset", "transaction_fee_maximum", "first_epoch",
-                        "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
-                        "timeout_ms", "prior_state"):
+            for key in ("host_slug", "first_epoch", "timeout_ms", "prior_state"):
                 self.assertEqual(argv[argv.index("--" + key.replace("_", "-")) + 1], str(policy[key]))
             self.assertEqual("--prior-plan" in argv, policy["prior_plan"] is not None)
             if policy["prior_plan"] is not None:
                 self.assertEqual(argv[argv.index("--prior-plan") + 1], policy["prior_plan"]["path"])
             self.assertEqual(argv[argv.index("--maintenance-admin-config") + 1],
                              "/public-fixture/maintenance-admin-config-0")
-            self.assertEqual(argv[argv.index("--epoch-seed-source")+1:argv.index("--epoch-seed-source")+5],[r["path"] for r in self.inventory["epoch_supervisor"]["original_seed_sources"]])
+            self.assertNotIn("--epoch-seed-source", argv)
             out=Path(argv[argv.index("--output-dir")+1]);out.mkdir(mode=0o700)
             self.assertFalse((out.parent/"native-local-args.json").exists())
             self.assertFalse((out.parent/"native-assembly-args.json").exists())
@@ -1959,7 +1954,8 @@ class WorkflowTests(unittest.TestCase):
         static=json.loads((attempt/"assembly/native-local-args.json").read_bytes())
         retained=json.loads((attempt/"assembly/native-retained-args.json").read_bytes())
         self.assertNotEqual(static[static.index("--epoch-supervisor-plan")+1],retained[retained.index("--epoch-supervisor-plan")+1])
-        self.assertEqual(static[static.index("--epoch-seed-sources")+1:static.index("--epoch-seed-sources")+5],retained[retained.index("--epoch-seed-sources")+1:retained.index("--epoch-seed-sources")+5])
+        self.assertNotIn("--epoch-seed-sources", static)
+        self.assertNotIn("--epoch-seed-sources", retained)
         self.assertEqual(result["completed"], list(retry.PHASES))
         self.assertEqual(result["qualification_scope"], "core_testnet")
 
@@ -2002,11 +1998,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse((attempt/"assembly/native-assembly-args.json").exists())
         self.assertFalse((attempt/"apply-started.json").exists())
 
-    def test_original_seed_mapping_mismatch_rejects_before_retirement(self):
+    def test_retired_seed_arguments_reject_before_retirement(self):
         args=json.loads(Path(self.plan["local_args_path"]).read_bytes())
-        args[args.index("--epoch-seed-sources")+1]="/unselected/seed"
+        args.extend(["--epoch-seed-sources", "/unselected/seed"])
         Path(self.plan["local_args_path"]).write_text(json.dumps(args))
-        with self.assertRaisesRegex(retry.RetryError,"seed paths"):
+        with self.assertRaisesRegex(retry.RetryError,"argument closure"):
             retry.guest_locked(self.request,self.capacity,self.attempts)
         retry._retire_retained_state.assert_not_called();retry._retire_apply.assert_not_called();self.assertEqual(self.calls,[])
 
@@ -2054,7 +2050,7 @@ class WorkflowTests(unittest.TestCase):
         args = json.loads(Path(self.plan["local_args_path"]).read_bytes())
         _, grouped = retry.local_arguments(json.dumps(args).encode(), "core_testnet")
         private_paths = {path for flag in (
-            "--runtime-client-config", "--maintenance-admin-config", "--epoch-seed-sources",
+            "--runtime-client-config", "--maintenance-admin-config",
             "--validator-client-config", "--validator-operator-key", "--onboarding-token")
             for path in grouped[flag]}
         reads = {str(call.args[0]) for call in retry.public_record.call_args_list}
