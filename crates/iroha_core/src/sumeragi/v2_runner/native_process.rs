@@ -293,13 +293,6 @@ impl NativeRunnerProcess {
             .is_some_and(|source| source.admits(message))
     }
 
-    pub(in crate::sumeragi) fn matches_output_guard(
-        &self,
-        guard: &Arc<ConsensusOutputGuard>,
-    ) -> bool {
-        Arc::ptr_eq(&self.guard, guard)
-    }
-
     pub(in crate::sumeragi) fn accept_source_response(
         &mut self,
         response: wire::CertifiedBodyResponse,

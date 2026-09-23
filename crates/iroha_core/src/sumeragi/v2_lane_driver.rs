@@ -368,6 +368,7 @@ impl NativeLaneDriver {
     }
 
     /// Match actual runner resources before it transfers ingress or publication custody.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn matches_dependencies(
         &self,
         state: &Arc<State>,

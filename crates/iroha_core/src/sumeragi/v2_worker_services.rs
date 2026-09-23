@@ -23,6 +23,10 @@ pub(crate) struct ProductionV2Services {
     orphan_lifecycle_sweep_cursor: Option<OrphanPayloadLifecycleSweepCursor>,
     max_orphan_chunks: usize,
     max_orphan_chunk_bytes: u64,
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     max_merge_sidecar_deferrals: usize,
     local_completions: VecDeque<LocalCompletion>,
     held_io_completion: Option<V2IoCompletion>,

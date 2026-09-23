@@ -5204,6 +5204,7 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     }
 }
 fn assert_stale_archived_marker_rejected(
@@ -7494,11 +7495,11 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
             b"g13p historical roster genesis",
         )));
-        let kagemusha_mint_finality_epoch_roster =
-            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        let kagemusha_mint_finality_authority =
+            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1 {
                 version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
-                epoch: 7,
+                generation: 0,
                 validators: roster
                     .iter()
                     .enumerate()
@@ -7515,16 +7516,19 @@ mod tests {
                     })
                     .collect(),
             };
-        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
-            .finality_epoch_id()
-            .expect("valid KAGEMUSHA mint-finality fixture roster");
+        let kagemusha_mint_finality_authorization =
+            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(
+                &kagemusha_mint_finality_authority,
+                100,
+            )
+            .expect("valid KAGEMUSHA mint-finality fixture authorization");
         HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
-            epoch: 7,
-            kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster,
+            epoch: 0,
+            kagemusha_mint_finality_authorization,
+            kagemusha_mint_finality_authority,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,

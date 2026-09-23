@@ -2986,8 +2986,6 @@ fn pre_timeout_physical_local_validate_completion_fixture(
     // The planner retains worker ownership. Install the unwind guard before
     // any further fixture setup can fail, so teardown detaches it first.
     let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
-    let (mut lane_work, _) =
-        crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
     assert_eq!(
         launched
             .producer_claim_projection()
@@ -3084,20 +3082,18 @@ fn pre_timeout_physical_local_validate_completion_fixture(
                 ),
             1
         );
-        let select =
-            |launched: &mut super::super::LaunchedProductionLifecycleV1,
-             lane_work: &mut crate::sumeragi::v2_lane_work::V2LaneWorkAdapter| {
-                super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
-                    fixture.verified.context(),
-                    super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
-                    |runner| match launched.drive_completion_pre_gate(runner) {
-                        Gate::Selected(selection) => selection,
-                        _ => panic!("retained local Validate must own the Completion turn"),
-                    },
-                )
-                .0
-            };
-        let selected = select(&mut launched, &mut lane_work);
+        let select = |launched: &mut super::super::LaunchedProductionLifecycleV1| {
+            super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+                fixture.verified.context(),
+                super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+                |runner| match launched.drive_completion_pre_gate(runner) {
+                    Gate::Selected(selection) => selection,
+                    _ => panic!("retained local Validate must own the Completion turn"),
+                },
+            )
+            .0
+        };
+        let selected = select(&mut launched);
         assert_eq!(
             launched.validate_row_and_registry_for_test(validate_ordinal),
             lifecycle_before
@@ -3133,7 +3129,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
         }
         assert!(matches!(selected, Selection::LifecycleValidateLocalWaiting));
         assert!(matches!(
-            select(&mut launched, &mut lane_work),
+            select(&mut launched),
             Selection::LifecycleValidateLocalWaiting
         ));
         assert!(!output_guard.restart_required());
@@ -3151,7 +3147,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
             .expect("release exact actual Queue owner");
         wake_rx.try_recv().expect("actual release wakes Sumeragi");
         assert!(matches!(
-            select(&mut launched, &mut lane_work),
+            select(&mut launched),
             Selection::LifecycleValidateLocalRequeued
         ));
         assert_eq!(
@@ -3173,7 +3169,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(
             1
         );
         assert!(
-            matches!(select(&mut launched, &mut lane_work), Selection::LifecycleValidatePublished { ordinal } if ordinal == validate_ordinal)
+            matches!(select(&mut launched), Selection::LifecycleValidatePublished { ordinal } if ordinal == validate_ordinal)
         );
         assert!(!output_guard.restart_required());
         return;
@@ -3771,8 +3767,6 @@ fn local_proposal_intent_live_wal_sign_fixture() {
             owner, executor, services, ingress,
         );
     launched.install_ordinary_completion_head_for_ready_sign_test(&planner_io);
-    let (mut lane_work, _) =
-        crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
     let (dispatched, after_completion) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
             fixture.verified.context(),

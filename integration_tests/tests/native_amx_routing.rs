@@ -2765,6 +2765,7 @@ fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     }
 }
 fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {

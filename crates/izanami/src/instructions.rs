@@ -26,16 +26,11 @@ use iroha_data_model::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
             RevokeSpaceDirectoryManifest,
         },
-        staking::{
-            ActivatePublicLaneValidator, BondPublicLaneStake, FinalizePublicLaneUnbond,
-            RecordPublicLaneRewards, RegisterPublicLaneValidator, SchedulePublicLaneUnbond,
-            SlashPublicLaneValidator,
-        },
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, ManifestEffect,
-        ManifestEntry, ManifestVersion, PublicLaneRewardRole, PublicLaneRewardShare,
-        UniversalAccountId,
+        ManifestEntry, ManifestVersion, UniversalAccountId,
     },
     parameter::system::SumeragiNposParameters,
     prelude::*,
@@ -92,6 +87,7 @@ pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
 use crate::config::WorkloadProfile;
 use crate::smart_contracts;
 use tokio::sync::Mutex;
+#[cfg(test)]
 fn quantity_to_u64_exact(quantity: &Quantity) -> Option<u64> {
     if quantity.scale() != 0 {
         return None;
@@ -347,21 +343,6 @@ pub fn prepare_state(
             }
         })
         .unwrap_or_else(|| vec![DataSpaceId::UNIVERSAL]);
-    let lanes: Vec<LaneId> = nexus
-        .map(|profile| {
-            let ids: Vec<LaneId> = profile
-                .lane_catalog
-                .lanes()
-                .iter()
-                .map(|lane| lane.id)
-                .collect();
-            if ids.is_empty() {
-                vec![LaneId::SINGLE]
-            } else {
-                ids
-            }
-        })
-        .unwrap_or_else(|| vec![LaneId::SINGLE]);
     let bootstrap_public_lanes: Vec<LaneId> = nexus
         .map(|profile| profile.bootstrap_public_lanes.clone())
         .unwrap_or_default();
@@ -422,7 +403,6 @@ pub fn prepare_state(
     let effective_peers = peer_count.unwrap_or(account_count.max(1)).max(1);
     let mut nexus_genesis = Vec::new();
     let mut nexus_staking = None;
-    let mut npos_bootstrap_stake = None;
     if nexus.is_some() {
         let nexus_domain = DomainId::try_new("nexus", "universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
@@ -458,10 +438,6 @@ pub fn prepare_state(
         let total_bootstrap_stake = stake_amount
             .try_mul_decimal(&bootstrap_lane_count.into())
             .expect("bootstrap validator stake must remain representable");
-        npos_bootstrap_stake = Some(
-            quantity_to_u64_exact(&stake_amount)
-                .expect("Izanami workload accounting requires an integer-valued validator bond"),
-        );
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             nexus_domain.clone(),
         ))));
@@ -672,35 +648,11 @@ pub fn prepare_state(
         asset_quantity_id,
         asset_nft_id,
         dataspaces,
-        lanes,
         sorafs_replication,
         nexus_staking,
         matches!(workload_profile, WorkloadProfile::Stable),
     );
     state.asset_instances.insert(treasury_asset_id);
-    if let (Some(stake_amount), Some(setup)) = (npos_bootstrap_stake, state.nexus_staking.as_ref())
-    {
-        let validator_ids: Vec<AccountId> = setup
-            .validator_accounts
-            .iter()
-            .map(|record| record.id.clone())
-            .collect();
-        if !validator_ids.is_empty() {
-            for &lane in &bootstrap_public_lanes {
-                for validator_id in &validator_ids {
-                    state.add_public_lane_stake_share(
-                        lane,
-                        validator_id,
-                        validator_id,
-                        stake_amount,
-                    );
-                }
-                state
-                    .public_lane_validators
-                    .insert(lane, validator_ids.iter().cloned().collect());
-            }
-        }
-    }
     let mut recipes = match workload_profile {
         WorkloadProfile::Stable => {
             let mut recipes = BASE_RECIPES_STABLE.to_vec();
@@ -838,12 +790,6 @@ pub(crate) enum RecipeKind {
     PublishSpaceDirectoryManifest,
     RevokeSpaceDirectoryManifest,
     ExpireSpaceDirectoryManifest,
-    RegisterPublicLaneValidator,
-    BondPublicLaneStake,
-    SchedulePublicLaneUnbond,
-    FinalizePublicLaneUnbond,
-    SlashPublicLaneValidator,
-    RecordPublicLaneRewards,
     DvpSettlement,
     IssueReplicationOrder,
 }
@@ -892,16 +838,10 @@ const NEXUS_RECIPES_STABLE: &[RecipeKind] = &[];
 // Replication completion is deliberately absent from offline recipe generation:
 // the V1 instruction must bind a fresh committed anchor and the exact
 // chain-authoritative owner, assignment revision, and signer-policy tuple.
-const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
-    RecipeKind::RegisterPublicLaneValidator,
-    RecipeKind::BondPublicLaneStake,
-    RecipeKind::SchedulePublicLaneUnbond,
-    RecipeKind::FinalizePublicLaneUnbond,
-    RecipeKind::SlashPublicLaneValidator,
-    RecipeKind::RecordPublicLaneRewards,
-    RecipeKind::DvpSettlement,
-    RecipeKind::IssueReplicationOrder,
-];
+// TODO: Add live Nexus staking recipes after the workload can authenticate the
+// current height, validator tenure, stake custody, and reward authority.
+const NEXUS_RECIPES_CHAOS: &[RecipeKind] =
+    &[RecipeKind::DvpSettlement, RecipeKind::IssueReplicationOrder];
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct NexusStakingSetup {
@@ -920,7 +860,6 @@ pub struct ChaosState {
     uaid_accounts: HashMap<UniversalAccountId, AccountRecord>,
     asset_quantity: AssetDefinitionId,
     dataspaces: Vec<DataSpaceId>,
-    lanes: Vec<LaneId>,
     created_domains: HashSet<DomainId>,
     registered_roles: Vec<RoleId>,
     role_memberships: HashMap<RoleId, HashSet<AccountId>>,
@@ -938,22 +877,12 @@ pub struct ChaosState {
     repeatable_trigger_state: HashMap<TriggerId, RepeatableTriggerState>,
     pending_trigger_repetitions: HashMap<TriggerId, u32>,
     space_directory_manifests: HashMap<UniversalAccountId, HashSet<DataSpaceId>>,
-    public_lane_validators: HashMap<LaneId, HashSet<AccountId>>,
-    public_lane_stakes: HashMap<(LaneId, AccountId, AccountId), u64>,
-    pending_unbonds: Vec<PendingUnbond>,
     pending_replication_orders: Vec<ReplicationOrderId>,
     sorafs_replication: Option<SorafsReplicationSeed>,
     sorafs_replication_ready: bool,
     nexus_staking: Option<NexusStakingSetup>,
     low_contention_transfers: bool,
     counters: ChaosCounters,
-}
-#[derive(Clone, Debug)]
-struct PendingUnbond {
-    lane: LaneId,
-    validator: AccountId,
-    staker: AccountId,
-    request_id: Hash,
 }
 #[derive(Clone, Debug)]
 struct SorafsReplicationSeed {
@@ -980,7 +909,6 @@ struct ChaosCounters {
     nft: u64,
     metadata: u64,
     invalid: u64,
-    staking: u64,
     settlement: u64,
     replication: u64,
 }
@@ -996,7 +924,6 @@ impl ChaosState {
         asset_quantity: AssetDefinitionId,
         asset_nft: AssetDefinitionId,
         dataspaces: Vec<DataSpaceId>,
-        lanes: Vec<LaneId>,
         sorafs_replication: Option<SorafsReplicationSeed>,
         nexus_staking: Option<NexusStakingSetup>,
         low_contention_transfers: bool,
@@ -1020,7 +947,6 @@ impl ChaosState {
             uaid_accounts,
             asset_quantity,
             dataspaces,
-            lanes,
             created_domains: HashSet::new(),
             registered_roles: Vec::new(),
             role_memberships: HashMap::new(),
@@ -1038,9 +964,6 @@ impl ChaosState {
             repeatable_trigger_state: HashMap::new(),
             pending_trigger_repetitions: HashMap::new(),
             space_directory_manifests: HashMap::new(),
-            public_lane_validators: HashMap::new(),
-            public_lane_stakes: HashMap::new(),
-            pending_unbonds: Vec::new(),
             pending_replication_orders: Vec::new(),
             sorafs_replication,
             sorafs_replication_ready: false,
@@ -1067,9 +990,6 @@ impl ChaosState {
                 ))]
             })
             .unwrap_or_default()
-    }
-    fn nexus_staking_expect_success(&self) -> bool {
-        self.nexus_staking.is_some()
     }
     fn allocate_uaid_record(&mut self) -> Result<AccountRecord> {
         let _ = self.bump_account();
@@ -1125,20 +1045,6 @@ impl ChaosState {
             .choose(rng)
             .unwrap_or(&DataSpaceId::UNIVERSAL)
     }
-    fn random_lane(&self, rng: &mut StdRng) -> LaneId {
-        *self.lanes.choose(rng).unwrap_or(&LaneId::SINGLE)
-    }
-    fn pick_registered_validator(&self, rng: &mut StdRng) -> Option<(LaneId, AccountRecord)> {
-        let mut candidates = Vec::new();
-        for (lane, accounts) in &self.public_lane_validators {
-            for account_id in accounts {
-                if let Some(record) = self.account_by_id(account_id) {
-                    candidates.push((*lane, record));
-                }
-            }
-        }
-        candidates.choose(rng).cloned()
-    }
     fn mark_manifest_removed(&mut self, uaid: UniversalAccountId, dataspace: DataSpaceId) {
         if let Some(spaces) = self.space_directory_manifests.get_mut(&uaid) {
             spaces.remove(&dataspace);
@@ -1185,12 +1091,6 @@ impl ChaosState {
             RecipeKind::PublishSpaceDirectoryManifest => self.plan_publish_space_manifest(rng),
             RecipeKind::RevokeSpaceDirectoryManifest => self.plan_revoke_space_manifest(rng),
             RecipeKind::ExpireSpaceDirectoryManifest => self.plan_expire_space_manifest(rng),
-            RecipeKind::RegisterPublicLaneValidator => self.plan_register_public_validator(rng),
-            RecipeKind::BondPublicLaneStake => self.plan_bond_public_stake(rng),
-            RecipeKind::SchedulePublicLaneUnbond => self.plan_schedule_public_unbond(rng),
-            RecipeKind::FinalizePublicLaneUnbond => self.plan_finalize_public_unbond(rng),
-            RecipeKind::SlashPublicLaneValidator => self.plan_slash_public_validator(rng),
-            RecipeKind::RecordPublicLaneRewards => self.plan_record_public_rewards(rng),
             RecipeKind::DvpSettlement => self.plan_dvp_settlement(rng),
             RecipeKind::IssueReplicationOrder => self.plan_issue_replication_order(rng),
         }
@@ -2228,304 +2128,6 @@ impl ChaosState {
             expect_success: true,
         })
     }
-    fn plan_register_public_validator(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let lane = self.random_lane(rng);
-        let validator = self
-            .random_staking_validator(rng)
-            .unwrap_or(self.random_user(rng)?.clone());
-        let stake_account = if self.nexus_staking.is_some() {
-            validator.clone()
-        } else {
-            self.random_user(rng)?.clone()
-        };
-        let stake_amount_value = u64::from(rng.random_range(10_u32..=100_u32));
-        let stake_quantity: Quantity = stake_amount_value.into();
-        let stake_asset_def = self.stake_asset_definition();
-        let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
-        let stake_asset = AssetId::new(stake_asset_def, stake_account.id.clone());
-        let mut instructions = vec![InstructionBox::from(Mint::asset_quantity(
-            stake_quantity.clone(),
-            treasury_asset.clone(),
-        ))];
-        instructions.push(InstructionBox::from(Transfer::asset_quantity(
-            treasury_asset.clone(),
-            stake_quantity.clone(),
-            stake_account.id.clone(),
-        )));
-        instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
-            lane_id: lane,
-            validator: validator.id.clone(),
-            peer_id: PeerId::from(validator.id.expect_single_signatory().clone()),
-            stake_account: stake_account.id.clone(),
-            initial_stake: stake_quantity,
-            metadata: Metadata::default(),
-        }));
-        let mut expect_success = self.nexus_staking_expect_success();
-        let mut state_updates = Vec::new();
-        if expect_success
-            && self
-                .public_lane_validators
-                .get(&lane)
-                .is_some_and(|validators| validators.contains(&validator.id))
-        {
-            expect_success = false;
-        }
-        if expect_success {
-            state_updates.push(PlanUpdate::TrackAssetInstance(treasury_asset));
-            state_updates.push(PlanUpdate::TrackAssetInstance(stake_asset));
-            self.public_lane_validators
-                .entry(lane)
-                .or_default()
-                .insert(validator.id.clone());
-            self.add_public_lane_stake_share(
-                lane,
-                &validator.id,
-                &stake_account.id,
-                stake_amount_value,
-            );
-        }
-        Ok(TransactionPlan {
-            state_updates,
-            label: "register_public_lane_validator",
-            instructions,
-            signer: self.treasury.clone(),
-            expect_success,
-        })
-    }
-    fn plan_bond_public_stake(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let Some((lane, validator)) = self.pick_registered_validator(rng) else {
-            let fallback_lane = self.random_lane(rng);
-            let staker = self.random_user(rng)?.clone();
-            let amount: Quantity = rng.random_range(1_u32..=5_u32).into();
-            return Ok(TransactionPlan {
-                state_updates: Vec::new(),
-                label: "bond_public_lane_stake",
-                instructions: vec![InstructionBox::from(BondPublicLaneStake {
-                    lane_id: fallback_lane,
-                    validator: staker.id.clone(),
-                    staker: staker.id.clone(),
-                    amount,
-                    metadata: Metadata::default(),
-                })],
-                signer: staker,
-                expect_success: false,
-            });
-        };
-        let staker = self.random_user(rng)?.clone();
-        let amount_value = u64::from(rng.random_range(5_u32..=40_u32));
-        let quantity: Quantity = amount_value.into();
-        let stake_asset_def = self.stake_asset_definition();
-        let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
-        let staker_asset = AssetId::new(stake_asset_def, staker.id.clone());
-        let mut instructions = vec![InstructionBox::from(Mint::asset_quantity(
-            quantity.clone(),
-            treasury_asset.clone(),
-        ))];
-        instructions.push(InstructionBox::from(Transfer::asset_quantity(
-            treasury_asset.clone(),
-            quantity.clone(),
-            staker.id.clone(),
-        )));
-        instructions.push(InstructionBox::from(BondPublicLaneStake {
-            lane_id: lane,
-            validator: validator.id.clone(),
-            staker: staker.id.clone(),
-            amount: quantity,
-            metadata: Metadata::default(),
-        }));
-        let expect_success = self.nexus_staking_expect_success();
-        let mut state_updates = Vec::new();
-        if expect_success {
-            state_updates.push(PlanUpdate::TrackAssetInstance(treasury_asset));
-            state_updates.push(PlanUpdate::TrackAssetInstance(staker_asset));
-            self.add_public_lane_stake_share(lane, &validator.id, &staker.id, amount_value);
-        }
-        Ok(TransactionPlan {
-            state_updates,
-            label: "bond_public_lane_stake",
-            instructions,
-            signer: self.treasury.clone(),
-            expect_success,
-        })
-    }
-    fn plan_schedule_public_unbond(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let Some((lane, validator)) = self.pick_registered_validator(rng) else {
-            let request_id = Hash::new(b"izanami-missing-unbond");
-            let staker = self.random_user(rng)?.clone();
-            return Ok(TransactionPlan {
-                state_updates: Vec::new(),
-                label: "schedule_public_lane_unbond",
-                instructions: vec![InstructionBox::from(SchedulePublicLaneUnbond {
-                    lane_id: LaneId::SINGLE,
-                    validator: staker.id.clone(),
-                    staker: staker.id.clone(),
-                    request_id,
-                    amount: 1u32.into(),
-                    release_at_ms: now_ms(),
-                })],
-                signer: staker,
-                expect_success: false,
-            });
-        };
-        let staker = if self.nexus_staking.is_some() {
-            validator.clone()
-        } else {
-            self.random_user(rng)?.clone()
-        };
-        let request_id = Hash::new(format!("izanami-unbond-{}", self.bump_staking()).as_bytes());
-        let mut expect_success = self.nexus_staking_expect_success();
-        let available = if expect_success {
-            self.available_public_lane_stake_share(lane, &validator.id, &staker.id)
-        } else {
-            0
-        };
-        let amount_value = if available > 0 {
-            rng.random_range(1_u64..=available.min(10))
-        } else {
-            u64::from(rng.random_range(1_u32..=10_u32))
-        };
-        let amount: Quantity = amount_value.into();
-        let release_at = now_ms().saturating_add(5_000);
-        if expect_success && available >= amount_value {
-            self.pending_unbonds.push(PendingUnbond {
-                lane,
-                validator: validator.id.clone(),
-                staker: staker.id.clone(),
-                request_id,
-            });
-            self.reduce_public_lane_stake_share(lane, &validator.id, &staker.id, amount_value);
-        } else {
-            expect_success = false;
-        }
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "schedule_public_lane_unbond",
-            instructions: vec![InstructionBox::from(SchedulePublicLaneUnbond {
-                lane_id: lane,
-                validator: validator.id.clone(),
-                staker: staker.id.clone(),
-                request_id,
-                amount,
-                release_at_ms: release_at,
-            })],
-            signer: staker,
-            expect_success,
-        })
-    }
-    fn plan_finalize_public_unbond(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let pending = if let Some(entry) = self.pending_unbonds.choose(rng).cloned() {
-            entry
-        } else {
-            return self.plan_schedule_public_unbond(rng);
-        };
-        let expect_success = self.nexus_staking_expect_success();
-        if expect_success {
-            self.pending_unbonds
-                .retain(|entry| entry.request_id != pending.request_id);
-        }
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "finalize_public_lane_unbond",
-            instructions: vec![InstructionBox::from(FinalizePublicLaneUnbond {
-                lane_id: pending.lane,
-                validator: pending.validator.clone(),
-                staker: pending.staker.clone(),
-                request_id: pending.request_id,
-            })],
-            signer: self.treasury.clone(),
-            expect_success,
-        })
-    }
-    fn plan_slash_public_validator(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let Some((lane, validator)) = self.pick_registered_validator(rng) else {
-            let slash_id = Hash::new(b"izanami-missing-slash");
-            let staker = self.random_user(rng)?.clone();
-            return Ok(TransactionPlan {
-                state_updates: Vec::new(),
-                label: "slash_public_lane_validator",
-                instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
-                    lane_id: LaneId::SINGLE,
-                    validator: staker.id.clone(),
-                    offence_height: 1,
-                    slash_id,
-                    amount: 1u32.into(),
-                    reason_code: "validator_missing".to_string(),
-                    metadata: Metadata::default(),
-                })],
-                signer: staker,
-                expect_success: false,
-            });
-        };
-        let amount: Quantity = rng.random_range(1_u32..=20_u32).into();
-        let slash_id = Hash::new(format!("izanami-slash-{}", self.bump_staking()).as_bytes());
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "slash_public_lane_validator",
-            instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
-                lane_id: lane,
-                validator: validator.id.clone(),
-                offence_height: 1,
-                slash_id,
-                amount,
-                reason_code: "chaos_injected".to_string(),
-                metadata: Metadata::default(),
-            })],
-            signer: self.treasury.clone(),
-            expect_success: self.nexus_staking_expect_success(),
-        })
-    }
-    fn plan_record_public_rewards(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let Some((lane, validator)) = self.pick_registered_validator(rng) else {
-            let epoch = self.bump_staking();
-            let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
-            let reward_asset = AssetId::new(reward_asset_def, reward_sink);
-            return Ok(TransactionPlan {
-                state_updates: Vec::new(),
-                label: "record_public_lane_rewards",
-                instructions: vec![InstructionBox::from(RecordPublicLaneRewards {
-                    lane_id: LaneId::SINGLE,
-                    epoch,
-                    reward_asset,
-                    total_reward: 1u32.into(),
-                    shares: Vec::new(),
-                    metadata: Metadata::default(),
-                })],
-                signer: self.treasury.clone(),
-                expect_success: false,
-            });
-        };
-        let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
-        let reward_asset = AssetId::new(reward_asset_def, reward_sink);
-        let expect_success = self.nexus_staking_expect_success();
-        let state_updates = expect_success
-            .then(|| vec![PlanUpdate::TrackAssetInstance(reward_asset.clone())])
-            .unwrap_or_default();
-        let reward: Quantity = rng.random_range(5_u32..=50_u32).into();
-        let share = PublicLaneRewardShare {
-            account: validator.id.clone(),
-            role: PublicLaneRewardRole::Validator,
-            amount: reward.clone(),
-        };
-        let epoch = self.bump_staking();
-        let mint = InstructionBox::from(Mint::asset_quantity(reward.clone(), reward_asset.clone()));
-        Ok(TransactionPlan {
-            state_updates,
-            label: "record_public_lane_rewards",
-            instructions: vec![
-                mint,
-                InstructionBox::from(RecordPublicLaneRewards {
-                    lane_id: lane,
-                    epoch,
-                    reward_asset,
-                    total_reward: reward,
-                    shares: vec![share],
-                    metadata: Metadata::default(),
-                }),
-            ],
-            signer: self.treasury.clone(),
-            expect_success,
-        })
-    }
     fn plan_dvp_settlement(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let seller = self.treasury.clone();
         let buyer = self.random_user_except(rng, &seller.id)?;
@@ -2710,25 +2312,6 @@ impl ChaosState {
             .cloned()
             .ok_or_else(|| eyre!("no alternative accounts available"))
     }
-    fn account_by_id(&self, id: &AccountId) -> Option<AccountRecord> {
-        if &self.treasury.id == id {
-            Some(self.treasury.clone())
-        } else {
-            self.users
-                .iter()
-                .find(|record| &record.id == id)
-                .cloned()
-                .or_else(|| {
-                    self.nexus_staking.as_ref().and_then(|setup| {
-                        setup
-                            .validator_accounts
-                            .iter()
-                            .find(|record| &record.id == id)
-                            .cloned()
-                    })
-                })
-        }
-    }
     fn random_asset_definition(&self, rng: &mut StdRng) -> Result<AssetDefinitionId> {
         let definitions: Vec<_> = self.asset_definitions.iter().cloned().collect();
         definitions
@@ -2742,63 +2325,6 @@ impl ChaosState {
             .choose(rng)
             .cloned()
             .ok_or_else(|| eyre!("no asset instances available"))
-    }
-    fn random_staking_validator(&self, rng: &mut StdRng) -> Option<AccountRecord> {
-        self.nexus_staking
-            .as_ref()
-            .and_then(|setup| setup.validator_accounts.choose(rng).cloned())
-    }
-    fn stake_asset_definition(&self) -> AssetDefinitionId {
-        self.nexus_staking
-            .as_ref()
-            .map(|setup| setup.stake_asset.clone())
-            .unwrap_or_else(|| self.asset_quantity.clone())
-    }
-    fn fee_asset_and_sink(&self) -> (AssetDefinitionId, AccountId) {
-        self.nexus_staking
-            .as_ref()
-            .map(|setup| (setup.fee_asset.clone(), setup.fee_sink.clone()))
-            .unwrap_or_else(|| (self.asset_quantity.clone(), self.treasury.id.clone()))
-    }
-    fn add_public_lane_stake_share(
-        &mut self,
-        lane: LaneId,
-        validator: &AccountId,
-        staker: &AccountId,
-        amount: u64,
-    ) {
-        let key = (lane, validator.clone(), staker.clone());
-        let entry = self.public_lane_stakes.entry(key).or_insert(0);
-        *entry = entry.saturating_add(amount);
-    }
-    fn available_public_lane_stake_share(
-        &self,
-        lane: LaneId,
-        validator: &AccountId,
-        staker: &AccountId,
-    ) -> u64 {
-        let key = (lane, validator.clone(), staker.clone());
-        self.public_lane_stakes.get(&key).copied().unwrap_or(0)
-    }
-    fn reduce_public_lane_stake_share(
-        &mut self,
-        lane: LaneId,
-        validator: &AccountId,
-        staker: &AccountId,
-        amount: u64,
-    ) -> bool {
-        let key = (lane, validator.clone(), staker.clone());
-        let Some(entry) = self.public_lane_stakes.get_mut(&key) else {
-            return false;
-        };
-        if *entry < amount {
-            return false;
-        }
-        *entry -= amount;
-        if *entry == 0 {
-            self.public_lane_stakes.remove(&key);
-        }
-        true
     }
     fn random_repeatable_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
         self.repeatable_trigger_state
@@ -2900,11 +2426,6 @@ impl ChaosState {
     fn bump_invalid(&mut self) -> u64 {
         let value = self.counters.invalid;
         self.counters.invalid += 1;
-        value
-    }
-    fn bump_staking(&mut self) -> u64 {
-        let value = self.counters.staking;
-        self.counters.staking += 1;
         value
     }
     fn bump_settlement(&mut self) -> u64 {
@@ -3205,48 +2726,6 @@ mod tests {
         }
     }
     #[test]
-    fn nexus_prepare_state_seeds_all_bootstrap_public_lanes() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { state, .. } =
-            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        let validator_ids: HashSet<_> = state
-            .nexus_staking
-            .as_ref()
-            .expect("staking setup")
-            .validator_accounts
-            .iter()
-            .map(|record| record.id.clone())
-            .collect();
-        let seeded_lanes: HashSet<_> = state.public_lane_validators.keys().copied().collect();
-        let expected_lanes: HashSet<_> = profile.bootstrap_public_lanes.iter().copied().collect();
-        assert_eq!(
-            seeded_lanes, expected_lanes,
-            "prepared chaos state should seed validator registry for every bootstrap lane"
-        );
-        for lane_id in &profile.bootstrap_public_lanes {
-            let seeded_validators = state
-                .public_lane_validators
-                .get(lane_id)
-                .expect("bootstrap lane should have seeded validators");
-            assert_eq!(
-                seeded_validators, &validator_ids,
-                "bootstrap lane {} should seed every validator account",
-                lane_id
-            );
-            for validator_id in &validator_ids {
-                assert_eq!(
-                    state.available_public_lane_stake_share(*lane_id, validator_id, validator_id),
-                    quantity_to_u64_exact(SumeragiNposParameters::default().min_self_bond())
-                        .expect("default self-bond must fit Izanami workload accounting"),
-                    "bootstrap lane {} should seed validator {} with min self-bond",
-                    lane_id,
-                    validator_id
-                );
-            }
-        }
-    }
-    #[test]
     fn nexus_prepare_state_prefunds_validator_stake_for_all_bootstrap_lanes() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { state, genesis, .. } =
@@ -3291,7 +2770,7 @@ mod tests {
         }
     }
     #[test]
-    fn nexus_profile_injects_additional_recipes() {
+    fn nexus_profile_injects_only_supported_runtime_recipes() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { recipes, .. } =
             prepare_state(3, None, Some(&profile), WorkloadProfile::Chaos, false)
@@ -3299,8 +2778,17 @@ mod tests {
         assert!(
             recipes
                 .iter()
-                .any(|kind| matches!(kind, RecipeKind::RegisterPublicLaneValidator)),
-            "nexus recipes should include staking paths"
+                .any(|kind| matches!(kind, RecipeKind::DvpSettlement))
+        );
+        assert!(
+            recipes
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::IssueReplicationOrder))
+        );
+        assert_eq!(NEXUS_RECIPES_CHAOS.len(), 2);
+        assert_eq!(
+            recipes.len(),
+            BASE_RECIPES_CHAOS.len() + NEXUS_RECIPES_CHAOS.len()
         );
     }
     #[test]
@@ -3469,112 +2957,6 @@ mod tests {
         );
     }
     #[test]
-    fn staking_recipes_track_validator_registry() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        state.public_lane_validators.clear();
-        state.public_lane_stakes.clear();
-        let mut rng = StdRng::seed_from_u64(31);
-        let plan = state
-            .plan_register_public_validator(&mut rng)
-            .expect("validator plan builds");
-        assert_eq!(plan.label, "register_public_lane_validator");
-        assert!(
-            plan.expect_success,
-            "staking should be provisioned in genesis"
-        );
-        let has_validators = state
-            .public_lane_validators
-            .values()
-            .any(|validators| !validators.is_empty());
-        assert_eq!(
-            has_validators, plan.expect_success,
-            "validator registry tracking should follow plan success"
-        );
-        let register = plan
-            .instructions
-            .iter()
-            .find_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RegisterPublicLaneValidator>()
-            })
-            .expect("register validator instruction");
-        assert_eq!(
-            register.validator, register.stake_account,
-            "validator registration should self-stake in Izanami genesis"
-        );
-        let stake_asset = state
-            .nexus_staking
-            .as_ref()
-            .expect("staking setup")
-            .stake_asset
-            .clone();
-        let mint_asset = plan
-            .instructions
-            .iter()
-            .find_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<MintBox>()
-                    .and_then(|mint| match mint {
-                        MintBox::Asset(asset) => Some(asset.destination.definition().clone()),
-                        _ => None,
-                    })
-            })
-            .expect("mint instruction");
-        assert_eq!(mint_asset, stake_asset);
-        assert!(
-            !state.public_lane_stakes.is_empty(),
-            "stake shares should be tracked after validator registration"
-        );
-    }
-    #[test]
-    fn bond_public_stake_tracks_share_and_uses_stake_asset() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(41);
-        assert!(
-            state
-                .public_lane_validators
-                .values()
-                .any(|validators| !validators.is_empty()),
-            "genesis should seed public lane validators"
-        );
-        let before_shares = state.public_lane_stakes.len();
-        let plan = state.plan_bond_public_stake(&mut rng).expect("bond plan");
-        assert_eq!(plan.label, "bond_public_lane_stake");
-        assert!(plan.expect_success, "bond plan should succeed");
-        assert!(
-            state.public_lane_stakes.len() >= before_shares,
-            "bond should add or update stake shares"
-        );
-        let stake_asset = state
-            .nexus_staking
-            .as_ref()
-            .expect("staking setup")
-            .stake_asset
-            .clone();
-        let mint_asset = plan
-            .instructions
-            .iter()
-            .find_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<MintBox>()
-                    .and_then(|mint| match mint {
-                        MintBox::Asset(asset) => Some(asset.destination.definition().clone()),
-                        _ => None,
-                    })
-            })
-            .expect("mint instruction");
-        assert_eq!(mint_asset, stake_asset);
-    }
-    #[test]
     fn replication_orders_are_tracked() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
@@ -3691,88 +3073,6 @@ mod tests {
                 panic!("expected DvP settlement instruction");
             }
         }
-    }
-    #[test]
-    fn public_unbond_tracks_pending_requests() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(51);
-        let before_state = state.clone();
-        let plan = state
-            .plan_schedule_public_unbond(&mut rng)
-            .expect("unbond plan");
-        assert_eq!(plan.label, "schedule_public_lane_unbond");
-        assert_eq!(
-            !state.pending_unbonds.is_empty(),
-            plan.expect_success,
-            "pending unbond tracking should follow plan success"
-        );
-        if plan.expect_success {
-            let schedule = plan
-                .instructions
-                .iter()
-                .find_map(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<SchedulePublicLaneUnbond>()
-                })
-                .expect("schedule unbond instruction");
-            let before_share = before_state.available_public_lane_stake_share(
-                schedule.lane_id,
-                &schedule.validator,
-                &schedule.staker,
-            );
-            let after_share = state.available_public_lane_stake_share(
-                schedule.lane_id,
-                &schedule.validator,
-                &schedule.staker,
-            );
-            assert!(
-                after_share < before_share,
-                "successful unbond should reduce tracked stake share"
-            );
-        }
-    }
-    #[test]
-    fn public_rewards_follow_validator_registry() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(61);
-        let plan = state
-            .plan_record_public_rewards(&mut rng)
-            .expect("reward plan");
-        assert_eq!(plan.label, "record_public_lane_rewards");
-        assert!(plan.expect_success, "staking genesis should enable rewards");
-        let setup = state.nexus_staking.as_ref().expect("staking setup");
-        let expected_reward_asset = AssetId::new(setup.fee_asset.clone(), setup.fee_sink.clone());
-        let reward = plan
-            .instructions
-            .iter()
-            .find_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RecordPublicLaneRewards>()
-            })
-            .expect("record rewards instruction");
-        assert_eq!(reward.reward_asset, expected_reward_asset);
-        let minted = plan
-            .instructions
-            .iter()
-            .find_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<MintBox>()
-                    .and_then(|mint| match mint {
-                        MintBox::Asset(asset) => Some(asset.destination.clone()),
-                        _ => None,
-                    })
-            })
-            .expect("mint reward instruction");
-        assert_eq!(minted, expected_reward_asset);
     }
     #[test]
     fn asset_definition_register_and_unregister_moves_tracking() {

@@ -518,6 +518,8 @@ pub(in crate::sumeragi) struct ReleasedLifecycleValidatedMarkerSealPermitV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum LifecycleValidateRetryResolutionV1 {
     /// A certified newer view retired an unprotected missing-sidecar row.
+    // TODO: invoke cancellation from the native lifecycle sidecar path.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     Cancelled,
     /// The row terminalized without a successor and may authenticate a later
     /// current-Decision standalone Apply.
@@ -1744,6 +1746,10 @@ pub(crate) trait V2EffectServices {
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error>;
     /// Retain a bounded request for the exact certified merge sidecar which
     /// must be authenticated before validation or decided application retries.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native merge sidecar deferral")
+    )]
     fn work_deferred_for_merge_sidecar(
         &mut self,
         work_id: EffectWorkId,
@@ -1758,6 +1764,10 @@ pub(crate) trait V2EffectServices {
     /// Retry one exact deferred Apply without consuming its executor owner on
     /// backpressure. `false` retains the task until bounded worker capacity is
     /// available; a conflicting command or disconnected worker is an error.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native deferred Apply retry")
+    )]
     fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error>;
     /// Observe a reducer-authorized view installation and its authenticated
     /// durable-lock projection for timer/status and ingress recovery wiring.
@@ -1791,6 +1801,10 @@ pub(crate) enum CompletionDisposition {
     Accepted,
     /// Validation remains pending until its exact certified merge sidecar is
     /// fetched, authenticated, and installed for a deterministic retry.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native merge sidecar deferral")
+    )]
     Deferred,
     /// Authenticated remote data completed an acquisition but proved
     /// noncanonical, so that acquisition was reset for an exact retry without
@@ -3204,6 +3218,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// later preliminary retransmit owner. The move-only authority proves that
     /// the exact coordinator row, registry carrier, and durable registration
     /// have already crossed their cancellation boundary.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn cancel_unwoken_lifecycle_validate_retry(
         &mut self,
         cancellation: CancelledLifecycleValidateSidecarV1,
@@ -10347,6 +10362,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// after every enqueue succeeds. `None` means the worker was full: the exact
     /// Apply owners and the caller's completed-sidecar notification must remain
     /// ready for another bounded scheduler turn.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native deferred Apply retry")
+    )]
     pub(crate) fn retry_deferred_merge_sidecar<S: V2EffectServices>(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -10393,6 +10412,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ///
     /// Transport failures and unavailable holders must not call this method;
     /// those conditions remain recoverable and keep the exact task pending.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn reject_deferred_merge_sidecar<S: V2EffectServices>(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
@@ -10442,6 +10462,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
     /// Retain a decided Apply task when its previously validated merge sidecar
     /// must be recovered again (for example after a safe losing-view prune).
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native merge sidecar deferral")
+    )]
     pub(crate) fn defer_application_for_merge_sidecar<S: V2EffectServices>(
         &mut self,
         work_id: EffectWorkId,
@@ -10488,6 +10512,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(CompletionDisposition::Deferred)
     }
     /// Fail closed when a decided Apply cannot register its exact merge sidecar.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn reject_deferred_merge_sidecar_work<S: V2EffectServices>(
         &mut self,
         work_id: EffectWorkId,
@@ -11554,6 +11579,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
     }
     /// Return whether the executor still owns this exact deferred Apply dependency.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn retains_deferred_merge_sidecar(
         &self,
         work_id: EffectWorkId,
@@ -11572,6 +11598,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
     /// Return whether this retained missing-sidecar dependency belongs to the
     /// uniquely decided Apply task rather than speculative validation work.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(crate) fn deferred_merge_sidecar_is_decided(&self, work_id: EffectWorkId) -> bool {
         self.deferred_merge_work.contains_key(&work_id)
             && self.pending_applications.contains_key(&work_id)
@@ -15755,6 +15782,10 @@ fn store_completion_matches(
         && receipt.subject() == manifest.subject
         && receipt.manifest_hash() == HashOf::new(manifest)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native merge sidecar deferral")
+)]
 fn merge_sidecar_reference_matches_carrier(
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,

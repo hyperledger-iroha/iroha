@@ -5,7 +5,7 @@ use iroha_data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
     domain::Domain,
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
         KagemushaMintFinalityGenesisParametersV1,
     },
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox},
@@ -94,12 +94,11 @@ pub(crate) fn dev_sandbox_kagemusha_mint_finality_parameters(
         })
         .collect::<color_eyre::Result<Vec<_>>>()?;
     let parameters = KagemushaMintFinalityGenesisParametersV1 {
-        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
-            epoch: 0,
+            generation: 0,
             validators,
         },
-        next_epoch_roster: None,
     };
     parameters.validate().map_err(|error| {
         color_eyre::eyre::eyre!("invalid Mochi sandbox KAGEMUSHA mint-finality roster: {error}")
@@ -288,12 +287,17 @@ mod tests {
         .expect("derive second sandbox roster");
         assert_eq!(
             first
-                .epoch_roster
+                .authority_generation
                 .validators
                 .iter()
                 .map(|keys| keys.validator.clone())
                 .collect::<Vec<_>>(),
             expected_validators
+        );
+        assert_eq!(first.authority_generation.generation, 0);
+        assert_eq!(
+            first.authority_generation.version,
+            KAGEMUSHA_CHAIN_VERSION_V1
         );
         assert_ne!(first, second);
     }

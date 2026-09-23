@@ -313,9 +313,7 @@ pub(crate) use selector::{
     certified_fetch_postdequeue_runtime_receipt,
     certified_fetch_preledger_productive_ingress_token,
 };
-pub(in crate::sumeragi) use validate_sidecar::{
-    CancelledLifecycleValidateSidecarV1, LifecycleValidateSidecarRegistrationIdentityV1,
-};
+pub(in crate::sumeragi) use validate_sidecar::CancelledLifecycleValidateSidecarV1;
 #[cfg_attr(
     not(test),
     allow(unused_imports, reason = "reviewed recovered-WAL projection namespace")

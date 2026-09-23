@@ -401,21 +401,6 @@ pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
     (fixture.block.clone(), fixture.genesis.clone())
 }
 
-/// Reuse native genesis execution with an explicit grant, leaving the default fixture unchanged.
-pub(crate) fn deployment_genesis_administrator_fixture() -> (SignedBlock, KeyPair) {
-    static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
-    let fixture = FIXTURE.get_or_init(|| {
-        let administrator = AccountId::new(key(101, Algorithm::Ed25519).public_key().clone());
-        let permission = iroha_data_model::permission::Permission::new(
-            "CanSetParameters".parse().unwrap(),
-            iroha_primitives::json::Json::from(norito::json::Value::Null),
-        );
-        let grant = iroha_data_model::isi::Grant::account_permission(permission, administrator);
-        Fixture::build_with_epoch_and_instructions(20, vec![grant.into()])
-    });
-    (fixture.block.clone(), fixture.genesis.clone())
-}
-
 #[test]
 fn derives_native_genesis_identity_and_exact_canary_request() {
     let fixture = Fixture::new();

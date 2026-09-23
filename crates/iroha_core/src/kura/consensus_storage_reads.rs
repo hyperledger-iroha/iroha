@@ -6,6 +6,7 @@ enum CanonicalBlockReadAuthority<'a, 'k> {
         hash: &'a HashOf<BlockHeader>,
         wire_len: u64,
     },
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     Apply(&'a crate::block::VerifiedV2FinalityArtifact),
     Startup(&'a V2StartupFinalityVerificationSession<'k>),
 }
@@ -131,6 +132,7 @@ impl Kura {
     /// Each write reauthenticates the exact signed carrier and active slot
     /// under the prune, canonical, geometry and sidecar locks. Existing corrupt
     /// or conflicting evidence is preserved as an error, never overwritten.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn recover_canonical_lane_block_artifacts_at_proposal_height_matching<F>(
         &self,
         proposal_height: u64,
@@ -156,6 +158,7 @@ impl Kura {
         Ok(artifacts)
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn recover_exact_canonical_lane_artifact(&self, artifact: &LaneBlockArtifact) -> Result<()> {
         let _prune = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -364,6 +367,7 @@ impl Kura {
     /// The opaque verified certificate selects the exact complete wire. Any
     /// published local finality must independently authenticate and equal that
     /// certificate; corrupt existing evidence is never bypassed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn read_block_body_with_verified_finality(
         &self,
         height: NonZeroUsize,

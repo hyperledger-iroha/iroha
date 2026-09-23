@@ -273,6 +273,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
     };
     let (kura, block_count) =
         Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;

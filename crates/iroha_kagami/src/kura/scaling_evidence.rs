@@ -162,14 +162,17 @@ pub struct AuthenticatedRun {
 }
 impl AuthenticatedRun {
     /// Complete rows in independently supplied schedule order.
+    #[cfg(test)]
     pub fn rows(&self) -> &[AuthenticatedRequest] {
         &self.rows
     }
     /// Canonical bounded result bytes; these are not a replacement for proof inputs.
+    #[cfg(test)]
     pub fn canonical_rows(&self) -> &[u8] {
         &self.canonical
     }
     /// Total exact canonical input bytes consumed.
+    #[cfg(test)]
     pub fn input_bytes(&self) -> u64 {
         self.input_bytes
     }
@@ -625,6 +628,7 @@ fn validate_carrier(block: &SignedBlock, maximum: usize) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(dead_code, reason = "fixture is shared by focused test suites")]
 #[path = "scaling_evidence/fixture.rs"]
 mod fixture;
 

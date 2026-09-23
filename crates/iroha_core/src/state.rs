@@ -3908,19 +3908,32 @@ pub enum MergeLedgerCommitError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MergeLedgerPublicationMode {
     /// The entry was just committed by global consensus and may emit its one live event.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     LiveCommit,
     /// The entry is being reconstructed from durable history and must remain silent.
     Replay,
 }
 /// Bounds which pending merge-entry shapes may be selected for one carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 pub(crate) enum PendingCertifiedMergeSelection {
     /// Execution and control-only entries are eligible.
     Any,
     /// Only entries without an autonomous execution batch are eligible.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: wire native state publication"))]
     ControlOnly,
 }
 impl PendingCertifiedMergeSelection {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     const fn allows_execution(self) -> bool {
         matches!(self, Self::Any)
     }
@@ -14773,6 +14786,10 @@ impl<'state> StateBlock<'state> {
     /// Callers use this read-only projection to acquire the Queue retirement
     /// observer only for a real scale-in. State re-derives and checks the same
     /// binding under its lifecycle fence during commit.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn pending_autoscale_retirement_binding(
         &self,
     ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, LaneLifecycleError> {
@@ -16813,6 +16830,12 @@ where
     peers.dedup();
     peers
 }
+// TODO: Route production epoch construction through the authenticated-seed
+// committee selector before removing this expectation.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn bounded_global_committee_size(
     world: &impl WorldReadOnly,
     available_candidates: usize,
@@ -16831,6 +16854,10 @@ fn bounded_global_committee_size(
     iroha_data_model::block::consensus_v2::is_valid_committee_size(committee_size)
         .then_some(committee_size)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Hash {
     let epoch_bytes = epoch.to_le_bytes();
     let peer_bytes = peer.encode();
@@ -16841,6 +16868,10 @@ fn threshold_beacon_seat_score(seed: [u8; 32], epoch: u64, peer: &PeerId) -> Has
         peer_bytes.as_slice(),
     ])
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 fn select_threshold_beacon_committee(
     world: &impl WorldReadOnly,
     epoch: u64,
@@ -17031,6 +17062,10 @@ where
 /// selection and the successor leader schedule consume the same finalized
 /// randomness. The caller owns authentication and exact chain-height binding
 /// of `selection_seed`.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native state publication")
+)]
 pub(crate) fn epoch_validator_peer_ids_from_world_with_seed<I>(
     world: &impl WorldReadOnly,
     commit_topology: I,
@@ -27817,6 +27852,10 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, concread::release::ReleaseWait> {
@@ -28081,6 +28120,10 @@ impl State {
             )
     }
     /// Snapshot all lane routes and incarnations authoritative at one proposal height.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn consensus_lane_routes_at_height(
         &self,
         proposal_height: u64,
@@ -31905,6 +31948,7 @@ impl State {
                 .then_some(anchor.snapshot_block_creation_time_ms)
         })
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     fn update_latest_block_header_cache(&self, header: BlockHeader) {
         *self.latest_block_header.write() = Some(header);
     }
@@ -32321,6 +32365,10 @@ impl State {
         cache.registry = Arc::clone(&registry);
         registry
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     fn install_sccp_registry_cache(&self, registry: Arc<ValidatedSccpRegistryV1>) {
         let mut cache = self.sccp_registry_cache.lock();
         cache.registry = registry;
@@ -44901,6 +44949,10 @@ impl State {
         Ok(())
     }
     /// Select a pending settlement entry bound to the exact consensus round.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn select_pending_certified_merge_entry_for_round(
         &self,
         round_header: &BlockHeader,
@@ -45046,6 +45098,10 @@ impl State {
     /// authoritative admission or deterministic WSV markers. Callers use this
     /// after State reaches the carrier height and before publishing any of those
     /// recoverable side effects.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn ensure_globally_committed_merge_entry_applied(
         &self,
         entry: &MergeLedgerEntry,
@@ -53398,6 +53454,10 @@ impl<'state> StateBlock<'state> {
         self.parliament_timed_ovn_casting_bindings.take()
     }
     /// Take the local-only FASTPQ witness context, if one was captured.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn take_fastpq_witness_context(
         &mut self,
     ) -> Option<crate::fastpq::FastpqWitnessContext> {
@@ -55415,6 +55475,10 @@ impl<'state> StateBlock<'state> {
     }
     /// Commit with a move-only authorization consumed inside State's exact
     /// linearization boundary.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn commit_with_state_commit_authorization(
         self,
         authorization: Box<dyn StateBlockCommitAuthorization>,
@@ -55434,6 +55498,10 @@ impl<'state> StateBlock<'state> {
     }
     /// Commit with both the exact State authorization and final Queue scale-in
     /// veto. The authorization is consumed only after the veto succeeds.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn commit_with_state_commit_authorization_and_autoscale_retirement_queue_veto(
         self,
         authorization: Box<dyn StateBlockCommitAuthorization>,
@@ -57790,6 +57858,10 @@ impl<'state> StateBlock<'state> {
     /// Callers hold the lane lifecycle admission fence while consulting the
     /// local Queue, so no ordinary owner can appear between this projection
     /// and the retirement vote check.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native state publication")
+    )]
     pub(crate) fn prospective_autoscale_retirement_binding(
         &self,
         block: &SignedBlock,

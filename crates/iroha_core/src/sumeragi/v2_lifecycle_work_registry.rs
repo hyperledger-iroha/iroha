@@ -56,7 +56,7 @@ use super::{
 };
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire};
+use iroha_data_model::block::{SignedBlock, consensus_v2 as wire};
 use iroha_model_base::peer::PeerId;
 use norito::codec::Encode;
 use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};

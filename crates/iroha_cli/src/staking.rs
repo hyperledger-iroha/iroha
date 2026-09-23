@@ -1487,7 +1487,7 @@ mod tests {
         for plan in alternatives {
             let file = write_plan(&plan);
             let mut context = TestContext::new();
-            BondArgs {
+            let _ = BondArgs {
                 lane_id: 0,
                 validator: alice_literal(),
                 staker: None,
@@ -1514,7 +1514,7 @@ mod tests {
         for (index, plan) in alternatives.into_iter().enumerate() {
             let file = write_plan(&plan);
             let mut context = TestContext::new();
-            RegisterArgs {
+            let _ = RegisterArgs {
                 lane_id: 0,
                 validator: alice_literal(),
                 peer_id: valid_peer_id_literal(),
@@ -1578,7 +1578,7 @@ mod tests {
         for plan in alternatives {
             let file = write_plan(&plan);
             let mut context = TestContext::new();
-            FinalizeUnbondArgs {
+            let _ = FinalizeUnbondArgs {
                 lane_id: 0,
                 validator: alice_literal(),
                 staker: None,
@@ -1614,7 +1614,7 @@ mod tests {
         for plan in alternatives {
             let file = write_plan(&plan);
             let mut context = TestContext::new();
-            ClaimRewardsArgs {
+            let _ = ClaimRewardsArgs {
                 lane_id: 0,
                 account: None,
                 claim_plan: file.path().to_path_buf(),
@@ -1634,7 +1634,8 @@ mod tests {
             .insert("retired_transfer".into(), norito::json::Value::Null);
         let file = write_plan(&json);
         let context = TestContext::new();
-        load_monetary_plan(&context, file.path()).expect_err("unknown plan fields are rejected");
+        let _ = load_monetary_plan(&context, file.path())
+            .expect_err("unknown plan fields are rejected");
         let oversized = tempfile::NamedTempFile::new().expect("sparse plan file");
         oversized
             .as_file()

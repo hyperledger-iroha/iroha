@@ -92,6 +92,8 @@ pub(crate) struct DurableAutonomousLaneMergeSource {
 /// group, validator, and height-context session. The lane signer consumes the
 /// value, so retaining an in-memory READY body is not sufficient authority.
 #[must_use = "a durable lane READY authorization must be consumed by the exact signer session"]
+// TODO: Bind retained READY authorization to the sole native lane runner.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LaneReadyAuthorization {
     durable_execution_input_hash: Hash,
     proposal: LaneBlockProposalV1,
@@ -131,6 +133,7 @@ impl AutonomousLaneExecutionInputPersistenceAuthorization {
 /// and certificate, checks the projection, and only then publishes the durable
 /// view state.
 #[must_use = "an autonomous READY-QC authorization must be consumed by Kura"]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 struct AutonomousLaneReadyQcPersistenceAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
     network_id: iroha_data_model::NetworkId,
@@ -140,6 +143,7 @@ struct AutonomousLaneReadyQcPersistenceAuthorization {
     reservation_group: LaneQueueReservationGroupBindingV1,
     certificate: DurableLanePayloadAvailabilityCertificateV1,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 impl AutonomousLaneReadyQcPersistenceAuthorization {
     fn consume_for_persistence(
         self,
@@ -1250,6 +1254,7 @@ impl AutonomousLaneReleaseProjectionContext {
         })
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 impl LaneReadyAuthorization {
     /// Return whether this one-shot authority names the exact READY signing
     /// request and still has a structurally complete durable-input binding.
@@ -1542,6 +1547,7 @@ impl Kura {
     }
     /// Validate one exact autonomous READY certificate and mint the move-only
     /// composed-transition authority consumed by its Kura persistence sink.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn authorize_lane_payload_availability_certificate_persistence(
         payload: &LaneExecutablePayloadV1,
         certificate: &DurableLanePayloadAvailabilityCertificateV1,
@@ -3854,6 +3860,7 @@ impl Kura {
     /// returned value binds the complete canonical artifact, ordered
     /// reservation group, proposal/payload identity, signer, and historical or
     /// current height-context session.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn mint_lane_ready_authorization(
         &self,
         payload: &LaneExecutablePayloadV1,

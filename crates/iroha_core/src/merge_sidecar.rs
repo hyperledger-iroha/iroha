@@ -7,6 +7,8 @@
 //! crash-safe, while incomplete payload bytes remain in memory. Only a
 //! completely reassembled, canonical, reference-matching entry may be handed
 //! to Kura's atomic pending-sidecar store.
+// TODO: Remove these scoped allowances when the native runner owns
+// merge sidecar transport, signing, and reliable flush paths.
 #[cfg(test)]
 use crate::sumeragi::v2_core::{
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
@@ -134,6 +136,10 @@ pub(crate) type MergeSidecarRosterDigest = HashOf<Vec<PeerId>>;
 ///
 /// Callers must derive the accompanying capacity from the same unique roster,
 /// never from currently connected peers.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) fn canonical_merge_sidecar_roster_digest(roster: &[PeerId]) -> MergeSidecarRosterDigest {
     let ordered = roster.iter().cloned().collect::<BTreeSet<_>>();
     HashOf::new(&ordered.into_iter().collect::<Vec<_>>())
@@ -149,12 +155,20 @@ const SERVICE_GENERATION_HINT_ID_DOMAIN: &[u8] =
     b"iroha:merge:sidecar-service-generation-hint:v1\0";
 const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v2\0";
 const RESERVED_DECIDED_INBOUND_SESSIONS: usize = 1;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const RESERVED_DECIDED_INBOUND_BYTES: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
 const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
 /// Maximum live requester-side semantic-stream working set.
 ///
 /// The table is validator-scoped rather than connection-scoped. Requester
 /// streams use globally monotonic local epochs.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// Maximum responder-side semantic-stream working set.
 ///
@@ -164,40 +178,120 @@ const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize = MAX_VALIDATORS_PER_HEIGHT;
 /// admission separately caps identities outside the current frozen roster at
 /// [`MAX_VALIDATORS_PER_HEIGHT`]; the transport keeps the aggregate hard bound
 /// and durable lifecycle geometry.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const MAX_CERTIFIED_MERGE_SERVER_STREAMS: usize = 2 * MAX_VALIDATORS_PER_HEIGHT;
 #[cfg(test)]
 const DEFAULT_REPLY_SOURCE_CAPACITY: usize = 8;
 const CHUNK_PAYLOAD_DIGEST_DOMAIN: &[u8] = b"iroha:merge-sidecar:chunk-payload:v1";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const RELIABLE_FLUSH_SIBLING_STATE_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-sibling-state:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const RELIABLE_FLUSH_SHARED_TRANSFER_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-shared-transfer:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const RELIABLE_FLUSH_TARGET_GATE_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-target-gate:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const RELIABLE_FLUSH_TARGET_OUTBOUND_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-target-outbound:v1\0";
 const SIGNING_GUARD_VERSION: u8 = 2;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const SIGNING_GUARD_DIR: &str = "merge-signing-guard-v2";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LEGACY_SIGNING_GUARD_DIRS: &[&str] = &["merge-signing-guard-v1"];
 const SIGNING_GUARD_RECORD_EXT: &str = "norito";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const SIGNING_GUARD_TEMP_EXT: &str = "norito.tmp";
 const SIGNING_GUARD_HIGH_WATER_FILE: &str = "committed-high-water.norito";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const SIGNING_GUARD_HIGH_WATER_TEMP: &str = "committed-high-water.norito.tmp";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_VERSION_V3: u8 = 3;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_DIR: &str = "sumeragi_v2_merge_sidecar_lifecycle_v3";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LEGACY_LIFECYCLE_JOURNAL_DIRS: &[&str] = &[
     "sumeragi_v2_merge_sidecar_lifecycle_v1",
     "sumeragi_v2_merge_sidecar_lifecycle_v2",
 ];
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_SLOT_FILES: [&str; 2] = ["state-0.norito", "state-1.norito"];
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_TEMP: &str = "state.norito.tmp";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_ROOT_HIGH_WATER_FILE: &str =
     "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_ROOT_HIGH_WATER_TEMP: &str =
     "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito.tmp";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES: usize = 4 * 1024;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_BASE_BYTES: usize = 64 * 1024;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_GATE_BYTES: usize = 16 * 1024;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 const LIFECYCLE_JOURNAL_STREAM_BYTES: usize = 2 * 1024;
 #[cfg(test)]
 const MAX_INBOUND_SESSIONS: usize =
@@ -242,6 +336,10 @@ pub(crate) struct MergeSidecarLimits {
     outbound_bytes_per_source: usize,
     server_request_gates_per_source: usize,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSidecarLimits {
     /// Maximum concurrent requester-side assemblies and live request attempts.
     pub(crate) const fn inbound_session_capacity(&self) -> usize {
@@ -374,6 +472,10 @@ impl MergeSigningGuardLimits {
         .expect("default merge-signing limits are valid")
     }
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn retry_timeout(base: Duration, attempts: u32) -> Duration {
     let backoff_shift = attempts.saturating_sub(1).min(4);
     base.saturating_mul(1_u32 << backoff_shift)
@@ -412,6 +514,10 @@ pub struct CertifiedMergeSidecarRequestV1 {
     /// Exact merge-QC signer selected to answer this request.
     pub responder: PeerId,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl CertifiedMergeSidecarRequestV1 {
     /// Derive the canonical identity of this immutable semantic projection.
     #[must_use]
@@ -475,6 +581,10 @@ pub struct CertifiedMergeSidecarCloseV1 {
     /// Exact responder whose retained occurrences may be released.
     pub responder: PeerId,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl CertifiedMergeSidecarCloseV1 {
     /// Derive the canonical identity of this cumulative close witness.
     #[must_use]
@@ -519,6 +629,10 @@ pub struct CertifiedMergeSidecarCloseAckV1 {
     /// Exact responder which applied the cumulative close floor.
     pub responder: PeerId,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl CertifiedMergeSidecarCloseAckV1 {
     pub(crate) fn canonical_close_id(&self) -> Hash {
         CertifiedMergeSidecarCloseV1 {
@@ -563,6 +677,10 @@ pub struct CertifiedMergeSidecarGenerationHintV1 {
     /// Exact responder which owns `current_generation`.
     pub responder: PeerId,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl CertifiedMergeSidecarGenerationHintV1 {
     /// Derive the canonical identity of this responder-generation witness.
     #[must_use]
@@ -1148,6 +1266,10 @@ pub enum MergeSidecarError {
     LifecycleJournal(String),
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct DeferredCarrier {
     hash: HashOf<BlockHeader>,
     height: u64,
@@ -1155,6 +1277,10 @@ struct DeferredCarrier {
     lifecycle_owned: bool,
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct RequestAttempt {
     id: Hash,
     message_hash: Hash,
@@ -1167,11 +1293,19 @@ struct RequestAttempt {
     previous_attempts: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum InboundPriority {
     Ordinary,
     Decided,
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct InboundAssembly {
     reference: CertifiedMergeLedgerReference,
     requester: PeerId,
@@ -1186,6 +1320,10 @@ struct InboundAssembly {
     complete_pending_validation: bool,
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct RequestStreamState {
     service_generation: CertifiedMergeSidecarServiceGenerationV1,
     stream_epoch: CertifiedMergeSidecarStreamEpochV1,
@@ -1196,6 +1334,10 @@ struct RequestStreamState {
     last_close_message_hash: Option<Hash>,
     open_sequences: BTreeSet<CertifiedMergeSidecarSemanticSequenceV1>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl RequestStreamState {
     fn new(stream_epoch: CertifiedMergeSidecarStreamEpochV1) -> Self {
         Self {
@@ -1304,6 +1446,10 @@ pub(crate) struct CertifiedMergeSidecarClosedPrefix {
     /// Highest contiguous semantic sequence covered by the close.
     pub(crate) closed_through: u64,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl CertifiedMergeSidecarClosedPrefix {
     pub(crate) fn covers(&self, other: &Self) -> bool {
         self.requester == other.requester
@@ -1315,6 +1461,10 @@ impl CertifiedMergeSidecarClosedPrefix {
     }
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct OutboundTransfer {
     request: CertifiedMergeSidecarRequestV1,
     response_len: usize,
@@ -1323,6 +1473,10 @@ struct OutboundTransfer {
     attempts: BTreeMap<ServerRequestSource, OutboundAttempt>,
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct OutboundAttempt {
     reply_route: Option<NetworkReplyRoute>,
     /// First chunk without a successful exact peer-writer flush receipt.
@@ -1332,6 +1486,10 @@ struct OutboundAttempt {
     queued: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ServerRequestSource {
     Synthetic(PeerId),
     /// Share the sealed transport identity across queued attempts and snapshots.
@@ -1340,10 +1498,18 @@ enum ServerRequestSource {
     RecoveredAuthenticated(PeerId),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ServerRequestBudgetSource {
     Synthetic(PeerId),
     Authenticated(PeerId),
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ServerRequestSource {
     fn budget_source(&self) -> ServerRequestBudgetSource {
         match self {
@@ -1361,6 +1527,10 @@ impl ServerRequestSource {
     }
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ServerRequestGate {
     request: CertifiedMergeSidecarRequestV1,
     request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
@@ -1371,6 +1541,10 @@ struct ServerRequestGate {
     attempts: BTreeMap<ServerRequestSource, ServerRequestGateAttempt>,
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ServerRequestGateAttempt {
     reply_route: Option<NetworkReplyRoute>,
     materialization_authorized: bool,
@@ -1399,6 +1573,10 @@ struct ServerRequestGateAttempt {
     inserted: Instant,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ServerResponseCursor {
     Pending(usize),
     Complete,
@@ -1424,6 +1602,10 @@ struct ServerPendingChunkIdentity {
     chunk_count: u32,
     topic: Topic,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ServerPendingChunkIdentity {
     fn from_message(message: &Arc<CertifiedMergeSidecarMessage>) -> Option<Self> {
         let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
@@ -1727,6 +1909,10 @@ struct MergeSidecarLifecycleSnapshotV3 {
     payload: MergeSidecarLifecyclePayloadV3,
     payload_hash: HashOf<MergeSidecarLifecyclePayloadV3>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSidecarLifecycleSnapshotV3 {
     fn new(payload: MergeSidecarLifecyclePayloadV3) -> Self {
         let payload_hash = HashOf::new(&payload);
@@ -1751,6 +1937,10 @@ struct MergeSidecarLifecycleRootHighWaterV3 {
     /// hash.
     snapshot_hash: Option<HashOf<MergeSidecarLifecycleSnapshotV3>>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSidecarLifecycleRootHighWaterV3 {
     fn bootstrap() -> Self {
         Self {
@@ -1876,6 +2066,10 @@ fn lifecycle_artifact_metadata_unchanged(left: &SecureMetadata, right: &SecureMe
         && identity == lifecycle_artifact_identity(right)
         && lifecycle_artifact_revision(left) == lifecycle_artifact_revision(right)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn verify_open_lifecycle_directory(
     path: &Path,
     directory: &File,
@@ -1904,6 +2098,10 @@ fn verify_open_lifecycle_directory(
     Ok(opened_identity)
 }
 #[cfg(any(unix, windows))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn open_lifecycle_directory(path: &Path) -> Result<File, MergeSidecarError> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -2024,6 +2222,10 @@ fn open_lifecycle_regular(_path: &Path, _artifact: &str) -> Result<File, MergeSi
 /// bootstrap sentinel), or rolling back the entire store root, is outside the
 /// rollback guarantee.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct MergeSidecarLifecycleJournal {
     store_root: PathBuf,
     directory: PathBuf,
@@ -2039,6 +2241,10 @@ struct MergeSidecarLifecycleJournal {
     #[cfg(test)]
     fail_after_root_publish: bool,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSidecarLifecycleJournal {
     fn open(
         store_root: &Path,
@@ -2775,9 +2981,17 @@ impl MergeSidecarLifecycleJournal {
 /// Every component, including fixed-width primitives, carries a u64 length
 /// prefix. These bytes never enter Norito, the wire, persistence, or consensus.
 #[derive(Default)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushProjectionBytes {
     bytes: Vec<u8>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushProjectionBytes {
     fn field(&mut self, bytes: &[u8]) {
         let len = u64::try_from(bytes.len())
@@ -2864,7 +3078,15 @@ impl ReliableFlushProjectionBytes {
     }
 }
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushRouteIdentity(NetworkReplyRoute);
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushRouteIdentity {
     fn capture(route: &NetworkReplyRoute) -> Self {
         Self(route.clone())
@@ -2880,6 +3102,10 @@ impl PartialEq for ReliableFlushRouteIdentity {
 }
 impl Eq for ReliableFlushRouteIdentity {}
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushTargetGateResidual {
     key: ServerRequestKey,
     source: ServerRequestSource,
@@ -2893,6 +3119,10 @@ struct ReliableFlushTargetGateResidual {
     authorized_materialization_route: Option<ReliableFlushRouteIdentity>,
     materialization_retryable: bool,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushTargetGateResidual {
     fn capture(
         key: &ServerRequestKey,
@@ -2968,11 +3198,19 @@ impl PartialEq for ReliableFlushTargetGateResidual {
 }
 impl Eq for ReliableFlushTargetGateResidual {}
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushTargetOutboundResidual {
     key: ServerRequestKey,
     source: ServerRequestSource,
     reply_route: Option<ReliableFlushRouteIdentity>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushTargetOutboundResidual {
     fn capture(
         key: &ServerRequestKey,
@@ -3010,6 +3248,10 @@ impl PartialEq for ReliableFlushTargetOutboundResidual {
 }
 impl Eq for ReliableFlushTargetOutboundResidual {}
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushChunkArcIdentity {
     message: Arc<CertifiedMergeSidecarMessage>,
     payload_len: usize,
@@ -3026,6 +3268,10 @@ struct ReliableFlushChunkArcIdentity {
     chunk_index: u32,
     chunk_count: u32,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushChunkArcIdentity {
     fn capture(message: &Arc<CertifiedMergeSidecarMessage>) -> Self {
         let CertifiedMergeSidecarMessage::Chunk(chunk) = message.as_ref() else {
@@ -3085,11 +3331,19 @@ impl PartialEq for ReliableFlushChunkArcIdentity {
 }
 impl Eq for ReliableFlushChunkArcIdentity {}
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushSharedTransferSnapshot {
     request: CertifiedMergeSidecarRequestV1,
     response_len: usize,
     chunks: Vec<ReliableFlushChunkArcIdentity>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushSharedTransferSnapshot {
     fn capture(transfer: &OutboundTransfer) -> Self {
         Self {
@@ -3114,6 +3368,10 @@ impl ReliableFlushSharedTransferSnapshot {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushSiblingGateSnapshot {
     key: ServerRequestKey,
     request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
@@ -3131,6 +3389,10 @@ struct ReliableFlushSiblingGateSnapshot {
     inserted: Instant,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushSiblingOutboundSnapshot {
     key: ServerRequestKey,
     source: ServerRequestSource,
@@ -3140,12 +3402,20 @@ struct ReliableFlushSiblingOutboundSnapshot {
     queued: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushSiblingStateSnapshot {
     gates: Vec<ReliableFlushSiblingGateSnapshot>,
     transfers: Vec<(ServerRequestKey, ReliableFlushSharedTransferSnapshot)>,
     outbound: Vec<ReliableFlushSiblingOutboundSnapshot>,
     order: Vec<OutboundAttemptKey>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl ReliableFlushSiblingStateSnapshot {
     fn capture(
         transport: &MergeSidecarTransport,
@@ -3340,6 +3610,10 @@ pub(crate) const fn reliable_flush_topic_tag(topic: Topic) -> u8 {
     }
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushGateApplicationPlan {
     key: ServerRequestKey,
     source: ServerRequestSource,
@@ -3348,12 +3622,20 @@ struct ReliableFlushGateApplicationPlan {
     inserted_before: Instant,
     residual_before: ReliableFlushTargetGateResidual,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ReliableFlushGatePreflight {
     /// A missing, complete, or already-advanced gate is a harmless late receipt.
     ConsumeWithoutMutation,
     Ready(ReliableFlushGateApplicationPlan),
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushOutboundAttemptPlan {
     route_active: bool,
     cursor_before: usize,
@@ -3362,6 +3644,10 @@ struct ReliableFlushOutboundAttemptPlan {
     residual_before: ReliableFlushTargetOutboundResidual,
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushOutboundApplicationPlan {
     shared_transfer_before: Option<ReliableFlushSharedTransferSnapshot>,
     shared_transfer_other_attempts_before: bool,
@@ -3370,16 +3656,28 @@ struct ReliableFlushOutboundApplicationPlan {
     sibling_order_len_before: usize,
     attempt: Option<ReliableFlushOutboundAttemptPlan>,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ReliableFlushOutboundPreflight {
     /// Retained outbound state did not belong to this exact source occurrence.
     RejectWithoutClaim,
     Ready(ReliableFlushOutboundApplicationPlan),
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ReliableFlushOutboundAttemptPreflight {
     RejectWithoutClaim,
     Ready(Option<ReliableFlushOutboundAttemptPlan>),
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushApplicationPlan {
     gate: ReliableFlushGateApplicationPlan,
     outbound: ReliableFlushOutboundApplicationPlan,
@@ -3394,6 +3692,10 @@ struct ReliableFlushApplicationPlan {
     outbound_order_rank_before: u64,
     sibling_order_len_before: u64,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn reliable_flush_target_order_position(
     order: &VecDeque<OutboundAttemptKey>,
     target_key: &ServerRequestKey,
@@ -3416,6 +3718,10 @@ fn reliable_flush_target_order_position(
     }
     (target_count, target_rank, sibling_len)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn preflight_reliable_flush_gate(
     transport: &MergeSidecarTransport,
     admission: &CertifiedMergeSidecarChunkAdmission,
@@ -3468,6 +3774,10 @@ fn preflight_reliable_flush_gate(
         },
     ))
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn preflight_reliable_flush_outbound(
     transport: &MergeSidecarTransport,
     admission: &CertifiedMergeSidecarChunkAdmission,
@@ -3552,6 +3862,10 @@ fn preflight_reliable_flush_outbound(
         },
     ))
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn preflight_reliable_flush_outbound_attempt(
     transfer: &OutboundTransfer,
     admission: &CertifiedMergeSidecarChunkAdmission,
@@ -3608,6 +3922,10 @@ fn preflight_reliable_flush_outbound_attempt(
     };
     Ok(ReliableFlushOutboundAttemptPreflight::Ready(attempt))
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn finish_reliable_flush_application_plan(
     transport: &MergeSidecarTransport,
     gate: ReliableFlushGateApplicationPlan,
@@ -3646,6 +3964,10 @@ fn finish_reliable_flush_application_plan(
         count,
     })
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn apply_reliable_flush_application(
     transport: &mut MergeSidecarTransport,
     plan: &ReliableFlushApplicationPlan,
@@ -3710,6 +4032,10 @@ fn apply_reliable_flush_application(
     }
 }
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ReliableFlushApplicationObservation {
     gate_marker_present_after: bool,
     gate_cursor_after: u64,
@@ -3726,6 +4052,10 @@ struct ReliableFlushApplicationObservation {
     shared_transfer_after: Option<ReliableFlushSharedTransferSnapshot>,
     sibling_state_after: ReliableFlushSiblingStateSnapshot,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn predict_reliable_flush_application(
     plan: &ReliableFlushApplicationPlan,
     now: Instant,
@@ -3775,6 +4105,10 @@ fn predict_reliable_flush_application(
         sibling_state_after: plan.sibling_state_before.clone(),
     }
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn observe_reliable_flush_application(
     transport: &MergeSidecarTransport,
     plan: &ReliableFlushApplicationPlan,
@@ -3946,6 +4280,10 @@ fn reliable_flush_application_occurrence_projection(
     application.marker_topic = application.ticket_topic;
     Ok(application)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn project_reliable_flush_marker(
     application: &mut ProductionReliableFlushApplicationProjection,
     marker: &ServerPendingChunkIdentity,
@@ -3996,6 +4334,10 @@ fn project_reliable_flush_marker(
     application.marker_chunk_count = u64::from(marker.chunk_count);
     application.marker_topic = reliable_flush_topic_tag(marker.topic);
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn project_reliable_flush_transition(
     application: &mut ProductionReliableFlushApplicationProjection,
     plan: &ReliableFlushApplicationPlan,
@@ -4036,6 +4378,10 @@ fn project_reliable_flush_transition(
 fn process_local_projection(kind: u8, digest: Hash) -> CanonicalIdentityProjection {
     reliable_flush_hash_identity(IDENTITY_DOMAIN_PROCESS_LOCAL, kind, digest)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn project_reliable_flush_residuals(
     application: &mut ProductionReliableFlushApplicationProjection,
     plan: &ReliableFlushApplicationPlan,
@@ -4097,6 +4443,10 @@ fn project_reliable_flush_residuals(
         observation.sibling_state_after.digest(),
     );
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn reliable_flush_application_projection(
     plan: &ReliableFlushApplicationPlan,
     observation: &ReliableFlushApplicationObservation,
@@ -4110,6 +4460,10 @@ fn reliable_flush_application_projection(
 }
 /// Network action emitted by the bounded transfer manager.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) struct MergeSidecarPost {
     /// Authenticated destination peer.
     pub(crate) peer: PeerId,
@@ -4133,6 +4487,10 @@ impl PartialEq for MergeSidecarPost {
 impl Eq for MergeSidecarPost {}
 /// Result of authenticating one server-side request occurrence.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) enum ServerRequestAdmission {
     /// The caller owns the terminating Kura lookup for this occurrence.
     Materialize,
@@ -4148,6 +4506,10 @@ pub(crate) enum ServerRequestAdmission {
 /// caller must either enqueue the exact response, release the authorization
 /// after transient capacity pressure, or durably retire a terminal failure.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) struct ServerRequestMaterialization {
     /// Semantic requester which owns the logical occurrence.
     pub(crate) requester: PeerId,
@@ -4158,6 +4520,10 @@ pub(crate) struct ServerRequestMaterialization {
 }
 /// Fully reassembled response awaiting canonical/QC validation and persistence.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) struct CompletedMergeSidecar {
     /// Exact compact reference from the deferred block.
     pub(crate) reference: CertifiedMergeLedgerReference,
@@ -4166,6 +4532,10 @@ pub(crate) struct CompletedMergeSidecar {
 }
 /// Outcome of accepting one response chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) enum ChunkIngestOutcome {
     /// Chunk was accepted but the entry is incomplete.
     Accepted,
@@ -4174,6 +4544,10 @@ pub(crate) enum ChunkIngestOutcome {
 }
 /// In-memory bounded transport state. Incomplete bytes are never durable.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 pub(crate) struct MergeSidecarTransport {
     limits: MergeSidecarLimits,
     reply_source_capacity: usize,
@@ -4220,6 +4594,10 @@ pub(crate) struct MergeSidecarTransport {
     #[cfg(test)]
     obstruct_next_terminal_retirement_persist: bool,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct ServerServiceGenerationTransitionPlan {
     server_stream_capacity: usize,
     server_roster_digest: MergeSidecarRosterDigest,
@@ -4229,6 +4607,10 @@ struct ServerServiceGenerationTransitionPlan {
     next_generation: CertifiedMergeSidecarServiceGenerationV1,
 }
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 enum ServerServiceGenerationRetirement {
     /// Every retained occurrence was cumulatively closed by its requester.
     AuthenticatedTerminal,
@@ -4238,7 +4620,15 @@ enum ServerServiceGenerationRetirement {
 }
 /// Private evidence that durable lifecycle restoration invalidated every
 /// predecessor process-local writer and output queue.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 struct RestoredLifecycleResponderFence;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSidecarTransport {
     /// Construct an empty transport with the dependent-test source geometry.
     #[cfg(test)]
@@ -8939,6 +9329,10 @@ pub(crate) struct MergeSigningGuard {
     committed_carrier_height: u64,
     limits: MergeSigningGuardLimits,
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 impl MergeSigningGuard {
     /// Open the guard under the Kura root and fail closed on malformed records.
     #[cfg(test)]
@@ -9586,6 +9980,10 @@ impl MergeSigningGuard {
         Ok(())
     }
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native sidecar owner")
+)]
 fn ensure_regular_directory(path: &Path) -> Result<(), MergeSidecarError> {
     if path.exists() {
         let metadata = fs::symlink_metadata(path)

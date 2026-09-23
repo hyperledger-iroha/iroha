@@ -66,7 +66,9 @@ use iroha_data_model::{
     },
     nexus::{
         LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusV1, LaneVisibility,
+        LaneLifecycleStatusV1, LaneVisibility, PublicLaneMonetaryPlanV1,
+        PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
+        PublicLaneMonetaryScopeV1,
     },
     parameter::{Parameters, system::SumeragiNposParameters},
     prelude::*,
@@ -149,7 +151,7 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
     let two_stakes = stake
         .checked_add(&stake)
         .expect("two validator self-stakes must be representable");
-    let mut bootstrap = vec![
+    let mut bootstrap: Vec<InstructionBox> = vec![
         Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
@@ -163,7 +165,7 @@ fn custom_genesis_post_topology(topology: &[PeerId]) -> Vec<Vec<InstructionBox>>
         ))
         .into(),
     ];
-    let mut default_lane_validators = Vec::with_capacity(VALIDATOR_COUNT * 2);
+    let mut default_lane_validators: Vec<InstructionBox> = Vec::with_capacity(VALIDATOR_COUNT * 2);
     for (index, peer_id) in topology.iter().enumerate() {
         let validator = AccountId::new(validator_keypair(index).public_key().clone());
         bootstrap.push(Register::account(Account::new(validator.clone())).into());
@@ -1905,6 +1907,7 @@ fn inspect_stopped_peer(
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         block_hash_history_bytes:
             iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
@@ -2451,6 +2454,17 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .await?;
         registration_alignment_tick = registration_alignment_tick.saturating_add(1);
     }
+    let registration_epoch_end = height(authority)
+        .await?
+        .checked_add(FIXTURE_EPOCH_LENGTH_BLOCKS)
+        .ok_or_else(|| eyre!("BPNG registration epoch end overflowed"))?;
+    ensure!(
+        registration_epoch_end % FIXTURE_EPOCH_LENGTH_BLOCKS == 0,
+        "BPNG registration plan requires a finalized epoch boundary"
+    );
+    let activation_height = registration_epoch_end
+        .checked_add(1)
+        .ok_or_else(|| eyre!("BPNG registration activation height overflowed"))?;
     let mut self_registrations = Vec::with_capacity(VALIDATOR_COUNT);
     for ((validator_client, peer), keypair) in validator_clients
         .iter()
@@ -2467,6 +2481,19 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 validator.clone(),
                 stake.clone(),
                 Metadata::default(),
+                PublicLaneMonetaryPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Network(network.network_id()),
+                    valid_until_height: registration_epoch_end,
+                    source_asset: AssetId::new(stake_asset_definition_id(), validator.clone()),
+                    destination_asset: AssetId::new(
+                        stake_asset_definition_id(),
+                        staking_custody_account(),
+                    ),
+                    amount: stake.clone(),
+                    precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                        PublicLaneMonetaryRegistrationV1 { activation_height },
+                    ),
+                },
             ),
         );
         ensure!(

@@ -64,6 +64,7 @@ pub(crate) enum SnapshotCaptureError {
     #[error("State snapshot observation changed during capture")]
     Changed,
     /// The captured committed cut belongs to another finalized block boundary.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
     #[error("State snapshot differs from the finalized commit {component}")]
     CommitBoundary {
         /// Exact identity component which failed before hashing or durable I/O.
@@ -182,6 +183,7 @@ impl CapturedStateSnapshot {
     /// substitute another generation. A later publication does not invalidate
     /// these immutable historical bytes. This authenticates the capture's block
     /// association, not finality or the installation of retained State journals.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
     pub(crate) fn canonical_hash_for_block(
         &self,
         network_id: NetworkId,

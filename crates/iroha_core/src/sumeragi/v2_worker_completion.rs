@@ -425,8 +425,6 @@ impl LifecycleValidateCompletionAckV1 {
         self.queue.acknowledge_lifecycle_validate(self.key);
         self.drop_guard.disarm();
     }
-
-
 }
 /// Original Validate dispatch and completion acknowledgement parked on local ownership.
 #[must_use = "local refusal must retain the same dispatch until retry or recovery"]
@@ -448,21 +446,37 @@ pub(in crate::sumeragi) enum LocalLifecycleValidateRetryV1 {
 }
 impl RetainedLocalLifecycleValidateV1 {
     /// Borrow the exact authenticated source still owned by the original dispatch.
-    pub(in crate::sumeragi) fn native_source_recovery(&self) -> Option<(
-        wire::BlockSubject, usize, &Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+    pub(in crate::sumeragi) fn native_source_recovery(
+        &self,
+    ) -> Option<(
+        wire::BlockSubject,
+        usize,
+        &Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
     )> {
         match &self.refusal {
-            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { execution_index, authenticated_source, .. }
-                if !self.native_source_recovered => Some((self.dispatch.subject(), *execution_index, authenticated_source)),
+            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery {
+                execution_index,
+                authenticated_source,
+                ..
+            } if !self.native_source_recovered => Some((
+                self.dispatch.subject(),
+                *execution_index,
+                authenticated_source,
+            )),
             _ => None,
         }
     }
     /// Only the exact response-settlement receipt can release this source wait.
     pub(in crate::sumeragi) fn accept_native_source_completion(
-        &mut self, completion: &super::v2_apply::native_validation::NativeSourceRecoveryCompletion,
+        &mut self,
+        completion: &super::v2_apply::native_validation::NativeSourceRecoveryCompletion,
     ) -> bool {
-        let Some((subject, index, source)) = self.native_source_recovery() else { return false; };
-        if !completion.matches(subject, index, source) { return false; }
+        let Some((subject, index, source)) = self.native_source_recovery() else {
+            return false;
+        };
+        if !completion.matches(subject, index, source) {
+            return false;
+        }
         self.native_source_recovered = true;
         true
     }
@@ -476,9 +490,11 @@ impl RetainedLocalLifecycleValidateV1 {
             LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
             LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
             LocalValidationRefusal::NativeSourceRecovery { wake, .. } => {
-                if !self.native_source_recovered { return LocalLifecycleValidateRetryV1::Waiting(self); }
+                if !self.native_source_recovered {
+                    return LocalLifecycleValidateRetryV1::Waiting(self);
+                }
                 wake.clone()
-            },
+            }
             LocalValidationRefusal::RecoveryRequired(reason) => {
                 self.ack
                     .drop_guard
@@ -745,6 +761,7 @@ pub(in crate::sumeragi) enum LifecycleDecisionApplyDeferredRetryV1 {
 impl PreparedLifecycleDecisionApplyCompletionV1 {
     /// Compare service queue, output guard, and recovery owner without releasing
     /// guarded completion or process-local dependencies.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(in crate::sumeragi) fn authorizes_sidecar_owner(
         &self,
         services: &ProductionV2Services,
@@ -783,24 +800,35 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
         let ready = match &refusal {
             super::v2_body_store::LocalValidationRefusal::PhysicalBusy(busy) => {
                 let mut pending = busy.wait.clone().wait_for_release();
-                std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                    &mut std::task::Context::from_waker(busy.waker())).is_ready()
+                std::future::Future::poll(
+                    std::pin::Pin::new(&mut pending),
+                    &mut std::task::Context::from_waker(busy.waker()),
+                )
+                .is_ready()
             }
             super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, wake } => {
                 let mut pending = wait.clone().wait_for_release();
-                std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                    &mut std::task::Context::from_waker(&wake)).is_ready()
+                std::future::Future::poll(
+                    std::pin::Pin::new(&mut pending),
+                    &mut std::task::Context::from_waker(&wake),
+                )
+                .is_ready()
             }
             super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. } => false,
             super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => {
-                drop(work_ack); drop(completion_guard);
+                drop(work_ack);
+                drop(completion_guard);
                 return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
             }
         };
         if !ready {
             return LifecycleDecisionApplyDeferredRetryV1::Unavailable(Self {
-                guarded: Box::new(GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
-                    LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal }, completion_guard)),
+                guarded: Box::new(
+                    GuardedLifecycleDecisionApplyWorkerResultV1::from_retry_parts(
+                        LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal },
+                        completion_guard,
+                    ),
+                ),
                 work_ack,
             });
         }
@@ -2076,21 +2104,30 @@ impl V2IoHandle {
 }
 
 /// Probe only the actual original publication dependency before requeueing Apply.
-fn local_apply_refusal_ready(refusal: &super::v2_body_store::LocalValidationRefusal) -> Result<bool, String> {
+fn local_apply_refusal_ready(
+    refusal: &super::v2_body_store::LocalValidationRefusal,
+) -> Result<bool, String> {
     use super::v2_body_store::LocalValidationRefusal;
     match refusal {
         LocalValidationRefusal::PhysicalBusy(busy) => {
             let mut pending = busy.wait.clone().wait_for_release();
-            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                &mut std::task::Context::from_waker(busy.waker())).is_ready())
+            Ok(std::future::Future::poll(
+                std::pin::Pin::new(&mut pending),
+                &mut std::task::Context::from_waker(busy.waker()),
+            )
+            .is_ready())
         }
         LocalValidationRefusal::QueueRelease { wait, wake } => {
             let mut pending = wait.clone().wait_for_release();
-            Ok(std::future::Future::poll(std::pin::Pin::new(&mut pending),
-                &mut std::task::Context::from_waker(&wake)).is_ready())
+            Ok(std::future::Future::poll(
+                std::pin::Pin::new(&mut pending),
+                &mut std::task::Context::from_waker(&wake),
+            )
+            .is_ready())
         }
         LocalValidationRefusal::RecoveryRequired(reason) => Err(reason.clone()),
-        LocalValidationRefusal::NativeSourceRecovery { .. } => Err(
-            "validated Apply lost its original Native source custody".into()),
+        LocalValidationRefusal::NativeSourceRecovery { .. } => {
+            Err("validated Apply lost its original Native source custody".into())
+        }
     }
 }

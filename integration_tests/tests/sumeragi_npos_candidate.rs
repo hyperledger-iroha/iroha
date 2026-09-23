@@ -14,6 +14,10 @@ use iroha::{
             PublicLaneCandidateAuthorization, RegisterPublicLaneCandidate,
             RegisterPublicLaneValidator,
         },
+        nexus::{
+            PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
+            PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
+        },
         parameter::system::SumeragiNposParameters,
         prelude::*,
         transaction::{FeePaymentIntent, error::TransactionRejectionReason},
@@ -106,6 +110,11 @@ async fn fresh_global_candidate_requires_prepared_epoch_transition() -> Result<(
             let permissions = admin.client().query(FindPermissionsByAccountId::new(validator.clone())).execute_all()?;
             let manage_peers: Permission = CanManagePeers.into();
             ensure!(!permissions.contains(&manage_peers), "operator must not receive peer-management authority");
+            let plan_valid_until_height = admin.status().get()?.blocks.checked_add(EPOCH_LENGTH)
+                .ok_or_else(|| eyre!("candidate monetary plan height overflowed"))?;
+            let escrow = AccountId::parse_encoded(
+                &defaults::nexus::staking::stake_escrow_account_id(),
+            )?;
             let registration = RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
@@ -113,6 +122,18 @@ async fn fresh_global_candidate_requires_prepared_epoch_transition() -> Result<(
                 stake_account: validator.clone(),
                 initial_stake: 2_000_u64.into(),
                 metadata: Metadata::default(),
+                monetary_plan: PublicLaneMonetaryPlanV1 {
+                    network_scope: PublicLaneMonetaryScopeV1::Network(network_id.clone()),
+                    valid_until_height: plan_valid_until_height,
+                    source_asset: AssetId::new(stake_definition.clone(), validator.clone()),
+                    destination_asset: AssetId::new(stake_definition.clone(), escrow),
+                    amount: 2_000_u64.into(),
+                    precondition: PublicLaneMonetaryPreconditionV1::Registration(
+                        PublicLaneMonetaryRegistrationV1 {
+                            activation_height: EPOCH_LENGTH + 1,
+                        },
+                    ),
+                },
             };
             let authorization = PublicLaneCandidateAuthorization::new(network_id, registration.clone(), EPOCH_LENGTH + 1);
             let candidate = RegisterPublicLaneCandidate {
