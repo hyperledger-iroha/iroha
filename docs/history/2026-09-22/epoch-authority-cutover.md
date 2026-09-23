@@ -375,3 +375,54 @@ and actual build metadata, without the local-fast metadata override. It will
 capture the official native-artifact workspace manifest and retain its binary
 identity. This is preparation for real-process regressions, not a clean signed
 release/source-seal claim.
+
+
+## Genesis runtime failures and retained Apply correction (2026-09-23)
+
+The real-metadata release daemon builds `normal-daemon25` and
+`normal-daemon28` pass, as do the standard-profile isolated network harness
+builds `native-harness26` and `native-harness27`. Build28 and harness27 share
+the native-artifact workspace manifest
+`d1af847f1abd45fcb78b5cc65e76f3d00baf1ea9edca29d86d91c3436eb66441`;
+the daemon hash is
+`b711dae0e2064ee2a83d06160cae462d122742a4693534940263269b259d50f0`
+and harness hash is
+`a08aba229148c815143e495d001e2a0b3291e79ea4180b524a30e2f414181a3c`.
+Each capture retains its exact commands, source observations and binary under
+`dist/sumeragi-main-work/generation188-real-process-build/`. These are local
+artifacts, not a clean signed release.
+
+Two unchanged-source controls fail and remain retained. `restart-fixture28`
+fails during actual signed four-validator genesis pre-execution, before any
+daemon starts: Genesis-scoped staking incorrectly demands NPoS parameters,
+which permissioned genesis prohibits. The correction accepts only initial
+height one and signed expiry one under authenticated Genesis scope. Network
+scope retains its committed NPoS validity window; exact transfer and custody
+checks remain mandatory. The four/seven-validator fixture now configures the
+actual `3f + 1` lane geometry and explicitly requests funded lane authority;
+it must pass on the normal test stack.
+
+`native-silent28` launches four real NPoS validators but times out after
+240 seconds during genesis startup. All four retain the same CommitQC at
+height one, view zero; none reaches Applied. The silent-author outage and sole
+Native transaction are never reached. Source and both artifacts remain
+unchanged. The retained logs show one pending application with empty I/O,
+and a sample of one test-owned daemon shows an idle I/O worker. The parked
+recovered Prepare Broadcast is an intentional durable retention, not runnable
+work and not authority to release it early.
+
+Source tracing identifies a deferred-Apply retry gap: consuming ApplyDeferred
+removes its physical completion, but the only retry was inside a drain that
+the lifecycle pre-gate never calls for an empty completion queue. A released
+dependency therefore needed unrelated completion traffic. The old probe also
+dropped its ReleaseFuture immediately, canceling its wake registration. The
+correction services the same retained task at authenticated Completion rank
+and keeps its original release future alive across turns and backpressure.
+The dedicated lifecycle Apply path uses the same retained dependency, replacing
+its identical canceled-wake probe while preserving the guarded result and exact
+queue acknowledgement. The starvation census now identifies a retained Apply's actual dependency.
+The failure logs did not expose that original dependency, so this source
+finding is not yet proof that the complete runtime failure is repaired.
+Focused regression execution and a fresh matching-source network rerun remain
+pending. L1–L6, full resource admission and unchanged four/seven-validator
+fault qualification remain open.

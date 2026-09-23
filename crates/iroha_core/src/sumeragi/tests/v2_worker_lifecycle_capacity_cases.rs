@@ -1820,3 +1820,140 @@ pub(in crate::sumeragi) fn exercise_local_validate_queue_retry_for_test(
     )
     .expect("same-row semantic completion retains the exact final acknowledgement")
 }
+
+
+impl LifecyclePlannerIoFixture {
+    /// Transfer one original ordinary Apply through its real queue and deferred callback.
+    pub(in crate::sumeragi) fn publish_ordinary_apply_deferred_for_test(
+        &self,
+        services: &ProductionV2Services,
+        task: ApplyTask,
+        refusal: super::super::v2_body_store::LocalValidationRefusal,
+    ) {
+        let work_id = task.id();
+        let ordinal = task.lifecycle_ordinal();
+        services
+            .io
+            .as_ref()
+            .expect("live worker")
+            .command_tx
+            .try_send(V2IoCommand::Apply(task))
+            .expect("admit the original Apply to the actual bounded worker queue");
+        let V2IoCommand::Apply(task) = self.command_rx.try_recv().expect("activate original Apply")
+        else {
+            panic!("the queue changed the original Apply command kind");
+        };
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::ApplyDeferred { task, refusal },
+            Some(ordinal),
+        )
+        .expect("publish the original deferred callback under real completion accounting");
+    }
+
+    /// Inspect the physical head without creating any event that could drive a retry.
+    pub(in crate::sumeragi) fn assert_ordinary_apply_wait_for_test(
+        &self,
+        services: &ProductionV2Services,
+        pending: bool,
+        command_depth: usize,
+    ) {
+        assert_eq!(services.pending_local_apply.is_some(), pending);
+        assert!(services.held_io_completion.is_none());
+        assert!(services.available_local_completion().is_none());
+        assert!(
+            matches!(
+                services
+                    .io
+                    .as_ref()
+                    .expect("live worker")
+                    .completion_rx
+                    .try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ),
+            "the physical completion channel is empty and still connected"
+        );
+        assert!(
+            self.admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .is_empty()
+        );
+        let state = self.command_rx.queue.lock();
+        assert_eq!(state.commands.len(), command_depth);
+        assert_eq!(state.work.len(), usize::from(!pending));
+        assert_eq!(self.admission.queued(), command_depth);
+    }
+
+    /// Saturate only real command capacity, without generating any completion.
+    pub(in crate::sumeragi) fn fill_ordinary_apply_retry_queue_for_test(
+        &self,
+        services: &ProductionV2Services,
+    ) -> usize {
+        let sender = &services.io.as_ref().expect("live worker").command_tx;
+        for count in 0..=self.admission.capacity() {
+            match sender.try_send(V2IoCommand::Shutdown) {
+                Ok(()) => {}
+                Err(V2IoTrySendError::Full(V2IoCommand::Shutdown)) => {
+                    assert!(count > 0);
+                    return count;
+                }
+                _ => panic!("the connected bounded queue must refuse only for capacity"),
+            }
+        }
+        panic!("the actual command queue did not enforce its configured bound");
+    }
+
+    /// Return command capacity without publishing an unrelated physical callback.
+    pub(in crate::sumeragi) fn release_ordinary_apply_retry_queue_for_test(&self, count: usize) {
+        for _ in 0..count {
+            assert!(matches!(
+                self.command_rx.try_recv(),
+                Ok(V2IoCommand::Shutdown)
+            ));
+        }
+        assert!(matches!(
+            self.command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    /// Consume exactly one retried command and verify every original Apply coordinate.
+    pub(in crate::sumeragi) fn assert_and_finish_ordinary_apply_retry_for_test(
+        &self,
+        services: &ProductionV2Services,
+        original: &ApplyTask,
+    ) {
+        let V2IoCommand::Apply(queued) = self.command_rx.try_recv().expect("one retried Apply")
+        else {
+            panic!("retry changed the original command kind");
+        };
+        assert_eq!(queued.id(), original.id());
+        assert_eq!(queued.tag(), original.tag());
+        assert_eq!(
+            queued.authorized_owner_tag(),
+            original.authorized_owner_tag()
+        );
+        assert_eq!(queued.subject(), original.subject());
+        assert_eq!(queued.certificate(), original.certificate());
+        assert_eq!(queued.validated_receipt(), original.validated_receipt());
+        assert_eq!(queued.lifecycle_ordinal(), original.lifecycle_ordinal());
+        assert!(
+            matches!(self.command_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "bounded pre-gate probes cannot duplicate the original task"
+        );
+        self.command_rx.complete_work(queued.id());
+        services
+            .io
+            .as_ref()
+            .expect("live worker")
+            .command_tx
+            .acknowledge_completion(queued.id());
+        assert!(self.command_rx.queue.lock().work.is_empty());
+        assert_eq!(self.admission.queued(), 0);
+    }
+}

@@ -3565,7 +3565,7 @@ required|runtime_capacity|Self::LifecycleDecisionApply(_)|Apply completion lost 
 required|unified_take|V2IoCompletion::LifecycleDecisionApply(guarded)|unified completion classifier lost neutral Apply ownership
 required|unified_take|prepare_lifecycle_decision_apply_ack|unified completion classifier lost neutral Apply acknowledgement preparation
 required|unified_take|LifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
-required|unified_take|PreparedLifecycleDecisionApplyCompletionV1 { guarded, work_ack }|unified completion classifier lost its guarded neutral Apply handoff
+required|unified_take|PreparedLifecycleDecisionApplyCompletionV1::new(guarded, work_ack)|unified completion classifier lost its guarded neutral Apply handoff
 required|whole|fn authorizes_sidecar_owner(|Apply sidecar owner oracle is missing
 required|whole|V2IoCommand::LifecycleDecisionApply|worker lost its neutral lifecycle Apply command
 required|whole|V2IoCompletion::LifecycleDecisionApply|worker lost its neutral lifecycle Apply completion

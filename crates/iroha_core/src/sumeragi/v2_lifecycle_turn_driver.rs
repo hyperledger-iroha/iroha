@@ -1450,6 +1450,20 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
         }
 
+        // A deferred ordinary Apply has already left the physical completion
+        // queue. Service its original dependency before classifying that queue,
+        // including when no new completion or Ready work exists.
+        if let Err(reason) = self.services.retry_local_apply() {
+            iroha_logger::error!(%reason, "retained Apply retry failed closed");
+            self.services
+                .lifecycle_output_guard()
+                .retain_effect_failure(reason);
+            self.close_output_for_restart();
+            return ProductionLifecycleCompletionPreGateV1::Selected(
+                ProductionLifecycleCompletionSelectionV1::RestartRequired,
+            );
+        }
+
         let current_validate_fence_wait =
             self.pending_lifecycle_completion
                 .as_ref()
