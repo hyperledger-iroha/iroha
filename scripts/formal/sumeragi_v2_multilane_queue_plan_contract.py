@@ -763,7 +763,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
         "crates/iroha_core/src/queue.rs",
         "method",
         "Queue::reject_exact_queue_plan_admission_claim",
-        ("reject_exact_queue_plan_admission_claim_inner(binding, false)",),
+        ("reject_exact_queue_plan_admission_claim_inner(binding, true)",),
     ),
     (
         "crates/iroha_core/src/queue.rs",
@@ -1138,7 +1138,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
         "crates/iroha_core/src/queue.rs",
         "method",
         "Queue::reject_exact_queue_plan_admission_claim",
-        ("self.reject_exact_queue_plan_admission_claim_inner(binding, false)",),
+        ("self.reject_exact_queue_plan_admission_claim_inner(binding, true)",),
     ),
     (
         "crates/iroha_core/src/queue.rs",

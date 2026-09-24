@@ -201,6 +201,9 @@ def copy_queue_plan_pending_membership_fixture(
         Path(row[0])
         for row in module.QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS
     )
+    relatives.add(
+        module.FORMAL_RELATIVE / f"{module.QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}.tla"
+    )
     copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
     return models
 
@@ -330,6 +333,29 @@ def test_queue_plan_pending_membership_contract_accepts_current_production(
         tmp_path, module, models
     )
     assert errors == (), errors
+
+
+@pytest.mark.parametrize(
+    ("declaration", "relation"),
+    (
+        ("ReturnPublicAccepted(binding) ==", "  /\\ canonicalBindings = {binding}"),
+        ("MLPublic202Exact ==", "  /\\ publicAccepted \\subseteq canonicalBindings"),
+    ),
+)
+def test_queue_plan_public_202_requires_canonical_binding_in_model(
+    tmp_path: Path, declaration: str, relation: str
+) -> None:
+    """The model must reject public success before the canonical registry owns it."""
+    module = load_checker()
+    models = copy_queue_plan_pending_membership_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / module.FORMAL_RELATIVE
+        / f"{module.QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}.tla"
+    )
+    replace_once_after(path, declaration, relation, "  /\\ TRUE")
+    errors = validate_queue_plan_pending_membership_fixture(tmp_path, module, models)
+    assert any("canonical 202 model relation changed" in error for error in errors), errors
 
 
 def test_queue_plan_exact_membership_contract_rejects_whole_roster_scan(

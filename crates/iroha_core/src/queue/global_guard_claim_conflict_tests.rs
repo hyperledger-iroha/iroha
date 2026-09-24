@@ -95,6 +95,53 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
 }
 
 #[test]
+fn exact_queue_plan_rejection_waits_for_popped_guard_release() {
+    let fixture = globally_bound_guard_fixture();
+    let hash = fixture.transaction.hash_as_entrypoint();
+    let guard = fixture.pop_guard();
+
+    assert!(
+        !fixture
+            .queue
+            .reject_exact_queue_plan_admission_claim(&fixture.binding)
+            .expect("defer exact terminal claim while the popped guard owns it"),
+        "terminal rejection must not tombstone a popped QueuePlan owner"
+    );
+    assert!(fixture.queue.replay_terminal_cleanup_pending(hash));
+    assert!(fixture.queue.txs.contains_key(&hash));
+    fixture.assert_live_journal_claim();
+
+    drop(guard);
+    fixture.assert_terminally_removed();
+}
+
+#[test]
+fn exact_queue_plan_rejection_waits_for_global_selection_lease() {
+    let fixture = globally_bound_guard_fixture();
+    let hash = fixture.transaction.hash_as_entrypoint();
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
+        .expect("select the exact QueuePlan claim");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].hash_as_entrypoint(), hash);
+
+    assert!(
+        !fixture
+            .queue
+            .reject_exact_queue_plan_admission_claim(&fixture.binding)
+            .expect("defer exact terminal claim while selection owns it"),
+        "terminal rejection must not tombstone a globally selected QueuePlan owner"
+    );
+    assert!(fixture.queue.replay_terminal_cleanup_pending(hash));
+    fixture.assert_live_journal_claim();
+
+    drop(lease);
+    fixture.assert_terminally_removed();
+}
+
+#[test]
 fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker() {
     let fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash_as_entrypoint();

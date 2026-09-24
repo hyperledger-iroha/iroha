@@ -13088,11 +13088,14 @@ impl Queue {
     /// # Errors
     /// Returns an identity or durability error when the binding is malformed or the queue's
     /// live ownership cannot be reconciled with its exact durable journal claim.
+    /// Returns `Ok(false)` while a selected, popped, or reserved owner still
+    /// holds the claim. Selection and guard release resume deferred cleanup;
+    /// reservation ownership remains under its original Kura terminal corridor.
     pub fn reject_exact_queue_plan_admission_claim(
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<bool, LaneQueueReservationError> {
-        self.reject_exact_queue_plan_admission_claim_inner(binding, false)
+        self.reject_exact_queue_plan_admission_claim_inner(binding, true)
     }
     /// Terminalize local durable claims whose exact autoscale route has closed
     /// without acquiring canonical admission membership.

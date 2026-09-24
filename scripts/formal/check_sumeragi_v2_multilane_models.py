@@ -5290,6 +5290,36 @@ def _validate_queue_plan_pending_membership_contract(
     if not _validate_queue_plan_pending_membership_model_bindings(models, errors):
         return
 
+    registry_model_path = (
+        root / FORMAL_RELATIVE / f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}.tla"
+    )
+    if _regular_file(registry_model_path, "QueuePlan admission registry model", errors):
+        registry_model = registry_model_path.read_text(encoding="utf-8")
+        for start, end, required in (
+            (
+                "ReturnPublicAccepted(binding) ==",
+                "ActivateExactQueueClaim(binding) ==",
+                "  /\\ canonicalBindings = {binding}",
+            ),
+            (
+                "MLPublic202Exact ==",
+                "MLExecutionRequiresExactBinding ==",
+                "  /\\ publicAccepted \\subseteq canonicalBindings",
+            ),
+        ):
+            if registry_model.count(start) != 1 or registry_model.count(end) != 1:
+                errors.append(
+                    f"{registry_model_path}: QueuePlan canonical 202 model declaration "
+                    f"changed: {start}"
+                )
+                continue
+            body = registry_model.split(start, 1)[1].split(end, 1)[0]
+            if body.count(required) != 1:
+                errors.append(
+                    f"{registry_model_path}: QueuePlan canonical 202 model relation "
+                    f"changed: {required}"
+                )
+
     state_path = root / QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
     if _regular_file(
         state_path,

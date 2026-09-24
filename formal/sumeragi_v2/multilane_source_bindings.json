@@ -27404,7 +27404,7 @@
           "kind": "method",
           "symbol": "Queue::reject_exact_queue_plan_admission_claim",
           "required_tokens": [
-            "reject_exact_queue_plan_admission_claim_inner(binding, false)"
+            "reject_exact_queue_plan_admission_claim_inner(binding, true)"
           ]
         },
         {

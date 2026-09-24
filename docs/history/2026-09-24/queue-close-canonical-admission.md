@@ -30,7 +30,8 @@ it into memory.
 Focused Core library compilation passed. The live close test covers certified
 and ordinary durable claims, Queue pop, journal removal and drain observation;
 the canonical-membership test retains an admitted claim; the restart test
-removes an uncarried claim without reopening an invalid route. The Torii
+removes an uncarried claim without reopening an invalid route. All three Core
+cases pass again on the final Rust source. The Torii
 canonical-wait and pre-registry-response tests passed, as did the retained
 handoff case. This is scoped development evidence, not a network liveness
 verdict.
@@ -40,9 +41,28 @@ public-response gate, plus exact-claim terminal cleanup. All 52 selected
 source-contract cases pass, including mutations that remove the wait or change
 its height, and the full multilane structural checker passes. These checks
 bind source behavior to the model; they do not extract a production trace.
+The QueuePlan TLA action and public-202 invariant now require canonical
+membership. Three focused model/source cases pass on this final relation,
+including both relation-removal mutations. The pinned TLC execution has not
+been run for this checkpoint.
 
 Still required: a real four-validator delayed-receipt/partial-attempt closure
 campaign with restart; distinct route committees; physical retirement under
 selection and storage contention; and the unchanged broader loss, reordering,
 backpressure and final-transaction matrix. The remaining source and resource
 ownership work in the Sumeragi redesign plan is not closed by this checkpoint.
+
+A follow-up ownership review found that ordinary exact QueuePlan rejection
+selected the unguarded path even when a selected or popped transaction still
+owned the same durable claim. The public rejection entrypoint now uses the
+guarded path already used for replay terminal cleanup. It keeps the exact
+journal claim until selection or guard release; autonomous reservations stay
+under their original Kura terminal corridor. Two Core regressions hold a popped
+guard and a global selection lease across rejection, respectively. The source
+ledger requires the guarded call, the multilane structural gate passes, and
+Rust runtime validation of these new cases remains pending.
+
+The first attempted four-peer autoscale run selected a September 23 release
+daemon against September 24 test and client sources. Status decoding failed
+with a Norito length mismatch before block one, so that run cannot qualify
+consensus behavior. A same-source daemon rebuild and pinned rerun are required.
