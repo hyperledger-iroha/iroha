@@ -121,15 +121,22 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
             .also { selected = it }
     }
 
-    /** Read the exact live native selection after a lost phase-1 response; never select again. */
+    /** Recheck the exact live native selection, including after a lost phase-1 response. */
     @Synchronized
     fun recoverExactSelection(accountI105: String): Selection? {
         val canonical = requireCanonicalI105Address(accountI105, "enrollment account")
         if (!beginInvoked || cancelled || poisoned || begunAccountI105 != canonical) return null
-        selected?.let { return it }
         val fields = bridge.invoke(METHOD, listOf(u32(7), canonical.toByteArray(Charsets.UTF_8)))
-        return Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4],
-            fields[5], fields[6]).also { selected = it }
+        val candidate = Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4],
+            fields[5], fields[6])
+        selected?.let { original ->
+            if (!sameSelection(original, candidate)) {
+                poisoned = true
+                error("Native enrollment selection changed on exact recovery")
+            }
+            return original
+        }
+        return candidate.also { selected = it }
     }
 
     /**
@@ -277,6 +284,15 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     }
 
     private fun copyFields(fields: List<ByteArray>): List<ByteArray> = fields.map(ByteArray::copyOf)
+    private fun sameSelection(left: Selection, right: Selection): Boolean =
+        left.accountI105 == right.accountI105 &&
+            left.ticket().contentEquals(right.ticket()) &&
+            left.clientNonce().contentEquals(right.clientNonce()) &&
+            left.releaseId().contentEquals(right.releaseId()) &&
+            left.profileId().contentEquals(right.profileId()) &&
+            left.laneId().contentEquals(right.laneId()) &&
+            left.ownerScope().contentEquals(right.ownerScope()) &&
+            left.nativeDeadlineContinuousMS() == right.nativeDeadlineContinuousMS()
     private fun u32(value: Int): ByteArray = KagemushaCoreCoordinatorFrameV1.u32(value)
     private fun u64(value: Long): ByteArray = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array()
 

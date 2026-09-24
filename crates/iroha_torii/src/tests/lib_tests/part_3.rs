@@ -924,12 +924,19 @@ async fn identifier_policies_lists_registered_policy() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x11,
         "derive identifier policy-list signer fixture key",
     );
-    let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
+    let (_sample_policy, program_policy) =
+        sample_identifier_policy(&authority, &signer, &policy_id);
+    let policy = IdentifierPolicy::new(
+        policy_id.clone(),
+        authority.clone(),
+        IdentifierNormalization::Exact,
+        program_policy.program_id.clone(),
+    );
     let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
     resolver.register_program_runtime(
         program_policy.program_id.clone(),
@@ -967,7 +974,7 @@ async fn identifier_policies_lists_registered_policy() {
     assert_eq!(dto.items[0].policy_id, policy_id.to_string());
     assert!(dto.items[0].active);
     assert_eq!(dto.items[0].backend, "bfv-affine-sha3-256-v1");
-    assert_eq!(dto.items[0].normalization, "email_address");
+    assert_eq!(dto.items[0].normalization, "exact");
     assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
     assert!(
         dto.items[0]
@@ -1095,7 +1102,7 @@ async fn identifier_resolve_returns_bound_account() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x15,
         "derive identifier resolve bound signer fixture key",
@@ -1116,19 +1123,32 @@ async fn identifier_resolve_returns_bound_account() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"owner@example.test",
+        b"+15551234567",
         b"identifier-resolve-bound-account",
     );
     let encrypted_input_hex =
         hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
     let output_opening =
         output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
+    let network_id = app.signed_query_admission.network_id();
+    let canonicality = phone_retail_canonicality_for_ciphertext(
+        &policy,
+        &program_policy,
+        &signer,
+        network_id.clone(),
+        uaid,
+        &authority,
+        &encrypted_input,
+        &output_opening,
+    );
     let draft = resolver
-        .derive_encrypted(
+        .derive_phone_retail_encrypted(
             &policy,
             &program_policy,
             &encrypted_input,
             output_opening.clone(),
+            canonicality.clone(),
+            &network_id,
         )
         .expect("derive opaque id");
     let receipt = resolver
@@ -1155,8 +1175,8 @@ async fn identifier_resolve_returns_bound_account() {
         NoritoJson(routing::IdentifierResolveRequestDto {
             policy_id: policy_id.to_string(),
             encrypted_input: encrypted_input_hex,
-            output_opening: output_opening.clone(),
-            phone_retail_canonicality: None,
+            output_opening,
+            phone_retail_canonicality: Some(canonicality),
         }),
     )
     .await
@@ -1205,7 +1225,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x17,
         "derive identifier resolve programmed signer fixture key",
@@ -1226,19 +1246,32 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"owner@example.test",
+        b"+15551234567",
         b"identifier-resolve-programmed",
     );
     let encrypted_input_hex =
         hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
     let output_opening =
         output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
+    let network_id = app.signed_query_admission.network_id();
+    let canonicality = phone_retail_canonicality_for_ciphertext(
+        &policy,
+        &program_policy,
+        &signer,
+        network_id.clone(),
+        uaid,
+        &authority,
+        &encrypted_input,
+        &output_opening,
+    );
     let draft = resolver
-        .derive_encrypted(
+        .derive_phone_retail_encrypted(
             &policy,
             &program_policy,
             &encrypted_input,
             output_opening.clone(),
+            canonicality.clone(),
+            &network_id,
         )
         .expect("derive opaque id");
     let receipt = resolver
@@ -1266,7 +1299,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
             policy_id: policy_id.to_string(),
             encrypted_input: encrypted_input_hex,
             output_opening,
-            phone_retail_canonicality: None,
+            phone_retail_canonicality: Some(canonicality),
         }),
     )
     .await
@@ -1520,7 +1553,7 @@ async fn identifier_resolve_enforces_token_policy() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_claim_receipt_normalizes_phone_input() {
+async fn identifier_claim_receipt_accepts_canonical_phone_attestation() {
     let authority = checked_torii_test_account_id(
         0x1c,
         "derive identifier claim receipt authority fixture key",
@@ -1574,7 +1607,7 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
         &policy,
         &program_policy,
         &signer,
-        network_id,
+        network_id.clone(),
         uaid,
         &authority,
         &encrypted_input,
@@ -1654,7 +1687,7 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .build(&authority);
     let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x1f,
         "derive identifier receipt lookup signer fixture key",
@@ -1675,13 +1708,31 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"owner@example.test",
+        b"+15551234567",
         b"identifier-receipt-lookup",
     );
     let output_opening =
         output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
+    let network_id = app.signed_query_admission.network_id();
+    let canonicality = phone_retail_canonicality_for_ciphertext(
+        &policy,
+        &program_policy,
+        &signer,
+        network_id.clone(),
+        uaid,
+        &authority,
+        &encrypted_input,
+        &output_opening,
+    );
     let draft = resolver
-        .derive_encrypted(&policy, &program_policy, &encrypted_input, output_opening)
+        .derive_phone_retail_encrypted(
+            &policy,
+            &program_policy,
+            &encrypted_input,
+            output_opening,
+            canonicality,
+            &network_id,
+        )
         .expect("derive opaque id");
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())

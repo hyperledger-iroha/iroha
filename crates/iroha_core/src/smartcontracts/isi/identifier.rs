@@ -1032,7 +1032,10 @@ pub mod isi {
 #[cfg(test)]
 mod tests {
     use crate::{
-        kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::Execute,
+        kura::Kura,
+        prelude::World,
+        query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, StateReadOnly},
     };
     use iroha_crypto::{
@@ -1040,11 +1043,12 @@ mod tests {
         RamLfeVerificationMode, Signature, SignatureOf,
         bfv_programmed_policy_commitment_with_program, decode_bfv_programmed_public_parameters,
         default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-        identifier_hashes_from_output_hash, ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
+        derive_phone_retail_nullifier_v1, identifier_hashes_from_output_hash,
+        ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
         try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
-        IntoKeyValue,
+        IntoKeyValue, NetworkId,
         account::{Account, AccountId, OpaqueAccountId},
         block::BlockHeader,
         identifier::{
@@ -1180,11 +1184,80 @@ mod tests {
             phone_retail_canonicality: None,
         }
     }
+    fn attach_phone_retail_canonicality(
+        receipt: &mut IdentifierResolutionReceipt,
+        attestor: &KeyPair,
+        network_id: &NetworkId,
+        canonical_phone: &str,
+    ) -> Hash {
+        let nullifier = derive_phone_retail_nullifier_v1(
+            &[0x5a; Hash::LENGTH],
+            network_id.as_bytes(),
+            canonical_phone,
+        )
+        .expect("derive canonical phone nullifier");
+        let opening = &receipt.payload.opening.payload;
+        let payload = PhoneRetailCanonicalityPayloadV1 {
+            network_id: *network_id,
+            policy_id: receipt.payload.policy_id.clone(),
+            program_id: receipt.payload.execution.program_id.clone(),
+            input_ciphertext_hash: opening.input_ciphertext_hash,
+            output_ciphertext_hash: opening.output_ciphertext_hash,
+            opened_output_hash: opening.opened_output_hash,
+            canonical_phone_nullifier: nullifier,
+            uaid: receipt.payload.uaid,
+            account_id: receipt.payload.account_id.clone(),
+            issued_at_ms: opening.opened_at_ms,
+            expires_at_ms: opening
+                .expires_at_ms
+                .expect("phone fixture needs an attestation expiry"),
+        };
+        receipt.phone_retail_canonicality = Some(PhoneRetailCanonicalityAttestationV1 {
+            signature: checked_signature_of(attestor.private_key(), &payload).into(),
+            payload,
+        });
+        nullifier
+    }
+    fn phone_retail_claim_receipt(
+        policy_id: &IdentifierPolicyId,
+        program_policy: &RamLfeProgramPolicy,
+        resolver: &KeyPair,
+        attestor: &KeyPair,
+        network_id: &NetworkId,
+        uaid: UniversalAccountId,
+        account_id: &AccountId,
+        resolved_at_ms: u64,
+        expires_at_ms: u64,
+        canonical_phone: &str,
+    ) -> IdentifierResolutionReceipt {
+        let mut receipt = claim_receipt(
+            policy_id,
+            program_policy,
+            resolver,
+            uaid,
+            account_id,
+            resolved_at_ms,
+            Some(expires_at_ms),
+            canonical_phone.as_bytes(),
+        );
+        let nullifier =
+            attach_phone_retail_canonicality(&mut receipt, attestor, network_id, canonical_phone);
+        let program_id_bytes = norito::encode_canonical(&program_policy.program_id)
+            .expect("encode canonical program id");
+        let (opaque_id, receipt_hash) =
+            identifier_hashes_from_output_hash(&program_id_bytes, &nullifier);
+        receipt.payload.opaque_id = OpaqueAccountId::from(opaque_id);
+        receipt.payload.receipt_hash = receipt_hash;
+        receipt.attestation = RamLfeReceiptAttestation::Signed(
+            checked_signature_of(resolver.private_key(), &receipt.payload).into(),
+        );
+        receipt
+    }
     fn phone_claim_receipt(
         policy_id: &IdentifierPolicyId,
         program_policy: &RamLfeProgramPolicy,
         resolver: &KeyPair,
-        network_id: iroha_data_model::NetworkId,
+        network_id: NetworkId,
         uaid: UniversalAccountId,
         account_id: &AccountId,
         canonical_phone: &str,
@@ -1207,34 +1280,13 @@ mod tests {
         receipt.payload.opening.payload.input_ciphertext_hash = input_hash;
         receipt.payload.opening.signature =
             checked_signature_of(resolver.private_key(), &receipt.payload.opening.payload).into();
-        let nullifier = iroha_crypto::derive_phone_retail_nullifier_v1(
-            &[0xA7; 32],
-            network_id.as_bytes(),
-            canonical_phone,
-        )
-        .expect("canonical test phone");
+        let nullifier =
+            attach_phone_retail_canonicality(&mut receipt, resolver, &network_id, canonical_phone);
         let program_bytes =
             norito::encode_canonical(&program_policy.program_id).expect("canonical program id");
         let (opaque, receipt_hash) = identifier_hashes_from_output_hash(&program_bytes, &nullifier);
         receipt.payload.opaque_id = OpaqueAccountId::from(opaque);
         receipt.payload.receipt_hash = receipt_hash;
-        let statement = PhoneRetailCanonicalityPayloadV1 {
-            network_id,
-            policy_id: policy_id.clone(),
-            program_id: program_policy.program_id.clone(),
-            input_ciphertext_hash: input_hash,
-            output_ciphertext_hash: receipt.payload.execution.output_ciphertext_hash,
-            opened_output_hash: receipt.payload.opening.payload.opened_output_hash,
-            canonical_phone_nullifier: nullifier,
-            uaid,
-            account_id: account_id.clone(),
-            issued_at_ms: resolved_at_ms,
-            expires_at_ms: resolved_at_ms + 60_000,
-        };
-        receipt.phone_retail_canonicality = Some(PhoneRetailCanonicalityAttestationV1 {
-            signature: checked_signature_of(resolver.private_key(), &statement).into(),
-            payload: statement,
-        });
         receipt.attestation = RamLfeReceiptAttestation::Signed(
             checked_signature_of(resolver.private_key(), &receipt.payload).into(),
         );
@@ -1311,15 +1363,18 @@ mod tests {
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
         let resolver = checked_keypair();
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let attestor = checked_keypair();
+        let network_id = *state.network_id_ref();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner.clone(),
-            IdentifierNormalization::EmailAddress,
+            IdentifierNormalization::PhoneE164,
             program_id.clone(),
-        );
+        )
+        .with_phone_retail_attestor_public_key(attestor.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1334,17 +1389,25 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-        let receipt = claim_receipt(
+        let receipt = phone_retail_claim_receipt(
             &policy_id,
             &program_policy,
             &resolver,
+            &attestor,
+            &network_id,
             uaid,
             &owner,
             0,
-            Some(1_800_000_000),
-            b"owner@example.test",
+            1_800_000_000,
+            "+15551234567",
         );
         let opaque_id = receipt.payload.opaque_id;
+        let phone_nullifier = receipt
+            .phone_retail_canonicality
+            .as_ref()
+            .expect("canonical phone attestation")
+            .payload
+            .canonical_phone_nullifier;
         ClaimIdentifier {
             account: owner.clone(),
             receipt,
@@ -1360,6 +1423,7 @@ mod tests {
         assert_eq!(claim.policy_id, policy_id);
         assert_eq!(claim.uaid, uaid);
         assert_eq!(claim.account_id, owner);
+        assert_eq!(claim.phone_retail_nullifier, Some(phone_nullifier));
         assert_ne!(claim.receipt_hash, Hash::prehashed([0; Hash::LENGTH]));
         assert_eq!(
             state.world.opaque_uaids.view().get(&opaque_id),
@@ -1413,6 +1477,73 @@ mod tests {
                 .opaque_ids()
                 .contains(&opaque_id),
             "account should no longer advertise revoked opaque id"
+        );
+    }
+    #[test]
+    fn phone_retail_requires_pinned_attestor_and_canonicality_evidence() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
+        let owner = checked_account_id();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-phone-canonicality-required"));
+        seed_domain(&mut state, &domain_id, &owner);
+        seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
+        let resolver = checked_keypair();
+        let attestor = checked_keypair();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
+        let program_policy = sample_program_policy(&owner, &resolver, &program_id);
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::PhoneE164,
+            program_id,
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
+        let error = RegisterIdentifierPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect_err("phone policy must pin its canonicality attestor");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit pinned canonicality attestor key"),
+            "unexpected error: {error}"
+        );
+        RegisterIdentifierPolicy {
+            policy: policy.with_phone_retail_attestor_public_key(attestor.public_key().clone()),
+        }
+        .execute(&owner, &mut tx)
+        .expect("register pinned phone policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect("activate phone policy");
+        let receipt = claim_receipt(
+            &policy_id,
+            &program_policy,
+            &resolver,
+            uaid,
+            &owner,
+            0,
+            Some(60_000),
+            b"+15551234567",
+        );
+        let error = ClaimIdentifier {
+            account: owner.clone(),
+            receipt,
+        }
+        .execute(&owner, &mut tx)
+        .expect_err("phone claim must carry canonicality evidence");
+        assert!(
+            error
+                .to_string()
+                .contains("trusted canonical E.164 nullifier attestation"),
+            "unexpected error: {error}"
         );
     }
     #[test]
@@ -1486,15 +1617,18 @@ mod tests {
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
         let resolver = checked_keypair();
         let wrong_resolver = checked_keypair();
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let attestor = checked_keypair();
+        let network_id = *state.network_id_ref();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner.clone(),
-            IdentifierNormalization::EmailAddress,
+            IdentifierNormalization::PhoneE164,
             program_id.clone(),
-        );
+        )
+        .with_phone_retail_attestor_public_key(attestor.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1507,23 +1641,30 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
+        let mut receipt = phone_retail_claim_receipt(
+            &policy_id,
+            &program_policy,
+            &resolver,
+            &attestor,
+            &network_id,
+            uaid,
+            &owner,
+            0,
+            60_000,
+            "+15551234567",
+        );
+        receipt.attestation = RamLfeReceiptAttestation::Signed(
+            checked_signature_of(wrong_resolver.private_key(), &receipt.payload).into(),
+        );
         let err = ClaimIdentifier {
             account: owner.clone(),
-            receipt: claim_receipt(
-                &policy_id,
-                &program_policy,
-                &wrong_resolver,
-                uaid,
-                &owner,
-                0,
-                Some(60_000),
-                b"+15551234567",
-            ),
+            receipt,
         }
         .execute(&owner, &mut tx)
         .expect_err("claim must reject a receipt signed by a different resolver");
         assert!(
-            err.to_string().contains("signature is invalid"),
+            err.to_string()
+                .contains("Identifier receipt signature is invalid"),
             "unexpected error: {err}"
         );
     }
@@ -1537,15 +1678,18 @@ mod tests {
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
         let resolver = checked_keypair();
         let wrong_resolver = checked_keypair();
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let attestor = checked_keypair();
+        let network_id = *state.network_id_ref();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner.clone(),
-            IdentifierNormalization::EmailAddress,
+            IdentifierNormalization::PhoneE164,
             program_id.clone(),
-        );
+        )
+        .with_phone_retail_attestor_public_key(attestor.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1558,15 +1702,17 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-        let mut receipt = claim_receipt(
+        let mut receipt = phone_retail_claim_receipt(
             &policy_id,
             &program_policy,
             &resolver,
+            &attestor,
+            &network_id,
             uaid,
             &owner,
             0,
-            Some(60_000),
-            b"+15551234567",
+            60_000,
+            "+15551234567",
         );
         receipt.payload.opening.signature = checked_signature_of(
             wrong_resolver.private_key(),
@@ -1597,15 +1743,18 @@ mod tests {
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
         let resolver = checked_keypair();
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let attestor = checked_keypair();
+        let network_id = *state.network_id_ref();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner.clone(),
-            IdentifierNormalization::EmailAddress,
+            IdentifierNormalization::PhoneE164,
             program_id.clone(),
-        );
+        )
+        .with_phone_retail_attestor_public_key(attestor.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1622,21 +1771,24 @@ mod tests {
             receipt.payload.opening.signature =
                 checked_signature_of(resolver.private_key(), &receipt.payload.opening.payload)
                     .into();
+            attach_phone_retail_canonicality(receipt, &attestor, &network_id, "+15551234567");
             receipt.attestation = RamLfeReceiptAttestation::Signed(
                 checked_signature_of(resolver.private_key(), &receipt.payload).into(),
             );
         };
         macro_rules! assert_claim_rejected {
             ($label:literal, |$receipt:ident| $body:block, $expected:literal) => {{
-                let mut $receipt = claim_receipt(
+                let mut $receipt = phone_retail_claim_receipt(
                     &policy_id,
                     &program_policy,
                     &resolver,
+                    &attestor,
+                    &network_id,
                     uaid,
                     &owner,
                     0,
-                    Some(60_000),
-                    $label.as_bytes(),
+                    60_000,
+                    "+15551234567",
                 );
                 $body
                 resign(&mut $receipt);
@@ -1702,10 +1854,10 @@ mod tests {
             "opening hash must not be zero"
         );
         assert_claim_rejected!(
-            "stale opaque id after opened output tamper",
+            "opaque id unrelated to canonical phone nullifier",
             |receipt| {
-                receipt.payload.opening.payload.opened_output_hash =
-                    Hash::new(b"tampered-opened-output");
+                receipt.payload.opaque_id =
+                    OpaqueAccountId::from(Hash::new(b"unrelated-phone-opaque-id"));
             },
             "opaque_id does not match"
         );
@@ -1727,15 +1879,18 @@ mod tests {
         seed_domain(&mut state, &domain_id, &owner);
         seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
         let resolver = checked_keypair();
-        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
-        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let attestor = checked_keypair();
+        let network_id = *state.network_id_ref();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "phone_retail".parse().expect("program id");
         let program_policy = sample_program_policy(&owner, &resolver, &program_id);
         let policy = IdentifierPolicy::new(
             policy_id.clone(),
             owner.clone(),
-            IdentifierNormalization::EmailAddress,
+            IdentifierNormalization::PhoneE164,
             program_id.clone(),
-        );
+        )
+        .with_phone_retail_attestor_public_key(attestor.public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -1748,15 +1903,17 @@ mod tests {
         }
         .execute(&owner, &mut tx)
         .expect("activate policy");
-        let mut receipt = claim_receipt(
+        let mut receipt = phone_retail_claim_receipt(
             &policy_id,
             &program_policy,
             &resolver,
+            &attestor,
+            &network_id,
             uaid,
             &owner,
             0,
-            Some(60_000),
-            b"+15551234567",
+            60_000,
+            "+15551234567",
         );
         receipt.payload.receipt_hash = Hash::prehashed([0; Hash::LENGTH]);
         receipt.attestation = RamLfeReceiptAttestation::Signed(

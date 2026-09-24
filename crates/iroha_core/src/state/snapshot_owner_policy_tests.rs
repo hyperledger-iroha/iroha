@@ -288,7 +288,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
         NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, dataspace_catalog_hash,
     };
 
-    let (_directory, mut state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
+    let (_directory, state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
     let baseline = configured.configured_dataspace_catalog.clone();
     assert!(baseline.entries().iter().any(|entry| entry.description.is_some()));
     let manifest_hash = [0x63; 32];

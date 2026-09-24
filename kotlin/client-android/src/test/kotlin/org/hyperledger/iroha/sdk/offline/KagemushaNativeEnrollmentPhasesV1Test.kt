@@ -39,7 +39,8 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         selected.clientNonce().fill(0)
         assertContentEquals(ByteArray(32) { 1 }, selected.clientNonce())
         assertFailsWith<IllegalStateException> { phases.begin(account) }
-        assertEquals(1, endpoint.calls)
+        assertEquals(2, endpoint.calls)
+        assertEquals(1, endpoint.readSelectionCalls)
 
         val accepted = accept(phases, selected)
         assertContentEquals(ByteArray(32) { 7 }, accepted.challengeId())
@@ -75,9 +76,9 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertSame(selected, phases.recoverExactSelection(account))
         assertContentEquals(ByteArray(32) { 1 }, selected.clientNonce())
         assertFailsWith<IllegalStateException> { phases.begin(account) }
-        assertEquals(2, endpoint.calls)
+        assertEquals(3, endpoint.calls)
         assertEquals(1, endpoint.selectionCalls)
-        assertEquals(1, endpoint.readSelectionCalls)
+        assertEquals(2, endpoint.readSelectionCalls)
     }
 
     @Test
@@ -113,7 +114,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         native.close()
         assertNull(phases.recoverExactSelection(account))
         assertFailsWith<IllegalStateException> { accept(phases, selection) }
-        assertEquals(1, endpoint.calls)
+        assertEquals(2, endpoint.calls)
     }
 
     @Test
@@ -128,6 +129,35 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertEquals(1, endpoint.prepareCalls)
         assertContentEquals(byteArrayOf(99), phases.recoverExactProof(accepted).canonicalProof())
         assertEquals(1, endpoint.prepareCalls)
+    }
+
+    @Test
+    fun `cached selection is rechecked natively and every changed recovered field poisons the owner`() {
+        for (changedField in 0..6) {
+            val endpoint = Endpoint()
+            val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint(
+                "/durable/recheck-$changedField", endpoint,
+            ).initialEnrollment()
+            val selected = phases.begin(account)
+            endpoint.changedSelectionField = changedField
+            assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) }
+            assertEquals(1, endpoint.readSelectionCalls)
+            assertNull(phases.recoverExactSelection(account))
+            assertFailsWith<IllegalStateException> { accept(phases, selected) }
+            phases.cancel(selected)
+        }
+    }
+
+    @Test
+    fun `cached selection does not survive a rejected native liveness read`() {
+        val endpoint = Endpoint()
+        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint(
+            "/durable/revoked-selection", endpoint,
+        ).initialEnrollment()
+        phases.begin(account)
+        endpoint.rejectSelectionRead = true
+        assertFailsWith<IllegalStateException> { phases.recoverExactSelection(account) }
+        assertEquals(1, endpoint.readSelectionCalls)
     }
 
     @Test
@@ -242,6 +272,8 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var cancelCalls = 0
         var selectionCalls = 0
         var readSelectionCalls = 0
+        var changedSelectionField: Int? = null
+        var rejectSelectionRead = false
         private var challengeId = ByteArray(32) { 7 }
         override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 31L
@@ -258,7 +290,9 @@ class KagemushaNativeEnrollmentPhasesV1Test {
                 }
                 7 -> {
                     readSelectionCalls++
-                    selection(ticket)
+                    if (rejectSelectionRead) null else selection(ticket).also { response ->
+                        changedSelectionField?.let { response[it][0] = (response[it][0].toInt() xor 1).toByte() }
+                    }
                 }
                 2 -> {
                     challengeId = fields[6].copyOf()

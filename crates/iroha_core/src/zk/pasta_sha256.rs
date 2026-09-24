@@ -185,16 +185,16 @@ struct PastaSha256BoundedJobV1<F: ScalarField> {
     final_block_selectors: Vec<AssignedValue<F>>,
 }
 
-/// Circuit-owned inputs needed to equality-bind an ordered hash-claim proof.
+/// Circuit-owned inputs for inspecting an ordinary ordered hash claim.
 ///
-/// This view never exposes an unconstrained host digest.  Every dynamic byte and every terminal
-/// word is the exact Base cell already consumed or produced by [`PastaSha256JobsV1`].  The mint
-/// claim consumer uses it to reconstruct the typed-plan roots in-circuit before it accepts the
-/// recursively verified terminal claim.
+/// Every dynamic byte is the exact Base cell consumed by [`PastaSha256JobsV1`]. Test helpers also
+/// inspect the assigned terminal words; the production claim bridge obtains those cells from
+/// [`PastaSha256JobsV1::typed_claim_jobs`].
 pub(super) struct PastaSha256ClaimJobV1<'a, F: ScalarField> {
     /// Exact, unpadded SHA message cells.
     pub(super) message: &'a [PastaSha256ByteV1<F>],
-    /// Exact eight terminal digest-word cells produced for this message.
+    /// Exact eight terminal digest-word cells inspected by test helpers.
+    #[cfg(test)]
     pub(super) output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
 }
 
@@ -688,6 +688,7 @@ where
                 }
                 Ok(PastaSha256ClaimJobV1 {
                     message: &job.message,
+                    #[cfg(test)]
                     output_words: &job.output_words,
                 })
             })

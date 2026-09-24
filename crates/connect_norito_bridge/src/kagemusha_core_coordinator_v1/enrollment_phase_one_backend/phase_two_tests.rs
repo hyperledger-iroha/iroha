@@ -804,3 +804,38 @@ fn phase_two_expired_original_deadline_never_reaches_typed_delegate() {
     assert_eq!(delegate.challenges.load(Ordering::SeqCst), 0);
     assert_eq!(delegate.generic_challenges.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn phase_seven_rejects_original_selection_after_native_deadline_expires() {
+    let (backend, delegate, _) = selected_backend(DelegateResult::Valid, true);
+    let request = kagemusha_core_coordinator_encode_request_v1(&[
+        INITIAL_ENROLLMENT_READ_SELECTION_V1.to_le_bytes().to_vec(),
+        super::super::initial_enrollment::tests::journal_account().into_bytes(),
+    ])
+    .unwrap();
+    let ticket = backend
+        .owner
+        .lock()
+        .unwrap()
+        .selection
+        .as_ref()
+        .unwrap()
+        .ticket;
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &request),
+        Ok(backend
+            .owner
+            .lock()
+            .unwrap()
+            .selection_response
+            .clone()
+            .unwrap())
+    );
+    backend.journal.expire_ticket_for_test(ticket);
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &request),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+    assert_eq!(delegate.challenges.load(Ordering::SeqCst), 0);
+    assert_eq!(delegate.generic_challenges.load(Ordering::SeqCst), 0);
+}

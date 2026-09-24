@@ -6025,6 +6025,7 @@ fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
     assert_eq!(receipt.payload.policy_id, policy.id);
     assert_eq!(receipt.payload.account_id, account.id);
     assert_eq!(receipt.payload.uaid, account.uaid);
+    assert!(receipt.phone_retail_canonicality.is_none());
     assert_eq!(
         receipt.payload.execution.associated_data_hash,
         Hash::new(&context.program_id_bytes)
