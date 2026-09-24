@@ -507,6 +507,11 @@ impl NativeAmxApplicationManifestV1 {
 /// Canonical, bounded lane-finality manifest for one result-bearing block.
 #[derive(Clone, Debug)]
 pub(crate) struct LaneFinalityManifestV1 {
+    // TODO: consume these statements from native lane application receipts.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     statements: Vec<LaneFinalityStatement>,
     tree: MerkleTree<LaneFinalityStatement>,
 }
@@ -579,11 +584,19 @@ impl LaneFinalityManifestV1 {
     }
     /// Canonically ordered statements.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     pub(crate) fn statements(&self) -> &[LaneFinalityStatement] {
         &self.statements
     }
     /// Inclusion proof for one canonical statement.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     pub(crate) fn proof(&self, index: u32) -> Option<MerkleProof<LaneFinalityStatement>> {
         self.tree.get_proof(index)
     }
@@ -636,7 +649,9 @@ pub(crate) fn execution_commitment_from_validated_block(
         merge_carrier,
         executed_block_wire_len,
         executed_block_wire_hash,
-    )
+    )?
+    .with_transaction_commitments_from_block(validated_block)
+    .map_err(|_| "selective transaction commitments differ from validated block")
 }
 #[cfg(test)]
 pub(crate) fn execution_commitment_from_witness_for_tests(
@@ -1831,6 +1846,14 @@ mod tests {
             &fixture.block,
         )
         .expect("exact original manifest/wire projection");
+        assert_eq!(
+            original_commitment.transaction_input_commitment,
+            fixture.block.network_input_merkle_commitment()
+        );
+        assert_eq!(
+            original_commitment.transaction_output_commitment,
+            fixture.block.output_merkle_commitment()
+        );
         let mut changed = fixture.block.clone();
         let mut outputs = changed.execution_outputs().to_vec();
         let ExecutionOutputV1::Network(output) = &mut outputs[0] else {
@@ -1883,6 +1906,14 @@ mod tests {
         )
         .expect("changed output has only its own structural commitment projection");
         assert_ne!(changed_commitment, original_commitment);
+        assert_eq!(
+            changed_commitment.transaction_input_commitment,
+            original_commitment.transaction_input_commitment
+        );
+        assert_ne!(
+            changed_commitment.transaction_output_commitment,
+            original_commitment.transaction_output_commitment
+        );
     }
     #[test]
     fn roots_ignore_fastpq_payloads_match_formal_gate() {

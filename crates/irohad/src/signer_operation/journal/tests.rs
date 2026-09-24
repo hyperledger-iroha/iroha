@@ -141,4 +141,5 @@ fn neutral_journal_errors_reveal_no_input_path_or_receipt_bytes() {
     );
 }
 
+mod pending_reserve;
 mod reader;

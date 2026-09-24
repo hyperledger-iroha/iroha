@@ -68,6 +68,7 @@ pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_
 use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
+    account::AccountAddress,
     alias::AliasIndex,
     alias_setup::{
         AccountAliasName, AliasAssetTotalV1, AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1,
@@ -5629,6 +5630,11 @@ pub fn verify_account_onboarding_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(eyre!(
+            "prepared onboarding transaction requires QueuePlanSynced admission"
+        ));
+    }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(eyre!(
@@ -5717,6 +5723,11 @@ pub fn verify_account_faucet_prepared_transaction_v1(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(eyre!(
+            "prepared faucet transaction requires QueuePlanSynced admission"
+        ));
+    }
     validate_public_prepared_transaction_lifetime(&transaction, binding)?;
     let expected_metadata = expected_prepared_transaction_metadata(
         binding,
@@ -15231,7 +15242,12 @@ mod evidence_http_tests {
         .expect("account payload");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
             let client = client
                 .clone()
@@ -15247,7 +15263,15 @@ mod evidence_http_tests {
             .first()
             .cloned()
             .expect("account snapshot");
-        let expected_url = join_torii_url(&client.torii_url, &format!("v1/accounts/{account_id}"));
+        let account_address = AccountAddress::from_account_id(&account_id)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
+        let expected_url = join_torii_url_with_path_segments(
+            &client.torii_url,
+            "v1/accounts",
+            &[&account_address],
+        );
         assert_eq!(snapshot.url.path(), expected_url.path());
         assert!(
             snapshot.headers.iter().any(|(name, value)| {
@@ -15275,7 +15299,12 @@ mod evidence_http_tests {
         .expect("account payload");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
             let client = client
                 .clone()
@@ -15292,6 +15321,16 @@ mod evidence_http_tests {
             .first()
             .cloned()
             .expect("account snapshot");
+        let account_address = AccountAddress::from_account_id(&account_id)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
+        let expected_url = join_torii_url_with_path_segments(
+            &client.torii_url,
+            "v1/accounts",
+            &[&account_address],
+        );
+        assert_eq!(snapshot.url.path(), expected_url.path());
         for header in [
             HEADER_ACCOUNT,
             HEADER_SIGNATURE,
@@ -19196,8 +19235,13 @@ impl Client {
         limit: u64,
         offset: u64,
     ) -> Result<Response<Vec<u8>>> {
-        let path = format!("v1/accounts/{account_id}/permissions");
-        let mut url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/accounts",
+            &[&account_address, "permissions"],
+        );
         let limit = limit.to_string();
         let offset = offset.to_string();
         url.query_pairs_mut()
@@ -21427,6 +21471,85 @@ impl Client {
         Ok(result)
     }
 
+    /// Relay one bounded canonical validation-fee proof page as untrusted bytes.
+    ///
+    /// The authenticated request uses this client's configured query account and
+    /// NetworkId. Decoding only checks the current wire shape. This method does
+    /// not authenticate finality, registry, witness, or checkpoint authority.
+    /// Consumers must verify the returned bytes against independently pinned
+    /// bindings and roots before displaying or using any policy projection.
+    ///
+    /// # Errors
+    ///
+    /// Rejects noncanonical/oversized requests, invalid request version or height,
+    /// transport/HTTP failure, nonexact media type, and malformed or oversized proof.
+    pub fn relay_validation_fee_current_policy_proof(
+        &self,
+        request_norito: &[u8],
+    ) -> Result<Vec<u8>> {
+        const MAX_RELAY_REQUEST: usize = 4096;
+        if request_norito.is_empty() || request_norito.len() > MAX_RELAY_REQUEST {
+            return Err(eyre!("validation-fee proof relay request exceeds bound"));
+        }
+        let request: ValidationFeeCurrentPolicyProofRequestV1 =
+            norito::decode_canonical_with_limits(
+                request_norito,
+                norito::canonical_decode_limits(request_norito.len()),
+            )
+            .wrap_err("validation-fee proof relay request is not canonical current Norito")?;
+        if request.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+            || request.trusted_checkpoint_height == 0
+        {
+            return Err(eyre!(
+                "invalid validation-fee proof relay request version or height"
+            ));
+        }
+        let url = join_torii_url(
+            &self.torii_url,
+            torii_uri::VALIDATION_FEE_CURRENT_POLICY_PROOF,
+        );
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, request_norito.to_vec())?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "validation-fee proof relay returned a non-success HTTP status"
+            ));
+        }
+        if exact_single_response_header(&response, "content-type")? != APPLICATION_NORITO
+            || response.headers().contains_key("x-iroha-reject-code")
+            || response
+                .headers()
+                .keys()
+                .any(|name| name.as_str().starts_with("sora-"))
+        {
+            return Err(eyre!(
+                "validation-fee proof relay has invalid response headers"
+            ));
+        }
+        let body = response.body();
+        if body.is_empty() || body.len() > VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES {
+            return Err(eyre!("validation-fee proof relay response exceeds bound"));
+        }
+        let proof: ValidationFeeCurrentPolicyProofV1 =
+            norito::decode_canonical_with_limits(body, norito::canonical_decode_limits(body.len()))
+                .wrap_err("validation-fee proof relay response is not canonical current Norito")?;
+        if proof.version != VALIDATION_FEE_POLICY_PROOF_VERSION_V1
+            || proof.evaluated_block_height == 0
+            || proof.observed_ledger_tip_height < proof.evaluated_block_height
+            || proof.more_available != (proof.evaluated_block_height < proof.observed_ledger_tip_height)
+            || proof.finality_chain.is_empty()
+            || proof.finality_chain.len() > iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS {
+            return Err(eyre!("validation-fee proof relay response has invalid current proof shape"));
+        }
+        // No verify_against: the relay must not substitute its own trust anchor
+        // for the independently pinned checkpoint of each consuming application.
+        Ok(body.clone())
+    }
+
     /// Fetch and verify one bounded validation-fee policy proof page.
     ///
     /// The caller supplies a previously trusted checkpoint. The returned page
@@ -23161,8 +23284,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
     /// typed JSON, or JSON deserialization fails.
     pub fn get_account_read(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
-        let path = format!("v1/accounts/{account_id}");
-        let url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let url =
+            join_torii_url_with_path_segments(&self.torii_url, "v1/accounts", &[&account_address]);
         let resp = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
@@ -23178,8 +23303,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
     /// typed JSON, or JSON deserialization fails.
     pub fn get_account_read_unsigned(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
-        let path = format!("v1/accounts/{account_id}");
-        let url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let url =
+            join_torii_url_with_path_segments(&self.torii_url, "v1/accounts", &[&account_address]);
         let resp = self.send_builder(
             self.request_without_canonical_account_auth(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
@@ -27242,6 +27369,108 @@ mod tests {
             Some(&APPLICATION_JSON.to_owned()),
         );
     }
+    #[test]
+    fn raw_fee_proof_relay_rejects_noncanonical_requests_before_http() {
+        let client = client_with_base_url(base_url());
+        let valid = to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            trusted_checkpoint_height: 1,
+        })
+        .expect("request");
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let invalid = vec![
+            Vec::new(),
+            vec![0; 4097],
+            trailing,
+            to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+                version: 2,
+                trusted_checkpoint_height: 1,
+            })
+            .unwrap(),
+            to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+                version: 1,
+                trusted_checkpoint_height: 0,
+            })
+            .unwrap(),
+        ];
+        with_mock_http(
+            |_| panic!("invalid proof relay request reached HTTP"),
+            |transport| {
+                let client = client.with_test_http_transport(transport);
+                for request in invalid {
+                    assert!(
+                        client
+                            .relay_validation_fee_current_policy_proof(&request)
+                            .is_err()
+                    );
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn raw_fee_proof_relay_signs_exact_bounded_request_and_rejects_response_shortcuts() {
+        let mut client = client_with_base_url(base_url());
+        client.headers.insert("X-Dataspace-Id".into(), "is2".into());
+        let request = to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+            version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+            trusted_checkpoint_height: 3,
+        })
+        .unwrap();
+        for response in [
+            mk_response(
+                StatusCode::OK,
+                br#"{"ready":true,"verified":true}"#.to_vec(),
+                Some(APPLICATION_JSON),
+            ),
+            mk_response(StatusCode::OK, vec![0], Some(APPLICATION_NORITO)),
+            mk_response(
+                StatusCode::OK,
+                vec![0],
+                Some("application/x-norito; charset=binary"),
+            ),
+            mk_response(StatusCode::FOUND, vec![], Some(APPLICATION_NORITO)),
+            mk_response(
+                StatusCode::OK,
+                vec![0; VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES + 1],
+                Some(APPLICATION_NORITO),
+            ),
+        ] {
+            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            with_mock_http(respond_with(&store, response), |transport| {
+                assert!(
+                    client
+                        .clone()
+                        .with_test_http_transport(transport)
+                        .relay_validation_fee_current_policy_proof(&request)
+                        .is_err()
+                );
+            });
+            let snapshots = store.lock().unwrap();
+            assert_eq!(snapshots.len(), 1);
+            let snapshot = &snapshots[0];
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(
+                snapshot.url.path(),
+                "/v1/validation-fee/policy/current/proof"
+            );
+            assert_eq!(snapshot.body, request);
+            assert_eq!(
+                snapshot.max_response_bytes,
+                VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES
+            );
+            assert_canonical_account_signed_request(&client, snapshot);
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("x-dataspace-id")
+                        && value == "is2")
+            );
+        }
+    }
+
     fn client_with_static_canonical_auth_headers() -> Client {
         let mut client = client_with_base_url(base_url());
         for header in [
@@ -28419,6 +28648,80 @@ mod tests {
         );
     }
     #[test]
+    fn prepared_account_verifiers_reject_signed_ordinary_admission() {
+        let mut client = client_with_base_url(base_url());
+        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
+        let onboarding_request = onboarding.receipt.body.request.clone();
+        let onboarding_signed = client
+            .verify_account_onboarding_prepared_transaction(
+                &onboarding_request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &onboarding.fee_payment,
+            )
+            .expect("canonical prepared onboarding uses QueuePlanSynced");
+        let onboarding_signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("onboarding fixture signer");
+        let ordinary_onboarding =
+            TransactionBuilder::from_payload(onboarding_signed.payload().clone())
+                .expect("rebuild onboarding payload")
+                .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+                .sign(onboarding_signer.private_key());
+        replace_onboarding_prepared_transaction(
+            &mut onboarding,
+            &ordinary_onboarding,
+            &onboarding_signer,
+        );
+        let onboarding_error = client
+            .verify_account_onboarding_prepared_transaction(
+                &onboarding_request,
+                &onboarding,
+                &onboarding.receipt,
+                &onboarding.binding,
+                &onboarding.fee_payment,
+            )
+            .expect_err("signed Ordinary onboarding must fail verification");
+        assert!(
+            onboarding_error
+                .to_string()
+                .contains("QueuePlanSynced admission")
+        );
+
+        let mut faucet = faucet_prepared_signature_fixture(&mut client);
+        let policy = faucet_policy_fixture();
+        let faucet_signed = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &faucet.fee_payment,
+                &policy,
+            )
+            .expect("canonical prepared faucet uses QueuePlanSynced");
+        let faucet_signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("faucet fixture signer");
+        let ordinary_faucet = TransactionBuilder::from_payload(faucet_signed.payload().clone())
+            .expect("rebuild faucet payload")
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .sign(faucet_signer.private_key());
+        replace_faucet_prepared_transaction(&mut faucet, &ordinary_faucet, &faucet_signer);
+        let faucet_error = client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &faucet.binding,
+                &faucet.fee_payment,
+                &policy,
+            )
+            .expect_err("signed Ordinary faucet payout must fail verification");
+        assert!(
+            faucet_error
+                .to_string()
+                .contains("QueuePlanSynced admission")
+        );
+    }
+    #[test]
     fn prepared_transaction_verifiers_reject_an_independent_fee_substitution() {
         let mut client = client_with_base_url(base_url());
         let onboarding = onboarding_prepared_signature_fixture(&mut client);
@@ -29475,7 +29778,12 @@ mod tests {
     }
     #[test]
     fn account_permissions_page_is_exact_and_canonically_signed() {
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
         with_mock_http(respond_with(&store, response), |mock_transport| {
@@ -29490,7 +29798,10 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        let account_id = client.account.to_string();
+        let account_id = AccountAddress::from_account_id(&client.account)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
         let expected_url = join_torii_url_with_path_segments(
             &base_url(),
             "v1/accounts",

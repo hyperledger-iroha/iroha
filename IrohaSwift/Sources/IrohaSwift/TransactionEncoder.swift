@@ -489,7 +489,68 @@ private func encodeNativeClaimIdentifierReceiptJSON(
 }
 
 enum SingleInstructionSwiftNoritoEncoder {
-    static func encodeExecutableBatch(
+    static func encodeKagemushaTopUp(
+        request: KagemushaTopUpRequestV1,
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        feePayment: FeePaymentIntent,
+        ttlMs: UInt64,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            networkId: networkId,
+            authorityId: authority
+        )
+        guard request.networkID == ids.networkId.bytes else {
+            throw KagemushaTopUpTransactionInputError.networkMismatch
+        }
+        guard request.payer == (try KagemushaAccountIDV1(ids.authorityId)) else {
+            throw KagemushaTopUpTransactionInputError.payerMismatch
+        }
+        let authorityAddress = try AccountAddress.parseEncoded(ids.authorityId)
+        guard let authorityController = authorityAddress.singleControllerInfo() else {
+            throw KagemushaTopUpTransactionInputError.unsupportedMultisigAuthority
+        }
+        guard authorityController.algorithm == signingKey.algorithm else {
+            throw KagemushaTopUpTransactionInputError.authorityKeyMismatch
+        }
+        // Canonical key encoding includes the SM2 DISTID; the supplied payer
+        // remains the signature-bound authority.
+        let signingAddress = try AccountAddress.fromAccount(
+            publicKey: signingKey.publicKey(),
+            algorithm: signingKey.algorithm.wireName,
+            distid: signingKey.metadata.distid
+        )
+        guard let signingController = signingAddress.singleControllerInfo(),
+              signingController.algorithm == authorityController.algorithm,
+              signingController.publicKey == authorityController.publicKey else {
+            throw KagemushaTopUpTransactionInputError.authorityKeyMismatch
+        }
+        let instruction = try KagemushaNoritoV1.topUpInstructionFrame(request)
+        let instructionPayload = try instruction.compactInstructionBoxPayload()
+        let transactionPayload = try encodeNetworkTransactionPayload(
+            networkId: ids.networkId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            feePayment: feePayment,
+            instructionPayload: instructionPayload
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signed = encodeCompactSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        return SignedTransactionEnvelope(
+            norito: encodeVersionedSignedTransaction(signed),
+            signedTransaction: signed,
+            payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
+        )
+    }
+
+    static func executableBatchPayload(
         networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
@@ -497,8 +558,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         nonce: UInt32?,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
-        signingKey: SigningKey
-    ) throws -> SignedTransactionEnvelope {
+        metadata: [String: ToriiJSONValue]
+    ) throws -> Data {
         guard !entries.isEmpty else {
             throw ExecutableBatchInputError.emptyBatch
         }
@@ -537,19 +598,38 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(try feePayment.compactNorito())
         transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
-        transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(try CanonicalNorito.encodeCompactMetadata(metadata))
         transactionPayload.writeField(encodeNoneOption())
 
-        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
+        return transactionPayload.data
+    }
+
+    static func encodeExecutableBatch(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32?,
+        entries: [TransactionBatchEntry],
+        feePayment: FeePaymentIntent,
+        metadata: [String: ToriiJSONValue],
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        let payload = try executableBatchPayload(
+            networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs, nonce: nonce, entries: entries, feePayment: feePayment,
+            metadata: metadata
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(payload))
         let signed = encodeCompactSignedTransaction(
             signature: signature,
-            transactionPayload: transactionPayload.data
+            transactionPayload: payload
         )
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed),
             signedTransaction: signed,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload.data))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(payload))
         )
     }
 

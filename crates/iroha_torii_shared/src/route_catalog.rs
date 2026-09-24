@@ -1591,8 +1591,9 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Read a transaction-entry proof from a block.
@@ -1603,8 +1604,9 @@ pub mod core {
         ApiSurface::Public,
         Listener::Torii,
         RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Internal peer-to-peer Torii HTTP proxy.
@@ -3760,6 +3762,11 @@ pub mod application_api {
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
+    const fn authenticated_account_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    }
     const fn dataspace_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path)
             .with_admission(AdmissionPolicy::DataspaceVisible)
@@ -3919,7 +3926,7 @@ pub mod application_api {
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
-        TRANSACTIONS_HISTORY_GET => app_get("application.transactions_history_get", "/v1/transactions/history");
+        TRANSACTIONS_HISTORY_GET => authenticated_account_get("application.transactions_history_get", "/v1/transactions/history");
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
         CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => dataspace_get("application.contracts_rollups_swaps_fills_get", "/v1/contracts/rollups/swaps/fills");
@@ -3946,7 +3953,6 @@ pub mod application_api {
         ACCOUNTS_CAPABILITIES_GET => app_get("application.accounts_capabilities_get", "/v1/accounts/capabilities");
         ACCOUNTS_QUERY_POST => dataspace_compute_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.transactions_query_post", "/v1/transactions/query");
-        TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
         ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");
         ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");

@@ -4366,6 +4366,10 @@ export function buildMultisigContractCallProposeRequest(options) {
           },
   };
 
+  payload.payload = assertPlainObject(
+    payload.payload,
+    "multisigContractCallPropose.payload",
+  );
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
     (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "feePayment"),
@@ -4396,30 +4400,16 @@ export function buildMultisigContractCallProposeRequest(options) {
 }
 
 function normalizeContractTargetSelectorInput(source, context) {
-  const contractAddress = source.contractAddress ?? source.contract_address;
   const contractAlias = source.contractAlias ?? source.contract_alias;
-  const hasContractAddress = contractAddress !== undefined && contractAddress !== null;
-  const hasContractAlias = contractAlias !== undefined && contractAlias !== null;
-  if (hasContractAddress === hasContractAlias) {
+  if (contractAlias == null || source.contractAddress != null || source.contract_address != null) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${context} requires exactly one of contractAddress or contractAlias`,
+      `${context} requires exact contractAlias without contractAddress`,
       context,
     );
   }
-  if (hasContractAddress) {
-    return {
-      contract_address: assertString(
-        contractAddress,
-        `${context}.${TEXT_CONTRACT_ADDRESS}`,
-      ),
-    };
-  }
   return {
-    contract_alias: assertString(
-      contractAlias,
-      `${context}.contractAlias`,
-    ),
+    contract_alias: assertString(contractAlias, `${context}.contractAlias`),
   };
 }
 
@@ -4507,6 +4497,18 @@ export function buildMultisigContractCallApproveRequest(options) {
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
     (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "feePayment"),
+  );
+  payload.contract_alias = assertString(
+    source.contract_alias,
+    "multisigContractCallApprove.contract_alias",
+  );
+  payload.entrypoint = assertString(
+    source.entrypoint,
+    "multisigContractCallApprove.entrypoint",
+  );
+  payload.payload = assertPlainObject(
+    source.payload,
+    "multisigContractCallApprove.payload",
   );
   return payload;
 }

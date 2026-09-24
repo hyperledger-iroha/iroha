@@ -133,6 +133,7 @@ pub(super) fn admit(
 ) -> Result<Policy, AllocationRefusal> {
     budget.try_reserve_bytes(demand.bytes()).map(Policy)
 }
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(super) fn new_identity(
     budget: &AllocationBudget,
 ) -> Result<Identity, MembershipAdmissionError> {

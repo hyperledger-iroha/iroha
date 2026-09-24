@@ -387,3 +387,45 @@ fn canonical_executed_body_worker_rejects_wrong_request_source_and_frame_limit()
         CanonicalExecutedBodyServeCompletion::Prepared(_)
     ));
 }
+
+#[test]
+fn canonical_executed_body_worker_returns_changed_message_with_its_original_ingress_owner() {
+    let (adapter, _keys, block, finality) = canonical_executed_block_recovery_fixture();
+    let need = canonical_executed_block_need(&block, &finality);
+    let request = canonical_executed_body_worker_request(&adapter, need);
+    let mut inbound =
+        canonical_worker_inbound(&adapter, request.clone(), adapter.local_peer.clone());
+    assert!(
+        inbound
+            .ingress_ownership()
+            .is_some_and(|owner| owner.matches_message(inbound.message()))
+    );
+
+    let mut changed = request;
+    let LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { chunk_index, .. } =
+        &mut changed.kind
+    else {
+        panic!("fixture must use canonical executed-block recovery")
+    };
+    *chunk_index += 1;
+    inbound.message = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(changed.clone()));
+    let Err((returned, CanonicalRecoveryReadError::LocalPersistence(_))) =
+        crate::sumeragi::v2_block_sync::CanonicalExecutedBodyServeTask::from_authenticated_inbound(
+            inbound,
+            adapter.context.clone(),
+            Arc::clone(&adapter.state),
+            adapter.limits,
+        )
+    else {
+        panic!("changed authenticated message must return its original ingress owner")
+    };
+    assert!(
+        returned.ingress_ownership().is_some_and(
+            |owner| owner.validate_exact() && !owner.matches_message(returned.message())
+        )
+    );
+    assert!(matches!(
+        returned.message(),
+        BlockMessage::LaneHistoricalRecoveryRequest(actual) if actual.as_ref() == &changed
+    ));
+}

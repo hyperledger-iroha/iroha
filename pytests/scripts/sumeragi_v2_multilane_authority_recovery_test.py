@@ -36,6 +36,7 @@ def defining_evidence_kernel(binding, old, new):
     """Retain old control IDs while exercising the same moved validation body."""
     kernels = {
         "lane_has_drain_blocking_evidence": "lane_has_drain_blocking_evidence_with_releases",
+        "validate_merge_lane_drain_certificate_payload": "validate_merge_lane_drain_certificate_payload_with_releases",
         "native_amx_participant_application_snapshot": "native_amx_participant_application_snapshot_with_lifecycle",
         "native_amx_participant_frontiers_pending_durable_evidence_snapshot": "native_amx_participant_frontiers_pending_durable_evidence_snapshot_with_lifecycle",
     }
@@ -1129,3 +1130,21 @@ def test_native_tip_and_locked_recovery_reject_changed_authority(
     assert errors == [] and actual is not None
     contract.validate_authority_recovery_item(actual, binding, errors)
     assert errors, f"changed {symbol} authority must be rejected"
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("validate_merge_lane_drain_certificate_payload", "&mut releases,", "&mut unrelated_releases,"),
+    ("validate_merge_lane_drain_certificate_payload_with_releases", "self.view_with_index_releases(releases)", "self.view()"),
+    ("validate_merge_lane_drain_certificate_payload_with_releases",
+     "intent.lane_incarnation,\n                releases,",
+     "intent.lane_incarnation,\n                &mut LaneLifecycleReleases::new(self),"),
+])
+def test_drain_validation_retains_original_reader_release_owner(tmp_path, symbol, old, new):
+    binding = next(row for row in BINDINGS if row[3] == symbol)
+    item = source_item(binding)
+    assert item.count(old) == 1
+    changed = item.replace(old, new, 1)
+    changed_provider(tmp_path, binding, item, changed)
+    errors = []
+    contract.validate_authority_recovery_item(changed, binding, errors)
+    assert errors, "substituting the original reader-release owner must be rejected"

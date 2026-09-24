@@ -40,6 +40,33 @@ pub const RELEASE_MANIFEST_CUSTODY_MAX_RECORD_BYTES_V1: usize = 32 * 1024;
 pub const RELEASE_MANIFEST_CUSTODY_RECORD_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.release-manifest.custody-control.v1\0";
 
+/// Governed revocation of the current release signer or independent attester generation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestRevocationV1 {
+    /// Revoke the current signer key generation.
+    pub signer: bool,
+    /// Revoke the current independent attester generation.
+    pub attester: bool,
+}
+
 /// Exact reviewed manifest request and audit predecessor to reserve before provider I/O.
 #[derive(
     Clone,
@@ -375,33 +402,6 @@ pub struct ReleaseManifestCheckV1 {
     pub reviewed: ReleaseManifestReserveV1,
     /// Current audit or original immutable indexed row for the selected phase.
     pub phase: ReleaseManifestCheckPhaseV1,
-}
-
-/// Governed emergency revocation of the current role-13 signer or attester generation.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
-)]
-#[norito(deny_unknown_fields)]
-pub struct ReleaseManifestRevocationV1 {
-    /// Revoke the current protected signer generation.
-    pub signer: bool,
-    /// Revoke the independent attester generation.
-    pub attester: bool,
 }
 
 /// Closed native action surface; its registered instruction has no production execution path.

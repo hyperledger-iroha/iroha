@@ -24,13 +24,16 @@ const ROUTE_OPEN_FRAME_LEN: usize = 34;
 ///
 /// The relay uses this for raw admission credential frames so parse failures
 /// and early handshake exits do not release an unwiped allocation.
+#[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
 pub(crate) struct SensitiveBytes(Vec<u8>);
 
 impl SensitiveBytes {
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
 
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     fn scrub(&mut self) {
         let initialized_len = self.0.len();
         // Expose the complete existing allocation without growing it so bytes

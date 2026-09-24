@@ -14,6 +14,37 @@ fn context() -> Context {
     Context::new(b"complete immutable public statement").unwrap()
 }
 
+#[test]
+fn doubled_degree_geometry_changes_the_bound_context_and_root_commitment() {
+    let current = context();
+    let old_descriptor = StatementContext {
+        layout: LAYOUT_ID.to_owned(),
+        trace_rows: TRACE_ROWS as u32,
+        lde_rows: LDE_ROWS as u32,
+        columns: COMMITTED_COLUMN_COUNT as u32,
+        constraints: CONSTRAINTS as u32,
+        modulus: MODULUS,
+        extension_nonresidue: 7,
+        lde_root: LDE_ROOT,
+        coset_offset: COSET_OFFSET,
+        fri_arities: FRI_ARITIES.map(|v| v as u32),
+        fri_lengths: FRI_LENGTHS.map(|v| v as u32),
+        fri_degrees: [65_536, 4_096, 256, 32, 4, 1],
+        query_count: QUERY_COUNT as u32,
+        query_candidates: QUERY_CANDIDATES as u32,
+        statement: b"complete immutable public statement".to_vec(),
+    };
+    let old = Context {
+        framing: FramingContext::new_deep(&norito::encode_canonical(&old_descriptor).unwrap())
+            .unwrap(),
+    };
+    let row = vec![0; COMMITTED_COLUMN_COUNT * 8];
+    assert_ne!(
+        current.hash_leaf(Oracle::Row, 0, &row).unwrap(),
+        old.hash_leaf(Oracle::Row, 0, &row).unwrap()
+    );
+}
+
 fn raw_challenge(transcript: &mut Transcript, round: Round) -> Result<Message> {
     transcript.challenge_with(|_, actual, _, output| {
         assert_eq!(actual, round);

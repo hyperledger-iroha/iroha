@@ -19,6 +19,24 @@ PASSIVE_RECOVERY_TEST_RELATIVE = Path(
 NATIVE_MODULE = "SumeragiV2NativeApplicationEvidence"
 AUTONOMOUS_MODULE = "SumeragiV2AutonomousReservationCarrier"
 
+# The diagnostic closures only observe errors; each original result still propagates.
+NATIVE_SOURCE_SERVICE_TURN = """native.service_sources(services, now).inspect_err(|error| {
+                    iroha_logger::error!(
+                        ?error,
+                        height = context.height,
+                        "Sumeragi v2 Native source service failed closed"
+                    );
+                })?;"""
+NATIVE_PROCESS_TURN = """native
+            .poll(native_global, native_network, now, receiver)
+            .inspect_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    height = context.height,
+                    "Sumeragi v2 Native process turn failed closed"
+                );
+            })?;"""
+
 # Passive completed diagnostics retain proof data only; none of these owners
 # reconstructs a Ready row or authorizes a new consensus output.
 COMPLETED_EQUIVOCATION_BINDINGS = (
@@ -75,8 +93,12 @@ COMPLETED_EQUIVOCATION_BINDINGS = (
         'fn',
         'retain_validated_local_evidence',
         (
-            'let snapshot = v2_committed_evidence_snapshot(view.world())',
-            'snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded',
+            'let records = world.consensus_evidence();',
+            'if record_count == MAX_V2_COMMITTED_EVIDENCE_RECORDS {\n            return false;\n        }',
+            'let record_bytes = v2_evidence_encoded_len(&record.evidence.equivocation);',
+            'if record_bytes > MAX_V2_EVIDENCE_ADMISSION_BYTES {\n            return false;\n        }',
+            'let Some(next_bytes) = checked_v2_evidence_byte_sum(\n            table_bytes,\n            [record_bytes],\n            MAX_V2_COMMITTED_EVIDENCE_BYTES,\n        ) else {\n            return false;\n        };',
+            'table_bytes = next_bytes;',
             'if subject_height > next_height',
             'next_height.max(after_subject_height)',
             '!evidence_within_configured_horizon(earliest_admission_height, horizon, Some(subject_height))',
@@ -637,8 +659,8 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
         "run_lifecycle_active_height",
         (
             "native.take_service_publication(services)",
-            "native.service_sources(services, now)?",
-            "native.poll(native_global, native_network, now, receiver)?",
+            NATIVE_SOURCE_SERVICE_TURN,
+            NATIVE_PROCESS_TURN,
             "native.next_deadline().map_or(IDLE_POLL, |deadline|",
             "wake_rx.recv_timeout(native_wait)",
         ),
@@ -669,9 +691,9 @@ PASSIVE_RECOVERY_MODEL_BINDINGS = (
     ),
 )
 
-# Native retry retains its original request/ticket. Only an instance target
-# with its original State family and authenticated frozen-context closure may
-# release that duplicate request. Candidate and Validate completion remain owned.
+# Native retry retains its original request/ticket. An instance or candidate
+# request is retired only against authenticated current lane membership; a
+# Validate request is retired when its exact lifecycle source wait disappears.
 NATIVE_RECOVERY_BINDINGS = (
     (
         AUTONOMOUS_MODULE,
@@ -681,12 +703,13 @@ NATIVE_RECOVERY_BINDINGS = (
         (
             'self.settle_pending_publication()?',
             'self.note_current_observation(observed.as_ref())',
-            'self.awaiting_current_observation |= source_gate == LaneCurrentGate::ObservationChanged',
+            'NativeSourceRequest::retire_closed_candidate(',
+            'self.awaiting_current_observation |= source_observation_changed',
             'self.note_current_observation(Some(&observed))',
             'self.poll_candidate()?',
             'self.service_native_ingress(receiver)?',
             'NativeSourceRequest::retire_closed_instance(',
-            'if source_gate != LaneCurrentGate::ObservationChanged',
+            'if !source_observation_changed',
             'if let Some(source) = self.source.as_mut()',
             'source.poll(network, &self.guard, now, self.retransmit)?',
             'if let Some(prepared) = self.pending_ingress.take()',
@@ -700,10 +723,14 @@ NATIVE_RECOVERY_BINDINGS = (
         'method',
         'NativeRunnerProcess::service_sources',
         (
-            'NativeSourceRequest::targets_instance',
+            'source.targets_instance() || source.targets_candidate()',
+            'self.candidate_source_requirement().is_some()',
             'self.driver.process().is_productive(id)',
             'let observed = if needs_current',
             'NativeSourceRequest::retire_closed_instance(',
+            'NativeSourceRequest::retire_closed_candidate(',
+            'self.prune_closed_candidate_source_waits(observed)',
+            'NativeSourceRequest::retire_released_validation(',
             '== LaneCurrentGate::ObservationChanged',
             'self.awaiting_current_observation = true',
             '.source_recovery_target(id, observed.as_ref()?)?',
@@ -732,6 +759,34 @@ NATIVE_RECOVERY_BINDINGS = (
             .next_deadline()""",
             '.and_then(NativeSourceRequest::next_deadline)',
             '.min()',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_candidate.rs',
+        'method',
+        'NativeRunnerProcess::prune_closed_candidate_source_waits',
+        (
+            'source.is_current_in(observed)',
+            'self.candidate_source.as_mut()',
+            'source.waits.retain(retain_current)',
+            'candidate_result',
+            'assembly.source.waits.retain(retain_current)',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/state/lane_admitted_input.rs',
+        'method',
+        'AuthenticatedLaneAdmittedInputSourceV1::is_current_in',
+        (
+            'observed.contexts().iter().any',
+            'frozen.network_id == self.network_id',
+            'frozen.admission_priority == self.priority',
+            'frozen.admitted_binding_hash == self.binding_hash',
+            'frozen.lane_id == self.lane_id',
+            'frozen.dataspace_id == self.dataspace_id',
+            'frozen.lane_incarnation == self.incarnation',
         ),
     ),
     (
@@ -855,7 +910,7 @@ NATIVE_RECOVERY_BINDINGS += (
         (
             'Instance(LaneSourceRecoveryTarget)',
             'Candidate',
-            'Validation(Box<wire::BlockSubject>)',
+            'Validation {\n        subject: Box<wire::BlockSubject>,\n        execution_index: usize,\n    }',
         ),
     ),
     (
@@ -887,13 +942,40 @@ NATIVE_RECOVERY_BINDINGS += (
         AUTONOMOUS_MODULE,
         'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
         'method',
+        'NativeSourceRequest::retire_closed_candidate',
+        (
+            'target: NativeSourceTarget::Candidate',
+            'observed.filter(|observed| observed.is_current(state))',
+            'source.is_current_in(observed)',
+            'response.is_some()',
+            'retained.take()',
+            'LaneCurrentGate::InstanceClosed',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
+        'NativeSourceRequest::retire_released_validation',
+        (
+            'NativeSourceTarget::Validation',
+            '**subject == *owned_subject',
+            '*execution_index == *owned_index',
+            'Arc::ptr_eq(source, owned_source)',
+            'retained.take()',
+        ),
+    ),
+    (
+        AUTONOMOUS_MODULE,
+        'crates/iroha_core/src/sumeragi/v2_runner/native_source.rs',
+        'method',
         'NativeSourceRequest::settle',
         (
             'match &self.target',
             'NativeSourceTarget::Instance(target)',
             '.complete_source_recovery(',
             'target.instance_id()',
-            'NativeSourceTarget::Validation(subject)',
+            'NativeSourceTarget::Validation { subject, .. }',
             'services.complete_native_source(**subject, request, response)',
             'self.request = Some(request)',
             'self.response = Some(response)',
@@ -931,11 +1013,25 @@ NATIVE_QUIET_LOOP_PREFIXES = (
             &mut active_runner,
             |_owner, _executor, services, _local_proposal| {
                 native.take_service_publication(services);
-                native.service_sources(services, now)?;
+                native.service_sources(services, now).inspect_err(|error| {
+                    iroha_logger::error!(
+                        ?error,
+                        height = context.height,
+                        "Sumeragi v2 Native source service failed closed"
+                    );
+                })?;
                 Ok::<_, V2RunnerError>(())
             },
         )?;
-        native.poll(native_global, native_network, now, receiver)?;
+        native
+            .poll(native_global, native_network, now, receiver)
+            .inspect_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    height = context.height,
+                    "Sumeragi v2 Native process turn failed closed"
+                );
+            })?;
         liveness_watchdog.poll(now);""",
     ),
     (
@@ -1072,6 +1168,22 @@ NATIVE_RECOVERY_TRANSITIONS = (
 )
 
 PASSIVE_RECOVERY_ORDERED_CHECKS = (
+    (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'retain_validated_local_evidence',
+        (
+            'let world = view.world();',
+            'let records = world.consensus_evidence();',
+            'for (_, record) in records.iter() {',
+            'if record_count == MAX_V2_COMMITTED_EVIDENCE_RECORDS {\n            return false;\n        }',
+            'let record_bytes = v2_evidence_encoded_len(&record.evidence.equivocation);',
+            'if record_bytes > MAX_V2_EVIDENCE_ADMISSION_BYTES {\n            return false;\n        }',
+            'let Some(next_bytes) = checked_v2_evidence_byte_sum(\n            table_bytes,\n            [record_bytes],\n            MAX_V2_COMMITTED_EVIDENCE_BYTES,\n        ) else {\n            return false;\n        };',
+            'table_bytes = next_bytes;',
+            'if records.iter().any(',
+        ),
+    ),
     (
         'crates/iroha_core/src/sumeragi/evidence.rs',
         'fn',
@@ -1233,8 +1345,8 @@ PASSIVE_RECOVERY_ORDERED_CHECKS = (
         "run_lifecycle_active_height",
         (
             "native.take_service_publication(services)",
-            "native.service_sources(services, now)?",
-            "native.poll(native_global, native_network, now, receiver)?",
+            NATIVE_SOURCE_SERVICE_TURN,
+            NATIVE_PROCESS_TURN,
             "dispatch_queue_plan_admission_effects(",
         ),
     ),
@@ -1285,7 +1397,8 @@ PASSIVE_RECOVERY_ORDERED_CHECKS += (
         (
             "self.service_native_ingress(receiver)?",
             "NativeSourceRequest::retire_closed_instance(",
-            "source_gate != LaneCurrentGate::ObservationChanged",
+            "NativeSourceRequest::retire_closed_candidate(",
+            "if !source_observation_changed",
             "source.poll(network, &self.guard, now, self.retransmit)?",
             "let Some(observed) = observed else",
             ".poll(&observed, now)",
@@ -1296,12 +1409,26 @@ PASSIVE_RECOVERY_ORDERED_CHECKS += (
 
 PASSIVE_RECOVERY_ORDERED_CHECKS += (
     (
+        "crates/iroha_core/src/sumeragi/v2_runner/native_source.rs",
+        "method", "NativeSourceRequest::retire_closed_candidate",
+        (
+            "if response.is_some()",
+            "return LaneCurrentGate::Current",
+            "observed.filter(|observed| observed.is_current(state))",
+            "source.is_current_in(observed)",
+            "retained.take()",
+        ),
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_runner/native_process.rs",
         "method", "NativeRunnerProcess::service_sources",
         (
             "let observed = if needs_current",
             "NativeSourceRequest::retire_closed_instance(",
             "== LaneCurrentGate::ObservationChanged",
+            "NativeSourceRequest::retire_closed_candidate(",
+            "self.prune_closed_candidate_source_waits(observed)",
+            "NativeSourceRequest::retire_released_validation(",
             "if let Some(mut source) = self.source.take()",
             "source.settle(&mut self.driver, services, &mut self.recovered_sources)",
             ".source_recovery_target(id, observed.as_ref()?)?",

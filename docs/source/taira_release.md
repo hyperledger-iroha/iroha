@@ -316,6 +316,9 @@ hash source or artifacts while reporting progress and does not impose an arbitra
 cold-build deadline. Captured source, tools and artifacts are checked at actual consumption
 and reuse boundaries. Runtime secrets remain excluded from the child environment.
 
+On a failed Linux build, the error includes the first bounded compiler or linker
+diagnostic found in that completed log; the full output remains private.
+
 Before initial source capture, local admission counts the signed Git blobs' exact
 byte sizes without reading unrelated worktree files.
 Before compilation, it groups requirements by filesystem and checks an 8 GiB
@@ -542,6 +545,12 @@ updater repeats both quorum samples and checks all four unchanged processes.
 Identity, hash, malformed response, and process failures stop immediately; only
 declared startup transport failures and HTTP 503 are polled. An idle chain does
 not need to create another block to pass.
+
+During guest apply, the coordinator prints the phase, elapsed time and owner-private
+attempt path to stderr at start and every 30 seconds. A failed or timed-out child
+reports that path without printing its captured stderr. The guest command remains
+a single timeout-bound submission.
+
 `--plan-only` writes the concrete plan locally without contacting the host.
 The operation is explicit and determines the immutable candidate binary paths.
 The update and public-reset paths share the root-owned

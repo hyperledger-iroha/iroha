@@ -133,6 +133,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             authority: authority,
             entries: frames.map { TransactionBatchEntry.instruction($0) },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            metadata: [:],
             ttlMs: 60,
             nonce: 7,
             signingKey: signingKey

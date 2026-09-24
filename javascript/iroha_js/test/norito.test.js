@@ -1838,16 +1838,58 @@ test("native multisig DTO encoders reject inline private-key fields", () => {
     () =>
       noritoEncodeMultisigContractCallProposeRequest({
         privateKeyHex: "11".repeat(32),
-      }),
+      }, 753),
     /does not accept private-key fields/,
   );
   assert.throws(
     () =>
       noritoEncodeMultisigContractCallApproveRequest({
         private_key_bytes: [1],
-      }),
+      }, 753),
     /does not accept private-key fields/,
   );
+});
+
+test("contract-call propose Norito encoder requires alias and object payload", () => {
+  const request = {
+    multisig_account_alias: "treasury@north.test",
+    signer_account_id: MULTISIG_SIGNER_ID,
+    contract_alias: "apps_review::universal",
+    entrypoint: "execute",
+    payload: { probe: true },
+    fee_payment: authorityFeePayment(10_000),
+  };
+  assert.throws(
+    () => noritoEncodeMultisigContractCallProposeRequest({
+      ...request,
+      contract_alias: null,
+      contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    }, 753),
+    /exact contract_alias/,
+  );
+  assert.throws(
+    () => noritoEncodeMultisigContractCallProposeRequest({ ...request, payload: null }, 753),
+    /exact object payload/,
+  );
+});
+
+baseTest("contract-call approve Norito encoder requires the exact object payload", () => {
+  const request = {
+    multisig_account_alias: "treasury@north.test",
+    signer_account_id: MULTISIG_SIGNER_ID,
+    instructions_hash: "aa".repeat(32),
+    contract_alias: "apps_review::universal",
+    entrypoint: "execute",
+    payload: { probe: true },
+    fee_payment: authorityFeePayment(10_000),
+  };
+  assert.ok(noritoEncodeMultisigContractCallApproveRequest(request, 753).length > 0);
+  for (const payload of [null, [], "{}", 7]) {
+    assert.throws(
+      () => noritoEncodeMultisigContractCallApproveRequest({ ...request, payload }, 753),
+      /payload must be the exact contract object/,
+    );
+  }
 });
 
 test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
@@ -2018,11 +2060,11 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
           multisig_account_alias: "cbdc@hbl.sbp",
           signer_account_id: MULTISIG_SIGNER_ID,
           signature_b64,
-          contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+          contract_alias: "apps_review::universal",
           entrypoint: "execute",
           payload: { probe: true },
           fee_payment: authorityFeePayment(10_000),
-        }),
+        }, 753),
       /exact standard-base64/,
     );
     assert.throws(
@@ -2033,7 +2075,7 @@ baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", 
           signature_b64,
           instructions_hash: "aa".repeat(32),
           fee_payment: authorityFeePayment(),
-        }),
+        }, 753),
       /exact standard-base64/,
     );
   }

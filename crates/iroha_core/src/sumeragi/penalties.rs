@@ -1693,6 +1693,21 @@ mod tests {
         block.commit();
 
         let view = state.view();
+        let empty_budget = AllocationBudget::new(0);
+        let preflight_error = match PublicLaneStakeIndex::from_world(
+            view.world(),
+            view.nexus.staking.max_stake_shares_per_validator.get(),
+            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            &empty_budget,
+        ) {
+            Ok(_) => panic!("an orphan stake-share group must fail before allocation"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{preflight_error:#}").contains("has no validator record"),
+            "unexpected pre-allocation rejection: {preflight_error:#}"
+        );
+        assert_eq!(empty_budget.reserved_bytes(), 0);
         let error = match PenaltyApplier::parent_snapshot(
             &view,
             2,
@@ -1885,6 +1900,22 @@ mod tests {
         block.commit();
 
         let view = state.view();
+        let empty_budget = AllocationBudget::new(0);
+        let preflight_error = match PublicLaneStakeIndex::from_world(
+            view.world(),
+            view.nexus.staking.max_stake_shares_per_validator.get(),
+            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            &empty_budget,
+        ) {
+            Ok(_) => panic!("a foreign stake account must fail before allocation"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{preflight_error:#}")
+                .contains("stake account must match the validator account"),
+            "unexpected pre-allocation rejection: {preflight_error:#}"
+        );
+        assert_eq!(empty_budget.reserved_bytes(), 0);
         let error = match PenaltyApplier::parent_snapshot(
             &view,
             2,

@@ -9,17 +9,18 @@ public enum KagemushaAppAttestEnvironmentV1: Sendable {
 }
 
 /// A checked Apple enrollment object. Its receipt still requires independent fraud assessment.
+/// An unavailable release measurement never proves a particular installed app version.
 public struct KagemushaAppAttestEnrollmentEvidenceV1: Sendable {
   public let rawAttestation: Data
   public let authenticatorData: Data
   public let keyID: String
   public let publicKeyX963: Data
   public let receipt: Data
-  public let validationCategory: UInt32
-  public let bundleVersion: String
+  public let releaseMeasurement: KagemushaAppAttestReleaseMeasurementV1
 }
 
-/// Verifies one dedicated App Attest key against Apple's pinned root and an authenticated release.
+/// Verifies one dedicated App Attest key against Apple's pinned root and app identity.
+/// A signed release measurement, when present, must match the authenticated release policy.
 ///
 /// This verifies enrollment evidence only. It does not authorize an offline monetary transition.
 public struct KagemushaAppAttestEnrollmentVerifierV1: Sendable {
@@ -109,7 +110,7 @@ public struct KagemushaAppAttestEnrollmentVerifierV1: Sendable {
     return KagemushaAppAttestEnrollmentEvidenceV1(
       rawAttestation: rawAttestation, authenticatorData: authenticatorData,
       keyID: keyID, publicKeyX963: externalKey, receipt: object.receipt,
-      validationCategory: parsed.category, bundleVersion: parsed.bundleVersion)
+      releaseMeasurement: parsed)
   }
 
   private func verifyCertificateChain(leafDER: Data, intermediateDER: Data) throws {
@@ -134,7 +135,7 @@ public struct KagemushaAppAttestEnrollmentVerifierV1: Sendable {
   }
 
   private func parseAuthenticatorData(_ raw: Data, credentialID: Data,
-    publicKeyX963: Data) throws -> (category: UInt32, bundleVersion: String) {
+    publicKeyX963: Data) throws -> KagemushaAppAttestReleaseMeasurementV1 {
     let bytes = [UInt8](raw)
     guard (37 + 16 + 2 + 32 + 1...1_024).contains(bytes.count),
       Data(bytes[0..<32]) == expectedAppIDHash,
@@ -173,8 +174,21 @@ public struct KagemushaAppAttestEnrollmentVerifierV1: Sendable {
     }
     guard kty == 2, alg == -7, curve == 1,
       let x, x.count == 32, let y, y.count == 32,
-      Data([0x04]) + x + y == publicKeyX963,
-      try reader.length(major: 5, maximum: 2) == 2 else {
+      Data([0x04]) + x + y == publicKeyX963 else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+    }
+    // iOS 26 ends authData immediately after the COSE key. The certificate and
+    // App ID are still verified above, but the release version is unmeasured.
+    if reader.isAtEnd {
+      guard bytes[32] == 0x40 else {
+        throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+      }
+      return .unavailable
+    }
+    guard bytes[32] == 0x40 || bytes[32] == 0xc0 else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
+    }
+    guard try reader.length(major: 5, maximum: 2) == 2 else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidAssertionObject
     }
     var category: UInt32?
@@ -199,7 +213,7 @@ public struct KagemushaAppAttestEnrollmentVerifierV1: Sendable {
       bundleVersion == expectedRelease.bundleVersion else {
       throw KagemushaAppAttestEvidenceErrorV1.releaseMismatch
     }
-    return (category, bundleVersion)
+    return .signed(validationCategory: category, bundleVersion: bundleVersion)
   }
 
   private struct ParsedAttestation {

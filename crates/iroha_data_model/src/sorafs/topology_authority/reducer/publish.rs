@@ -75,8 +75,8 @@ impl<L: TopologyIndexedReadV1 + ?Sized> TopologyStateViewV1<'_, L> {
                     next.fence = row.reservation.fence;
                     next.active = Some(row.reviewed.request.operation_id);
                 }
-                TopologyOutcomeV1::Completed { commitment, .. } => {
-                    next.audit = commitment.audit;
+                TopologyOutcomeV1::Completed(completion) => {
+                    next.audit = completion.commitment.audit;
                     next.active = None;
                 }
                 TopologyOutcomeV1::Expired | TopologyOutcomeV1::Invalidated => next.active = None,

@@ -305,7 +305,7 @@ pub struct BallotProof {
     /// Optional direction hint (Aye/Nay/Abstain).
     pub direction: Option<String>,
 }
-/// Cast a non‑ZK quadratic ballot (optional mode)
+/// Cast one immutable public standalone ballot.
 #[derive(
     Clone,
     Debug,
@@ -331,6 +331,34 @@ pub struct CastPlainBallot {
     pub direction: u8,
 }
 impl crate::seal::Instruction for CastPlainBallot {}
+/// Increase the bond or extend the lock of an existing public standalone ballot.
+///
+/// The original ballot's choice is retained from finalized state and is not a field of this
+/// instruction. A second `CastPlainBallot` never acts as a conviction update.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::isi::governance::UpdatePlainConviction")]
+#[norito(deny_unknown_fields)]
+pub struct UpdatePlainConviction {
+    /// Canonical V1 selector of the referendum whose existing ballot is updated.
+    pub referendum_id: String,
+    /// Owner of the existing ballot; must equal the transaction authority.
+    pub owner: AccountId,
+    /// New total bond, in the asset's exact smallest units.
+    pub amount: Quantity,
+    /// New requested lock duration in blocks.
+    pub duration_blocks: u64,
+}
+impl crate::seal::Instruction for UpdatePlainConviction {}
 /// Bond the configured citizenship amount to join the citizen registry.
 ///
 /// Ordinary execution is owner-authorized. The authenticated initial genesis may instead seed an
@@ -492,6 +520,12 @@ impl_governance_decode_from_slice!(CastPlainBallot {
     duration_blocks: u64,
     direction: u8,
 });
+impl_governance_decode_from_slice!(UpdatePlainConviction {
+    referendum_id: String,
+    owner: AccountId,
+    amount: Quantity,
+    duration_blocks: u64,
+});
 impl_governance_decode_from_slice!(SlashGovernanceLock {
     referendum_id: String,
     owner: AccountId,
@@ -650,6 +684,19 @@ mod tests {
         }
         .encode();
         assert!(CastPlainBallot::decode_from_slice(&encoded).is_err());
+    }
+    #[test]
+    fn conviction_update_rejects_cast_payload_with_direction() {
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<UpdatePlainConviction>(),
+            &CastPlainBallot {
+                referendum_id: "referendum-1".to_owned(),
+                owner: account(1),
+                amount: 2_000_u64.into(),
+                duration_blocks: 200,
+                direction: 1,
+            },
+        );
     }
     #[test]
     fn encode_roundtrip_basic() {
@@ -820,6 +867,12 @@ mod tests {
             duration_blocks: 100,
             direction: 0,
         });
+        assert_slice_roundtrip(UpdatePlainConviction {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: 2_000_u64.into(),
+            duration_blocks: 200,
+        });
         assert_slice_roundtrip(SlashGovernanceLock {
             referendum_id: "referendum-1".to_owned(),
             owner: account(1),
@@ -880,6 +933,15 @@ mod tests {
                 amount: 1_000_u64.into(),
                 duration_blocks: 100,
                 direction: 0,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            UpdatePlainConviction {
+                referendum_id: "referendum-1".to_owned(),
+                owner: account(1),
+                amount: 2_000_u64.into(),
+                duration_blocks: 200,
             },
         );
         assert_registry_decodes(

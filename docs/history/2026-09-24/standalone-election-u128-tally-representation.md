@@ -80,6 +80,18 @@ and the `ivm_abi` weight-above-`u64::MAX` roundtrip passes 1/1. The same
 the canonical selector 1/1. The IVM mock-host exact-maximum test passes 1/1;
 Torii's same-source tally response tests pass 3/3, including the corrected
 two-option minimum, one-option rejection, and lossless weight above
-`u64::MAX` (`target/f11-torii-tally-response.log`). Full-host IVM, native
+`u64::MAX` (`target/f11-torii-tally-response.log`). A separate four-case Torii
+HTTP tally selector passes 4/4 on the merged `optimizations` checkout:
+`cargo test --locked -p iroha_torii --test torii_zk zk_vote_tally_endpoint -- --nocapture`
+(`target/f11-torii-tally-accept-merged.log`). Its test-only fixture seeds the
+election World before signed genesis publication and checks the retained
+height, hash, and signed Kura block body. Explicit JSON `Accept` gives an
+exact `u128::MAX` response; the Norito handler response agrees. Malformed or
+partial retained tallies fail closed. SHA-256 pins of `Cargo.lock` and the
+selected Torii, Core, and DataModel source files match before and after the
+selector (`target/f11-torii-scoped-source-{before,after}.sha256`). This scoped
+pin does not cover every source file: an unrelated formal inventory file
+changed during the earlier run, and the merge was not yet committed. The
+route tests do not exercise private-proof admission. Full-host IVM, native
 network integration and candidate-wide qualification remain open.
 This record is not release evidence.

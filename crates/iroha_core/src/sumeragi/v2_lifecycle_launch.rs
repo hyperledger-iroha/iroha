@@ -1,6 +1,6 @@
 //! Sealed production launch from recovered lifecycle ownership into live I/O.
 use iroha_crypto::KeyPair;
-use iroha_data_model::block::{CertifiedMergeLedgerReference, consensus_v2 as wire};
+use iroha_data_model::block::consensus_v2 as wire;
 use iroha_model_base::peer::PeerId;
 use std::{
     collections::BTreeSet,
@@ -71,7 +71,6 @@ use crate::{
         v2_effects::{
             EffectExecutorError, EffectQueueConfig, PostFinalityCleanupOutcome, V2EffectExecutor,
         },
-        v2_lane_work::{RetainedMergeSidecars, V2LaneWorkAdapter},
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
@@ -1649,6 +1648,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     Services(String),
     /// A durable Validate sidecar registration could not be authenticated and rebound.
     #[error("Validate sidecar registration recovery failed: {0}")]
+    // TODO: exercise this failure after native sidecar registration is live.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     ValidateSidecarRegistration(String),
     /// A post-construction process-identity check failed.
     #[error("launched lifecycle stack lost exact process ownership")]

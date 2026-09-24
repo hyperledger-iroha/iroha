@@ -27,6 +27,7 @@ fn all_route_input_fixture(block_secondary: bool) -> LaneContextVerifiedFixture 
     );
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
+    seed_committee_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
         &state,
         &[

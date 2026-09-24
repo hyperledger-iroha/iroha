@@ -129,7 +129,7 @@ fn geometry_extends_the_exact_existing_subgroup_and_preserves_every_fold() {
         domain = next;
     }
     assert_eq!(FRI_LENGTHS[5], 128);
-    assert_eq!(FRI_DEGREES[5], 1);
+    assert_eq!(FRI_DEGREES, [131_072, 8_192, 512, 64, 8, 2]);
     assert_eq!(field_pow(domain.generator, 128), 1);
     assert_ne!(field_pow(domain.generator, 64), 1);
 }

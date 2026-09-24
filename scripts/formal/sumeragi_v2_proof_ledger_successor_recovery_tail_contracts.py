@@ -5106,7 +5106,7 @@ executor.acknowledge_runner_decision_cleanup(
             "continue",
             "if drained_terminal_ingress || drained_terminal_relay",
             "continue",
-            "receiver.ensure_closed_drained_cut()",
+            "receiver.ensure_closed_global_drained_cut()",
             "finalize_lifecycle_height(",
         ),
     )

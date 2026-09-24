@@ -26646,6 +26646,7 @@ mod tests {
         };
         let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at,
             expires_at,
             body: body.clone(),
@@ -26708,6 +26709,12 @@ mod tests {
         let proposal_digest = compute_proposal_digest(&proposal)?;
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body: body.clone(),
@@ -26726,7 +26733,7 @@ mod tests {
                 .to_vec(),
         });
         let policy = ProviderAdmissionCouncilPolicy::new([council_public_payload], 1)?;
-        let admission = AdmissionRegistry::from_envelopes(policy, [envelope])?;
+        let admission = AdmissionRegistry::from_envelopes(envelope.network_id, policy, [envelope])?;
         let mut cache = ProviderAdvertCache::new(
             vec![
                 CapabilityType::ToriiGateway,

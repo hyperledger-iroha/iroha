@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Closed native coordinator methods; schema 2 is the sole V1 protocol frame.
@@ -6,6 +7,8 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case beginSenderTransition, provePreparedSenderTransition, buildTerminalEnvelope
   case acceptInstalledTerminal, recoverSender, recoverTerminalEnvelope, releaseOutbox
   case beginObservation
+  case initialEnrollment
+  case acknowledgeCommittedAppAttest
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -20,7 +23,7 @@ public enum KagemushaCoreCoordinatorErrorV1: Error, Equatable, Sendable {
 public enum KagemushaCoreCoordinatorFrameV1 {
   public static let schemaVersion: UInt16 = 2
   public static let maximumFields = 16
-  public static let maximumFieldBytes = 64 * 1024
+  public static let maximumFieldBytes = 96 * 1024
   public static let maximumRequestBytes = 256 * 1024
   public static let maximumResponseBytes = 128 * 1024
   private static let magic = Data("IKGMCOR1".utf8)
@@ -137,6 +140,36 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       let receipt = try field(fields, end + 1)
       try require(receipt.count > 4 && receipt.prefix(4) == field(fields, 1), "invalid terminal receipt")
       try qualification(fields, end + 2)
+    case .initialEnrollment:
+      switch try number(fields, 0) {
+      case 1:
+        try count(fields, 2); try bounded(fields, 1, 512)
+      case 2:
+        try count(fields, 11); try ticket(fields, 1)
+        try require(fields[2].count == 273, "invalid signed app preparation"); try bounded(fields, 3, 8 * 1024)
+        try bounded(fields, 4, 2 * 1024); try bounded(fields, 5, 16 * 1024)
+        for index in 6...8 { try digest(fields, index) }
+        try bounded(fields, 9, 2 * 1024); try ticket(fields, 10)
+      case 3:
+        try count(fields, 4); try ticket(fields, 1)
+        try require(fields[2].count == 64, "invalid account signature")
+        try bounded(fields, 3, 65_716)
+      case 4, 6:
+        try count(fields, 2); try ticket(fields, 1)
+      case 5:
+        try count(fields, 3); try ticket(fields, 1); try bounded(fields, 2, 16 * 1024)
+      default:
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
+      }
+    case .acknowledgeCommittedAppAttest:
+      try count(fields, 7); try digest(fields, 0)
+      let keyID = try field(fields, 1)
+      try require((1...512).contains(keyID.count) && !keyID.contains(0)
+        && String(data: keyID, encoding: .utf8) != nil, "invalid App Attest key ID")
+      _ = try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: field(fields, 2))
+      try bounded(fields, 3, 8 * 1024)
+      try require(number(fields, 4) != UInt32.max, "App Attest counter exhausted")
+      try digest(fields, 5); try digest(fields, 6)
     }
   }
 
@@ -162,6 +195,35 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try count(response, 5); try digest(response, 0); try nonempty(response, 1); try digest(response, 2)
       try nonempty(response, 3); try nonempty(response, 4)
       try equal(response, 3, request, senderInputs(request, 1))
+    case .initialEnrollment:
+      switch try number(request, 0) {
+      case 1:
+        try count(response, 5); try ticket(response, 0)
+        for index in 1...4 { try digest(response, index) }
+      case 2:
+        try count(response, 4); try equal(response, 0, request, 1)
+        try equal(response, 1, request, 7); try equal(response, 2, request, 8)
+        try equal(response, 3, request, 9)
+      case 3, 4:
+        try count(response, 3); try equal(response, 0, request, 1)
+        try digest(response, 1); try bounded(response, 2, 83_124)
+      case 5:
+        try count(response, 2); try equal(response, 0, request, 1); try digest(response, 1)
+      case 6:
+        try count(response, 0)
+      default:
+        throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
+      }
+    case .acknowledgeCommittedAppAttest:
+      try count(response, 7)
+      try equal(response, 0, request, 0)
+      for index in 1...3 {
+        try require(response[index] == Data(SHA256.hash(data: request[index])),
+          "App Attest acknowledgment substituted original bytes")
+      }
+      try require(number(response, 4) == number(request, 4) + 1,
+        "App Attest acknowledgment skipped the committed counter")
+      try equal(response, 5, request, 5); try equal(response, 6, request, 6)
     }
   }
 
@@ -180,6 +242,16 @@ public enum KagemushaCoreCoordinatorFrameV1 {
 
   private static func nonempty(_ fields: [Data], _ index: Int) throws {
     try require(!field(fields, index).isEmpty, "empty field")
+  }
+
+  private static func bounded(_ fields: [Data], _ index: Int, _ maximum: Int) throws {
+    let value = try field(fields, index)
+    try require(!value.isEmpty && value.count <= maximum, "invalid enrollment field size")
+  }
+
+  private static func ticket(_ fields: [Data], _ index: Int) throws {
+    let value = try field(fields, index)
+    try require(value.count == 8 && value.contains { $0 != 0 }, "invalid enrollment ticket")
   }
 
   private static func digest(_ fields: [Data], _ index: Int) throws {

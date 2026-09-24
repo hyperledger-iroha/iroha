@@ -1,7 +1,8 @@
 //! Canonical commitments and guard contexts for KAGEMUSHA state transitions.
 //!
-//! Each preimage owns its frame identity. Hashes bind the complete canonical frame, including
-//! its header, and retain the protocol identity independently of this module location.
+//! Each preimage owns its frame identity. The transition statement uses a fixed flat V1
+//! SHA preimage so its complete content can be derived from recursive state cells.
+//! Other statement hashes bind their complete canonical Norito frame.
 
 use super::*;
 
@@ -221,7 +222,90 @@ pub(super) fn transition_guard_context(
 pub(super) fn transition_statement_digest(
     statement: &TransitionProofStatementV1,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {
-    canonical_sha256_digest(TRANSITION_STATEMENT_DOMAIN, statement)
+    Ok(Sha256::digest(transition_statement_digest_preimage_v1(statement)?).into())
+}
+
+/// Exact fixed-width first-release digest transcript for one Core transition.
+///
+/// Framing is `u64_be(40) || domain || u64_be(1089) || body`. Integer body fields
+/// use little endian. `kind` is one byte in 1..=5, matching the non-bootstrap
+/// recursive operation tag. The typed asset is the sole canonical asset-identity
+/// digest, rather than an unprovable variable Norito object embedded in this frame.
+pub(super) fn transition_statement_digest_preimage_v1(
+    statement: &TransitionProofStatementV1,
+) -> Result<Vec<u8>, KagemushaStateErrorV1> {
+    let asset_id = statement.lane.normalized_asset_id()?;
+    let kind = match statement.kind {
+        KagemushaTransitionKindV1::MintFold => 1,
+        KagemushaTransitionKindV1::SendSplit => 2,
+        KagemushaTransitionKindV1::ReceiveFold => 3,
+        KagemushaTransitionKindV1::RedeemSplit => 4,
+        KagemushaTransitionKindV1::Rotate => 5,
+    };
+    let mut body = Vec::with_capacity(KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1);
+    body.extend_from_slice(&statement.version.to_le_bytes());
+    body.extend_from_slice(&statement.protocol_version.to_le_bytes());
+    body.extend_from_slice(&statement.predecessor_suite_id);
+    body.extend_from_slice(&statement.predecessor_vk_digest);
+    body.extend_from_slice(&statement.successor_suite_id);
+    body.extend_from_slice(&statement.successor_vk_digest);
+    body.push(kind);
+    body.extend_from_slice(&statement.amount.to_le_bytes());
+    body.extend_from_slice(&statement.mint_finality_semantic_digest);
+    body.extend_from_slice(&statement.mint_finality_proof_binding_digest);
+    body.extend_from_slice(&statement.peer_credit_id);
+    body.extend_from_slice(&statement.recipient_encryption_key_binding);
+    body.extend_from_slice(&statement.lifecycle_binding_digest);
+    body.extend_from_slice(&statement.prepared_transition_binding_digest);
+    body.extend_from_slice(&statement.receive_credit_binding_digest);
+    body.extend_from_slice(&statement.predecessor_release_id);
+    body.extend_from_slice(&statement.release_id);
+    body.extend_from_slice(statement.asset_incarnation.as_bytes());
+    body.extend_from_slice(&statement.liability_pool_id);
+    body.extend_from_slice(&statement.hardware_profile_id);
+    body.extend_from_slice(&statement.policy_epoch.to_le_bytes());
+    body.extend_from_slice(statement.lane.network_id.as_bytes());
+    body.extend_from_slice(&statement.lane.device_lane_id);
+    body.extend_from_slice(&asset_id);
+    body.extend_from_slice(&statement.lane.scale.to_le_bytes());
+    body.extend_from_slice(&statement.predecessor_commitment);
+    body.extend_from_slice(&statement.successor_commitment);
+    body.extend_from_slice(&statement.predecessor_sequence.to_le_bytes());
+    body.extend_from_slice(&statement.successor_sequence.to_le_bytes());
+    body.extend_from_slice(&statement.predecessor_epoch.generation.to_le_bytes());
+    body.extend_from_slice(&statement.predecessor_epoch.epoch_id);
+    body.extend_from_slice(&statement.successor_epoch.generation.to_le_bytes());
+    body.extend_from_slice(&statement.successor_epoch.epoch_id);
+    body.extend_from_slice(
+        &statement
+            .predecessor_device_policy_binding
+            .device_key_reference,
+    );
+    body.extend_from_slice(
+        &statement
+            .predecessor_device_policy_binding
+            .hardware_policy_id,
+    );
+    body.extend_from_slice(
+        &statement
+            .successor_device_policy_binding
+            .device_key_reference,
+    );
+    body.extend_from_slice(&statement.successor_device_policy_binding.hardware_policy_id);
+    body.extend_from_slice(&statement.predecessor_state_nonce_commitment);
+    body.extend_from_slice(&statement.successor_state_nonce_commitment);
+    body.extend_from_slice(&statement.journal_revision_before.to_le_bytes());
+    body.extend_from_slice(&statement.journal_revision_after.to_le_bytes());
+    body.extend_from_slice(&statement.effect_digest);
+    if body.len() != KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1 {
+        return Err(KagemushaStateErrorV1::CanonicalEncoding);
+    }
+    let mut message = Vec::with_capacity(8 + TRANSITION_STATEMENT_DOMAIN.len() + 8 + body.len());
+    message.extend_from_slice(&(TRANSITION_STATEMENT_DOMAIN.len() as u64).to_be_bytes());
+    message.extend_from_slice(TRANSITION_STATEMENT_DOMAIN);
+    message.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    message.extend_from_slice(&body);
+    Ok(message)
 }
 
 pub(super) fn transport_semantic_digest(

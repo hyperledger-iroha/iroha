@@ -33,6 +33,8 @@ use super::v2_core::{
     production_successor_predecessor_binding_kernel,
 };
 #[cfg(test)]
+use super::v2_lane_work::DurableLaneRolloverAuthority;
+#[cfg(test)]
 use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
 use super::{
     FairV2Ingress, FairV2IngressCapacityError, FairV2IngressDequeueDisposition,
@@ -73,11 +75,10 @@ use super::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery,
-        DurableLaneRolloverAuthority, GlobalBodyLockOutcome, HistoricalRecoveryServiceOutcome,
+        CanonicalExecutedBlockRecovery, HistoricalRecoveryServiceOutcome,
         LaneApplicationEvidenceRepairPlanning, MergeSidecarDeferralDisposition,
-        RetainedMergeSidecars, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
-        V2LaneWorkError, V2LaneWorkLimits, apply_lane_application_evidence_repair,
+        V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
+        V2LaneWorkLimits, apply_lane_application_evidence_repair,
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
     },
@@ -609,6 +610,7 @@ impl PendingSuccessorConstruction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum LocalValidationDisposition {
     RetryNonEmpty,
     FatalNonEmpty,
@@ -837,6 +839,7 @@ impl LocalProposalState {
     /// before the body was submitted, then give the exact owner one ordinary
     /// non-empty retry. The caller releases the candidate's selection lease
     /// before crossing this boundary, without publishing a body or events.
+    #[cfg(test)]
     fn handle_candidate_binding_rejection(
         &mut self,
         owner: LocalProposalOwner,
@@ -1280,7 +1283,6 @@ fn run_inner(
             lifecycle_storage_authority,
             first_height_authenticated_genesis,
             pending_successor_activation,
-            staged_genesis_nexus_amx_context,
             first_height_genesis,
             genesis_account,
             block_cadence,
@@ -1412,7 +1414,6 @@ fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
     context: &wire::HeightContext,
     local_validator: Option<wire::ValidatorIndex>,
-    key_pair: &KeyPair,
     output_guard: &ConsensusOutputGuard,
     state: &State,
     queue: &Arc<Queue>,
@@ -1908,7 +1909,7 @@ pub(in crate::sumeragi) fn retry_recovered_decision_fetch_if_due(
     *next_attempt = deadline_after(now, retransmit_interval);
     Ok(attempted)
 }
-fn drive_block_sync(
+pub(in crate::sumeragi) fn drive_block_sync(
     now: Instant,
     next_attempt: &mut Instant,
     retransmit_interval: Duration,
@@ -1929,6 +1930,13 @@ fn drive_block_sync(
         let message = discovery
             .retransmit(*hash)
             .ok_or(V2RunnerError::BlockSyncRequestDisappeared)?;
+        // The previous topology attempt can remain owned by an unavailable
+        // peer after reachable servers answered "not yet". Retire only that
+        // transport attempt before sampling new archive targets; discovery
+        // retains the same signed request and accepts any late response.
+        services
+            .cancel_block_sync_request(*hash)
+            .map_err(V2RunnerError::Service)?;
         services
             .broadcast_block_sync_while_guarded(message, operation.permit())
             .map_err(V2RunnerError::Service)?;
@@ -2702,6 +2710,7 @@ pub(in crate::sumeragi) fn reconcile_executor_locked_body_for_pending_kura_test(
 /// post-apply metadata, and strict Native AMX evidence repair are durable.
 /// Keeping the constructor in this continuation makes that ordering explicit
 /// and independently testable.
+#[cfg(test)]
 fn construct_after_pending_tip_application_recovery<T>(
     recovering_interrupted_tip: bool,
     recovery_complete: bool,
@@ -3007,6 +3016,8 @@ fn adapter_fingerprints(
         config: config.fingerprint(),
     }
 }
+// TODO: connect the retained lane-work sidecar dispatcher to the sole runner.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn apply_bounded_sidecar_admissions<T, Error>(
     limit: usize,
     mut next: impl FnMut() -> Result<Option<T>, Error>,
@@ -3022,6 +3033,7 @@ fn apply_bounded_sidecar_admissions<T, Error>(
     }
     Ok(applied)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn apply_certified_merge_sidecar_chunk_admissions(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3043,6 +3055,7 @@ fn apply_certified_merge_sidecar_chunk_admissions(
     )?;
     Ok(())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn retry_exact_output_and_apply_sidecar_admissions(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3060,6 +3073,7 @@ fn retry_exact_output_and_apply_sidecar_admissions(
         .map_err(V2RunnerError::Service)?;
     Ok(pending)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn apply_native_amx_output_retention(
     lane_work: &V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3077,6 +3091,7 @@ fn apply_native_amx_output_retention(
 }
 /// Cancel service-owned historical requests whose adapter owner completed
 /// before retrying any retained network occurrence.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(in crate::sumeragi) fn apply_retired_historical_recovery_requests(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3094,6 +3109,7 @@ pub(in crate::sumeragi) fn apply_retired_historical_recovery_requests(
     }
 }
 /// Cancel service-owned sidecar requests whose exact transport attempt retired.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(in crate::sumeragi) fn apply_retired_merge_sidecar_requests(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3112,6 +3128,7 @@ pub(in crate::sumeragi) fn apply_retired_merge_sidecar_requests(
 }
 /// Cancel canonical old-generation Request/Close output for each exact endpoint
 /// whose authenticated responder generation was durably fenced.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(in crate::sumeragi) fn apply_obsolete_merge_sidecar_generation_hints(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3129,6 +3146,7 @@ pub(in crate::sumeragi) fn apply_obsolete_merge_sidecar_generation_hints(
     }
 }
 /// Cancel requester Close retries covered by an authenticated cumulative ACK.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(in crate::sumeragi) fn apply_acknowledged_merge_sidecar_closes(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3146,6 +3164,7 @@ pub(in crate::sumeragi) fn apply_acknowledged_merge_sidecar_closes(
     }
 }
 include!("v2_runner/finalized_output_rollover.rs");
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3156,6 +3175,7 @@ fn apply_certified_merge_sidecar_closed_prefixes(
             .map(|_| ())
     })
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn apply_certified_merge_sidecar_closed_prefixes_with(
     lane_work: &mut V2LaneWorkAdapter,
     mut apply: impl FnMut(&CertifiedMergeSidecarClosedPrefix) -> Result<(), String>,
@@ -3241,6 +3261,7 @@ pub(in crate::sumeragi) fn dispatch_queue_plan_admission_effects(
     }
     Ok(dispatched)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3249,6 +3270,7 @@ pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     dispatch_lane_work_effects_with_progress(lane_work, services, limit)?;
     Ok(())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn dispatch_lane_work_effects_with_progress(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -3339,6 +3361,7 @@ include!("v2_runner/reply_route_retention.rs");
 #[derive(Debug)]
 enum LaneWorkEffectDispatch {
     Complete,
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     SourceRetained(V2LaneWorkEffect),
 }
 fn dispatch_lane_work_effect(
@@ -3651,6 +3674,7 @@ pub(super) enum V2RunnerError {
     #[error("Sumeragi v2 height one is missing its signed genesis body")]
     MissingGenesisBody,
     /// Interrupted-tip application did not reach its strict durable repair boundary.
+    #[cfg(test)]
     #[error(
         "Sumeragi v2 interrupted-tip recovery did not complete post-apply metadata and Native AMX evidence repair before lane-work construction"
     )]
@@ -3682,9 +3706,6 @@ pub(super) enum V2RunnerError {
     /// A local or recovered proposal carried execution results.
     #[error("Sumeragi v2 proposal body must be resultless")]
     ResultBearingProposal,
-    /// A locally assembled body could not bind its lane-local work to the exact round.
-    #[error("local Sumeragi v2 candidate could not bind its lane-local ownership artifacts")]
-    LaneCandidateBinding,
     /// Candidate tag belongs to another height.
     #[error("stale Sumeragi v2 proposal tag")]
     StaleTag,

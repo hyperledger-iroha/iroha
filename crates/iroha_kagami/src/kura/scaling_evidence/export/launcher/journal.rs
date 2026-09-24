@@ -87,17 +87,21 @@ pub(in crate::kura::scaling_evidence::export) struct JournalExpectations {
 /// Collector observations only; these fields are not canonical state proof.
 pub(in crate::kura::scaling_evidence::export) struct JournalObservation {
     pub(in crate::kura::scaling_evidence::export) sequence: usize,
+    #[allow(dead_code, reason = "TODO: expose retained collector diagnostics")]
     pub(in crate::kura::scaling_evidence::export) scheduled_offset_ns: i64,
     pub(in crate::kura::scaling_evidence::export) offer_offset_ns: i64,
     pub(in crate::kura::scaling_evidence::export) acknowledgment_offset_ns: i64,
     pub(in crate::kura::scaling_evidence::export) applied_offset_ns: i64,
     pub(in crate::kura::scaling_evidence::export) block_height: u64,
+    #[allow(dead_code, reason = "TODO: expose retained collector diagnostics")]
     pub(in crate::kura::scaling_evidence::export) status_attempts: usize,
 }
 
 /// Raw identity of the entire original byte stream, not a filesystem retention receipt.
 pub(in crate::kura::scaling_evidence::export) struct JournalIdentity {
+    #[allow(dead_code, reason = "TODO: bind journal identity to exported receipt")]
     pub(in crate::kura::scaling_evidence::export) raw_sha256: [u8; 32],
+    #[allow(dead_code, reason = "TODO: bind journal identity to exported receipt")]
     pub(in crate::kura::scaling_evidence::export) byte_length: u64,
 }
 

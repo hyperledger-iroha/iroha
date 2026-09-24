@@ -14,7 +14,10 @@ use iroha_data_model::{
     },
     isi::{
         Log, Register, RegisterBox, Revoke, RevokeBox, Unregister, UnregisterBox,
-        sorafs::{MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority},
+        sorafs::{
+            MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
+            MutateSorafsTopologyAuthority,
+        },
     },
     permission::Permission,
     role::{Role, RoleId},
@@ -67,7 +70,7 @@ pub(crate) fn commit(
     membership: bool,
     finality: bool,
 ) -> Vec<bool> {
-    // These fixtures exercise exactly the closed native custody transitions,
+    // These fixtures exercise exactly the closed native custody and topology transitions,
     // with no callback or arbitrary executor capable of producing omitted output.
     // They intentionally do not stand in for genesis or ordinary admission.
     let limits = {
@@ -94,6 +97,7 @@ pub(crate) fn commit(
                 let instruction = instruction.as_any();
                 instruction.is::<MutateSorafsFinalPromotionAuthority>()
                     || instruction.is::<MutateSorafsFinalPromotionAccountCustody>()
+                    || instruction.is::<MutateSorafsTopologyAuthority>()
                     || instruction.is::<Log>()
                     // Existing adversarial cases execute observer/operator
                     // permission and account removal in the exact native cut.

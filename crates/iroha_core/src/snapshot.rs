@@ -64,6 +64,7 @@ pub(crate) enum SnapshotCaptureError {
     #[error("State snapshot observation changed during capture")]
     Changed,
     /// The captured committed cut belongs to another finalized block boundary.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
     #[error("State snapshot differs from the finalized commit {component}")]
     CommitBoundary {
         /// Exact identity component which failed before hashing or durable I/O.
@@ -196,6 +197,7 @@ impl CapturedStateSnapshot {
     /// substitute another generation. A later publication does not invalidate
     /// these immutable historical bytes. This authenticates the capture's block
     /// association, not finality or the installation of retained State journals.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native Apply"))]
     pub(crate) fn canonical_hash_for_block(
         &self,
         network_id: NetworkId,
@@ -2725,6 +2727,7 @@ fn try_read_snapshot_bundle<F>(
     generation: &BoundSnapshotGeneration,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
+    configured_nexus: &iroha_config::parameters::actual::Nexus,
     live_query_store: &LiveQueryStoreHandle,
     block_count: usize,
     merkle_chunk_size: NonZeroUsize,
@@ -2903,7 +2906,8 @@ where
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let decoded_state = seed.into_state_from_json_str(input);
+    let decoded_state =
+        seed.into_state_from_json_str_with_configured_nexus(input, configured_nexus.clone());
     let mut state = decoded_state.map_err(|err| {
         iroha_logger::warn!(
             ?err,
@@ -3046,6 +3050,7 @@ pub fn try_read_snapshot(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
+    configured_nexus: &iroha_config::parameters::actual::Nexus,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     block_count: BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -3060,6 +3065,7 @@ pub fn try_read_snapshot(
         store_dir,
         kura,
         lane_manifests,
+        configured_nexus,
         live_query_store_lazy,
         block_count,
         merkle_chunk_size,
@@ -3085,6 +3091,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
+    configured_nexus: &iroha_config::parameters::actual::Nexus,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     block_count: BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -3101,6 +3108,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         store_dir,
         kura,
         lane_manifests,
+        configured_nexus,
         live_query_store_lazy,
         block_count,
         merkle_chunk_size,
@@ -3126,6 +3134,7 @@ fn try_read_snapshot_with_initializer<F>(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     lane_manifests: &LaneManifestRegistryHandle,
+    configured_nexus: &iroha_config::parameters::actual::Nexus,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     BlockCount(block_count): BlockCount,
     merkle_chunk_size: NonZeroUsize,
@@ -3170,6 +3179,7 @@ where
             &generation,
             kura,
             lane_manifests,
+            configured_nexus,
             &live_query_store,
             block_count,
             merkle_chunk_size,
@@ -4346,7 +4356,10 @@ fn validate_generated_snapshot_for_restart_with_policy(
         telemetry: StateTelemetry::default(),
     };
     let mut restored = seed
-        .into_state_from_json_str_without_durable_recovery(input)
+        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+            input,
+            state.nexus_snapshot(),
+        )
         .map_err(TryReadError::from)?;
     if restored.network_id_ref() != state.network_id_ref() {
         return Err(TryReadError::NetworkIdMismatch {

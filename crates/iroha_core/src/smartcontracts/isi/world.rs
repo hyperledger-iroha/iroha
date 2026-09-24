@@ -2008,7 +2008,7 @@ pub mod isi {
         gov: &iroha_config::parameters::actual::Governance,
     ) -> crate::state::GovernanceLockCustody {
         crate::state::GovernanceLockCustody {
-            escrowed: !gov.min_bond_amount.is_zero(),
+            escrowed: true,
             asset_definition_id: gov.voting_asset_id.clone(),
             bond_escrow_account: gov.bond_escrow_account.clone(),
             slash_receiver_account: gov.slash_receiver_account.clone(),
@@ -2060,11 +2060,6 @@ pub mod isi {
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if minimum_bond.is_zero() && !custody.escrowed {
-            // The unopened ZK path has its own custody protocol. PLAIN always supplies
-            // escrowed custody, including when its frozen minimum is zero.
-            return Ok(());
-        }
         if !custody.escrowed {
             return Err(InstructionExecutionError::InvariantViolation(
                 "governance lock custody omits escrow for a bonded ballot".into(),
@@ -4913,8 +4908,20 @@ pub mod isi {
         }
         Ok(Some(proposal))
     }
+    struct PlainBallotPosition {
+        referendum_id: String,
+        owner: AccountId,
+        amount: Quantity,
+        duration_blocks: u64,
+        direction: u8,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PlainBallotAction {
+        Cast,
+        UpdateConviction,
+    }
     fn ensure_plain_ballot_preconditions(
-        ballot: &gov::CastPlainBallot,
+        ballot: &PlainBallotPosition,
         authority: &AccountId,
         policy: &PlainConvictionPolicyV1,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4994,7 +5001,7 @@ pub mod isi {
         Ok(())
     }
     fn ensure_plain_referendum_open(
-        ballot: &gov::CastPlainBallot,
+        ballot: &PlainBallotPosition,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<crate::state::GovernanceReferendumRecord, Error> {
         let rid = ballot.referendum_id.clone();
@@ -5075,7 +5082,7 @@ pub mod isi {
         Ok(rr)
     }
     fn ensure_plain_ballot_lock_covers_window(
-        ballot: &gov::CastPlainBallot,
+        ballot: &PlainBallotPosition,
         referendum: &crate::state::GovernanceReferendumRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -5100,8 +5107,120 @@ pub mod isi {
         }
         Ok(())
     }
+    fn ensure_plain_ballot_action_preconditions(
+        ballot: &PlainBallotPosition,
+        action: PlainBallotAction,
+        authority: &AccountId,
+        policy: &PlainConvictionPolicyV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let previous = state_transaction
+            .world
+            .governance_locks
+            .get(&ballot.referendum_id)
+            .and_then(|locks| locks.locks.get(authority));
+        match (action, previous) {
+            (PlainBallotAction::Cast, None) => Ok(()),
+            (PlainBallotAction::Cast, Some(previous)) => {
+                previous
+                    .validate_plain_context(policy)
+                    .map_err(invalid_smart_contract_parameter)?;
+                if previous.owner != *authority {
+                    return Err(invalid_smart_contract_parameter(
+                        "plain lock owner does not match its corpus key",
+                    ));
+                }
+                if previous.direction != ballot.direction {
+                    return reject_governance_ballot_with_penalty(
+                        &ballot.referendum_id,
+                        authority,
+                        state_transaction.gov.slash_double_vote_bps,
+                        GovernanceSlashReason::DoubleVote,
+                        "double_vote",
+                        "second plain ballot cannot change direction",
+                        InstructionExecutionError::InvariantViolation(
+                            "second plain ballot cannot change direction".into(),
+                        )
+                        .into(),
+                        state_transaction,
+                    );
+                }
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: ballot.referendum_id.clone(),
+                            reason: "plain ballot already cast; use UpdatePlainConviction".into(),
+                        },
+                    ),
+                ));
+                Err(InstructionExecutionError::InvariantViolation(
+                    "plain ballot already cast; use UpdatePlainConviction to increase conviction"
+                        .into(),
+                )
+                .into())
+            }
+            (PlainBallotAction::UpdateConviction, None) => {
+                Err(InstructionExecutionError::InvariantViolation(
+                    "conviction update requires an existing plain ballot".into(),
+                )
+                .into())
+            }
+            (PlainBallotAction::UpdateConviction, Some(previous)) => {
+                previous
+                    .validate_plain_context(policy)
+                    .map_err(invalid_smart_contract_parameter)?;
+                if previous.owner != *authority || previous.direction != ballot.direction {
+                    return Err(invalid_smart_contract_parameter(
+                        "conviction update must preserve the existing ballot owner and choice",
+                    ));
+                }
+                if !previous.slashed.is_zero() {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: ballot.referendum_id.clone(),
+                                reason: "conviction update requires prior restitution of the existing slash".into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conviction update requires prior restitution of the existing slash".into(),
+                    )
+                    .into());
+                }
+                let next_expiry = state_transaction
+                    ._curr_block
+                    .height()
+                    .get()
+                    .checked_add(ballot.duration_blocks)
+                    .ok_or_else(|| Error::from(MathError::Overflow))?;
+                if let Err(error) = validate_conviction_update_v1(
+                    &previous.amount,
+                    previous.duration_blocks,
+                    previous.expiry_height,
+                    &ballot.amount,
+                    ballot.duration_blocks,
+                    next_expiry,
+                ) {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: ballot.referendum_id.clone(),
+                                reason: error.to_string(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        error.to_string().into(),
+                    )
+                    .into());
+                }
+                Ok(())
+            }
+        }
+    }
     fn apply_plain_ballot_lock(
-        ballot: &gov::CastPlainBallot,
+        ballot: &PlainBallotPosition,
         authority: &AccountId,
         weight: u128,
         policy: &PlainConvictionPolicyV1,
@@ -5118,59 +5237,6 @@ pub mod isi {
         let new_expiry = now_h
             .checked_add(ballot.duration_blocks)
             .ok_or_else(|| Error::from(MathError::Overflow))?;
-        if let Some(prev) = locks.locks.get(authority) {
-            prev.validate_plain_context(policy)
-                .map_err(invalid_smart_contract_parameter)?;
-            if prev.direction != ballot.direction {
-                return reject_governance_ballot_with_penalty(
-                    &rid,
-                    authority,
-                    state_transaction.gov.slash_double_vote_bps,
-                    GovernanceSlashReason::DoubleVote,
-                    "double_vote",
-                    "re-vote cannot change direction",
-                    InstructionExecutionError::InvariantViolation(
-                        "re-vote cannot change direction".into(),
-                    )
-                    .into(),
-                    state_transaction,
-                );
-            }
-            if !prev.slashed.is_zero() {
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: rid.clone(),
-                            reason: "re-vote requires prior restitution of the existing slash"
-                                .into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "re-vote requires prior restitution of the existing slash".into(),
-                ));
-            }
-            if let Err(error) = validate_conviction_update_v1(
-                &prev.amount,
-                prev.duration_blocks,
-                prev.expiry_height,
-                &ballot.amount,
-                ballot.duration_blocks,
-                new_expiry,
-            ) {
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: rid.clone(),
-                            reason: error.to_string(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    error.to_string().into(),
-                ));
-            }
-        }
         let custody = crate::state::GovernanceLockCustody {
             escrowed: true,
             asset_definition_id: policy.asset_definition_id.clone(),
@@ -5247,68 +5313,134 @@ pub mod isi {
             ),
         ));
     }
+    fn execute_plain_ballot_position(
+        ballot: PlainBallotPosition,
+        action: PlainBallotAction,
+        signed_instruction: InstructionBox,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        consume_signed_standalone_governance_ballot_v1(signed_instruction, state_transaction)?;
+        ensure_exact_governance_ballot_permission(
+            authority,
+            &ballot.referendum_id,
+            state_transaction,
+        )?;
+        if !state_transaction.gov.plain_voting_enabled {
+            return Err(invalid_smart_contract_parameter(
+                "plain voting mode disabled by policy",
+            ));
+        }
+        if ballot.direction > 2 {
+            return Err(invalid_smart_contract_parameter(
+                "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)",
+            ));
+        }
+        // Typed proposals have no standalone referendum policy to load.
+        // Reject their selector before touching that separate voting surface.
+        if typed_proposal_for_standalone_referendum(&ballot.referendum_id, state_transaction)?
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "typed governance proposals accept only timed-private Parliament ballots".into(),
+            ));
+        }
+        let policy = state_transaction
+            .world
+            .governance_referenda
+            .get(&ballot.referendum_id)
+            .ok_or_else(|| invalid_smart_contract_parameter("referendum not found"))?
+            .plain_policy()
+            .map_err(invalid_smart_contract_parameter)?
+            .clone();
+        // A scale change does not reinterpret retained bonds: their exact Quantity values
+        // and frozen scale still define units. The live asset spec independently governs
+        // whether an additional real transfer remains admissible.
+        ensure_plain_ballot_preconditions(&ballot, authority, &policy, state_transaction)?;
+        ensure_plain_ballot_action_preconditions(
+            &ballot,
+            action,
+            authority,
+            &policy,
+            state_transaction,
+        )?;
+        // Validate all economic arithmetic before opening the referendum,
+        // sweeping locks, moving the bond, or emitting acceptance events.
+        let weight = plain_ballot_weight(&ballot.amount, ballot.duration_blocks, &policy)?;
+        ensure_plain_tally_replacement_capacity_v1(
+            &ballot.referendum_id,
+            authority,
+            ballot.direction,
+            weight,
+            &policy,
+            state_transaction,
+        )?;
+        let referendum = ensure_plain_referendum_open(&ballot, state_transaction)?;
+        ensure_plain_ballot_lock_covers_window(&ballot, &referendum, state_transaction)?;
+        apply_plain_ballot_lock(&ballot, authority, weight, &policy, state_transaction)?;
+        Ok(())
+    }
     impl Execute for gov::CastPlainBallot {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            consume_signed_standalone_governance_ballot_v1(
-                InstructionBox::from(self.clone()),
-                state_transaction,
-            )?;
-            ensure_exact_governance_ballot_permission(
+            let signed_instruction = InstructionBox::from(self.clone());
+            let ballot = PlainBallotPosition {
+                referendum_id: self.referendum_id,
+                owner: self.owner,
+                amount: self.amount,
+                duration_blocks: self.duration_blocks,
+                direction: self.direction,
+            };
+            execute_plain_ballot_position(
+                ballot,
+                PlainBallotAction::Cast,
+                signed_instruction,
                 authority,
-                &self.referendum_id,
                 state_transaction,
-            )?;
-            if !state_transaction.gov.plain_voting_enabled {
-                return Err(invalid_smart_contract_parameter(
-                    "plain voting mode disabled by policy",
-                ));
-            }
-            if self.direction > 2 {
-                return Err(invalid_smart_contract_parameter(
-                    "plain governance ballot direction must be 0 (Aye), 1 (Nay), or 2 (Abstain)",
-                ));
-            }
-            // Typed proposals have no standalone referendum policy to load.
-            // Reject their selector before touching that separate voting surface.
-            if typed_proposal_for_standalone_referendum(&self.referendum_id, state_transaction)?
-                .is_some()
-            {
+            )
+        }
+    }
+    impl Execute for gov::UpdatePlainConviction {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if self.owner != *authority {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "typed governance proposals accept only timed-private Parliament ballots"
-                        .into(),
-                ));
+                    "owner must equal authority".into(),
+                )
+                .into());
             }
-            let policy = state_transaction
+            let direction = state_transaction
                 .world
-                .governance_referenda
+                .governance_locks
                 .get(&self.referendum_id)
-                .ok_or_else(|| invalid_smart_contract_parameter("referendum not found"))?
-                .plain_policy()
-                .map_err(invalid_smart_contract_parameter)?
-                .clone();
-            // A scale change does not reinterpret retained bonds: their exact Quantity values
-            // and frozen scale still define units. The live asset spec independently governs
-            // whether an additional real transfer remains admissible.
-            ensure_plain_ballot_preconditions(&self, authority, &policy, state_transaction)?;
-            // Validate all economic arithmetic before opening the referendum,
-            // sweeping locks, moving the bond, or emitting acceptance events.
-            let weight = plain_ballot_weight(&self.amount, self.duration_blocks, &policy)?;
-            ensure_plain_tally_replacement_capacity_v1(
-                &self.referendum_id,
+                .and_then(|locks| locks.locks.get(authority))
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "conviction update requires an existing plain ballot".into(),
+                    )
+                })?
+                .direction;
+            let signed_instruction = InstructionBox::from(self.clone());
+            let ballot = PlainBallotPosition {
+                referendum_id: self.referendum_id,
+                owner: self.owner,
+                amount: self.amount,
+                duration_blocks: self.duration_blocks,
+                direction,
+            };
+            execute_plain_ballot_position(
+                ballot,
+                PlainBallotAction::UpdateConviction,
+                signed_instruction,
                 authority,
-                self.direction,
-                weight,
-                &policy,
                 state_transaction,
-            )?;
-            let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
-            ensure_plain_ballot_lock_covers_window(&self, &referendum, state_transaction)?;
-            apply_plain_ballot_lock(&self, authority, weight, &policy, state_transaction)?;
-            Ok(())
+            )
         }
     }
     impl Execute for gov::SlashGovernanceLock {
@@ -27913,6 +28045,88 @@ pub mod isi {
                     .expect_err("zero conviction parameters must reject");
                 assert_contains!(format!("{error:?}"), "invalid frozen conviction policy");
             }
+        });
+        world_test!(zero_minimum_governance_bond_still_escrows_positive_exact_deltas {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.min_bond_amount = Quantity::zero();
+            state_transaction.gov.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+            state_transaction.gov.slash_receiver_account =
+                iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            crate::query::standalone_plain_test_fixture::fund_voter(
+                &mut state_transaction,
+                &ALICE_ID,
+                Quantity::from(10_u64),
+                0,
+            );
+            let custody = super::governance_lock_custody(&state_transaction.gov);
+            assert!(custody.escrowed, "zero minimum must not disable custody");
+            let voter_asset = AssetId::new(custody.asset_definition_id.clone(), ALICE_ID.clone());
+            let escrow_asset = AssetId::new(
+                custody.asset_definition_id.clone(),
+                custody.bond_escrow_account.clone(),
+            );
+            let balance = |transaction: &crate::state::StateTransaction<'_, '_>, id: &AssetId| {
+                transaction
+                    .world
+                    .assets
+                    .get(id)
+                    .map_or_else(Quantity::zero, |asset| asset.clone().into_inner())
+            };
+
+            let mut unescrowed = custody.clone();
+            unescrowed.escrowed = false;
+            let error = super::lock_voting_bond(
+                &Quantity::from(4_u64),
+                None,
+                &Quantity::zero(),
+                &unescrowed,
+                &ALICE_ID,
+                "zero-minimum-test",
+                &mut state_transaction,
+            )
+            .expect_err("a positive bond cannot use unescrowed custody");
+            assert_contains!(format!("{error:?}"), "omits escrow");
+            assert_eq!(balance(&state_transaction, &voter_asset), Quantity::from(10_u64));
+            assert_eq!(balance(&state_transaction, &escrow_asset), Quantity::zero());
+
+            super::lock_voting_bond(
+                &Quantity::zero(),
+                None,
+                &Quantity::zero(),
+                &custody,
+                &ALICE_ID,
+                "zero-minimum-test",
+                &mut state_transaction,
+            )
+            .expect("zero bond requires no transfer");
+            assert_eq!(balance(&state_transaction, &voter_asset), Quantity::from(10_u64));
+            assert_eq!(balance(&state_transaction, &escrow_asset), Quantity::zero());
+
+            super::lock_voting_bond(
+                &Quantity::from(4_u64),
+                None,
+                &Quantity::zero(),
+                &custody,
+                &ALICE_ID,
+                "zero-minimum-test",
+                &mut state_transaction,
+            )
+            .expect("positive first bond moves exact amount to escrow");
+            assert_eq!(balance(&state_transaction, &voter_asset), Quantity::from(6_u64));
+            assert_eq!(balance(&state_transaction, &escrow_asset), Quantity::from(4_u64));
+
+            super::lock_voting_bond(
+                &Quantity::from(6_u64),
+                Some(&Quantity::from(4_u64)),
+                &Quantity::zero(),
+                &custody,
+                &ALICE_ID,
+                "zero-minimum-test",
+                &mut state_transaction,
+            )
+            .expect("bond increase moves only the exact delta");
+            assert_eq!(balance(&state_transaction, &voter_asset), Quantity::from(4_u64));
+            assert_eq!(balance(&state_transaction, &escrow_asset), Quantity::from(6_u64));
         });
         world_test!(plain_ballot_rejects_invalid_direction_before_state_mutation {
             second_height_transaction!(state, block, state_transaction);

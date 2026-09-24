@@ -8,6 +8,7 @@ use crate::signer_operation::final_promotion::current_observation::{
     FinalPromotionQualifiedUtcV1, FinalPromotionRetainedFloorV1,
 };
 use crate::signer_operation::final_promotion::observer_transaction::FinalPromotionObserverKeyRequestV1;
+use crate::signer_operation::final_promotion::pending_reserve_journal::FinalPromotionPendingReserveJournalV1;
 use crate::signer_operation::final_promotion::reserved_observation::FinalPromotionReservedCheckRuntimeV1;
 use iroha_core::{
     query::final_promotion_authority::observation::PendingFinalPromotionCheckV1, state::State,
@@ -20,7 +21,24 @@ use iroha_data_model::{
 use sorafs_manifest::signer::{
     custody::SignerCustodyBindingV1, protocol::SignerOperationAuditHeadV1,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, os::unix::fs::MetadataExt as _};
+
+fn pending_reserve_journal() -> (tempfile::TempDir, FinalPromotionPendingReserveJournalV1) {
+    let directory = tempfile::tempdir().expect("private operation directory");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    for leaf in ["receipts", "pending-reserve-v1"] {
+        let path = directory.path().join(leaf);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = directory
+        .path()
+        .join("pending-reserve-v1")
+        .canonicalize()
+        .unwrap();
+    let journal = FinalPromotionPendingReserveJournalV1::open(&path).unwrap();
+    (directory, journal)
+}
 
 struct QualifiedClock {
     intervals: VecDeque<Result<FinalPromotionEligibilityTimeIntervalV1, CurrentError>>,
@@ -394,16 +412,69 @@ fn reserved_runtime(
     request: SignerFinalPromotionRequestV1,
     signed: SignedFinalPromotionAccountTransactionV1,
     floor: &mut RetainedFloor,
-) -> FinalPromotionReservedCheckRuntimeV1 {
-    FinalPromotionReservedCheckRuntimeV1::new(
+) -> (FinalPromotionReservedCheckRuntimeV1, tempfile::TempDir) {
+    let (directory, journal) = pending_reserve_journal();
+    let runtime = FinalPromotionReservedCheckRuntimeV1::new(
         Arc::clone(f.native.state()),
         f.observer_transactions(),
         request,
         signed,
         Duration::from_secs(60),
         floor,
+        journal,
     )
-    .unwrap()
+    .unwrap();
+    (runtime, directory)
+}
+
+#[test]
+fn pending_reserve_restart_recovers_only_the_original_signed_attempt() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let source_floor = floor.current;
+    let (runtime, directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let pending = directory
+        .path()
+        .join("pending-reserve-v1")
+        .canonicalize()
+        .unwrap();
+    let file = pending.join(format!(
+        "{}.pending-reserve.norito",
+        hex::encode(request.operation_id)
+    ));
+    assert_eq!(std::fs::metadata(&file).unwrap().mode() & 0o7777, 0o400);
+    assert!(FinalPromotionPendingReserveJournalV1::open(&pending).is_err());
+    drop(runtime);
+    let reopened = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+    let recovered = reopened.recover(request.operation_id).unwrap();
+    assert_eq!(recovered.operation_id(), request.operation_id);
+    assert_eq!(recovered.source_floor(), source_floor);
+    recovered.recheck().unwrap();
+    assert_eq!(floor.advances, 0);
+    // Recovery retains only exact evidence; no Reserve submission method exists on this owner.
+}
+
+#[test]
+fn changed_pending_reserve_file_blocks_transport_before_submit() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let (runtime, directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let file = directory.path().join("pending-reserve-v1").join(format!(
+        "{}.pending-reserve.norito",
+        hex::encode(request.operation_id)
+    ));
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&file, b"changed pending bytes").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let mut submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    assert!(matches!(
+        runtime.submit_reserve_with(times().0, times().1, &mut floor, &mut submission),
+        Err(CurrentError::Journal)
+    ));
+    assert_eq!(submission.submits, 0);
+    assert_eq!(floor.advances, 0);
 }
 
 struct RuntimePayload {
@@ -839,7 +910,7 @@ fn reserved_runtime_keeps_original_role15_envelope_through_reconciliation_and_fi
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
     let pre_reserve = floor.current;
-    let runtime = reserved_runtime(&f, request, signed, &mut floor);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
     let mut reserve_submission =
         RuntimeSubmission::new(&mut f.native, SubmissionMode::AmbiguousThenApplied);
     let submitted = runtime
@@ -899,7 +970,7 @@ fn reserved_post_persistence_clock_failure_retains_the_in_memory_check_owner() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
-    let runtime = reserved_runtime(&f, request, signed, &mut floor);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
     let mut reserve_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
     let submitted = runtime
         .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
@@ -939,7 +1010,7 @@ fn reserved_runtime_refuses_floor_advance_before_reserve_transport() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
-    let runtime = reserved_runtime(&f, request, signed, &mut floor);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
     let concurrent = pending_current(&f);
     assert_eq!(
         f.native
@@ -975,6 +1046,7 @@ fn reserved_runtime_rejects_wrong_finalized_floor_context_before_construction() 
     let mut floor = RetainedFloor::new(&f);
     assert_ne!(earlier_context, floor.current.context_id);
     floor.current.context_id = earlier_context;
+    let (_journal_directory, journal) = pending_reserve_journal();
     assert!(matches!(
         FinalPromotionReservedCheckRuntimeV1::new(
             Arc::clone(f.native.state()),
@@ -983,6 +1055,7 @@ fn reserved_runtime_rejects_wrong_finalized_floor_context_before_construction() 
             signed,
             Duration::from_secs(60),
             &mut floor,
+            journal,
         ),
         Err(CurrentError::Floor)
     ));
@@ -1005,7 +1078,7 @@ fn reserved_runtime_rejects_unapplied_or_substituted_reserve_before_floor_advanc
         let mut f = Fixture::new();
         let (request, signed) = signed_reserve(&mut f);
         let mut floor = RetainedFloor::new(&f);
-        let runtime = reserved_runtime(&f, request, signed, &mut floor);
+        let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
         let mut reserve_submission =
             RuntimeSubmission::new(&mut f.native, SubmissionMode::AcceptedWithoutApplication);
         let submitted = runtime
@@ -1047,7 +1120,7 @@ fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
     let mut floor = RetainedFloor::new(&f);
-    let runtime = reserved_runtime(&f, request, signed, &mut floor);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
     let mut reserve_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
     let submitted = runtime
         .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
@@ -1078,6 +1151,7 @@ fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
     let original = signed.for_submission(times().0, times().1).unwrap().clone();
     assert_eq!(f.native.commit(NOW, vec![original]), [true]);
     let mut floor = RetainedFloor::new(&f);
+    let (_journal_directory, journal) = pending_reserve_journal();
     assert!(matches!(
         FinalPromotionReservedCheckRuntimeV1::new(
             Arc::clone(f.native.state()),
@@ -1086,6 +1160,7 @@ fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
             signed,
             Duration::from_secs(60),
             &mut floor,
+            journal,
         ),
         Err(CurrentError::Check)
     ));

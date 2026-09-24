@@ -23,8 +23,8 @@ use super::{
 use crate::{
     block::{BlockBuilder, Chained},
     queue::{
-        GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan,
-        reconcile_execution_routing_plan,
+        GlobalQueueSelectionLease, Queue, RouteLegRole, RoutingPlan,
+        execution_context_for_routing_plan, reconcile_execution_routing_plan,
     },
     state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
@@ -40,9 +40,13 @@ use iroha_data_model::{
     consensus::NposConsensusEffects,
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
+    isi::consensus_keys::{
+        ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleCertificateV1,
+    },
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLedgerEntry},
-    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
+    transaction::{Executable, TransactionAdmissionIntent, TransactionEntrypoint},
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::time::TimeSource;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -82,14 +86,26 @@ impl CandidateLimits {
         })
     }
     /// Maximum entries selected across one complete carrier candidate.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_transactions(self) -> NonZeroUsize {
         self.max_transactions
     }
     /// Maximum canonical carrier payload bytes.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_payload_bytes(self) -> NonZeroUsize {
         self.max_payload_bytes
     }
     /// Maximum FIFO entries inspected during one selection attempt.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate limits cutover")
+    )]
     pub(crate) const fn max_queue_scan(self) -> NonZeroUsize {
         self.max_queue_scan
     }
@@ -142,6 +158,10 @@ pub(crate) struct CandidateDescriptor<'candidate> {
 impl<'candidate> CandidateDescriptor<'candidate> {
     /// Build a read-only descriptor from one exact accepted entrypoint and
     /// routing plan.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate assembly cutover")
+    )]
     pub(crate) fn new(
         transaction: &'candidate AcceptedTransaction<'static>,
         routing_plan: &'candidate RoutingPlan,
@@ -423,9 +443,57 @@ pub(crate) struct NativeCandidateAssembly {
     pub(crate) outcome: Result<CandidateAssemblyOutcome, CandidateError>,
 }
 
-/// Borrowed readiness of one authenticated preparation. It never supplies an
-/// ordinary execution fallback when no Native group is ready.
+/// Borrowed readiness of one authenticated preparation. An exact-height
+/// threshold-key lifecycle certificate takes the current carrier even when a
+/// Native group is ready; all application work remains lane-owned.
 struct NativeCandidateWork<'source>(&'source NativeLaneCandidatePreparation);
+
+fn lifecycle_certificate<'a>(
+    accepted: &'a AcceptedTransaction<'_>,
+) -> Option<&'a ThresholdKeyLifecycleCertificateV1> {
+    let TransactionEntrypoint::External(transaction) = accepted.entrypoint() else {
+        return None;
+    };
+    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary
+        || transaction.attachments().is_some()
+        || transaction.multisig_signatures().is_some()
+        || !transaction.metadata().is_empty()
+    {
+        return None;
+    }
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return None;
+    };
+    if instructions.len() != 1 {
+        return None;
+    }
+    instructions[0]
+        .as_any()
+        .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+        .map(|instruction| &instruction.certificate)
+}
+
+fn exact_height_lifecycle_transaction(
+    context: &wire::HeightContext,
+    transaction: &AcceptedTransaction<'_>,
+) -> bool {
+    lifecycle_certificate(transaction).is_some_and(|certificate| {
+        certificate.effective_height == context.height
+            && certificate.network_id == context.network_id
+    })
+}
+
+fn exact_height_lifecycle_candidate(
+    context: &wire::HeightContext,
+    candidate: CandidateDescriptor<'_>,
+) -> bool {
+    let RoutingPlan::Single(leg) = candidate.routing_plan() else {
+        return false;
+    };
+    leg.role == RouteLegRole::Coordinator
+        && leg.route.dataspace_id == DataSpaceId::UNIVERSAL
+        && exact_height_lifecycle_transaction(context, candidate.transaction())
+}
 
 impl CandidateWorkProvider for NativeCandidateWork<'_> {
     fn prepare(
@@ -434,6 +502,32 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkError> {
+        if let Some(lifecycle_index) = candidates
+            .iter()
+            .copied()
+            .position(|candidate| exact_height_lifecycle_candidate(context, candidate))
+        {
+            // A certificate signed for this exact height cannot wait behind a
+            // ready Native batch. Its original Decisions and source waits remain
+            // with the Native runner and can be prepared for the successor.
+            let unavailable = candidates
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(index, _candidate)| (index != lifecycle_index).then_some(index))
+                .collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "only exact-height threshold-key lifecycle certificates may use ordinary global execution",
+                )
+                .into());
+            }
+            return Ok(PreparedCandidateWork {
+                native_amx_receipts: vec![None; candidates.len()],
+                ..PreparedCandidateWork::default()
+            });
+        }
         if self.0.waits.iter().any(|wait| {
             matches!(
                 wait,
@@ -450,7 +544,7 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
         if !candidates.is_empty() {
             return Err(CandidateWorkUnavailable::new(
                 (0..candidates.len()).collect(),
-                "Native candidate input cannot execute ordinary queue entries",
+                "Native candidate input cannot execute ordinary application queue entries",
             )
             .into());
         }
@@ -478,6 +572,10 @@ impl AssembledV2Candidate {
         self.tag
     }
     /// Borrow the signed canonical successor block.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native candidate assembly cutover")
+    )]
     pub(crate) const fn block(&self) -> &SignedBlock {
         &self.block
     }
@@ -634,7 +732,8 @@ impl V2CandidateAssembler {
             .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
             .ok_or(CandidateError::RestartRequired)?;
         drop(state_view);
-        let pool = self.snapshot_routable_candidates(
+        let mut pool = self.snapshot_routable_candidates(
+            request.context,
             request.queue,
             request.state,
             &request.attachments,
@@ -642,6 +741,10 @@ impl V2CandidateAssembler {
             exact_payload_limit,
             &mut report,
         )?;
+        // This control expires at the current height. Give every eligible
+        // certificate its bounded opportunity before ordinary FIFO work, even
+        // when the configured transaction limit is smaller than the snapshot.
+        prioritize_exact_height_lifecycle_candidates(request.context, &mut pool);
         let mut reserve = VecDeque::from(pool);
         let mut selected = Vec::with_capacity(selection_max);
         fill_selection(
@@ -741,6 +844,12 @@ impl V2CandidateAssembler {
                     + native.batch().groups.len().saturating_sub(selection_max);
                 native.retain_prefix(native.batch().groups.len().min(selection_max));
             }
+            let mut carrier_attachments = attachments_for_selected_lifecycle(
+                request.context,
+                &selected,
+                &request.attachments,
+                &mut report,
+            );
             report.selected = selected.len();
             let candidate_header = BlockHeader::new(
                 NonZeroU64::new(request.context.height)
@@ -750,7 +859,7 @@ impl V2CandidateAssembler {
                 candidate_ledger_time_ms,
                 view,
             );
-            if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
+            if !candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work)
                 && request
                     .state
                     .deterministic_start_work_pending(&candidate_header)
@@ -763,7 +872,7 @@ impl V2CandidateAssembler {
                 validate_request(&request)?;
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
             }
-            if request.attachments.required_beacon_pulse_pending {
+            if carrier_attachments.required_beacon_pulse_pending {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
@@ -786,7 +895,7 @@ impl V2CandidateAssembler {
                 let preferred_count = if candidate_economic_work_first(request.context.height) {
                     0
                 } else {
-                    let mut mandatory = request.attachments.clone();
+                    let mut mandatory = carrier_attachments.clone();
                     mandatory.queue_plan_admissions.clear();
                     let anchors = PreparedCandidateWork {
                         autonomous_lane_payloads: prepared_work.autonomous_lane_payloads.clone(),
@@ -812,7 +921,7 @@ impl V2CandidateAssembler {
                     )?
                     .1
                 };
-                request.attachments.npos_consensus_effects =
+                carrier_attachments.npos_consensus_effects =
                     npos_effects_prefix(&original_npos_effects, preferred_count);
             }
             let mut builder = self.prepare_block_builder(
@@ -820,7 +929,7 @@ impl V2CandidateAssembler {
                 tag,
                 request.parent,
                 request.state,
-                &request.attachments,
+                &carrier_attachments,
                 &selected,
                 &prepared_work,
                 candidate_creation_time,
@@ -899,7 +1008,7 @@ impl V2CandidateAssembler {
                             encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
                     }
                 }
-                let original_count = request.attachments.queue_plan_admissions.len();
+                let original_count = carrier_attachments.queue_plan_admissions.len();
                 let mut low = 0usize;
                 let mut high = original_count;
                 // All mandatory fields are already on this exact builder. Only
@@ -930,8 +1039,8 @@ impl V2CandidateAssembler {
                     builder = builder
                         .retain_queue_plan_admission_prefix(low)
                         .map_err(CandidateError::CanonicalEncoding)?;
-                    request.attachments.queue_plan_admissions.truncate(low);
-                    report.admission_deferred = original_count - low;
+                    carrier_attachments.queue_plan_admissions.truncate(low);
+                    report.admission_deferred += original_count - low;
                     encoded_bytes = builder
                         .canonical_proposal_wire_len(u64::from(request.local_validator), algorithm)
                         .map_err(CandidateError::CanonicalEncoding)?;
@@ -970,7 +1079,7 @@ impl V2CandidateAssembler {
                     exact_payload_limit,
                 )?;
                 builder = fitted;
-                request.attachments.npos_consensus_effects =
+                carrier_attachments.npos_consensus_effects =
                     npos_effects_prefix(&original_npos_effects, count);
                 report.evidence_deferred = evidence_count - count;
                 encoded_bytes = builder
@@ -978,7 +1087,7 @@ impl V2CandidateAssembler {
                     .map_err(CandidateError::CanonicalEncoding)?;
                 chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
             }
-            if !candidate_has_proposal_work(&selected, &request.attachments, &prepared_work)
+            if !candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work)
                 && request
                     .state
                     .deterministic_start_work_pending(&candidate_header)
@@ -1053,7 +1162,7 @@ impl V2CandidateAssembler {
             if !candidate_block_has_proposal_work(
                 &block,
                 request.state,
-                request.attachments.time_trigger_clock_progress_required,
+                carrier_attachments.time_trigger_clock_progress_required,
             )
             .map_err(CandidateError::LocalStateAdmission)?
             {
@@ -1127,6 +1236,26 @@ impl V2CandidateAssembler {
                 }
             }
         }
+        drop(state_view);
+        for (index, candidate) in selected.iter().enumerate() {
+            if !exact_height_lifecycle_candidate(context, candidate.descriptor()) {
+                continue;
+            }
+            let certificate = lifecycle_certificate(&candidate.transaction)
+                .expect("exact-height lifecycle descriptor has one certificate");
+            if !state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(certificate)
+                .is_ok_and(|(_, roster)| {
+                    context
+                        .roster
+                        .iter()
+                        .map(|validator| &validator.validator)
+                        .eq(roster.iter())
+                })
+            {
+                unavailable.insert(index);
+            }
+        }
         Ok(unavailable)
     }
     fn prospective_candidate_creation_time(
@@ -1152,6 +1281,7 @@ impl V2CandidateAssembler {
     }
     fn snapshot_routable_candidates(
         &self,
+        context: &wire::HeightContext,
         queue: &Queue,
         state: &State,
         attachments: &CandidateAttachments,
@@ -1185,9 +1315,15 @@ impl V2CandidateAssembler {
             }
         }
         let mut records = Vec::with_capacity(pending.len());
+        let mut queue_plan_barrier = false;
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
+                continue;
+            }
+            // A QueuePlan item remains an ordinary FIFO cut, but cannot make an
+            // exact-height lifecycle control behind it miss its only block.
+            if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction) {
                 continue;
             }
             let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -1202,9 +1338,10 @@ impl V2CandidateAssembler {
                         Ok(Some(binding)) => Some(binding),
                         Ok(None) => {
                             // A QueuePlan transaction is a FIFO barrier until the same carrier or
-                            // canonical parent state owns its exact admission certificate. Skipping
-                            // it would let later work overtake a signature-bound admission promise.
-                            break;
+                            // canonical parent state owns its exact admission certificate.
+                            // Continue only to find an independent exact-height control.
+                            queue_plan_barrier = true;
+                            continue;
                         }
                         Err(_) => return Err(CandidateError::RestartRequired),
                     },
@@ -1219,6 +1356,14 @@ impl V2CandidateAssembler {
                     return Err(CandidateError::RestartRequired);
                 }
             };
+            if queue_plan_barrier
+                && !exact_height_lifecycle_candidate(
+                    context,
+                    CandidateDescriptor::new(&transaction, &routing_plan),
+                )
+            {
+                continue;
+            }
             if let Some(binding) = queue_plan_binding
                 && let Err(reason) = crate::torii_proxy::validate_queue_plan_binding_for_request(
                     &binding,
@@ -1242,7 +1387,8 @@ impl V2CandidateAssembler {
                 // admission binding becomes canonical, so later ordinary work
                 // cannot overtake it while the lane author takes ownership.
                 report.work_deferred = report.work_deferred.saturating_add(1);
-                break;
+                queue_plan_barrier = true;
+                continue;
             }
             let encoded_len = transaction.encoded_len();
             if encoded_len > payload_limit {
@@ -1519,6 +1665,25 @@ fn candidate_has_proposal_work(
         || attachments.certified_merge_entry.is_some()
         || !attachments.queue_plan_admissions.is_empty()
 }
+
+fn attachments_for_selected_lifecycle(
+    context: &wire::HeightContext,
+    selected: &[CandidateRecord],
+    source: &CandidateAttachments,
+    report: &mut CandidateScanReport,
+) -> CandidateAttachments {
+    let mut carrier = source.clone();
+    if selected.len() == 1 && exact_height_lifecycle_candidate(context, selected[0].descriptor()) {
+        // The certificate is the sole direct external control. Pending
+        // QueuePlan certificates remain in Kura and are reconciled by their
+        // original owner after this height; omit only their candidate copies.
+        report.admission_deferred = report
+            .admission_deferred
+            .saturating_add(carrier.queue_plan_admissions.len());
+        carrier.queue_plan_admissions.clear();
+    }
+    carrier
+}
 /// Return whether a canonical resultless v2 body carries deterministic ledger
 /// work. The caller supplies the state-derived clock-progress decision for the
 /// exact parent: clock progress is semantic work even when no trigger fires in
@@ -1670,6 +1835,13 @@ fn order_records_by_fifo(records: &mut [CandidateRecord]) {
             .cmp(&right.source_ordinal)
             .then_with(|| left.entrypoint_hash.cmp(&right.entrypoint_hash))
     });
+}
+fn prioritize_exact_height_lifecycle_candidates(
+    context: &wire::HeightContext,
+    records: &mut [CandidateRecord],
+) {
+    // Stable sorting keeps distinct controls in their original FIFO order.
+    records.sort_by_key(|record| !exact_height_lifecycle_candidate(context, record.descriptor()));
 }
 fn effective_output_transaction_limit(
     configured_max: NonZeroUsize,
@@ -2230,6 +2402,7 @@ pub(super) mod tests {
         account::AccountId,
         block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        isi::consensus_keys::{ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1},
         nexus::AxtPolicySnapshot,
         transaction::TransactionBuilder,
     };
@@ -2277,6 +2450,56 @@ pub(super) mod tests {
     }
     fn autonomous_accepted(seed: u8) -> AcceptedTransaction<'static> {
         accepted_with_intent(seed, TransactionAdmissionIntent::QueuePlanSynced)
+    }
+    fn lifecycle_record(
+        context: &wire::HeightContext,
+        effective_height: u64,
+        intent: TransactionAdmissionIntent,
+    ) -> CandidateRecord {
+        lifecycle_record_signed_by(context, effective_height, intent, 0x73)
+    }
+    fn lifecycle_record_signed_by(
+        context: &wire::HeightContext,
+        effective_height: u64,
+        intent: TransactionAdmissionIntent,
+        signer_seed: u8,
+    ) -> CandidateRecord {
+        let key = KeyPair::try_from_seed(vec![signer_seed; 32], Algorithm::Ed25519)
+            .expect("deterministic lifecycle transaction key");
+        let instruction = ApplyThresholdKeyLifecycleCertificateV1 {
+            certificate: ThresholdKeyLifecycleCertificateV1 {
+                version: 1,
+                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                expected_active_session_id: Some([0x31; 32]),
+                effective_height,
+                network_id: context.network_id,
+                roster_hash: [0x32; 32],
+                committee_size: 4,
+                quorum: 3,
+                session_id: [0x31; 32],
+                transcript_hash: [0x33; 32],
+                public_state: Vec::new(),
+                signatures: Vec::new(),
+            },
+        };
+        let (_, transaction_clock) = TimeSource::new_mock(Duration::from_millis(3));
+        let signed = TransactionBuilder::new_with_time_source(
+            context.network_id,
+            AccountId::new(key.public_key().clone()),
+            &transaction_clock,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(intent)
+        .with_instructions([instruction])
+        .sign(key.private_key());
+        let transaction = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+        CandidateRecord {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            encoded_len: transaction.encoded_len(),
+            transaction,
+            routing_plan: RoutingPlan::single(RoutingDecision::default()),
+            source_ordinal: 0,
+        }
     }
     fn record(seed: u8, label: &str, source_ordinal: usize) -> CandidateRecord {
         let transaction = accepted(seed, label);
@@ -2572,6 +2795,262 @@ pub(super) mod tests {
                 CandidateWorkDeferral::NativeLaneSource
             ))
         ));
+    }
+
+    #[test]
+    fn native_candidate_selects_only_exact_height_lifecycle_control() {
+        let (_, context, _, _) = snapshot_parent_fixture();
+        let pending = NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![
+                crate::state::LaneDecisionGroupPreparationV1::MissingDecisions(vec![Hash::new(
+                    b"retained native source wait",
+                )]),
+            ],
+        };
+        let original_waits = pending.waits.as_ptr();
+        let lifecycle = lifecycle_record(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+        );
+        let prepared = NativeCandidateWork(&pending)
+            .prepare(&context, 0, &[lifecycle.descriptor()])
+            .expect("one exact-height lifecycle certificate is independent proposal work");
+        assert_eq!(prepared.native_amx_receipts, vec![None]);
+        assert!(prepared.native_lane_decisions.is_none());
+        assert_eq!(pending.waits.as_ptr(), original_waits);
+        assert_eq!(pending.waits.len(), 1);
+        let empty = NativeCandidateWork(&pending)
+            .prepare(&context, 0, &[])
+            .expect("empty candidate retains no economic work");
+        assert!(!candidate_has_proposal_work(
+            &[],
+            &CandidateAttachments::default(),
+            &empty,
+        ));
+
+        let unrelated = record(0x74, "ordinary application", 1);
+        let error = NativeCandidateWork(&pending)
+            .prepare(
+                &context,
+                0,
+                &[lifecycle.descriptor(), unrelated.descriptor()],
+            )
+            .unwrap_err();
+        assert!(matches!(error, CandidateWorkError::Unavailable(unavailable)
+            if unavailable.indices() == &BTreeSet::from([1])));
+
+        let second_lifecycle = lifecycle_record_signed_by(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+            0x75,
+        );
+        assert_ne!(lifecycle.entrypoint_hash, second_lifecycle.entrypoint_hash);
+        let error = NativeCandidateWork(&pending)
+            .prepare(
+                &context,
+                0,
+                &[lifecycle.descriptor(), second_lifecycle.descriptor()],
+            )
+            .expect_err("two distinct certificates cannot share a direct-control carrier");
+        assert!(matches!(error, CandidateWorkError::Unavailable(unavailable)
+            if unavailable.indices() == &BTreeSet::from([1])));
+
+        let changed = NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![crate::state::LaneDecisionGroupPreparationV1::ObservationChanged],
+        };
+        let prepared = NativeCandidateWork(&changed)
+            .prepare(&context, 0, &[lifecycle.descriptor()])
+            .expect("source observation change cannot defer an independent exact-height control");
+        assert_eq!(prepared.native_amx_receipts, vec![None]);
+        assert!(prepared.native_lane_decisions.is_none());
+        assert!(matches!(
+            changed.waits.as_slice(),
+            [crate::state::LaneDecisionGroupPreparationV1::ObservationChanged]
+        ));
+
+        for rejected in [
+            lifecycle_record(
+                &context,
+                context.height + 1,
+                TransactionAdmissionIntent::Ordinary,
+            ),
+            lifecycle_record(
+                &context,
+                context.height,
+                TransactionAdmissionIntent::QueuePlanSynced,
+            ),
+        ] {
+            assert!(matches!(
+                NativeCandidateWork(&pending).prepare(&context, 0, &[rejected.descriptor()]),
+                Err(CandidateWorkError::Unavailable(unavailable))
+                    if unavailable.indices() == &BTreeSet::from([0])
+            ));
+        }
+        let mut non_global = lifecycle_record(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+        );
+        non_global.routing_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(7)));
+        assert!(matches!(
+            NativeCandidateWork(&pending).prepare(&context, 0, &[non_global.descriptor()]),
+            Err(CandidateWorkError::Unavailable(unavailable))
+                if unavailable.indices() == &BTreeSet::from([0])
+        ));
+        non_global.routing_plan = RoutingPlan::Single(RouteLeg::new(
+            RoutingDecision::default(),
+            RouteLegRole::Participant,
+        ));
+        assert!(matches!(
+            NativeCandidateWork(&pending).prepare(&context, 0, &[non_global.descriptor()]),
+            Err(CandidateWorkError::Unavailable(unavailable))
+                if unavailable.indices() == &BTreeSet::from([0])
+        ));
+    }
+
+    #[test]
+    fn lifecycle_control_defers_queue_plan_admission_attachment() {
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        let lifecycle = lifecycle_record(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+        );
+        let source = CandidateAttachments {
+            queue_plan_admissions: vec![vec![0xA5]],
+            ..CandidateAttachments::default()
+        };
+        let mut report = CandidateScanReport::default();
+        let carrier = attachments_for_selected_lifecycle(
+            &context,
+            std::slice::from_ref(&lifecycle),
+            &source,
+            &mut report,
+        );
+        assert_eq!(source.queue_plan_admissions, vec![vec![0xA5]]);
+        assert!(carrier.queue_plan_admissions.is_empty());
+        assert_eq!(report.admission_deferred, 1);
+
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("candidate limits"),
+            time_source,
+        );
+        let builder = assembler
+            .prepare_block_builder(
+                &context,
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                CandidateParent::Snapshot(&anchor),
+                &state,
+                &carrier,
+                std::slice::from_ref(&lifecycle),
+                &PreparedCandidateWork {
+                    native_amx_receipts: vec![None],
+                    ..PreparedCandidateWork::default()
+                },
+                Duration::from_millis(3),
+            )
+            .expect("build a real singleton lifecycle carrier");
+        let signed: SignedBlock = builder
+            .try_sign_with_index(key.private_key(), u64::from(context.leader(0)))
+            .expect("sign lifecycle carrier")
+            .unpack(|_| {})
+            .into();
+        assert_eq!(signed.external_entrypoints_slice().len(), 1);
+        let bundle = signed
+            .execution_context()
+            .expect("singleton global route context");
+        assert_eq!(bundle.external.len(), 1);
+        assert!(bundle.queue_plan_admissions().is_empty());
+        assert!(bundle.lane_payload_ownerships.is_empty());
+        assert!(bundle.native_lane_decisions.is_none());
+        assert!(bundle.autonomous_lane_payloads.is_empty());
+        assert!(bundle.merge_entry.is_none());
+    }
+
+    #[test]
+    fn invalid_exact_height_lifecycle_certificate_is_deferred_before_signing() {
+        let account_key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+            .expect("lifecycle account key");
+        let mut world = World::new();
+        world.accounts.insert(
+            AccountId::new(account_key.public_key().clone()),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let (state, mut context, anchor, leader_key) = snapshot_parent_fixture_with_world(2, world);
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        let lifecycle = lifecycle_record(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+        );
+        assert!(
+            lifecycle_certificate(&lifecycle.transaction)
+                .expect("fixture certificate")
+                .signatures
+                .is_empty()
+        );
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        queue
+            .push(lifecycle.transaction.clone(), state.view())
+            .expect("ordinary Queue can hold a shape-valid invalid-QC transaction");
+        let output_guard = ConsensusOutputGuard::isolated();
+        output_guard.activate_restart_required();
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        let pending = NativeLaneCandidatePreparation {
+            work: None,
+            waits: Vec::new(),
+        };
+        let outcome = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("candidate limits"),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive,
+            local_validator,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &leader_key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: NativeCandidateWork(&pending),
+        })
+        .expect("invalid QC is filtered before the closed signing gate");
+        assert!(
+            matches!(outcome, CandidateAssemblyOutcome::NoProposalWork(report)
+            if report.selected == 0 && report.work_deferred == 1)
+        );
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "rejected candidate retains its queue owner"
+        );
     }
 
     #[test]
@@ -4237,7 +4716,7 @@ pub(super) mod tests {
     }
     #[test]
     fn queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding() {
-        let (state, _context, anchor, key) = snapshot_parent_fixture();
+        let (state, height_context, anchor, key) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
             iroha_config::parameters::actual::Queue::default(),
@@ -4253,6 +4732,7 @@ pub(super) mod tests {
         let mut blocked_report = CandidateScanReport::default();
         let blocked = assembler
             .snapshot_routable_candidates(
+                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -4262,7 +4742,7 @@ pub(super) mod tests {
             )
             .expect("an absent marker is a normal bounded wait");
         assert!(blocked.is_empty());
-        assert_eq!(blocked_report.inspected, 1);
+        assert_eq!(blocked_report.inspected, 2);
 
         let routing_plan = queue
             .route_plan_with_state(&queue_plan, &state)
@@ -4305,6 +4785,7 @@ pub(super) mod tests {
         let mut bound_report = CandidateScanReport::default();
         let bound = assembler
             .snapshot_routable_candidates(
+                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -4314,9 +4795,68 @@ pub(super) mod tests {
             )
             .expect("exact parent-state binding preserves the autonomous FIFO cut");
         assert!(bound.is_empty());
-        assert_eq!(bound_report.inspected, 1);
+        assert_eq!(bound_report.inspected, 2);
         assert_eq!(bound_report.routable, 1);
         assert_eq!(bound_report.work_deferred, 1);
+    }
+
+    #[test]
+    fn exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier() {
+        let (state, context, _, _) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let queue = Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        );
+        let ordinary_before = accepted(0x80, "ordinary before QueuePlan cut");
+        let queue_plan = accepted_with_intent(0x81, TransactionAdmissionIntent::QueuePlanSynced);
+        let ordinary_after = accepted(0x82, "ordinary after QueuePlan cut");
+        let first = lifecycle_record_signed_by(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+            0x73,
+        );
+        let second = lifecycle_record_signed_by(
+            &context,
+            context.height,
+            TransactionAdmissionIntent::Ordinary,
+            0x75,
+        );
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(8))
+                .expect("one-transaction candidate limit"),
+            time_source,
+        );
+        let mut report = CandidateScanReport::default();
+        let mut pool = assembler
+            .snapshot_routable_candidates(
+                &context,
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![
+                    ordinary_before,
+                    queue_plan,
+                    ordinary_after,
+                    first.transaction.clone(),
+                    second.transaction.clone(),
+                ],
+                64 * 1024,
+                &mut report,
+            )
+            .expect("bounded scan preserves the exact-height control after the FIFO cut");
+        assert_eq!(pool.len(), 3);
+        assert_eq!(pool[1].entrypoint_hash, first.entrypoint_hash);
+        assert_eq!(pool[2].entrypoint_hash, second.entrypoint_hash);
+        prioritize_exact_height_lifecycle_candidates(&context, &mut pool);
+        assert_eq!(pool[0].entrypoint_hash, first.entrypoint_hash);
+        assert_eq!(pool[1].entrypoint_hash, second.entrypoint_hash);
+        let mut reserve = VecDeque::from(pool);
+        let mut selected = Vec::new();
+        fill_selection(&mut selected, &mut reserve, 1, 64 * 1024, &mut report);
+        assert_eq!(selected[0].entrypoint_hash, first.entrypoint_hash);
+        assert_eq!(report.inspected, 5);
     }
     // Eligibility deliberately does not verify the pulse: the block validator
     // retains that separate cryptographic boundary. The beacon producer tests

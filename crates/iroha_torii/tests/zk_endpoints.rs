@@ -19,9 +19,11 @@ fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
     Router::new().route(
         "/v1/zk/vote/tally",
         post(
-            move |req: iroha_torii::NoritoJson<iroha_torii::ZkVoteGetTallyRequestDto>| {
+            move |headers: http::HeaderMap,
+                  req: iroha_torii::NoritoJson<iroha_torii::ZkVoteGetTallyRequestDto>| {
                 let state = state.clone();
-                async move { iroha_torii::handle_v1_zk_vote_tally(State(state), None, req).await }
+                let accept = headers.get(http::header::ACCEPT).cloned();
+                async move { iroha_torii::handle_v1_zk_vote_tally(State(state), accept, req).await }
             },
         ),
     )
@@ -373,10 +375,15 @@ async fn zk_vote_tally_endpoint_preserves_exact_u128_and_committed_identity() {
     let request = http::Request::builder()
         .method("POST")
         .uri("/v1/zk/vote/tally")
+        .header(http::header::ACCEPT, "application/json")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .expect("build tally request");
     let response = app.oneshot(request).await.expect("route response");
+    assert_eq!(
+        response.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/json"))
+    );
     let status = response.status();
     let bytes = response
         .into_body()

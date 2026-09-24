@@ -316,6 +316,14 @@ pub struct SignedFinalPromotionAccountTransactionV1 {
     after_receipt: VerifiedFinalPromotionCheckV1,
 }
 impl SignedFinalPromotionAccountTransactionV1 {
+    /// Exact successfully verified Current Check that selected this Reserve, for private
+    /// pre-transport journaling only. Its historical signed frame grants no renewed authority.
+    pub(in crate::signer_operation::final_promotion) const fn original_current_check(
+        &self,
+    ) -> &VerifiedFinalPromotionCheckV1 {
+        &self.authorized.prepared.receipt_check
+    }
+
     fn recheck(
         &self,
         receipt_time: FinalPromotionEligibilityTimeIntervalV1,

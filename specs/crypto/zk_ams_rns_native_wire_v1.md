@@ -1,11 +1,14 @@
 # ZK-AMS native RNS proof wire V1
 
 The source owners are `iroha_zkp_halo2::vega::zk_ams::mkhe::rns_native_*`.
-This specifies the sole native40 representation. The modulus/root arrays derive
-their first 38 entries from the canonical source chain and append the two fixed
-extension limbs. Each root has exact order 262,144 for the degree-131,072 ring;
-duplicated parameter tables are not an alternative authority. It does not declare the
-unfinished source/prover, composite admission or resource qualification ready.
+This specifies the sole native40 representation. The ordered 40-entry
+modulus/root tables are canonical; the still-unqualified 38-limb release profile
+derives its prefix from those tables. Each root has exact order 262,144 for the
+degree-131,072 ring; duplicated parameter tables are not an alternative
+authority. The [governed profile boundary](../../docs/history/2026-09-24/mkhe-native40-governed-profile-source-boundary.md)
+checks a source's complete profile claim before publication. It does not
+establish live coefficient correspondence or declare the unfinished
+source/prover, composite admission or resource qualification ready.
 
 ## Commitments, fields and identity
 

@@ -743,6 +743,36 @@ pub fn materialized_signed_data_frame_len_for_test<T: Pload>(
     crate::peer::materialized_data_message_wire_len(relay).map_err(Error::NoritoCodec)
 }
 
+/// Decode a genuinely signed relay under its production inbound payload limits.
+///
+/// This exercises the owned relay and payload graph without starting a peer.
+///
+/// # Errors
+/// Returns identity, signature, or bounded Norito decode errors.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn signed_relay_decode_with_limits_for_test<T: Pload + message::ClassifyTopic>(
+    key: &KeyPair,
+    target: PeerId,
+    payload: T,
+) -> Result<T, Error> {
+    let _flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
+    let relay = RelayMessage::try_new(key, RelayTarget::Direct(target), 1, payload)?;
+    relay.verify_origin_signature()?;
+    let encoded = ncore::to_bytes(&relay).map_err(Error::NoritoCodec)?;
+    let view = ncore::from_bytes_view(&encoded).map_err(Error::NoritoCodec)?;
+    let limits = <RelayMessage<T> as message::ClassifyTopic>::inbound_decode_limits(
+        view.as_bytes(),
+        encoded.len(),
+        view.flags(),
+    )
+    .map_err(Error::NoritoCodec)?
+    .ok_or(Error::Format)?;
+    let decoded: RelayMessage<T> =
+        ncore::decode_from_bytes_with_limits(&encoded, limits).map_err(Error::NoritoCodec)?;
+    decoded.verify_origin_signature()?;
+    Ok(decoded.payload)
+}
+
 fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
     ncore::len_prefix_len_with_flags(payload_len, flags).checked_add(payload_len)
 }

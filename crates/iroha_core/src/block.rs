@@ -3167,9 +3167,9 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs<'a>(
+fn creation_time_after_inputs(
     minimum: Duration,
-    inputs: impl IntoIterator<Item = &'a TransactionEntrypoint>,
+    inputs: impl IntoIterator<Item = impl std::ops::Deref<Target = TransactionEntrypoint>>,
 ) -> Option<Duration> {
     let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
     for input in inputs {
@@ -3263,12 +3263,15 @@ mod input_clock_tests {
         assert!(
             creation_time_after_inputs(
                 Duration::from_millis(u64::MAX) + Duration::from_millis(1),
-                std::iter::empty()
+                std::iter::empty::<&TransactionEntrypoint>()
             )
             .is_none()
         );
         assert_eq!(
-            creation_time_after_inputs(Duration::from_millis(u64::MAX), std::iter::empty()),
+            creation_time_after_inputs(
+                Duration::from_millis(u64::MAX),
+                std::iter::empty::<&TransactionEntrypoint>()
+            ),
             Some(Duration::from_millis(u64::MAX))
         );
     }
@@ -7004,6 +7007,9 @@ pub(crate) mod valid {
                         crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged => {
                             return Err(Self::execution_context_error("Native replay pre-State observation changed"));
                         }
+                        crate::state::NativeLaneBatchSourcePreparationV1::Superseded => {
+                            return Err(Self::execution_context_error("Native replay carrier was superseded by finalized State"));
+                        }
                     };
                         let input = Self::validate_and_record_native_candidate(
                             source,
@@ -8990,6 +8996,63 @@ pub(crate) mod valid {
                 "lane payload ownership {ownership_idx} {message}"
             ))
         }
+        /// A quorum-certified threshold-key lifecycle action must execute at
+        /// its exact global height. It is the sole direct external control
+        /// without a lane payload; ordinary application entries still require
+        /// complete lane ownership coverage.
+        fn sole_exact_height_lifecycle_control_without_lane_ownership(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            bundle: &BlockExecutionContextBundle,
+        ) -> bool {
+            if !bundle.lane_payload_ownerships.is_empty()
+                || bundle.native_lane_decisions.is_some()
+                || !bundle.autonomous_lane_payloads.is_empty()
+                || !bundle.queue_plan_admissions.is_empty()
+                || bundle.merge_entry.is_some()
+            {
+                return false;
+            }
+            let ([TransactionEntrypoint::External(transaction)], [context]) = (
+                block.external_entrypoints_slice(),
+                bundle.external.as_slice(),
+            ) else {
+                return false;
+            };
+            if transaction.admission_intent()
+                != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+                || transaction.attachments().is_some()
+                || transaction.multisig_signatures().is_some()
+                || !transaction.metadata().is_empty()
+                || context.entrypoint_hash != block.external_entrypoints_slice()[0].hash()
+            {
+                return false;
+            }
+            let iroha_data_model::transaction::Executable::Instructions(instructions) =
+                transaction.instructions()
+            else {
+                return false;
+            };
+            if instructions.len() != 1 {
+                return false;
+            }
+            let Some(instruction) = instructions[0].as_any().downcast_ref::<
+                iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
+            >() else {
+                return false;
+            };
+            if instruction.certificate.effective_height != block.header().height().get()
+                || instruction.certificate.network_id != *state.network_id()
+            {
+                return false;
+            }
+            matches!(
+                routing_plan_from_execution_context(context),
+                Ok(crate::queue::RoutingPlan::Single(leg))
+                    if leg.role == crate::queue::RouteLegRole::Coordinator
+                        && leg.route.dataspace_id == DataSpaceId::UNIVERSAL
+            )
+        }
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
             topology: &Topology,
@@ -9226,6 +9289,13 @@ pub(crate) mod valid {
                 }
             }
             if covered_indices.len() != bundle.external.len() {
+                if covered_indices.is_empty()
+                    && Self::sole_exact_height_lifecycle_control_without_lane_ownership(
+                        block, state, bundle,
+                    )
+                {
+                    return Ok(());
+                }
                 let missing = (0..bundle.external.len())
                     .find(|index| !covered_indices.contains(index))
                     .expect("coverage length mismatch implies a missing index");
@@ -12991,7 +13061,7 @@ pub(crate) mod valid {
             let topology = test_topology_with_keys(&validator_keys);
             let mut world = World::new();
             for (index, key) in validator_keys.iter().enumerate() {
-                insert_consensus_key(
+                let validator_id = insert_consensus_key(
                     &mut world,
                     &format!("autonomous-anchor-validator-{index}"),
                     key,
@@ -12999,6 +13069,28 @@ pub(crate) mod valid {
                     None,
                     ConsensusKeyStatus::Active,
                 );
+                if replay_lane.is_some() {
+                    let committee_id = crate::state::derive_committee_key_id(key.public_key());
+                    let committee_record = ConsensusKeyRecord {
+                        id: committee_id.clone(),
+                        public_key: key.public_key().clone(),
+                        pop: Some(
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("replay lane committee proof of possession"),
+                        ),
+                        activation_height: 0,
+                        expiry_height: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    };
+                    world
+                        .consensus_keys
+                        .insert(committee_id.clone(), committee_record);
+                    world.consensus_keys_by_pk.insert(
+                        key.public_key().to_string(),
+                        vec![validator_id, committee_id],
+                    );
+                }
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             install_test_lane_manifests_for_keypairs(&state, &validator_keys);
@@ -16158,6 +16250,78 @@ pub(crate) mod valid {
                 BlockValidationError::ExecutionContextInvalid(ref message)
                     if message.contains("unsupported block execution-context bundle version")
             ));
+        }
+        #[test]
+        fn only_exact_height_lifecycle_control_exempts_lane_ownership_coverage() {
+            use iroha_data_model::isi::consensus_keys::{
+                ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+                ThresholdKeyLifecycleCertificateV1,
+            };
+            let (state, topology, _, mut block) = signed_default_lane_block_with_execution_context(
+                "lifecycle-control-coverage",
+                1,
+                |transactions, _, _| {
+                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                        transactions[0].hash_as_entrypoint(),
+                        LaneId::SINGLE,
+                        DataSpaceId::UNIVERSAL,
+                    )])
+                },
+            );
+            let state_view = state.view();
+            let ordinary_bundle = block.execution_context().expect("ordinary route");
+            let error = ValidBlock::validate_execution_context_lane_payload_ownerships(
+                &block,
+                &topology,
+                &state_view,
+                ordinary_bundle,
+            )
+            .expect_err("ordinary application transaction still needs lane ownership");
+            assert!(matches!(
+                error,
+                BlockValidationError::ExecutionContextInvalid(ref message)
+                    if message.contains("do not cover execution context index 0")
+            ));
+
+            let (authority, signer) = gen_account_in("lifecycle-control-coverage-cert");
+            let certificate = ThresholdKeyLifecycleCertificateV1 {
+                version: 1,
+                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                expected_active_session_id: Some([0x31; 32]),
+                effective_height: block.header().height().get(),
+                network_id: state.network_id,
+                roster_hash: [0x32; 32],
+                committee_size: 4,
+                quorum: 3,
+                session_id: [0x31; 32],
+                transcript_hash: [0x33; 32],
+                public_state: Vec::new(),
+                signatures: Vec::new(),
+            };
+            let signed = TransactionBuilder::new(
+                state.network_id,
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+            )
+            .with_instructions([ApplyThresholdKeyLifecycleCertificateV1 { certificate }])
+            .sign(signer.private_key());
+            let entrypoint = TransactionEntrypoint::External(signed);
+            let bundle = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint.hash(),
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            )]);
+            block.set_external_entrypoints(vec![entrypoint]);
+            ValidBlock::validate_execution_context_lane_payload_ownerships(
+                &block,
+                &topology,
+                &state_view,
+                &bundle,
+            )
+            .expect("sole exact-height global lifecycle control needs no legacy lane payload");
         }
         #[test]
         fn validate_static_state_dependent_rejects_missing_execution_context() {

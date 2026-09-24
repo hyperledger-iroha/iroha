@@ -10095,10 +10095,3 @@ pub(crate) fn validate_inrou_checks_for_test(
 ) -> Result<()> {
     host::validate_inrou_checks_for_test(report, scope)
 }
-
-/// Native signed genesis with an explicit administrator grant for admission controls.
-#[cfg(test)]
-pub(crate) fn deployment_genesis_administrator_fixture()
--> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
-    public_inputs::deployment_genesis_administrator_fixture()
-}

@@ -22,7 +22,7 @@ use halo2_ecc::{
     fields::{FieldChip as _, Selectable as _, fp::FpChip},
 };
 use halo2_proofs::halo2curves::{
-    CurveAffine as _,
+    CurveAffine as _, CurveAffineExt as _,
     ff::Field as _,
     ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
@@ -30,18 +30,14 @@ use halo2_proofs::halo2curves::{
 
 use super::pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1};
 
+#[path = "app_attest_der_gadget.rs"]
+pub(crate) mod app_attest_der_gadget;
+
 /// Constrain one reduced affine point to P-256, excluding the point at infinity.
 ///
 /// SEC1 byte range and equality to an enrolled public key are separate required
 /// constraints in the eventual signature relation. This function alone does
 /// not bind a point to a credential.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 signature relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -65,13 +61,7 @@ pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
 ///
 /// Input validation is repeated here so a future caller cannot accidentally
 /// use an unchecked or identity point with `divide_unsafe`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 signature relation consumes this after cutover"
-    )
-)]
+#[cfg_attr(not(test), expect(dead_code, reason = "bounded point test helper"))]
 pub(crate) fn double_p256_affine_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -101,13 +91,6 @@ pub(crate) fn double_p256_affine_point<F: BigPrimeField>(
 ///
 /// SEC1 decoders must reject `(0, 0)` as a public key; it is used only as the
 /// internal group identity for complete addition and scalar multiplication.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -135,21 +118,36 @@ pub(crate) fn assert_p256_affine_or_identity<F: BigPrimeField>(
 /// This uses the actual P-256 `a = -3` doubling numerator. Denominators are
 /// masked to one in inactive cases before division, so no exceptional case
 /// reaches an undefined nonnative-field division.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
+#[cfg_attr(not(test), expect(dead_code, reason = "bounded group test helper"))]
 pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
     p: &EcPoint<F, ProperCrtUint<F>>,
     q: &EcPoint<F, ProperCrtUint<F>>,
 ) -> EcPoint<F, ProperCrtUint<F>> {
-    let p_identity = assert_p256_affine_or_identity(chip, ctx, p);
-    let q_identity = assert_p256_affine_or_identity(chip, ctx, q);
+    let _ = assert_p256_affine_or_identity(chip, ctx, p);
+    let _ = assert_p256_affine_or_identity(chip, ctx, q);
+    add_p256_affine_complete_validated(chip, ctx, p, q)
+}
+
+/// Complete addition for points that the caller has already proven valid.
+///
+/// The checked entry validates both inputs before calling here. The joint
+/// ladder validates its initial points once, its table selection is Boolean,
+/// and every result is validated below before the next round. This avoids
+/// re-proving two entire curve equations at every 256-bit ladder step.
+fn add_p256_affine_complete_validated<F: BigPrimeField>(
+    chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    p: &EcPoint<F, ProperCrtUint<F>>,
+    q: &EcPoint<F, ProperCrtUint<F>>,
+) -> EcPoint<F, ProperCrtUint<F>> {
+    let p_x_zero = chip.is_soft_zero(ctx, p.x.clone());
+    let p_y_zero = chip.is_soft_zero(ctx, p.y.clone());
+    let p_identity = chip.gate().and(ctx, p_x_zero, p_y_zero);
+    let q_x_zero = chip.is_soft_zero(ctx, q.x.clone());
+    let q_y_zero = chip.is_soft_zero(ctx, q.y.clone());
+    let q_identity = chip.gate().and(ctx, q_x_zero, q_y_zero);
     let not_p_identity = chip.gate().not(ctx, p_identity);
     let not_q_identity = chip.gate().not(ctx, q_identity);
     let both = chip.gate().and(ctx, not_p_identity, not_q_identity);
@@ -206,13 +204,6 @@ pub(crate) fn add_p256_affine_complete<F: BigPrimeField>(
 }
 
 /// Select a point coordinate-wise with a constrained Boolean selector.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
 fn select_p256_point<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -226,34 +217,39 @@ fn select_p256_point<F: BigPrimeField>(
     )
 }
 
-/// Multiply a P-256 point by at most 256 MSB-first Boolean scalar bits.
+/// Constrain `left_scalar * left + right_scalar * right` with one joint ladder.
 ///
-/// The caller must later bind a 256-bit instantiation to a canonical scalar
-/// representation; this bounded group primitive does not yet do that. Its
-/// shape depends on `N`, not on the private bit values.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 group relation consumes this after cutover"
-    )
-)]
-pub(crate) fn multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
+/// Both bit arrays are MSB-first and Boolean-constrained. Each round doubles
+/// the accumulator and adds exactly one of `0`, `left`, `right`, or
+/// `left + right`. Precomputing the fourth choice also handles inverse points:
+/// the table entry is then the constrained identity. Compared with two
+/// independent ladders this removes one doubling and one addition per bit,
+/// without changing the public or private scalar range.
+/// The caller must bind a 256-bit instance to canonical scalar residues; this
+/// bounded group primitive alone does not prove that representation.
+pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
-    point: &EcPoint<F, ProperCrtUint<F>>,
-    bits_msb_first: &[AssignedValue<F>; N],
+    left: &EcPoint<F, ProperCrtUint<F>>,
+    right: &EcPoint<F, ProperCrtUint<F>>,
+    left_bits_msb_first: &[AssignedValue<F>; N],
+    right_bits_msb_first: &[AssignedValue<F>; N],
 ) -> EcPoint<F, ProperCrtUint<F>> {
-    assert!(N <= 256, "P-256 scalar bit bound");
-    let _ = assert_p256_affine_or_identity(chip, ctx, point);
+    assert!(N > 0 && N <= 256, "P-256 joint scalar bit bound");
+    let _ = assert_p256_affine_or_identity(chip, ctx, left);
+    let _ = assert_p256_affine_or_identity(chip, ctx, right);
+    let sum = add_p256_affine_complete_validated(chip, ctx, left, right);
     let zero = chip.load_constant(ctx, P256Base::ZERO);
     let identity = EcPoint::new(zero.clone(), zero);
     let mut accumulator = identity.clone();
-    for bit in bits_msb_first {
-        chip.gate().assert_bit(ctx, *bit);
-        accumulator = add_p256_affine_complete(chip, ctx, &accumulator, &accumulator);
-        let summand = select_p256_point(chip, ctx, point.clone(), identity.clone(), *bit);
-        accumulator = add_p256_affine_complete(chip, ctx, &accumulator, &summand);
+    for (&left_bit, &right_bit) in left_bits_msb_first.iter().zip(right_bits_msb_first.iter()) {
+        chip.gate().assert_bit(ctx, left_bit);
+        chip.gate().assert_bit(ctx, right_bit);
+        accumulator = add_p256_affine_complete_validated(chip, ctx, &accumulator, &accumulator);
+        let if_left = select_p256_point(chip, ctx, sum.clone(), left.clone(), right_bit);
+        let if_not_left = select_p256_point(chip, ctx, right.clone(), identity.clone(), right_bit);
+        let summand = select_p256_point(chip, ctx, if_left, if_not_left, left_bit);
+        accumulator = add_p256_affine_complete_validated(chip, ctx, &accumulator, &summand);
     }
     accumulator
 }
@@ -262,13 +258,6 @@ pub(crate) fn multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
 ///
 /// The last two bits of the 86-by-three limb layout must be zero. This works
 /// for canonical P-256 base coordinates and scalar residues alike.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn p256_uint_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -287,13 +276,6 @@ fn p256_uint_bits_le<F: BigPrimeField>(
 }
 
 /// Interpret 32 constrained, big-endian digest bytes as a 256-bit integer.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn p256_digest_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -306,18 +288,39 @@ fn p256_digest_bits_le<F: BigPrimeField>(
     bits.try_into().expect("32 bytes contain exactly 256 bits")
 }
 
+/// Bind a reduced P-256 point to an exact uncompressed SEC1 credential key.
+///
+/// Every coordinate byte is decomposed to eight constrained bits, then
+/// compared bit-for-bit with the canonical 256-bit nonnative coordinate.
+/// Neither compressed keys nor alternative encodings of the same point are
+/// accepted. The parent must copy-bind `credential_sec1` to its governed
+/// hardware credential before this point may authorize a transition.
+pub(crate) fn assert_p256_uncompressed_sec1_key<F: BigPrimeField>(
+    chip: &FpChip<'_, F, P256Base>,
+    ctx: &mut Context<F>,
+    point: &EcPoint<F, ProperCrtUint<F>>,
+    credential_sec1: &[AssignedValue<F>; 65],
+) {
+    assert_p256_affine_point(chip, ctx, point);
+    chip.gate()
+        .assert_is_const(ctx, &credential_sec1[0], &F::from(4_u64));
+    let x_bytes: [AssignedValue<F>; 32] = std::array::from_fn(|i| credential_sec1[i + 1]);
+    let y_bytes: [AssignedValue<F>; 32] = std::array::from_fn(|i| credential_sec1[i + 33]);
+    let x_bits = p256_digest_bits_le(chip, ctx, &x_bytes);
+    let y_bits = p256_digest_bits_le(chip, ctx, &y_bytes);
+    for (actual, expected) in x_bits.iter().zip(p256_uint_bits_le(chip, ctx, &point.x)) {
+        ctx.constrain_equal(actual, &expected);
+    }
+    for (actual, expected) in y_bits.iter().zip(p256_uint_bits_le(chip, ctx, &point.y)) {
+        ctx.constrain_equal(actual, &expected);
+    }
+}
+
 /// Constrain `actual = reduced + quotient * n` as 256-bit integers.
 ///
 /// `n` is the P-256 scalar order. Both operands are below 2^256 and `n` is
 /// above 2^255, so `quotient` must be one bit. Independent 128-bit halves keep
 /// all arithmetic below the Pasta modulus and prevent native-field wraparound.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn assert_p256_mod_n_relation<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -355,13 +358,6 @@ fn assert_p256_mod_n_relation<F: BigPrimeField>(
 }
 
 /// Constrain the direct-signature profile's canonical low-S rule.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 fn assert_p256_low_s<F: BigPrimeField>(
     scalar_chip: &FpChip<'_, F, P256Scalar>,
     ctx: &mut Context<F>,
@@ -383,7 +379,7 @@ fn assert_p256_low_s<F: BigPrimeField>(
 /// Constrain P-256 ECDSA verification of a canonical 32-byte prehash.
 ///
 /// `enrolled_public_key` must come from a credential-bound circuit input;
-/// coordinate equality is enforced here. `digest_bytes_be` must be bound by
+/// its exact uncompressed SEC1 bytes are equality-bound here. `digest_bytes_be` must be bound by
 /// the caller to SHA-256 of the signed assertion preimage. `N=256` admits the
 /// full scalar range; smaller `N` strictly constrains upper scalar bits to
 /// zero and exists only for bounded proof tests. Direct-signature profiles
@@ -391,13 +387,6 @@ fn assert_p256_low_s<F: BigPrimeField>(
 ///
 /// TODO: Bind signed authenticator data, App Attest counter, digest SHA-256,
 /// and credential policy in the parent recursive hardware-selection relation.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged P-256 ECDSA relation consumes this after cutover"
-    )
-)]
 pub(crate) fn assert_p256_ecdsa_digest<
     F: BigPrimeField,
     const N: usize,
@@ -407,6 +396,7 @@ pub(crate) fn assert_p256_ecdsa_digest<
     ctx: &mut Context<F>,
     signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
+    enrolled_public_key_sec1: &[AssignedValue<F>; 65],
     r: &ProperCrtUint<F>,
     s: &ProperCrtUint<F>,
     z: &ProperCrtUint<F>,
@@ -415,6 +405,12 @@ pub(crate) fn assert_p256_ecdsa_digest<
 ) {
     assert!(N > 0 && N <= 256, "P-256 scalar window must be 1..=256");
     assert_p256_affine_point(base_chip, ctx, signature_public_key);
+    assert_p256_uncompressed_sec1_key(
+        base_chip,
+        ctx,
+        enrolled_public_key,
+        enrolled_public_key_sec1,
+    );
     base_chip.assert_equal(
         ctx,
         signature_public_key.x.clone(),
@@ -427,6 +423,8 @@ pub(crate) fn assert_p256_ecdsa_digest<
     );
 
     let scalar_chip = FpChip::<F, P256Scalar>::new(base_chip.range(), 86, 3);
+    let _ = scalar_chip.enforce_less_than(ctx, r.clone());
+    let _ = scalar_chip.enforce_less_than(ctx, s.clone());
     let r_valid = scalar_chip.is_soft_nonzero(ctx, r.clone());
     let s_valid = scalar_chip.is_soft_nonzero(ctx, s.clone());
     base_chip.gate().assert_is_const(ctx, &r_valid, &F::ONE);
@@ -464,9 +462,14 @@ pub(crate) fn assert_p256_ecdsa_digest<
         base_chip.load_constant(ctx, gx),
         base_chip.load_constant(ctx, gy),
     );
-    let u1_g = multiply_p256_affine_bits(base_chip, ctx, &g, &u1_bits_msb);
-    let u2_q = multiply_p256_affine_bits(base_chip, ctx, signature_public_key, &u2_bits_msb);
-    let result = add_p256_affine_complete(base_chip, ctx, &u1_g, &u2_q);
+    let result = joint_multiply_p256_affine_bits(
+        base_chip,
+        ctx,
+        &g,
+        signature_public_key,
+        &u1_bits_msb,
+        &u2_bits_msb,
+    );
     assert_p256_affine_point(base_chip, ctx, &result);
     let result_x_bits = p256_uint_bits_le(base_chip, ctx, &result.x);
     let r_bits = p256_uint_bits_le(base_chip, ctx, r);
@@ -480,13 +483,6 @@ pub(crate) fn assert_p256_ecdsa_digest<
 }
 
 /// Convert eight copy-bound SHA-256 words to their canonical big-endian bytes.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
-)]
 fn sha256_words_to_be_bytes<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -507,31 +503,27 @@ fn sha256_words_to_be_bytes<F: BigPrimeField>(
     bytes.try_into().expect("eight SHA-256 words are 32 bytes")
 }
 
-/// Queue both Apple assertion hashes over the complete signed authenticator data.
+/// Queue Apple's three assertion hashes over the complete authenticator data.
 ///
 /// `S` is Core's canonical signing message. This function proves its domain
-/// and length framing; the parent must additionally constrain the Norito body
+/// and length framing; the parent must additionally constrain the flat V1 body
 /// to the independently reconstructed transition subject. The expected RP ID
 /// hash and previous/next indices must come from the governed credential and
 /// inherited monetary checkpoint, not from the assertion itself.
 ///
 /// The full, release-bounded authenticator data, including extensions, enters
 /// the signed SHA-256 preimage. `expected_flags` must be bound by the parent to
-/// the governed Apple profile. The assertion's AT bit is forbidden; this
-/// slice makes no assumption about ED because Apple's published sample has
-/// signed extension bytes without it. Apple's current assertion guide also
+/// the governed Apple profile. This slice accepts the physically observed
+/// 37-byte header with `0x40`; longer
+/// authenticated data requires the ED bit and extension bytes. The model may
+/// parse a fully signed suffix with ED unset, but this proof profile keeps that
+/// form closed until qualified. Apple's
+/// current assertion guide also
 /// requires validation of `validationCategory` and
 /// `bundleVersion`. This hash/counter slice does not
 /// parse or authorize those extensions, so no production monetary profile may
 /// rely on it until a qualified extension relation is recursively bound.
 /// See <https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server>.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
-)]
 pub(crate) fn queue_apple_assertion_digest<F, const S_LEN: usize, const AUTH_LEN: usize>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
@@ -552,8 +544,8 @@ where
         "Core canonical selection message has a release-bounded length"
     );
     assert!(
-        (38..=1_024).contains(&AUTH_LEN),
-        "Apple authenticator data must contain a release-bounded signed suffix"
+        (37..=1_024).contains(&AUTH_LEN),
+        "Apple authenticator data must contain the complete signed header"
     );
     let range = base_chip.range();
     let gate = range.gate();
@@ -590,7 +582,15 @@ where
     range.range_check(ctx, expected_flags, 8);
     ctx.constrain_equal(&authenticator_data[32], &expected_flags);
     let flag_bits = gate.num_to_bits(ctx, expected_flags, 8);
-    gate.assert_is_const(ctx, &flag_bits[6], &F::ZERO);
+    for bit in &flag_bits[..6] {
+        gate.assert_is_const(ctx, bit, &F::ZERO);
+    }
+    gate.assert_is_const(ctx, &flag_bits[6], &F::ONE);
+    if AUTH_LEN == 37 {
+        gate.assert_is_const(ctx, &flag_bits[7], &F::ZERO);
+    } else {
+        gate.assert_is_const(ctx, &flag_bits[7], &F::ONE);
+    }
 
     range.range_check(ctx, previous_secure_index, 32);
     range.range_check(ctx, next_secure_index, 32);
@@ -605,9 +605,13 @@ where
 
     let mut message = auth_bytes;
     message.extend(client_data_hash);
-    let assertion_words = jobs.digest_constrained(ctx, &message)?;
-    let assertion_digest = sha256_words_to_be_bytes(base_chip, ctx, &assertion_words);
-    Ok(assertion_digest.map(|byte| {
+    let nonce_words = jobs.digest_constrained(ctx, &message)?;
+    let nonce = sha256_words_to_be_bytes(base_chip, ctx, &nonce_words);
+    // Apple's ECDSA-P256-SHA256 assertion API signs the nonce as a message;
+    // the signature equation therefore uses SHA256(nonce), not nonce itself.
+    let prehash_words = jobs.digest_constrained(ctx, &nonce)?;
+    let prehash = sha256_words_to_be_bytes(base_chip, ctx, &prehash_words);
+    Ok(prehash.map(|byte| {
         byte.assigned()
             .expect("digest bytes are Boolean-composed assigned cells")
     }))
@@ -621,10 +625,7 @@ where
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion relation consumes this after cutover"
-    )
+    expect(dead_code, reason = "staged monetary assertion fold remains closed")
 )]
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
@@ -644,6 +645,7 @@ pub(crate) fn assert_apple_assertion_ecdsa<
     next_secure_index: AssignedValue<F>,
     signature_public_key: &EcPoint<F, ProperCrtUint<F>>,
     enrolled_public_key: &EcPoint<F, ProperCrtUint<F>>,
+    enrolled_public_key_sec1: &[AssignedValue<F>; 65],
     r: &ProperCrtUint<F>,
     s: &ProperCrtUint<F>,
     z: &ProperCrtUint<F>,
@@ -668,6 +670,7 @@ where
         ctx,
         signature_public_key,
         enrolled_public_key,
+        enrolled_public_key_sec1,
         r,
         s,
         z,
@@ -682,17 +685,48 @@ mod tests {
     use super::*;
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
     use halo2_base::utils::CurveAffineExt as _;
+    use halo2_ecc::bigint::FixedCRTInteger;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::{
-            ff::Field as _,
-            ff::PrimeField as _,
             group::{Curve as _, prime::PrimeCurveAffine as _},
             pasta::{Fp, Fq},
         },
     };
 
     const TEST_K: u32 = 16;
+
+    fn check_scalar_order_bound<F: BigPrimeField>(above_order: bool) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(10)
+            .use_lookup_bits(9)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let order = modulus::<P256Scalar>();
+        let value = if above_order {
+            &order + 1_u32
+        } else {
+            &order - 1_u32
+        };
+        let ctx = builder.main(0);
+        let assigned = FixedCRTInteger::from_native(value, 3, 86).assign(ctx, 86, &modulus::<F>());
+        let _ = chip.enforce_less_than(ctx, assigned);
+        builder.assigned_instances = vec![Vec::new()];
+        builder.calculate_params(Some(9));
+        MockProver::run(10, &builder, vec![Vec::new()])
+            .expect("scalar range circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn p256_scalar_order_bound_rejects_noncanonical_residues_in_both_pasta_fields() {
+        assert!(check_scalar_order_bound::<Fp>(false));
+        assert!(check_scalar_order_bound::<Fq>(false));
+        assert!(!check_scalar_order_bound::<Fp>(true));
+        assert!(!check_scalar_order_bound::<Fq>(true));
+    }
 
     fn check_point_and_double<F: BigPrimeField>(alter_y: bool, check_double: bool) -> bool {
         let mut builder = BaseCircuitBuilder::<F>::new(false)
@@ -754,6 +788,58 @@ mod tests {
         EcPoint::new(chip.load_private(ctx, x), chip.load_private(ctx, y))
     }
 
+    fn uncompressed_sec1(point: Secp256r1Affine) -> [u8; 65] {
+        let (x, y) = point.into_coordinates();
+        let mut x_be = x.to_repr();
+        let mut y_be = y.to_repr();
+        x_be.reverse();
+        y_be.reverse();
+        let mut sec1 = [0_u8; 65];
+        sec1[0] = 4;
+        sec1[1..33].copy_from_slice(&x_be);
+        sec1[33..65].copy_from_slice(&y_be);
+        sec1
+    }
+
+    fn check_uncompressed_sec1_binding<F: BigPrimeField>(mutation: usize) -> bool {
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let generator = Secp256r1Affine::generator();
+        let mut sec1 = uncompressed_sec1(generator);
+        if mutation != 0 {
+            sec1[mutation] ^= 1;
+        }
+        let ctx = builder.main(0);
+        let point = load_affine(&chip, ctx, generator);
+        let bytes: [AssignedValue<F>; 65] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(sec1[i]))));
+        assert_p256_uncompressed_sec1_key(&chip, ctx, &point, &bytes);
+        builder.assigned_instances = vec![Vec::new()];
+        builder.calculate_params(Some(9));
+        MockProver::run(TEST_K, &builder, vec![Vec::new()])
+            .expect("P-256 SEC1 binding circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn uncompressed_sec1_key_binds_all_coordinates_in_both_pasta_fields() {
+        for mutation in [0, 1, 33, 64] {
+            assert_eq!(
+                check_uncompressed_sec1_binding::<Fp>(mutation),
+                mutation == 0
+            );
+            assert_eq!(
+                check_uncompressed_sec1_binding::<Fq>(mutation),
+                mutation == 0
+            );
+        }
+    }
+
     fn check_complete_add<F: BigPrimeField>(
         left: Secp256r1Affine,
         right: Secp256r1Affine,
@@ -810,41 +896,82 @@ mod tests {
         check_all_add_cases::<Fq>();
     }
 
-    fn check_two_bit_scalar<F: BigPrimeField>(scalar: u8, expected: Secp256r1Affine) -> bool {
+    fn check_joint_two_bit_scalars<F: BigPrimeField>(
+        left_scalar: u8,
+        right_scalar: u8,
+        inverse_right: bool,
+        corrupt_result: bool,
+    ) -> bool {
         let mut builder = BaseCircuitBuilder::<F>::new(false)
             .use_k(18)
             .use_lookup_bits(17)
             .use_instance_columns(1);
         let range = builder.range_chip();
         let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let generator = Secp256r1Affine::generator();
+        let right_host = if inverse_right {
+            (-generator.to_curve()).to_affine()
+        } else {
+            (generator.to_curve() + generator.to_curve()).to_affine()
+        };
+        let mut expected_host = Secp256r1Affine::identity().to_curve();
+        for _ in 0..left_scalar {
+            expected_host += generator.to_curve();
+        }
+        for _ in 0..right_scalar {
+            expected_host += right_host.to_curve();
+        }
+        if corrupt_result {
+            expected_host += generator.to_curve();
+        }
+
         let ctx = builder.main(0);
-        let generator = load_affine(&chip, ctx, Secp256r1Affine::generator());
-        let bits = [
-            ctx.load_witness(F::from(u64::from((scalar >> 1) & 1))),
-            ctx.load_witness(F::from(u64::from(scalar & 1))),
-        ];
-        let actual = multiply_p256_affine_bits(&chip, ctx, &generator, &bits);
-        let expected = load_affine(&chip, ctx, expected);
+        let left = load_affine(&chip, ctx, generator);
+        let right = load_affine(&chip, ctx, right_host);
+        let left_bits: [AssignedValue<F>; 2] = std::array::from_fn(|bit| {
+            ctx.load_witness(F::from(u64::from((left_scalar >> (1 - bit)) & 1)))
+        });
+        let right_bits: [AssignedValue<F>; 2] = std::array::from_fn(|bit| {
+            ctx.load_witness(F::from(u64::from((right_scalar >> (1 - bit)) & 1)))
+        });
+        let actual =
+            joint_multiply_p256_affine_bits(&chip, ctx, &left, &right, &left_bits, &right_bits);
+        let expected = load_affine(&chip, ctx, expected_host.to_affine());
         chip.assert_equal(ctx, actual.x, expected.x);
         chip.assert_equal(ctx, actual.y, expected.y);
         builder.assigned_instances = vec![Vec::new()];
         builder.calculate_params(Some(9));
         MockProver::run(18, &builder, vec![Vec::new()])
-            .expect("P-256 scalar circuit synthesizes")
+            .expect("P-256 joint scalar circuit synthesizes")
             .verify()
             .is_ok()
     }
 
     #[test]
-    fn bounded_scalar_zero_one_two_three_match_p256_in_both_pasta_fields() {
-        let g = Secp256r1Affine::generator();
-        let identity = Secp256r1Affine::identity();
-        let two = (g.to_curve() + g.to_curve()).to_affine();
-        let three = (two.to_curve() + g.to_curve()).to_affine();
-        for (scalar, expected) in [(0, identity), (1, g), (2, two), (3, three)] {
-            assert!(check_two_bit_scalar::<Fp>(scalar, expected));
-            assert!(check_two_bit_scalar::<Fq>(scalar, expected));
+    fn joint_scalar_table_and_inverse_points_match_p256_in_both_pasta_fields() {
+        for (left, right, inverse_right) in [
+            (0, 0, false),
+            (1, 0, false),
+            (0, 1, false),
+            (1, 1, false),
+            (2, 3, false),
+            (1, 1, true),
+        ] {
+            assert!(check_joint_two_bit_scalars::<Fp>(
+                left,
+                right,
+                inverse_right,
+                false
+            ));
+            assert!(check_joint_two_bit_scalars::<Fq>(
+                left,
+                right,
+                inverse_right,
+                false
+            ));
         }
+        assert!(!check_joint_two_bit_scalars::<Fp>(2, 3, false, true));
+        assert!(!check_joint_two_bit_scalars::<Fq>(2, 3, false, true));
     }
 
     fn check_ecdsa_small_scalar_slice<F: BigPrimeField>(
@@ -882,16 +1009,17 @@ mod tests {
         let digest = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(digest_be[i]))));
         let digest_quotient = ctx.load_witness(F::ZERO);
         let signature_key = load_affine(&base_chip, ctx, generator);
-        let enrolled_key = load_affine(
-            &base_chip,
-            ctx,
-            if change_enrolled_key { two } else { generator },
-        );
+        let enrolled_host = if change_enrolled_key { two } else { generator };
+        let enrolled_key = load_affine(&base_chip, ctx, enrolled_host);
+        let enrolled_sec1 = uncompressed_sec1(enrolled_host);
+        let enrolled_sec1: [AssignedValue<F>; 65] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(enrolled_sec1[i]))));
         assert_p256_ecdsa_digest::<F, 2, true>(
             &base_chip,
             ctx,
             &signature_key,
             &enrolled_key,
+            &enrolled_sec1,
             &r,
             &s,
             &z,
@@ -904,6 +1032,59 @@ mod tests {
             .expect("P-256 ECDSA slice synthesizes")
             .verify()
             .is_ok()
+    }
+
+    #[test]
+    #[ignore = "full-width P-256 capacity inventory is expensive and awaits the release build lane"]
+    fn full_width_p256_equation_inventory_in_both_pasta_fields() {
+        fn inventory<F: BigPrimeField>() -> (usize, usize) {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(TEST_K as usize)
+                .use_lookup_bits((TEST_K - 1) as usize)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+            let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+            let ctx = builder.main(0);
+            let generator = Secp256r1Affine::generator();
+            let two = (generator.to_curve() + generator.to_curve()).to_affine();
+            let (two_x, _) = two.into_coordinates();
+            let scalar = P256Scalar::from_repr(two_x.to_repr())
+                .expect("2G x-coordinate is below the P-256 scalar order");
+            let r = scalar_chip.load_private(ctx, scalar);
+            let s = scalar_chip.load_private(ctx, scalar);
+            let z = scalar_chip.load_private(ctx, scalar);
+            let mut digest_be = scalar.to_repr();
+            digest_be.reverse();
+            let digest =
+                std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(digest_be[i]))));
+            let key = load_affine(&base_chip, ctx, generator);
+            let sec1 = uncompressed_sec1(generator);
+            let enrolled_sec1: [AssignedValue<F>; 65] =
+                std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(sec1[i]))));
+            let digest_quotient = ctx.load_witness(F::ZERO);
+            assert_p256_ecdsa_digest::<F, 256, true>(
+                &base_chip,
+                ctx,
+                &key,
+                &key,
+                &enrolled_sec1,
+                &r,
+                &s,
+                &z,
+                &digest,
+                digest_quotient,
+            );
+            let cells = builder.statistics().gate.total_advice_per_phase[0];
+            let params = builder.calculate_params(Some(9));
+            let columns = params.num_advice_per_phase[0];
+            (cells, columns)
+        }
+
+        let fp = inventory::<Fp>();
+        let fq = inventory::<Fq>();
+        eprintln!("full-width P-256 k=16 Eq/Fp cells+columns: {fp:?}; Ep/Fq: {fq:?}");
+        assert!(fp.0 > 0 && fq.0 > 0 && fp.1 > 0 && fq.1 > 0);
     }
 
     #[test]
@@ -1009,7 +1190,8 @@ mod apple_assertion_tests {
         circuit::{Layouter, V1},
         dev::MockProver,
         halo2curves::{
-            ff::Field as _,
+            ff::{Field as _, PrimeField as _},
+            group::{Curve as _, prime::PrimeCurveAffine as _},
             pasta::{Fp, Fq},
         },
         plonk::{Circuit, ConstraintSystem, Error},
@@ -1099,7 +1281,7 @@ mod apple_assertion_tests {
         Counter,
         Rollover,
         SignedExtension,
-        AttestedCredentialFlag,
+        ReservedFlag,
     }
 
     fn check_apple_hash_and_counter<F, const AUTH_LEN: usize, const FLAGS: u8>(
@@ -1125,7 +1307,8 @@ mod apple_assertion_tests {
         let h: [u8; 32] = Sha256::digest(&s).into();
         let mut preimage = auth.to_vec();
         preimage.extend_from_slice(&h);
-        let mut expected: [u8; 32] = Sha256::digest(&preimage).into();
+        let nonce: [u8; 32] = Sha256::digest(&preimage).into();
+        let mut expected: [u8; 32] = Sha256::digest(nonce).into();
         let mut governed_flags = auth[32];
 
         match mutation {
@@ -1136,15 +1319,16 @@ mod apple_assertion_tests {
             Mutation::Flags => auth[32] ^= 2,
             Mutation::Counter => auth[36] = 2,
             Mutation::SignedExtension => auth[AUTH_LEN - 1] ^= 1,
-            Mutation::AttestedCredentialFlag => {
-                auth[32] |= 0x40;
+            Mutation::ReservedFlag => {
+                auth[32] |= 0x01;
                 governed_flags = auth[32];
             }
         }
-        if matches!(mutation, Mutation::AttestedCredentialFlag) {
+        if matches!(mutation, Mutation::ReservedFlag) {
             let mut signed = auth.to_vec();
             signed.extend_from_slice(&h);
-            expected = Sha256::digest(&signed).into();
+            let nonce: [u8; 32] = Sha256::digest(&signed).into();
+            expected = Sha256::digest(nonce).into();
         }
 
         let mut builder = BaseCircuitBuilder::<F>::new(false)
@@ -1178,7 +1362,7 @@ mod apple_assertion_tests {
             previous,
             next,
         )
-        .expect("canonical Apple assertion fixture queues two hashes");
+        .expect("canonical Apple assertion fixture queues three hashes");
         for (actual, expected_byte) in digest.iter().zip(expected) {
             let expected_cell = ctx.load_constant(F::from(u64::from(expected_byte)));
             ctx.constrain_equal(actual, &expected_cell);
@@ -1193,8 +1377,8 @@ mod apple_assertion_tests {
 
     #[test]
     fn apple_assertion_hash_rp_flags_and_exact_next_are_constrained_in_both_pasta_fields() {
-        assert!(check_apple_hash_and_counter::<Fp, 41, 0x01>(Mutation::None));
-        assert!(check_apple_hash_and_counter::<Fq, 41, 0x01>(Mutation::None));
+        assert!(check_apple_hash_and_counter::<Fp, 41, 0xc0>(Mutation::None));
+        assert!(check_apple_hash_and_counter::<Fq, 41, 0xc0>(Mutation::None));
         for mutation in [
             Mutation::Domain,
             Mutation::Body,
@@ -1203,29 +1387,166 @@ mod apple_assertion_tests {
             Mutation::Counter,
             Mutation::Rollover,
             Mutation::SignedExtension,
-            Mutation::AttestedCredentialFlag,
+            Mutation::ReservedFlag,
         ] {
-            assert!(!check_apple_hash_and_counter::<Fp, 41, 0x01>(mutation));
-            assert!(!check_apple_hash_and_counter::<Fq, 41, 0x01>(mutation));
+            assert!(!check_apple_hash_and_counter::<Fp, 41, 0xc0>(mutation));
+            assert!(!check_apple_hash_and_counter::<Fq, 41, 0xc0>(mutation));
         }
     }
 
     #[test]
-    fn signed_suffix_is_bound_with_ed_set_in_both_pasta_fields() {
-        assert!(check_apple_hash_and_counter::<Fp, 41, 0x81>(Mutation::None));
-        assert!(check_apple_hash_and_counter::<Fq, 41, 0x81>(Mutation::None));
-        for mutation in [Mutation::SignedExtension, Mutation::AttestedCredentialFlag] {
-            assert!(!check_apple_hash_and_counter::<Fp, 41, 0x81>(mutation));
-            assert!(!check_apple_hash_and_counter::<Fq, 41, 0x81>(mutation));
+    fn longer_authenticator_data_requires_ed_flag_in_both_pasta_fields() {
+        assert!(!check_apple_hash_and_counter::<Fp, 41, 0x40>(
+            Mutation::None
+        ));
+        assert!(!check_apple_hash_and_counter::<Fq, 41, 0x40>(
+            Mutation::None
+        ));
+    }
+
+    #[derive(Clone, Copy)]
+    enum EcdsaMutation {
+        None,
+        Subject,
+        Sec1Key,
+        Counter,
+    }
+
+    fn check_apple_hash_and_p256_equation<F>(mutation: EcdsaMutation) -> bool
+    where
+        F: BigPrimeField + PrimeField + From<u64>,
+    {
+        let rp: [u8; 32] = Sha256::digest(b"TEAM.bundle").into();
+        let mut auth = [0_u8; 37];
+        auth[..32].copy_from_slice(&rp);
+        auth[32] = 0x40;
+        auth[36] = 1;
+        let mut canonical_s = Vec::with_capacity(S_LEN);
+        canonical_s.extend_from_slice(DOMAIN);
+        canonical_s.extend_from_slice(&(BODY_LEN as u64).to_le_bytes());
+        canonical_s.extend_from_slice(&[0x42; BODY_LEN]);
+
+        // Construct a valid, small-scalar ECDSA verification equation for an
+        // actual SHA-256 assertion digest. For r = s = z we have u1 = u2 = 1.
+        // If z is an on-curve x-coordinate, Q = R - G makes G + Q = R and
+        // x(R) = r. The loop only selects public test data, not circuit shape.
+        let (z, q) = (0_u8..=u8::MAX)
+            .find_map(|tweak| {
+                canonical_s[S_LEN - 1] = tweak;
+                let client_hash: [u8; 32] = Sha256::digest(&canonical_s).into();
+                let mut preimage = auth.to_vec();
+                preimage.extend_from_slice(&client_hash);
+                let nonce: [u8; 32] = Sha256::digest(&preimage).into();
+                let digest: [u8; 32] = Sha256::digest(nonce).into();
+                let mut repr = digest;
+                repr.reverse();
+                let z = Option::<P256Scalar>::from(P256Scalar::from_repr(repr))?;
+                if z == P256Scalar::ZERO {
+                    return None;
+                }
+                let x = Option::<P256Base>::from(P256Base::from_repr(repr))?;
+                let rhs = x * x * x - P256Base::from(3_u64) * x + Secp256r1Affine::b();
+                let y = Option::<P256Base>::from(rhs.sqrt())?;
+                let r_point = Option::<Secp256r1Affine>::from(Secp256r1Affine::from_xy(x, y))?;
+                let q = (r_point.to_curve() - Secp256r1Affine::generator().to_curve()).to_affine();
+                (!bool::from(q.is_identity())).then_some((z, q))
+            })
+            .expect("some bounded test nonce yields an on-curve digest x-coordinate");
+
+        let (qx, qy) = q.into_coordinates();
+        let mut qx_be = qx.to_repr();
+        let mut qy_be = qy.to_repr();
+        qx_be.reverse();
+        qy_be.reverse();
+        let mut sec1 = [0_u8; 65];
+        sec1[0] = 4;
+        sec1[1..33].copy_from_slice(&qx_be);
+        sec1[33..].copy_from_slice(&qy_be);
+        match mutation {
+            EcdsaMutation::None => {}
+            EcdsaMutation::Subject => canonical_s[S_LEN - 1] ^= 1,
+            EcdsaMutation::Sec1Key => sec1[64] ^= 1,
+            EcdsaMutation::Counter => auth[36] = 2,
+        }
+
+        let mut builder = BaseCircuitBuilder::<F>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize);
+        let range = builder.range_chip();
+        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let mut jobs = PastaSha256JobsV1::default();
+        let ctx = builder.main(0);
+        let signed_s: [AssignedValue<F>; S_LEN] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(canonical_s[i]))));
+        let signed_auth: [AssignedValue<F>; 37] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
+        let governed_rp: [AssignedValue<F>; 32] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(rp[i]))));
+        let sec1_cells: [AssignedValue<F>; 65] =
+            std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(sec1[i]))));
+        let key = EcPoint::new(
+            base_chip.load_private(ctx, qx),
+            base_chip.load_private(ctx, qy),
+        );
+        let signature_r = scalar_chip.load_private(ctx, z);
+        let signature_s = scalar_chip.load_private(ctx, z);
+        let prehash = scalar_chip.load_private(ctx, z);
+        let previous = ctx.load_witness(F::ZERO);
+        let next = ctx.load_witness(F::ONE);
+        let flags = ctx.load_witness(F::from(0x40_u64));
+        let digest_quotient = ctx.load_witness(F::ZERO);
+        assert_apple_assertion_ecdsa::<F, S_LEN, 2, 37, false>(
+            &base_chip,
+            ctx,
+            &mut jobs,
+            &signed_s,
+            &signed_auth,
+            &governed_rp,
+            flags,
+            previous,
+            next,
+            &key,
+            &key,
+            &sec1_cells,
+            &signature_r,
+            &signature_s,
+            &prehash,
+            digest_quotient,
+        )
+        .expect("bounded Apple assertion queues constrained SHA and P-256 jobs");
+        builder.calculate_params(Some(UNUSABLE_ROWS));
+        let circuit = AppleCircuit { builder, jobs };
+        MockProver::run(TEST_K, &circuit, vec![])
+            .expect("bounded Apple assertion and P-256 circuit synthesizes")
+            .verify()
+            .is_ok()
+    }
+
+    #[test]
+    fn apple_assertion_sha_and_p256_equation_share_bound_cells_in_both_pasta_fields() {
+        for mutation in [
+            EcdsaMutation::None,
+            EcdsaMutation::Subject,
+            EcdsaMutation::Sec1Key,
+            EcdsaMutation::Counter,
+        ] {
+            let valid = matches!(mutation, EcdsaMutation::None);
+            assert_eq!(check_apple_hash_and_p256_equation::<Fp>(mutation), valid);
+            assert_eq!(check_apple_hash_and_p256_equation::<Fq>(mutation), valid);
         }
     }
 
     #[test]
-    #[should_panic(
-        expected = "Apple authenticator data must contain a release-bounded signed suffix"
-    )]
-    fn extension_free_assertion_is_rejected() {
-        let _ = check_apple_hash_and_counter::<Fp, 37, 0x01>(Mutation::None);
+    fn physical_header_without_extensions_is_accepted_in_both_pasta_fields() {
+        assert!(check_apple_hash_and_counter::<Fp, 37, 0x40>(Mutation::None));
+        assert!(check_apple_hash_and_counter::<Fq, 37, 0x40>(Mutation::None));
+        assert!(!check_apple_hash_and_counter::<Fp, 37, 0xc0>(
+            Mutation::None
+        ));
+        assert!(!check_apple_hash_and_counter::<Fq, 37, 0xc0>(
+            Mutation::None
+        ));
     }
 
     #[test]

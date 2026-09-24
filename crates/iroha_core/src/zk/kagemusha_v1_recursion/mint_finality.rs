@@ -374,8 +374,8 @@ pub fn validate_kagemusha_mint_finality_roster_keys_v1(
 ///
 /// # Errors
 ///
-/// Returns an error unless both roster templates are structurally valid and every Pallas and
-/// Vesta encoding is canonical and non-identity.
+/// Returns an error unless the single generation-zero authority template is structurally valid
+/// and every Pallas and Vesta encoding is canonical and non-identity.
 pub fn validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
     parameters: &KagemushaMintFinalityGenesisParametersV1,
 ) -> Result<(), KagemushaMintFinalityErrorV1> {

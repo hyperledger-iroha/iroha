@@ -141,6 +141,7 @@ macro_rules! for_each_instruction_type {
         );
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
+        $macro!(iroha_data_model::isi::governance::UpdatePlainConviction);
         $macro!(
             iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
         );

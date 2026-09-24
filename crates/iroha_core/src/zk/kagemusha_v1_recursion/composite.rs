@@ -7,14 +7,24 @@
 //! remains enabled for every operation. Prepared KeyMint one-use heads remain circuit-fixed to
 //! zero until the exact signed selection and attested key chain enter both parity folds.
 
+#[path = "app_attest_assertion_cbor.rs"]
+mod app_attest_assertion_cbor;
+#[path = "app_attest_assertion_fold.rs"]
+mod app_attest_assertion_fold;
+#[path = "apple_compact_credential_id.rs"]
+mod apple_compact_credential_id;
+
 use ff::Field as _;
+
+#[path = "apple_governed_policy_opening.rs"]
+mod apple_governed_policy_opening;
 use halo2_base::{
     AssignedValue,
     gates::{
         GateInstructions as _, RangeInstructions as _,
         circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder},
     },
-    utils::{BigPrimeField, CurveAffineExt, fe_to_biguint},
+    utils::{BigPrimeField, CurveAffineExt, fe_to_biguint, power_of_two},
 };
 use halo2_proofs::{
     circuit::{Layouter, V1},
@@ -70,8 +80,9 @@ use super::{
     state_relation::{self, public_instance},
     terminal_authorization::{
         TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
-        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, constrain_receiver_credential_lane_v1,
-        hash_terminal_send_output_binding_v1, public_instance as incoming_public_instance,
+        TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1, constrain_candidate_envelope_digest_v1,
+        constrain_receiver_credential_lane_v1, hash_terminal_send_output_binding_v1,
+        public_instance as incoming_public_instance,
     },
     typed_sha_consumer::{
         KagemushaRecursiveHashClaimParityWitnessV1, constrain_recursive_hash_claim_v1,
@@ -96,7 +107,8 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_PASTA_STATE_COMMITMENT_DOMAIN_V1, KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
     KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-    KagemushaCanonicalMintFrameV1, KagemushaCreditOpeningV1, KagemushaLifecycleBindingV1,
+    KagemushaCanonicalMintFrameV1, KagemushaCreditOpeningV1, KagemushaHardwareCredentialV1,
+    KagemushaHardwareSelectionSigningLayoutV1, KagemushaLifecycleBindingV1,
     KagemushaMintAuthorizationStatementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
     KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
     kagemusha_canonical_mint_frame_prefix_v1,
@@ -292,6 +304,8 @@ where
     C: CurveAffineExt,
 {
     hash_claim: Option<KagemushaRecursiveHashClaimParityWitnessV1<'a, C>>,
+    hardware_selection:
+        Option<super::generation::KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
     pub(super) mint_fold_opening: Option<KagemushaMintFoldOpeningWitnessV1<'a>>,
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
@@ -331,6 +345,8 @@ pub(super) struct KagemushaRecursiveStateWitnessV1<'a> {
     pub(super) mint_authorization: &'a KagemushaMintAuthorizationV1,
     pub(super) mint_credit: &'a KagemushaMintCreditV1,
     pub(super) guard_relation: KagemushaGuardBundleRelationWitnessV1,
+    pub(super) hardware_selection:
+        Option<super::generation::KagemushaAppAttestRecursiveSelectionWitnessV1<'a>>,
     pub(super) eq_parent_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_parent_protocol: &'a PlonkProtocol<EpAffine>,
     pub(super) eq_parent_instances: &'a [Vec<Fp>],
@@ -747,6 +763,7 @@ fn build_recursive_state_pair_impl_v1(
                         merge_fold_proof: claim.eq_merge_fold_proof.as_bytes(),
                     },
                 ),
+            hardware_selection: witness.hardware_selection,
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -808,6 +825,7 @@ fn build_recursive_state_pair_impl_v1(
                         merge_fold_proof: claim.ep_merge_fold_proof.as_bytes(),
                     },
                 ),
+            hardware_selection: witness.hardware_selection,
             mint_fold_opening: witness.mint_fold_opening,
             mint_authorization: witness.mint_authorization,
             mint_credit: witness.mint_credit,
@@ -847,8 +865,8 @@ fn build_recursive_state_pair_impl_v1(
     if discover_messages {
         // These builders have not consumed a hash proof and must never escape as circuits.
         return Ok(RecursiveStateBuildV1::Messages(
-            eq_sha.canonical_messages()?,
-            ep_sha.canonical_messages()?,
+            eq_sha.bounded_claim_messages()?,
+            ep_sha.bounded_claim_messages()?,
         ));
     }
     if eq_sha.compression_blocks()? != 0 || ep_sha.compression_blocks()? != 0 {
@@ -920,7 +938,14 @@ pub(super) fn assigned_digest_bytes<F: halo2_base::utils::ScalarField>(
 fn require_complete_hardware_selection_fold_v1(
     predecessor: Option<&KagemushaStateV1>,
     successor: &KagemushaStateV1,
+    app_selection_present: bool,
 ) -> Result<(), String> {
+    if app_selection_present {
+        return Err(
+            "original App Attest selection is not yet bound to Core, Guard, and P-256 in both monetary folds"
+                .to_owned(),
+        );
+    }
     if successor.next_one_use_key_reference != [0; 32]
         || predecessor.is_some_and(|state| state.next_one_use_key_reference != [0; 32])
     {
@@ -958,6 +983,341 @@ fn constrain_unqualified_hardware_selection_limbs_v1<F: KagemushaPoseidonFieldV1
     }
 }
 
+/// Tie both signed Core indices and Apple's signed counter to committed state cells.
+///
+/// `canonical_s` and `authenticator_data` must be the same assigned bytes used by the
+/// assertion SHA/P-256 relation. This helper does not authenticate them by itself.
+fn constrain_apple_signed_secure_index_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    predecessor_secure_index: AssignedValue<F>,
+    successor_secure_index: AssignedValue<F>,
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    authenticator_data: &[AssignedValue<F>; 37],
+) {
+    let range = builder.range_chip();
+    let gate = range.gate();
+    let ctx = builder.main(0);
+    let before_bytes = &canonical_s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE];
+    let after_bytes = &canonical_s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_AFTER];
+    for byte in before_bytes
+        .iter()
+        .chain(after_bytes)
+        .chain(&authenticator_data[33..37])
+    {
+        range.range_check(ctx, *byte, 8);
+    }
+    let compose_le = |ctx: &mut halo2_base::Context<F>, bytes: &[AssignedValue<F>]| {
+        gate.inner_product(
+            ctx,
+            bytes.iter().copied(),
+            (0..bytes.len())
+                .map(|index| halo2_base::QuantumCell::Constant(power_of_two::<F>(8 * index))),
+        )
+    };
+    let signed_before = compose_le(ctx, before_bytes);
+    let signed_after = compose_le(ctx, after_bytes);
+    ctx.constrain_equal(&signed_before, &predecessor_secure_index);
+    ctx.constrain_equal(&signed_after, &successor_secure_index);
+    range.range_check(ctx, predecessor_secure_index, 32);
+    range.range_check(ctx, successor_secure_index, 32);
+    let exact_next = gate.inc(ctx, signed_before);
+    ctx.constrain_equal(&exact_next, &signed_after);
+    let counter_be = gate.inner_product(
+        ctx,
+        authenticator_data[33..37].iter().copied(),
+        [24, 16, 8, 0].map(|bit| halo2_base::QuantumCell::Constant(power_of_two::<F>(bit))),
+    );
+    ctx.constrain_equal(&counter_be, &signed_after);
+}
+
+fn constrain_signed_subject_digest_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    field: core::ops::Range<usize>,
+    expected: [AssignedValue<F>; 2],
+) {
+    let expected_bytes = assigned_digest_bytes_v1(ctx, gate, expected);
+    for (signed, expected_byte) in canonical_s[field].iter().zip(expected_bytes) {
+        ctx.constrain_equal(
+            signed,
+            &expected_byte.assigned().expect("decomposed digest byte"),
+        );
+    }
+}
+
+fn constrain_signed_subject_u64_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    gate: &halo2_base::gates::GateChip<F>,
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    field: core::ops::Range<usize>,
+    expected: AssignedValue<F>,
+) {
+    let expected_bytes = assigned_uint_bytes_v1(ctx, gate, expected, 64);
+    for (signed, expected_byte) in canonical_s[field].iter().zip(expected_bytes) {
+        ctx.constrain_equal(
+            signed,
+            &expected_byte.assigned().expect("decomposed integer byte"),
+        );
+    }
+}
+
+/// Match the signed terminal-body presence to the authenticated operation.
+///
+/// Send and redeem require a nonzero commitment; every other operation requires
+/// zero. This is only the operation-shape constraint: the exact outgoing body
+/// still needs to be derived from authenticated terminal openings.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged Apple assertion monetary fold remains closed"
+    )
+)]
+fn constrain_apple_signed_terminal_body_mode_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    operation: AssignedValue<F>,
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+) {
+    let range = builder.range_chip();
+    let gate = range.gate();
+    let ctx = builder.main(0);
+    range.range_check(ctx, operation, 8);
+    let send = gate.is_equal(
+        ctx,
+        operation,
+        halo2_base::QuantumCell::Constant(F::from(2)),
+    );
+    let redeem = gate.is_equal(
+        ctx,
+        operation,
+        halo2_base::QuantumCell::Constant(F::from(4)),
+    );
+    let outgoing = gate.or(ctx, send, redeem);
+    let terminal =
+        &canonical_s[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT];
+    for byte in terminal {
+        range.range_check(ctx, *byte, 8);
+    }
+    // The bounded integer sum is zero exactly when all 32 bytes are zero.
+    let sum = gate.sum(ctx, terminal.iter().copied());
+    let zero = gate.is_zero(ctx, sum);
+    let nonzero = gate.not(ctx, zero);
+    ctx.constrain_equal(&nonzero, &outgoing);
+}
+
+/// Copy-bind the Apple assertion's enrolled key and compact credential ID to the
+/// provider-authenticated predecessor Guard credential statement.
+///
+/// This authenticates which key may enter the staged P-256 assertion equation. The
+/// separate terminal credential opening must still prove that the claimed compact ID
+/// is the canonical issuer credential ID before this can authorize money.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged Apple assertion monetary fold remains closed"
+    )
+)]
+fn constrain_apple_enrolled_credential_guard_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    credential_id: [u8; 32],
+    credential_sec1: &[u8],
+    guard_issuance_digest: &[PastaSha256ByteV1<F>; 32],
+    guard_device_public_key: &[PastaSha256ByteV1<F>],
+) -> Result<[AssignedValue<F>; 65], String> {
+    if credential_sec1.len() != 65 || guard_device_public_key.len() != 65 {
+        return Err("Apple enrolled credential key is not uncompressed SEC1".to_owned());
+    }
+    let range = builder.range_chip();
+    let ctx = builder.main(0);
+    let id = assign_bytes(ctx, &range, &credential_id);
+    let sec1 = assign_bytes(ctx, &range, credential_sec1);
+    range.gate().assert_is_const(
+        ctx,
+        &sec1[0].assigned().expect("enrolled SEC1 prefix assigned"),
+        &F::from(4_u64),
+    );
+    for (actual, authenticated) in id.iter().zip(guard_issuance_digest) {
+        ctx.constrain_equal(
+            &actual
+                .assigned()
+                .expect("enrolled credential ID byte assigned"),
+            &authenticated
+                .assigned()
+                .expect("Guard credential ID byte assigned"),
+        );
+    }
+    for (actual, authenticated) in sec1.iter().zip(guard_device_public_key) {
+        ctx.constrain_equal(
+            &actual.assigned().expect("enrolled SEC1 byte assigned"),
+            &authenticated
+                .assigned()
+                .expect("Guard device key byte assigned"),
+        );
+    }
+    Ok(sec1
+        .into_iter()
+        .map(|byte| byte.assigned().expect("enrolled SEC1 byte assigned"))
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("fixed uncompressed SEC1 width"))
+}
+
+/// Bind all currently authenticated fixed subject fields to the predecessor state and Guard.
+///
+/// The statement/terminal digests, Apple RP policy, and ECDSA relation need their own complete
+/// links before this partial slice can authorize an app transition.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged Apple assertion monetary fold remains closed"
+    )
+)]
+fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    jobs: &mut PastaSha256JobsV1<F>,
+    state_witness: &KagemushaStateRelationWitnessV1,
+    state: &state_relation::KagemushaAssignedStateRelationV1<F>,
+    guard: &KagemushaAssignedGuardBundleV1<F>,
+    public: &[AssignedValue<F>],
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    authenticator_data: &[AssignedValue<F>; 37],
+    enrolled_credential: &KagemushaHardwareCredentialV1,
+) -> Result<[AssignedValue<F>; 65], String> {
+    use KagemushaHardwareSelectionSigningLayoutV1 as S;
+
+    let enrolled_sec1 = constrain_apple_enrolled_credential_guard_v1(
+        builder,
+        enrolled_credential.credential_id,
+        enrolled_credential.device_public_key.as_sec1_bytes(),
+        &guard.credential_issuance_digests[0],
+        &guard.credential_device_public_keys[0],
+    )?;
+    let transition_digest = state_relation::constrain_transition_statement_digest_v1(
+        builder,
+        jobs,
+        state,
+        state_witness,
+    )?;
+    let range = builder.range_chip();
+    let gate = range.gate();
+    let ctx = builder.main(0);
+    for signed in canonical_s {
+        range.range_check(ctx, *signed, 8);
+    }
+    for (signed, expected) in canonical_s[S::DOMAIN].iter().zip(S::DOMAIN_BYTES) {
+        gate.assert_is_const(ctx, signed, &F::from(u64::from(*expected)));
+    }
+    let signed_body_len = u64::try_from(S::BODY_BYTES).expect("fixed V1 subject length fits u64");
+    for (signed, expected) in canonical_s[S::BODY_LENGTH]
+        .iter()
+        .zip(signed_body_len.to_le_bytes())
+    {
+        gate.assert_is_const(ctx, signed, &F::from(u64::from(expected)));
+    }
+    for (signed, expected) in canonical_s[S::VERSION]
+        .iter()
+        .zip(KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes())
+    {
+        gate.assert_is_const(ctx, signed, &F::from(u64::from(expected)));
+    }
+    for (signed, derived) in canonical_s[S::TRANSITION_STATEMENT_DIGEST]
+        .iter()
+        .zip(transition_digest)
+    {
+        ctx.constrain_equal(
+            signed,
+            &derived
+                .assigned()
+                .expect("derived transition-statement digest byte"),
+        );
+    }
+    let predecessor = &state.predecessor;
+    for (field, expected) in [
+        (S::RELEASE_ID, predecessor.release_id),
+        (S::PROVIDER_POLICY_ROOT, predecessor.policy_id),
+        (S::NETWORK_ID, predecessor.network_id),
+        (S::LANE_COMMITMENT, predecessor.lane_id),
+        (S::HARDWARE_PROFILE_ID, predecessor.hardware_profile_id),
+        (S::HARDWARE_EPOCH_ID, predecessor.epoch_id),
+    ] {
+        constrain_signed_subject_digest_v1(ctx, gate, canonical_s, field, expected);
+    }
+    constrain_signed_subject_u64_v1(
+        ctx,
+        gate,
+        canonical_s,
+        S::POLICY_EPOCH,
+        predecessor.policy_epoch,
+    );
+    constrain_signed_subject_u64_v1(
+        ctx,
+        gate,
+        canonical_s,
+        S::HARDWARE_EPOCH_GENERATION,
+        predecessor.epoch_generation,
+    );
+    range.range_check(ctx, state.operation, 8);
+    ctx.constrain_equal(&canonical_s[S::OPERATION_TAG.start], &state.operation);
+    for (field, expected) in [
+        (
+            S::APP_POLICY_DIGEST,
+            &guard.credential_app_policy_binding_digests[0],
+        ),
+        (S::CREDENTIAL_ID, &guard.credential_issuance_digests[0]),
+    ] {
+        for (signed, credential_byte) in canonical_s[field].iter().zip(expected) {
+            ctx.constrain_equal(
+                signed,
+                &credential_byte
+                    .assigned()
+                    .expect("Guard credential byte is assigned"),
+            );
+        }
+    }
+    constrain_apple_signed_secure_index_v1(
+        builder,
+        predecessor.secure_index,
+        state.successor.secure_index,
+        canonical_s,
+        authenticator_data,
+    );
+    let candidate = constrain_candidate_envelope_digest_v1(builder, jobs, public)?;
+    let range = builder.range_chip();
+    let gate = range.gate();
+    let ctx = builder.main(0);
+    let send = gate.is_equal(
+        ctx,
+        state.operation,
+        halo2_base::QuantumCell::Constant(F::from(2)),
+    );
+    let redeem = gate.is_equal(
+        ctx,
+        state.operation,
+        halo2_base::QuantumCell::Constant(F::from(4)),
+    );
+    let outgoing = gate.or(ctx, send, redeem);
+    let zero = ctx.load_constant(F::ZERO);
+    for (signed, candidate_byte) in canonical_s[S::CANDIDATE_ENVELOPE_DIGEST]
+        .iter()
+        .zip(candidate)
+    {
+        let expected = gate.select(
+            ctx,
+            candidate_byte
+                .assigned()
+                .expect("candidate digest byte is assigned"),
+            zero,
+            outgoing,
+        );
+        ctx.constrain_equal(signed, &expected);
+    }
+    constrain_apple_signed_terminal_body_mode_v1(builder, state.operation, canonical_s);
+    Ok(enrolled_sec1)
+}
+
 fn build_scalar_half<C>(
     state: KagemushaStateRelationWitnessV1,
     guard_relation: KagemushaGuardBundleRelationWitnessV1,
@@ -978,7 +1338,11 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: KagemushaPoseidonFieldV1,
 {
-    require_complete_hardware_selection_fold_v1(state.predecessor.as_ref(), &state.successor)?;
+    require_complete_hardware_selection_fold_v1(
+        state.predecessor.as_ref(),
+        &state.successor,
+        witness.hardware_selection.is_some(),
+    )?;
     let parent_enabled = state.operation != KagemushaOperationV1::Bootstrap;
     let mint_enabled = state.operation == KagemushaOperationV1::MintFold;
     let (mut builder, assigned_state) =
@@ -988,6 +1352,37 @@ where
     let assigned_guard =
         constrain_guard_bundle_semantics_v1(&mut builder, &mut sha_jobs, &guard_relation)?;
     constrain_state_guard_binding_v1(&mut builder, &assigned_state, &assigned_guard)?;
+    // Expose the exact SHA transcript derived from assigned State cells. Bootstrap
+    // runs the same SHA graph but has no signed transition statement, so its two
+    // public limbs are constrained to zero in both Pasta parities.
+    let transition_digest = state_relation::constrain_transition_statement_digest_v1(
+        &mut builder,
+        &mut sha_jobs,
+        &assigned_state,
+        &state,
+    )?;
+    let transition_limbs = {
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let is_bootstrap = range.gate().is_zero(ctx, assigned_state.operation);
+        let signed_transition = range.gate().not(ctx, is_bootstrap);
+        digest_limbs_assigned(ctx, &transition_digest)
+            .map(|limb| range.gate().mul(ctx, limb, signed_transition))
+    };
+    builder.assigned_instances[0].extend(transition_limbs);
+    let prepared_intent_limbs = state_relation::assign_prepared_intent_public_v1(
+        &mut builder,
+        assigned_state.operation,
+        state.prepared_intent,
+    );
+    builder.assigned_instances[0].extend(prepared_intent_limbs);
+    debug_assert_eq!(
+        builder.assigned_instances[0].len(),
+        state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+    );
+    // TODO: production hardware admission must consume the authenticated prepared-intent
+    // and terminal-body openings in both parities. The experimental testnet state relation
+    // remains available while the separate production qualifier is incomplete.
     let public = builder
         .assigned_instances
         .first()
@@ -3903,14 +4298,16 @@ mod tests {
     fn paired_monetary_builder_rejects_unproved_one_use_key_heads() {
         let (public, _) = super::super::tests::state_verification_fixture();
         let mut successor = public.successor;
-        assert!(require_complete_hardware_selection_fold_v1(None, &successor).is_ok());
+        assert!(require_complete_hardware_selection_fold_v1(None, &successor, false).is_ok());
+        assert!(require_complete_hardware_selection_fold_v1(None, &successor, true).is_err());
         successor.next_one_use_key_reference = [0x61; 32];
-        assert!(require_complete_hardware_selection_fold_v1(None, &successor).is_err());
+        assert!(require_complete_hardware_selection_fold_v1(None, &successor, false).is_err());
         successor.next_one_use_key_reference = [0; 32];
         let mut predecessor = successor.clone();
         predecessor.next_one_use_key_reference = [0x62; 32];
         assert!(
-            require_complete_hardware_selection_fold_v1(Some(&predecessor), &successor).is_err()
+            require_complete_hardware_selection_fold_v1(Some(&predecessor), &successor, false)
+                .is_err()
         );
     }
 
@@ -3946,6 +4343,212 @@ mod tests {
             !check::<Fq>(1, 0),
             !check::<Fp>(0, 1),
             !check::<Fq>(0, 1),
+        ] {
+            assert!(outcome);
+        }
+    }
+
+    #[test]
+    fn apple_signed_counter_is_bound_to_both_committed_secure_indices() {
+        fn check<F: KagemushaPoseidonFieldV1>(
+            signed_before: u128,
+            signed_after: u128,
+            counter: u32,
+            state_before: u128,
+            state_after: u128,
+        ) -> bool {
+            let mut s = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+            s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE]
+                .copy_from_slice(&signed_before.to_le_bytes());
+            s[KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_AFTER]
+                .copy_from_slice(&signed_after.to_le_bytes());
+            let mut auth = [0_u8; 37];
+            auth[33..37].copy_from_slice(&counter.to_be_bytes());
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(10)
+                .use_lookup_bits(9)
+                .use_instance_columns(1);
+            let ctx = builder.main(0);
+            let assigned_before = ctx.load_witness(F::from_u128(state_before));
+            let assigned_after = ctx.load_witness(F::from_u128(state_after));
+            let assigned_s = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(s[i]))));
+            let assigned_auth =
+                std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(auth[i]))));
+            constrain_apple_signed_secure_index_v1(
+                &mut builder,
+                assigned_before,
+                assigned_after,
+                &assigned_s,
+                &assigned_auth,
+            );
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(10, &builder, vec![Vec::new()])
+                .expect("signed-index binding circuit synthesizes")
+                .verify()
+                .is_ok()
+        }
+
+        for outcome in [
+            check::<Fp>(7, 8, 8, 7, 8),
+            check::<Fq>(7, 8, 8, 7, 8),
+            !check::<Fp>(7, 8, 8, 6, 8),
+            !check::<Fq>(7, 8, 8, 6, 8),
+            !check::<Fp>(7, 9, 9, 7, 9),
+            !check::<Fq>(7, 9, 9, 7, 9),
+            !check::<Fp>(7, 8, 9, 7, 8),
+            !check::<Fq>(7, 8, 9, 7, 8),
+            !check::<Fp>(
+                u128::from(u32::MAX),
+                u128::from(u32::MAX) + 1,
+                0,
+                u128::from(u32::MAX),
+                u128::from(u32::MAX) + 1,
+            ),
+            !check::<Fq>(
+                u128::from(u32::MAX),
+                u128::from(u32::MAX) + 1,
+                0,
+                u128::from(u32::MAX),
+                u128::from(u32::MAX) + 1,
+            ),
+        ] {
+            assert!(outcome);
+        }
+    }
+
+    #[test]
+    fn apple_fixed_subject_fields_bind_digest_and_epoch_in_both_pasta_fields() {
+        fn check<F: KagemushaPoseidonFieldV1>(change_digest: bool, change_epoch: bool) -> bool {
+            use KagemushaHardwareSelectionSigningLayoutV1 as S;
+
+            let mut s = [0_u8; S::TOTAL_BYTES];
+            let digest = [0x7b_u8; 32];
+            s[S::RELEASE_ID].copy_from_slice(&digest);
+            s[S::POLICY_EPOCH].copy_from_slice(&19_u64.to_le_bytes());
+            if change_digest {
+                s[S::RELEASE_ID.start] ^= 1;
+            }
+            if change_epoch {
+                s[S::POLICY_EPOCH.start] ^= 1;
+            }
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(10)
+                .use_lookup_bits(9)
+                .use_instance_columns(1);
+            let ctx = builder.main(0);
+            let assigned_s = std::array::from_fn(|i| ctx.load_witness(F::from(u64::from(s[i]))));
+            let gate = halo2_base::gates::GateChip::default();
+            let lo = ctx.load_witness(F::from_u128(u128::from_le_bytes([0x7b; 16])));
+            let hi = ctx.load_witness(F::from_u128(u128::from_le_bytes([0x7b; 16])));
+            let epoch = ctx.load_witness(F::from(19_u64));
+            constrain_signed_subject_digest_v1(ctx, &gate, &assigned_s, S::RELEASE_ID, [lo, hi]);
+            constrain_signed_subject_u64_v1(ctx, &gate, &assigned_s, S::POLICY_EPOCH, epoch);
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(10, &builder, vec![Vec::new()])
+                .expect("fixed subject binding circuit synthesizes")
+                .verify()
+                .is_ok()
+        }
+
+        assert!(check::<Fp>(false, false));
+        assert!(check::<Fq>(false, false));
+        assert!(!check::<Fp>(true, false));
+        assert!(!check::<Fq>(true, false));
+        assert!(!check::<Fp>(false, true));
+        assert!(!check::<Fq>(false, true));
+    }
+
+    #[test]
+    fn apple_signed_terminal_body_presence_matches_operation_in_both_pasta_fields() {
+        fn check<F: KagemushaPoseidonFieldV1>(operation: u64, nonzero_byte: Option<usize>) -> bool {
+            use KagemushaHardwareSelectionSigningLayoutV1 as S;
+
+            let mut s = [0_u8; S::TOTAL_BYTES];
+            if let Some(nonzero_byte) = nonzero_byte {
+                s[S::TERMINAL_BODY_COMMITMENT.start + nonzero_byte] = 1;
+            }
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(12)
+                .use_lookup_bits(11)
+                .use_instance_columns(1);
+            let ctx = builder.main(0);
+            let operation = ctx.load_witness(F::from(operation));
+            let assigned_s =
+                std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(s[index]))));
+            constrain_apple_signed_terminal_body_mode_v1(&mut builder, operation, &assigned_s);
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(12, &builder, vec![Vec::new()])
+                .expect("Apple terminal-body operation circuit synthesizes")
+                .verify()
+                .is_ok()
+        }
+
+        for operation in [0, 1, 3, 5] {
+            assert!(check::<Fp>(operation, None));
+            assert!(check::<Fq>(operation, None));
+            for nonzero_byte in [0, 15, 31] {
+                assert!(!check::<Fp>(operation, Some(nonzero_byte)));
+                assert!(!check::<Fq>(operation, Some(nonzero_byte)));
+            }
+        }
+        for operation in [2, 4] {
+            assert!(!check::<Fp>(operation, None));
+            assert!(!check::<Fq>(operation, None));
+            assert!(check::<Fp>(operation, Some(0)));
+            assert!(check::<Fq>(operation, Some(31)));
+        }
+    }
+
+    #[test]
+    fn apple_enrolled_key_and_compact_id_copy_bind_to_guard_in_both_pasta_fields() {
+        fn check<F: KagemushaPoseidonFieldV1>(change_id: bool, change_key: bool) -> bool {
+            let credential_id = [0x31_u8; 32];
+            let mut credential_sec1 = [0x42_u8; 65];
+            credential_sec1[0] = 4;
+            let mut guard_id = credential_id;
+            let mut guard_key = credential_sec1;
+            if change_id {
+                guard_id[7] ^= 1;
+            }
+            if change_key {
+                guard_key[64] ^= 1;
+            }
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(10)
+                .use_lookup_bits(9)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let guard_id: [PastaSha256ByteV1<F>; 32] = assign_bytes(ctx, &range, &guard_id)
+                .try_into()
+                .expect("fixed Guard credential ID");
+            let guard_key = assign_bytes(ctx, &range, &guard_key);
+            constrain_apple_enrolled_credential_guard_v1(
+                &mut builder,
+                credential_id,
+                &credential_sec1,
+                &guard_id,
+                &guard_key,
+            )
+            .expect("fixed Apple key/ID geometry");
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(10, &builder, vec![Vec::new()])
+                .expect("Apple credential/Guard binding circuit synthesizes")
+                .verify()
+                .is_ok()
+        }
+
+        for outcome in [
+            check::<Fp>(false, false),
+            check::<Fq>(false, false),
+            !check::<Fp>(true, false),
+            !check::<Fq>(true, false),
+            !check::<Fp>(false, true),
+            !check::<Fq>(false, true),
         ] {
             assert!(outcome);
         }
@@ -5203,7 +5806,7 @@ mod tests {
             authorization_proof_instances,
             INCOMING_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
         );
-        assert_eq!(authorization_proof_instances, 81);
+        assert_eq!(authorization_proof_instances, 83);
 
         assert!(
             validate_incoming_authorization_proof_shape_v1(
@@ -5212,13 +5815,21 @@ mod tests {
             )
             .is_ok()
         );
+        let state_proof_instances =
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
         assert!(
-            validate_incoming_authorization_proof_shape_v1(&[119], [authorization_proof_instances])
-                .is_err()
+            validate_incoming_authorization_proof_shape_v1(
+                &[state_proof_instances],
+                [authorization_proof_instances],
+            )
+            .is_err()
         );
         assert!(
-            validate_incoming_authorization_proof_shape_v1(&[authorization_proof_instances], [119])
-                .is_err()
+            validate_incoming_authorization_proof_shape_v1(
+                &[authorization_proof_instances],
+                [state_proof_instances],
+            )
+            .is_err()
         );
         assert_eq!(
             incoming_public_instance::HISTORY_START,

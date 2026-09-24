@@ -86,10 +86,25 @@ private final class AppAttestFixtureIntentStore: KagemushaAppAttestAssertionInte
 
   func complete(keyID: String, counter: UInt32, selectionDigest: Data, rawAssertion: Data) throws {
     lock.lock(); defer { lock.unlock() }
-    guard record == .pending(previousCounter: counter - 1, selectionDigest: selectionDigest) else {
+    guard counter > 0,
+      record == .pending(previousCounter: counter - 1, selectionDigest: selectionDigest) else {
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }
     record = .complete(counter: counter, selectionDigest: selectionDigest, rawAssertion: rawAssertion)
+  }
+
+  func advanceAfterCommitted(keyID: String, counter: UInt32, selectionDigest: Data,
+    rawAssertion: Data, acknowledgment: KagemushaAppAttestCoreCommitAcknowledgmentV1) throws {
+    lock.lock(); defer { lock.unlock() }
+    guard record == .complete(counter: counter, selectionDigest: selectionDigest,
+        rawAssertion: rawAssertion),
+      acknowledgment.keyIDDigest == Data(SHA256.hash(data: Data(keyID.utf8))),
+      acknowledgment.selectionDigest == selectionDigest,
+      acknowledgment.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)),
+      acknowledgment.committedCounter == counter else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    record = .ready(counter: counter)
   }
 
   func reservationCount() -> Int {
@@ -98,9 +113,49 @@ private final class AppAttestFixtureIntentStore: KagemushaAppAttestAssertionInte
   }
 }
 
+/// Test-only response projection; it is not a qualified native coordinator.
+private final class AppAttestCommitEndpoint: KagemushaCoreCoordinatorEndpointV1 {
+  enum Mode: Equatable { case unavailable, substituted, valid }
+  private let lock = NSLock()
+  private var mode: Mode = .unavailable
+  private var invocationCount = 0
+
+  func configure(_ newMode: Mode) { lock.lock(); mode = newMode; lock.unlock() }
+  func calls() -> Int { lock.lock(); defer { lock.unlock() }; return invocationCount }
+  func contract() throws -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13] }
+  func open(storagePath: Data) throws -> UInt64 { 7 }
+  func close(handle: UInt64) throws {}
+
+  func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {
+    lock.lock()
+    let selected = mode
+    invocationCount += 1
+    lock.unlock()
+    guard selected != .unavailable else { throw KagemushaCoreCoordinatorErrorV1.unavailable }
+    guard method == KagemushaCoreCoordinatorMethodV1.acknowledgeCommittedAppAttest.rawValue else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("wrong method")
+    }
+    let fields = try KagemushaCoreCoordinatorFrameV1.decodeRequest(
+      .acknowledgeCommittedAppAttest, frame: request)
+    let previous = fields[4].enumerated().reduce(UInt32(0)) {
+      $0 | (UInt32($1.element) << ($1.offset * 8))
+    }
+    let response = [fields[0], Data(SHA256.hash(data: fields[1])),
+      Data(SHA256.hash(data: fields[2])), Data(SHA256.hash(data: fields[3])),
+      KagemushaCoreCoordinatorFrameV1.u32(previous + 1), fields[5], fields[6]]
+    var frame = try KagemushaCoreCoordinatorFrameV1.encodeResponse(
+      .acknowledgeCommittedAppAttest, requestFrame: request, fields: response)
+    if selected == .substituted { frame[20] ^= 1 }
+    return frame
+  }
+}
+
 final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
   private let appIDHash = Data(repeating: 0x39, count: 32)
   private static let selectionDomain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
+  private static let signingKey = try! P256.Signing.PrivateKey(
+    rawRepresentation: Data(repeating: 1, count: 32))
+  private var assertionKey: Data { Self.signingKey.publicKey.x963Representation }
 
   private func release(category: UInt32 = 4, version: String = "1") throws
     -> KagemushaAppAttestExpectedReleaseV1 {
@@ -111,7 +166,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
       authenticatedAppReleaseDigest: digest)
   }
 
-  private func binding(_ body: Data = Data(repeating: 0x17, count: 192)) throws
+  private func binding(_ body: Data = Data(repeating: 0x17, count: 403)) throws
     -> KagemushaAppAttestTransitionBindingV1 {
     var signingBytes = Self.selectionDomain
     for shift in stride(from: 0, to: 64, by: 8) {
@@ -133,8 +188,9 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     return cborLength(bytes.count, major: 3) + bytes
   }
 
-  private func assertion(counter: UInt32, appIDHash: Data? = nil, flags: UInt8 = 0x81,
-    category: UInt32? = 4, bundleVersion: String? = "1") -> Data {
+  private func assertion(counter: UInt32, appIDHash: Data? = nil, flags: UInt8 = 0x40,
+    category: UInt32? = 4, bundleVersion: String? = "1",
+    includeExtensionMap: Bool = true, clientDataHash: Data? = nil) -> Data {
     var auth = appIDHash ?? self.appIDHash
     auth.append(flags)
     auth.append(UInt8(counter >> 24))
@@ -152,20 +208,25 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     if let bundleVersion {
       extensions.append(("bundleVersion", cborText(bundleVersion)))
     }
-    auth.append(cborLength(extensions.count, major: 5))
-    for (name, value) in extensions {
-      auth.append(cborText(name))
-      auth.append(value)
+    if includeExtensionMap {
+      auth.append(cborLength(extensions.count, major: 5))
+      for (name, value) in extensions {
+        auth.append(cborText(name))
+        auth.append(value)
+      }
     }
-    let signature = Data([0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01])
+    let hash = clientDataHash ?? (try! binding().clientDataHash)
+    let nonce = Data(SHA256.hash(data: auth + hash))
+    let signature = try! Self.signingKey.signature(for: nonce).derRepresentation
     return Data([0xa2]) + cborText("authenticatorData") + cborBytes(auth)
       + cborText("signature") + cborBytes(signature)
   }
 
   func testCanonicalCoreFrameAndEnrollmentAreDomainSeparated() throws {
     let selected = try binding()
+    XCTAssertEqual(selected.canonicalSelectionSigningBytes.count, 460)
     XCTAssertEqual(selected.clientDataHash, Data(SHA256.hash(data: selected.canonicalSelectionSigningBytes)))
-    var body = Data(repeating: 0x17, count: 192)
+    var body = Data(repeating: 0x17, count: 403)
     body[0] ^= 1
     XCTAssertNotEqual(try binding(body).clientDataHash, selected.clientDataHash)
     var wrongLength = selected.canonicalSelectionSigningBytes
@@ -174,15 +235,35 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     var wrongDomain = selected.canonicalSelectionSigningBytes
     wrongDomain[0] ^= 1
     XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: wrongDomain))
+    XCTAssertThrowsError(try binding(Data(repeating: 0x17, count: 402)))
+    XCTAssertThrowsError(try binding(Data(repeating: 0x17, count: 404)))
     XCTAssertThrowsError(try KagemushaAppAttestTransitionBindingV1(
       coreSelectionSigningBytes: Data(repeating: 1, count: 1_025)))
     let enrollment = try KagemushaAppAttestEnrollmentBindingV1(
-      releaseDigest: Data(repeating: 1, count: 32),
-      laneDigest: Data(repeating: 2, count: 32),
-      serverChallenge: Data(repeating: 3, count: 32))
+      clientNonce: Data(repeating: 1, count: 32),
+      serverNonce: Data(repeating: 2, count: 32),
+      releaseID: Data(repeating: 3, count: 32),
+      profileID: Data(repeating: 4, count: 32),
+      attestedKeyID: Data(repeating: 5, count: 32),
+      laneID: Data(repeating: 6, count: 32))
     XCTAssertNotEqual(enrollment.clientDataHash, selected.clientDataHash)
+    XCTAssertEqual(enrollment.canonicalClientData,
+      Data("iroha:kagemusha:v1:app-device-attestation-challenge\0".utf8)
+        + Data(repeating: 1, count: 32) + Data(repeating: 2, count: 32)
+        + Data(repeating: 3, count: 32) + Data(repeating: 4, count: 32)
+        + Data(repeating: 5, count: 32) + Data(repeating: 6, count: 32))
+    for changedField in 0..<6 {
+      var fields = (1...6).map { Data(repeating: UInt8($0), count: 32) }
+      fields[changedField][0] ^= 1
+      let changed = try KagemushaAppAttestEnrollmentBindingV1(
+        clientNonce: fields[0], serverNonce: fields[1], releaseID: fields[2],
+        profileID: fields[3], attestedKeyID: fields[4], laneID: fields[5])
+      XCTAssertNotEqual(changed.clientDataHash, enrollment.clientDataHash)
+    }
     XCTAssertThrowsError(try KagemushaAppAttestEnrollmentBindingV1(
-      releaseDigest: Data(count: 31), laneDigest: Data(count: 32), serverChallenge: Data(count: 32)))
+      clientNonce: Data(count: 31), serverNonce: Data(repeating: 2, count: 32),
+      releaseID: Data(repeating: 3, count: 32), profileID: Data(repeating: 4, count: 32),
+      attestedKeyID: Data(repeating: 5, count: 32), laneID: Data(repeating: 6, count: 32)))
   }
 
   func testAssertionParsesHardwareCounterAndSignatureDigest() throws {
@@ -190,14 +271,22 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let raw = assertion(counter: 0x01020304)
     let evidence = try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: raw, clientDataHash: binding.clientDataHash, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     XCTAssertEqual(evidence.signCount, 0x01020304)
     XCTAssertGreaterThan(evidence.authenticatorData.count, 37)
-    XCTAssertEqual(evidence.validationCategory, 4)
-    XCTAssertEqual(evidence.bundleVersion, "1")
-    XCTAssertEqual(evidence.signatureDER, Data([0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]))
-    XCTAssertEqual(evidence.signatureMessageDigest,
-      Data(SHA256.hash(data: evidence.authenticatorData + binding.clientDataHash)))
+    XCTAssertEqual(evidence.releaseMeasurement,
+      .signed(validationCategory: 4, bundleVersion: "1"))
+    XCTAssertGreaterThan(evidence.signatureDER.count, 64)
+    let nonce = Data(SHA256.hash(data: evidence.authenticatorData + binding.clientDataHash))
+    XCTAssertEqual(evidence.assertionNonce, nonce)
+    XCTAssertEqual(evidence.signatureMessageDigest, Data(SHA256.hash(data: nonce)))
+    try evidence.validateExactNext(previousCounter: 0x01020303)
+    XCTAssertThrowsError(try evidence.validateExactNext(previousCounter: 0x01020302)) {
+      XCTAssertEqual($0 as? KagemushaAppAttestEvidenceErrorV1, .assertionCounterMismatch)
+    }
+    XCTAssertThrowsError(try evidence.validateExactNext(previousCounter: UInt32.max)) {
+      XCTAssertEqual($0 as? KagemushaAppAttestEvidenceErrorV1, .assertionCounterMismatch)
+    }
   }
 
   func testAuthenticatedReleaseDigestMatchesRustAndRejectsSubstitution() throws {
@@ -234,23 +323,23 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let wrongApp = assertion(counter: 1, appIDHash: Data(repeating: 0x41, count: 32))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: wrongApp, clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release()))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: assertion(counter: 0), clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release()))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: assertion(counter: 1, flags: 0x41),
-      clientDataHash: hash, expectedAppIDHash: appIDHash, expectedRelease: release()))
+      clientDataHash: hash, expectedAppIDHash: appIDHash, expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: raw + Data([0]), clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release()))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: Data([0xa2]) + cborText("signature") + cborBytes(Data([0x30]))
         + cborText("signature") + cborBytes(Data([0x30])),
-      clientDataHash: hash, expectedAppIDHash: appIDHash, expectedRelease: release()))
+      clientDataHash: hash, expectedAppIDHash: appIDHash, expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
   }
 
-  func testAssertionReleaseExtensionsAreRequiredAndPinned() throws {
+  func testAssertionReleaseExtensionsWhenPresentAreExactAndPinned() throws {
     let hash = try binding().clientDataHash
     let expected = try release()
     XCTAssertThrowsError(try KagemushaAppAttestExpectedReleaseV1(
@@ -266,7 +355,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     ] {
       XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
         rawAssertion: raw, clientDataHash: hash, expectedAppIDHash: appIDHash,
-        expectedRelease: expected)) { error in
+        expectedRelease: expected, enrolledAssertionPublicKeyX963: assertionKey)) { error in
         XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1,
           .invalidAssertionObject)
       }
@@ -278,7 +367,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     ] {
       XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
         rawAssertion: raw, clientDataHash: hash, expectedAppIDHash: appIDHash,
-        expectedRelease: expected)) { error in
+        expectedRelease: expected, enrolledAssertionPublicKeyX963: assertionKey)) { error in
         XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1,
           .releaseMismatch)
       }
@@ -286,32 +375,55 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let testFlight = try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: assertion(counter: 1, category: 2, bundleVersion: "42"),
       clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release(category: 2, version: "42"))
+      expectedRelease: release(category: 2, version: "42"), enrolledAssertionPublicKeyX963: assertionKey)
     let appStore = try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: assertion(counter: 1), clientDataHash: hash,
-      expectedAppIDHash: appIDHash, expectedRelease: expected)
+      expectedAppIDHash: appIDHash, expectedRelease: expected, enrolledAssertionPublicKeyX963: assertionKey)
     XCTAssertNotEqual(testFlight.signatureMessageDigest, appStore.signatureMessageDigest)
   }
 
-  func testEDUnsetStillRequiresAndBindsExactSignedExtensions() throws {
+  func testPhysicalIOS26AssertionHasNoReleaseMeasurement() throws {
     let hash = try binding().clientDataHash
-    let raw = assertion(counter: 1, flags: 0x01)
+    let raw = assertion(counter: 1, flags: 0x40, category: nil,
+      bundleVersion: nil, includeExtensionMap: false)
     let evidence = try KagemushaAppAttestAssertionEvidenceV1(
       rawAssertion: raw, clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
-    XCTAssertEqual(evidence.authenticatorData[32], 0x01)
-    XCTAssertEqual(evidence.validationCategory, 4)
-    XCTAssertEqual(evidence.bundleVersion, "1")
-    XCTAssertEqual(evidence.signatureMessageDigest,
-      Data(SHA256.hash(data: evidence.authenticatorData + hash)))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    XCTAssertEqual(evidence.authenticatorData.count, 37)
+    XCTAssertEqual(evidence.authenticatorData[32], 0x40)
+    XCTAssertEqual(evidence.releaseMeasurement, .unavailable)
+    let nonce = Data(SHA256.hash(data: evidence.authenticatorData + hash))
+    XCTAssertEqual(evidence.assertionNonce, nonce)
+    XCTAssertEqual(evidence.signatureMessageDigest, Data(SHA256.hash(data: nonce)))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
-      rawAssertion: assertion(counter: 1, flags: 0x01, bundleVersion: nil),
+      rawAssertion: assertion(counter: 1, flags: 0xc0, category: nil,
+        bundleVersion: nil, includeExtensionMap: false),
       clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release()))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
     XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
-      rawAssertion: assertion(counter: 1, flags: 0x01, category: 2),
+      rawAssertion: assertion(counter: 1, flags: 0x40, category: 2),
       clientDataHash: hash, expectedAppIDHash: appIDHash,
-      expectedRelease: release()))
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey))
+  }
+
+  func testAssertionSignatureRejectsDifferentKeyAndChangedChallenge() throws {
+    let raw = assertion(counter: 1, category: nil, bundleVersion: nil,
+      includeExtensionMap: false)
+    let hash = try binding().clientDataHash
+    let otherKey = try P256.Signing.PrivateKey(
+      rawRepresentation: Data(repeating: 2, count: 32)).publicKey.x963Representation
+    XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
+      rawAssertion: raw, clientDataHash: hash, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: otherKey)) {
+      XCTAssertEqual($0 as? KagemushaAppAttestEvidenceErrorV1, .invalidAssertionSignature)
+    }
+    var changed = hash
+    changed[0] ^= 1
+    XCTAssertThrowsError(try KagemushaAppAttestAssertionEvidenceV1(
+      rawAssertion: raw, clientDataHash: changed, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)) {
+      XCTAssertEqual($0 as? KagemushaAppAttestEvidenceErrorV1, .invalidAssertionSignature)
+    }
   }
 
   func testReleaseMismatchLeavesDurablePendingIntent() async throws {
@@ -319,7 +431,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let service = AppAttestFixtureService(assertion: assertion(counter: 1, category: 2))
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     let selected = try binding()
     do {
       _ = try await provider.assertTransition(
@@ -341,7 +453,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let service = AppAttestFixtureService(assertion: raw)
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     let selected = try binding()
     let evidence = try await provider.assertTransition(
       keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 4)
@@ -355,7 +467,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     XCTAssertEqual(store.reservationCount(), 1)
     let restarted = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     do {
       _ = try await restarted.assertTransition(
         keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 5)
@@ -367,13 +479,146 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     XCTAssertEqual(afterReopenObservations.0, 1)
   }
 
+  func testCompletedIntentRecoversExactSignedSelectionWithoutAnotherHardwareCall() async throws {
+    let store = AppAttestFixtureIntentStore(counter: 4)
+    let raw = assertion(counter: 5)
+    let service = AppAttestFixtureService(assertion: raw)
+    let selected = try binding()
+    let first = try KagemushaAppAttestEvidenceProviderV1(
+      service: service, intentStore: store, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    _ = try await first.assertTransition(
+      keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 4)
+    let restarted = try KagemushaAppAttestEvidenceProviderV1(
+      service: service, intentStore: store, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    let recovered = try await restarted.recoverCompletedTransition(
+      keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 4)
+    XCTAssertEqual(recovered.rawAssertion, raw)
+    XCTAssertEqual(recovered.signCount, 5)
+    let wrongSelection = try binding(Data(repeating: 0x18, count: 403))
+    do {
+      _ = try await restarted.recoverCompletedTransition(
+        keyID: "dedicated-key", binding: wrongSelection, expectedPreviousCounter: 4)
+      XCTFail("different selection recovered")
+    } catch {
+      XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1, .journalMismatch)
+    }
+    do {
+      _ = try await restarted.recoverCompletedTransition(
+        keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 3)
+      XCTFail("different predecessor recovered")
+    } catch {
+      XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1, .journalMismatch)
+    }
+    XCTAssertEqual(try store.load(keyID: "dedicated-key"),
+      .complete(counter: 5, selectionDigest: selected.clientDataHash, rawAssertion: raw))
+    do {
+      _ = try await restarted.assertTransition(
+        keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 5)
+      XCTFail("a completed assertion advanced without a Core commit acknowledgment")
+    } catch {
+      XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1, .journalMismatch)
+    }
+    let observations = await service.observations()
+    XCTAssertEqual(observations.0, 1)
+  }
+
+  func testCommitAcknowledgmentAdvancesOnlyAfterExactNativeResponse() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("kagemusha-app-attest-commit-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: NSNumber(value: 0o700)])
+    addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+    let store = try KagemushaAppAttestFileIntentStoreV1.bootstrapNew(
+      directoryURL: directory, keyID: "dedicated-key")
+    let raw = assertion(counter: 1)
+    let service = AppAttestFixtureService(assertion: raw)
+    let provider = try KagemushaAppAttestEvidenceProviderV1(
+      service: service, intentStore: store, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    let selected = try binding()
+    _ = try await provider.assertTransition(
+      keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0)
+    let endpoint = AppAttestCommitEndpoint()
+    let bridge = try KagemushaCoreCoordinatorBridgeV1.openEndpoint(
+      storagePath: "/private/coordinator", endpoint: endpoint)
+    let coordinator = KagemushaNativeCoreCoordinatorAdapterV1(bridge: bridge)
+    let operationID = Data(repeating: 0x31, count: 32)
+    let certificate = Data(repeating: 0x32, count: 32)
+    let envelope = Data(repeating: 0x33, count: 32)
+    func acknowledge() async throws {
+      try await provider.acknowledgeCommittedTransition(
+        keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0,
+        operationID: operationID, terminalCertificateDigest: certificate,
+        installedEnvelopeDigest: envelope, coordinator: coordinator)
+    }
+    do { try await acknowledge(); XCTFail("unavailable native owner advanced App Attest") } catch {}
+    XCTAssertEqual(try store.load(keyID: "dedicated-key"),
+      .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
+    endpoint.configure(.substituted)
+    do { try await acknowledge(); XCTFail("substituted native response advanced App Attest") } catch {}
+    XCTAssertEqual(try store.load(keyID: "dedicated-key"),
+      .complete(counter: 1, selectionDigest: selected.clientDataHash, rawAssertion: raw))
+    endpoint.configure(.valid)
+    try await acknowledge()
+    let reopened = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
+    XCTAssertEqual(try reopened.load(keyID: "dedicated-key"), .ready(counter: 1))
+    do { try await acknowledge(); XCTFail("acknowledgment replay advanced App Attest") } catch {}
+    XCTAssertEqual(try reopened.load(keyID: "dedicated-key"), .ready(counter: 1))
+    let nextSelected = try binding(Data(repeating: 0x18, count: 403))
+    let nextService = AppAttestFixtureService(assertion: assertion(
+      counter: 2, clientDataHash: nextSelected.clientDataHash))
+    let next = try KagemushaAppAttestEvidenceProviderV1(
+      service: nextService, intentStore: reopened, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    let nextEvidence = try await next.assertTransition(
+      keyID: "dedicated-key", binding: nextSelected, expectedPreviousCounter: 1)
+    XCTAssertEqual(nextEvidence.signCount, 2)
+    let observations = await service.observations()
+    XCTAssertEqual(observations.0, 1)
+    XCTAssertEqual(endpoint.calls(), 3)
+  }
+
+  func testRecoveryRejectsPendingAndTamperedCompletedAssertion() async throws {
+    let store = AppAttestFixtureIntentStore(counter: 0)
+    let service = AppAttestFixtureService(assertion: Data())
+    let selected = try binding()
+    let provider = try KagemushaAppAttestEvidenceProviderV1(
+      service: service, intentStore: store, expectedAppIDHash: appIDHash,
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
+    try store.reserve(keyID: "dedicated-key", previousCounter: 0,
+      selectionDigest: selected.clientDataHash)
+    do {
+      _ = try await provider.recoverCompletedTransition(
+        keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0)
+      XCTFail("pending hardware outcome recovered")
+    } catch {
+      XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1, .assertionOutcomeUnknown)
+    }
+    var tampered = assertion(counter: 1)
+    tampered[tampered.index(before: tampered.endIndex)] ^= 1
+    try store.complete(keyID: "dedicated-key", counter: 1,
+      selectionDigest: selected.clientDataHash, rawAssertion: tampered)
+    do {
+      _ = try await provider.recoverCompletedTransition(
+        keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 0)
+      XCTFail("tampered assertion recovered")
+    } catch {
+      XCTAssertEqual(error as? KagemushaAppAttestEvidenceErrorV1,
+        .invalidAssertionSignature)
+    }
+    let observations = await service.observations()
+    XCTAssertEqual(observations.0, 0)
+  }
+
   func testSkippedCounterFreezesAcrossProviderRecreation() async throws {
     let store = AppAttestFixtureIntentStore(counter: 4)
     let service = AppAttestFixtureService(assertion: assertion(counter: 6))
     let selected = try binding()
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     do {
       _ = try await provider.assertTransition(
         keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 4)
@@ -383,7 +628,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     }
     let restarted = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     do {
       _ = try await restarted.assertTransition(
         keyID: "dedicated-key", binding: selected, expectedPreviousCounter: 4)
@@ -402,7 +647,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let service = AppAttestFixtureService(assertion: assertion(counter: 1), losesReply: true)
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     let selected = try binding()
     for _ in 0..<2 {
       do {
@@ -424,7 +669,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let service = BlockingAppAttestFixtureService(assertion: assertion(counter: 1))
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     let selected = try binding()
     let first = Task {
       try await provider.assertTransition(
@@ -450,7 +695,7 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
     let service = AppAttestFixtureService(assertion: assertion(counter: 1), supported: false)
     let provider = try KagemushaAppAttestEvidenceProviderV1(
       service: service, intentStore: store, expectedAppIDHash: appIDHash,
-      expectedRelease: release())
+      expectedRelease: release(), enrolledAssertionPublicKeyX963: assertionKey)
     do {
       _ = try await provider.assertTransition(
         keyID: "dedicated-key", binding: binding(), expectedPreviousCounter: 0)

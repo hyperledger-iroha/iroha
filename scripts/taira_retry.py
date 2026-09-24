@@ -5427,6 +5427,7 @@ def remote_command(argv, source, output, phase):
     """One SSH submission with periodic time reporting and private output retention."""
     output.mkdir(mode=0o700)
     started = time.monotonic()
+    emit(phase, started, status="started", private_log=str(output))
     cursor, pending, current_phase = 0, b"", phase
     with (
         (output / "stdout").open("xb") as stdout,
@@ -5461,6 +5462,9 @@ def remote_command(argv, source, output, phase):
             "automatic_replay": False,
         },
     )
+    if code != 0:
+        emit(phase, started, status="failed", exit_code=code,
+             private_log=str(output), automatic_replay=False)
     require(code == 0, phase + " stopped; inspect private evidence " + str(output))
     return decode(public_record(output / "stdout").splitlines()[-1])
 

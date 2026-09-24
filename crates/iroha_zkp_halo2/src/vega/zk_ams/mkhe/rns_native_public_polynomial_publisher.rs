@@ -23,6 +23,7 @@
 use std::sync::OnceLock;
 
 use super::{
+    BgvProfile,
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
         ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
@@ -32,7 +33,7 @@ use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_IO_MAX_BYTES_V1, ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1,
-        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1,
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1, candidate_profile_v1,
     },
     rns_native_public_polynomial_reader::{
         RnsNativePublicPolynomialDescriptorV1, RnsNativePublicPolynomialEvaluationV1,
@@ -102,7 +103,7 @@ const ORDER_LANGUAGE_V1: &[u8] = b"A-limb-0-through-39;then-B-limb-0-through-39;
 const SOURCE_LANGUAGE_V1: &[u8] = b"move-only-source;nonzero-stable-source-identity-before-and-after-every-chunk;exact-request-digest;128-exact-1024-residue-chunks-per-object;complete-terminal-seal-after-3520-objects-and-461373440-residues;terminal-binds-nonzero-distinct-governed-upstream-owner-digest;legacy-38-digests-and-fabricated-limbs-38-39-forbidden";
 
 /// Exact upstream work still required to inhabit the production adapter.
-pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_REMAINING_DELTA_V1: &[u8] = b"introduce-a-governed-40-modulus-collective-key-owner;compute-and-retain-coefficient-domain-A-and-B-for-limbs-0-through-39;encrypt-all-43-phase23-records-under-the-same-40-modulus-profile;retain-or-stream-each-coefficient-domain-C0-and-C1-before-native-ownership-is-dropped;produce-upstream-40-limb-positive-and-negative-KATs;prove-transition-from-the-legacy-38-limb-release-profile-without-inferring-limbs-38-and-39;inhabit-the-production-source-adapter;integrate-this-module;qualify-aggregate-io-work-rss-and-device-evidence;keep-composite-readiness-and-release-false-until-all-evidence-passes";
+pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_REMAINING_DELTA_V1: &[u8] = b"introduce-a-governed-40-modulus-collective-key-owner;compute-and-retain-coefficient-domain-A-and-B-for-limbs-0-through-39;encrypt-all-43-phase23-records-under-the-same-40-modulus-profile;retain-or-stream-each-coefficient-domain-C0-and-C1-before-native-ownership-is-dropped;produce-upstream-40-limb-positive-and-negative-KATs;retire-the-38-limb-release-selector-and-basis-extension-path-without-inferring-limbs-38-and-39;inhabit-the-production-source-adapter;integrate-this-module;qualify-aggregate-io-work-rss-and-device-evidence;keep-composite-readiness-and-release-false-until-all-evidence-passes";
 
 pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_SOURCE_CONTRACT_SETTLED_V1: bool = true;
 pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_PUBLISHER_ENCODER_SETTLED_V1: bool = true;
@@ -525,13 +526,45 @@ fn source_terminal_digest_v1(
     hash.finalize()
 }
 
+/// Typed claim of the complete governed 40-limb BGV identity.
+///
+/// This checks the profile presented by a source. The production adapter still
+/// needs to authenticate that its coefficient stream came from that live profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RnsNativeGovernedSourceProfileV1 {
+    digest: [u8; DIGEST_BYTES_V1],
+}
+
+impl RnsNativeGovernedSourceProfileV1 {
+    /// Seal only the exact full 40-limb BGV profile, including its resource policy.
+    fn from_profile_v1(
+        profile: &BgvProfile,
+    ) -> Result<Self, RnsNativePublicPolynomialPublisherErrorV1> {
+        let digest = profile
+            .digest()
+            .map_err(|_| RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)?;
+        let expected = candidate_profile_v1()
+            .digest()
+            .map_err(|_| RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)?;
+        if profile.moduli.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || digest != expected {
+            return Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource);
+        }
+        Ok(Self { digest })
+    }
+}
+
 /// Sequential, move-only coefficient-domain source contract.
 ///
 /// The caller consumes the source by value. Implementations must return the
 /// exact next chunk requested and must not transform NTT-domain storage into a
 /// claimed coefficient-domain stream implicitly. A future production adapter
-/// must be constructed only by the governed 40-limb Phase-23 owner.
+/// must be constructed only by the governed 40-limb Phase-23 owner. Its
+/// profile is checked before source identity or CAS publication.
 pub(super) trait RnsNativePublicPolynomialCoefficientSourceV1: Sized {
+    fn governed_profile_v1(
+        &mut self,
+    ) -> Result<RnsNativeGovernedSourceProfileV1, RnsNativePublicPolynomialPublisherErrorV1>;
+
     fn source_identity_v1(
         &mut self,
     ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativePublicPolynomialPublisherErrorV1>;
@@ -555,6 +588,12 @@ pub(super) trait RnsNativePublicPolynomialCoefficientSourceV1: Sized {
 pub(super) enum RnsNativePhase23FortyLimbProductionSourceV1 {}
 
 impl RnsNativePublicPolynomialCoefficientSourceV1 for RnsNativePhase23FortyLimbProductionSourceV1 {
+    fn governed_profile_v1(
+        &mut self,
+    ) -> Result<RnsNativeGovernedSourceProfileV1, RnsNativePublicPolynomialPublisherErrorV1> {
+        match *self {}
+    }
+
     fn source_identity_v1(
         &mut self,
     ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativePublicPolynomialPublisherErrorV1> {
@@ -1277,6 +1316,7 @@ where
     S: RnsNativePublicPolynomialCoefficientSourceV1,
     P: ZkAmsMkheDirectObjectCasPublicationV1,
 {
+    let governed_profile = source.governed_profile_v1()?;
     let source_identity = source.source_identity_v1()?;
     if source_identity == [0; DIGEST_BYTES_V1] {
         return Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource);
@@ -1299,6 +1339,7 @@ where
     source_stream_hash.update(SOURCE_STREAM_DOMAIN_V1);
     source_stream_hash.update(&[VERSION_V1]);
     source_stream_hash.update(&source_contract_digest_v1());
+    source_stream_hash.update(&governed_profile.digest);
     source_stream_hash.update(&source_identity);
     source_stream_hash.update(&(OBJECTS_V1 as u16).to_be_bytes());
     {
@@ -1317,7 +1358,8 @@ where
             receipts.push(receipt);
         }
     }
-    if source.source_identity_v1()? != source_identity
+    if source.governed_profile_v1()? != governed_profile
+        || source.source_identity_v1()? != source_identity
         || publisher
             .publication_identity()
             .map_err(|_| RnsNativePublicPolynomialPublisherErrorV1::InvalidPublication)?

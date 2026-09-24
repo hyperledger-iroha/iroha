@@ -2165,6 +2165,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     /// Exact carrier block hashes still owned by retained missing-sidecar work.
+    // TODO: consume this census from native sidecar recovery before cleanup.
+    #[allow(dead_code, reason = "TODO: native sidecar recovery census")]
     pub(crate) fn deferred_merge_sidecar_blocks(&self) -> BTreeSet<HashOf<BlockHeader>> {
         self.deferred_merge_work
             .keys()

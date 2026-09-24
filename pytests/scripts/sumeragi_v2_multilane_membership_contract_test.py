@@ -36,7 +36,7 @@ def fixture(tmp_path):
     checker = helper.load_checker()
     contract = checker.membership_contract
     helper.copy_reviewed_source_fixture_with_includes(
-        tmp_path, checker, {Path(contract.STATE), Path(contract.STORAGE), Path(contract.CAPTURE), Path(contract.DETACHED)},
+        tmp_path, checker, {*(Path(path) for path, _, _, _ in contract.MEMBERSHIP_BINDINGS), Path(contract.STATE)},
     )
     result = tmp_path, helper, checker, helper.canonical_models()
     assert validate(result) == ()
@@ -144,7 +144,7 @@ def test_membership_rejects_weakened_ledger(fixture):
     model = next(m for m in models if m["module"] == checker.membership_contract.MODELS[0])
     row = next(b for b in model["production_symbols"]
                if b["symbol"] == "TransactionsBlock::admit_publication")
-    row["required_tokens"].remove("previous: previous_block")
+    row["required_tokens"].remove("_previous: previous_block")
     assert any("reviewed tokens changed" in e for e in validate(fixture))
 
 
@@ -156,21 +156,21 @@ def test_membership_rejects_weakened_ledger(fixture):
     pytest.param('CAPTURE', '            block,\n            publication,\n            next_identity,', '            replacement,\n            publication,\n            next_identity,', 'executable relation', id='CAPTURE-            block,\n            publication,\n            next_identity,-            block: replacement,\n            publication,\n            next_identity,-executable relation'),
     pytest.param('STORAGE', 'previous_block.transactions == current_block.transactions', 'previous_block.transactions != current_block.transactions', 'executable relation', id='STORAGE-previous_block.transactions == current_block.transactions-previous_block.transactions != current_block.transactions-executable relation'),
     pytest.param('STORAGE', 'if expected_current_height != current_height', 'if expected_current_height == current_height', 'executable relation', id='STORAGE-if expected_current_height != current_height-if expected_current_height == current_height-executable relation'),
-    pytest.param('STORAGE', 'previous: previous_block,', 'previous: None,', 'executable relation', id='STORAGE-previous: previous_block,-previous: None,-executable relation'),
+    pytest.param('STORAGE', '_previous: previous_block,', '_previous: None,', 'executable relation', id='STORAGE-previous: previous_block,-previous: None,-executable relation'),
     pytest.param('STORAGE', 'fn publish(mut self)', 'fn publish(&self)', 'executable relation', id='STORAGE-fn publish(self)-fn publish(&self)-executable relation'),
-    pytest.param('STORAGE', 'MembershipPublication::Repeated => {}', 'MembershipPublication::Repeated => { self.block.latest_block_ref.swap(None); }', 'executable relation', id='STORAGE-MembershipPublication::Repeated => None-MembershipPublication::Repeated => block.latest_block_ref.swap(None)-executable relation'),
-    pytest.param('STORAGE', '*height < current.height', '*height <= current.height', 'executable relation', id='STORAGE-*height < current.height-*height <= current.height-executable relation'),
-    pytest.param('STORAGE', 'block.blocks_ref.insert(transaction, previous.height)', 'block.blocks_ref.insert(transaction, current.height)', 'executable relation', id='STORAGE-block.blocks_ref.insert(transaction, previous.height)-block.blocks_ref.insert(transaction, current.height)-executable relation'),
-    pytest.param('STORAGE', 'if !matches!(&self.publication', 'self.block.validate_commit()?; if !matches!(&self.publication', 'repeats admission', id='STORAGE-let changes_identity = !matches!-block.validate_commit()?; let changes_identity = !matches!-repeats admission'),
-    pytest.param('STORAGE', '        predecessor_identity: Arc<()>,', '        pub(crate) predecessor_identity: Arc<()>,', 'mutable authority', id='STORAGE-        predecessor_identity: Arc<()>,-        pub(crate) predecessor_identity: Arc<()>,-mutable authority'),
-    pytest.param('STORAGE', 'predecessor_identity: Arc::clone(block._guard.identity())', 'predecessor_identity: Arc::new(())', 'executable relation', id='STORAGE-predecessor_identity: Arc::clone(block._guard.identity())-predecessor_identity: Arc::new(())-executable relation'),
-    pytest.param('STORAGE', 'Arc::ptr_eq(&guard, &self.predecessor_identity)', 'true', 'executable relation', id='STORAGE-Arc::ptr_eq(&guard, &self.predecessor_identity)-true-executable relation'),
+    pytest.param('STORAGE', 'if !matches!(&self.publication, MembershipPublication::Repeated)', 'if true', 'executable relation', id='STORAGE-MembershipPublication::Repeated => None-MembershipPublication::Repeated => block.latest_block_ref.swap(None)-executable relation'),
+    pytest.param('HISTORY', 'let len = if self.replacement', 'let len = if !self.replacement', 'executable relation', id='STORAGE-*height < current.height-*height <= current.height-executable relation'),
+    pytest.param('HISTORY', 'work.try_insert_admitted(key, height,', 'work.try_insert_admitted(key, other_height,', 'executable relation', id='STORAGE-block.blocks_ref.insert(transaction, previous.height)-block.blocks_ref.insert(transaction, current.height)-executable relation'),
+    pytest.param('STORAGE', 'self.publication_started = true;', 'self.block.validate_commit()?; self.publication_started = true;', 'repeats admission', id='STORAGE-let changes_identity = !matches!-block.validate_commit()?; let changes_identity = !matches!-repeats admission'),
+    pytest.param('STORAGE', '        predecessor_identity: Identity,', '        pub(crate) predecessor_identity: Identity,', 'mutable authority', id='STORAGE-        predecessor_identity: Identity,-        pub(crate) predecessor_identity: Identity,-mutable authority'),
+    pytest.param('STORAGE', 'predecessor_identity: block._guard.identity().clone()', 'predecessor_identity: Arc::new(())', 'executable relation', id='STORAGE-predecessor_identity: block._guard.identity().clone()-predecessor_identity: Arc::new(())-executable relation'),
+    pytest.param('STORAGE', 'Identity::ptr_eq(&guard, &self.predecessor_identity)', 'true', 'executable relation', id='STORAGE-Identity::ptr_eq(&guard, &self.predecessor_identity)-true-executable relation'),
     pytest.param('STORAGE', 'storage.write_lock.try_lock()', 'storage.write_lock.lock()', 'executable relation', id='STORAGE-storage.write_lock.try_lock()-storage.write_lock.lock()-executable relation'),
     pytest.param('STORAGE', 'std::mem::swap(self.block._guard.identity_mut(), &mut self.next_identity)', 'std::mem::drop(Arc::clone(&self.next_identity))', 'executable relation', id='STORAGE-std::mem::replace(block._guard.identity_mut(), next_identity)-next_identity-executable relation'),
     pytest.param('STORAGE', '_guard.into_release()', 'other.into_release()', 'executable relation', id='STORAGE-_guard.into_release()-other.into_release()-executable relation'),
     pytest.param('STORAGE', '_tip: retired_tip,', '_tip: None,', 'executable relation', id='STORAGE-_tip: tip,-_tip: None,-executable relation'),
     pytest.param('STORAGE', '_identity: next_identity,', '_identity: Arc::new(()),', 'executable relation', id='STORAGE-_identity: identity,-_identity: Arc::new(()),-executable relation'),
-    pytest.param('STORAGE', '_retirement: prepared.publish(),', '_retirement: replacement,', 'executable relation', id='STORAGE-_retirement: prepared.publish(),-_retirement: replacement,-executable relation'),
+    pytest.param('STORAGE', '_retirement: prepared.publish_prepared(),', '_retirement: replacement,', 'executable relation', id='STORAGE-_retirement: prepared.publish_prepared(),-_retirement: replacement,-executable relation'),
     pytest.param('STATE', 'let tx_validate_result = transactions.try_prepare_publication();', 'let tx_validate_result = transactions.validate_commit();', 'misses or reorders', id='STATE-let tx_validate_result = transactions.prepare_commit();-let tx_validate_result = transactions.validate_commit();-misses or reorders'),
     pytest.param('STATE', '} = this.fields.as_mut().expect("original executing State");', '} = this.fields.take().expect("original executing State");', 'misses or reorders', id='STATE-            membership_retirement = transactions.publish();-            transactions.publish();-misses or reorders'),
 ])
@@ -196,8 +196,8 @@ def test_membership_rejects_publication_order_drift(fixture, earlier, later):
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
-    pytest.param('STORAGE', 'fn block_impl(', 'self.released.guard(self.write_lock.lock())', 'self.write_lock.lock()', id='fn block_impl(-self.released.guard(self.write_lock.lock())-self.write_lock.lock()'),
-    pytest.param('STORAGE', 'fn block_impl(', '_guard: block::MembershipWriter::new(guard)', '_guard: block::MembershipWriter::new(replacement)', id='fn block_impl(-_guard: block::MembershipWriter::new(guard)-_guard: block::MembershipWriter::new(replacement)'),
+    pytest.param('STORAGE', "fn attach_prepared<'a>", 'self.released.guard(guard)', 'guard', id='fn block_impl(-self.released.guard(self.write_lock.lock())-self.write_lock.lock()'),
+    pytest.param('STORAGE', "fn attach_prepared<'a>", 'Some(history_slot::Slot::new(self, original))', 'Some(history_slot::Slot::new(self, replacement))', id='fn block_impl(-_guard: block::MembershipWriter::new(guard)-_guard: block::MembershipWriter::new(replacement)'),
     pytest.param('STORAGE', 'pub(crate) fn observe_predecessor(', 'storage.released.guard(guard)', 'guard', id='pub(crate) fn observe_predecessor(-storage.released.guard(guard)-guard'),
     pytest.param('STORAGE', 'pub(crate) fn observe_predecessor(', 'storage.released.guard(guard)', 'storage.released.poisoning_guard(guard)', id='pub(crate) fn observe_predecessor(-storage.released.guard(guard)-storage.released.poisoning_guard(guard)'),
     pytest.param('DETACHED', 'pub(crate) fn try_prepare<E>', 'let wait = target.released.observe();', 'let wait = other.released.observe();', id='pub(crate) fn try_prepare_publication<-let wait = storage.released.observe();-let wait = other.released.observe();'),
@@ -261,12 +261,12 @@ def test_membership_capture_requires_original_caller_custody(fixture, symbol, ol
 @pytest.mark.parametrize("owner,symbol,old,new", [
     pytest.param("STORAGE", "PreparedTransactionsBlock::new", "publication_started: false", "publication_started: true", id="original-unstarted-owner"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::assert_unpublished", "!self.publication_started && !self.published", "!self.published", id="started-unwind-cannot-retry"),
-    pytest.param("STORAGE", "PreparedTransactionsBlock::publish", "self.publish_in_place();", "replacement.publish_in_place();", id="consuming-delegates-original-kernel"),
+    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_prepared", "self.publish_in_place();", "replacement.publish_in_place();", id="consuming-delegates-original-kernel"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.assert_unpublished();", "", id="reject-repeat-before-mutation"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.block._guard.identity();", "", id="original-writer-before-publication"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.publication_started = true;", "self.publication_started = false;", id="attempt-armed-before-map-work"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "match &self.publication", "match &replacement.publication", id="borrow-exact-admitted-action"),
-    pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "if let Some(previous) = previous", "if let Some(previous) = &None", id="advance-exact-previous-membership"),
+    pytest.param("HISTORY", "Pending::advance", "if !self.replacement", "if self.replacement", id="advance-exact-previous-membership"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "std::mem::swap(self.block._guard.identity_mut(), &mut self.next_identity)", "*self.block._guard.identity_mut() = Arc::new(())", id="rotate-original-prepaid-identity"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.block.release_writers();", "", id="physical-release-with-retirement-retained"),
     pytest.param("STORAGE", "PreparedTransactionsBlock::publish_in_place", "self.published = true;", "self.published = false;", id="complete-only-after-native-release"),
@@ -357,3 +357,82 @@ def test_membership_detached_preparation_keeps_original_caller(fixture, owner, s
     errors = validate(fixture)
     assert any("executable relation" in error for error in errors), errors
     assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    ('STORAGE', 'PreparedTransactionsBlock::publish_in_place', 'self.is_physically_prepared()', 'true'),
+    ('STORAGE', 'PreparedTransactionsBlock::publish_in_place', '.store(next - 1, Ordering::Release)', '.store(next, Ordering::Release)'),
+    ('STORAGE', 'PreparedTransactionsBlock::publish_in_place', '.store(next, Ordering::Release)', '.store(next - 1, Ordering::Release)'),
+    ('STORAGE', 'PreparedTransactionsBlock::publish_in_place', 'self.retired_tip = self.block.latest_block_ref.swap(Some(current.clone()));', 'drop(self.block.latest_block_ref.swap(Some(current.clone())));'),
+    ('STORAGE', 'PreparedTransactionsBlock::try_prepare_physical', '.map_err(TransactionsBlockError::MembershipAdmission)?', '.unwrap_or(())'),
+    ('CAPTURE', 'TransactionsCaptureSlot::try_prepare', '.next_identity();', '.next_identity().clone();'),
+    ('CAPTURE', 'TransactionsBlockField::recover_preparation', 'original.predecessor.clone()', 'other.predecessor.clone()'),
+    ('CAPTURE', 'MembershipWriter::into_writer_release', 'assert!(self.history.is_none(), "observation-only writer");', ''),
+    ('CAPTURE', 'MembershipWriter::release', 'history.release();', 'drop(history);'),
+    ('HISTORY_SLOT', 'Slot::prepare', 'self.target.blocks.try_acquire_owned_retained(work)', 'other.blocks.try_acquire_owned_retained(work)'),
+    ('HISTORY_SLOT', 'Slot::prepare', 'self.phase = Some(Phase::Original(work));', 'drop(work);'),
+    ('HISTORY_SLOT', 'Slot::prepare', '            self.phase = Some(Phase::Acquired(acquired));\n        }', '            drop(acquired);\n        }'),
+    ('HISTORY_SLOT', 'Slot::prepare', '                    self.phase = Some(Phase::Acquired(acquired));', '                    drop(acquired);'),
+    ('HISTORY_SLOT', 'Slot::prepare', 'acquired.try_map_preserving_release(|a| a.validate())', 'acquired.try_map_preserving_release(|a| Ok(a))'),
+    ('HISTORY_SLOT', 'Slot::prepare', 'self.target.blocks.observe_reader_release()', 'self.target.released.observe()'),
+    ('HISTORY_SLOT', 'Slot::prepare', 'self.prepared = true;', 'self.prepared = false;'),
+    ('HISTORY_SLOT', 'Slot::publish', 'assert!(self.prepared, "original prepared membership history");', ''),
+    ('HISTORY_SLOT', 'Slot::publish', 'self.writer_release = Some(writer);', 'drop(writer);'),
+    ('HISTORY_SLOT', 'Slot::release', 'self.reader_release = reader;', 'drop(reader);'),
+    ('HISTORY_SLOT', 'Slot::recover', 'pending.work = Some(work);', 'pending.work = Some(other);'),
+    ('HISTORY_SLOT', 'Slot::recover_detached', 'self.loan_release = pending.release_loan();', 'drop(pending.release_loan());'),
+    ('HISTORY_SLOT', 'Slot::cleanup', '_pending: pending,', '_pending: None,'),
+    ('HISTORY_SLOT', 'Slot::cleanup', '_loan: self.loan_release.take(),', '_loan: None,'),
+    ('HISTORY', 'Pending::advance', 'if self.work.is_none()', 'if true'),
+    ('HISTORY', 'Pending::advance', 'let key = batch.as_slice()[self.next];', 'let key = batch.as_slice()[0];'),
+    ('HISTORY', 'Pending::advance', 'self.next += 1;', 'self.next = 0;'),
+    ('HISTORY', 'Pending::advance', 'self.baseline = Some(writer.predecessor().retain());', 'self.baseline = Some(other.predecessor().retain());'),
+    ('HISTORY', 'Pending::release_loan', 'self.predecessor.loaned.store(false, Ordering::Release);', 'self.predecessor.loaned.store(true, Ordering::Release);'),
+    ('DETACHED', 'DetachedTransactionsPublicationSlot::try_prepare', 'MembershipAdmissionError::Busy(wait) => PublicationPreparationError::Busy(wait)', 'MembershipAdmissionError::Busy(wait) => PublicationPreparationError::Changed'),
+    ('DETACHED', 'DetachedTransactionsPublicationSlot::try_prepare', '.history = Some(history_slot::Slot::new(target, history));', '.history = Some(history_slot::Slot::new(target, other));'),
+])
+def test_membership_current_history_preserves_original_physical_authority(fixture, owner, symbol, old, new):
+    root, helper, checker, _ = fixture
+    errors = []
+    path = getattr(checker.membership_contract, owner)
+    item = checker._rust_binding_item(root, path, "method", symbol, "current membership mutation", errors)
+    assert item is not None and errors == []
+    assert item.count(old) == 1, (symbol, old)
+    helper.replace_once(root / path, item, item.replace(old, new, 1))
+    errors = validate(fixture)
+    assert any("executable relation" in error for error in errors), errors
+    assert not any("must have one" in error or "must occur exactly once" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("owner,method,attribute", [
+    ("STORAGE", "TransactionsStorage::block_impl", '#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]'),
+    ("STORAGE", "PreparedTransactionsBlock::publish", '#[cfg(test)]'),
+])
+@pytest.mark.parametrize("replacement", ["", "// {attribute}", "/* {attribute} */"])
+def test_membership_fixture_helpers_never_become_production(fixture, owner, method, attribute, replacement):
+    root, _, checker, _ = fixture
+    errors = []
+    path = root / getattr(checker.membership_contract, owner)
+    item = checker._rust_binding_item(root, str(path.relative_to(root)), "method", method, "fixture gate", errors)
+    assert item is not None and errors == []
+    source = path.read_text()
+    start = source.index(item)
+    cut = source.rfind(attribute, 0, start)
+    assert cut >= 0
+    path.write_text(source[:cut] + source[cut:].replace(attribute, replacement.format(attribute=attribute), 1))
+    assert any("fixture-only owner became production" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("old,new", [
+    ("TransactionsBlockError::MembershipAdmission(\n                    storage_transactions::MembershipAdmissionError::Busy(_))", "TransactionsBlockError::MembershipAdmission(_)"),
+    ("membership_retry = Some(transactions.recover_preparation());", "membership_retry = None;"),
+    ("membership_target.retain_preparation(original);", "other.retain_preparation(original);"),
+    ("Ok(())\n        }));\n        if let Some(original) = membership_retry", "Ok(())\n        });\n        if let Some(original) = membership_retry"),
+])
+def test_membership_busy_retry_keeps_original_until_siblings_retire(fixture, old, new):
+    root, helper, checker, _ = fixture
+    path = root / checker.membership_contract.STATE
+    source = path.read_text()
+    assert source.count(old) == 1, old
+    helper.replace_once(path, old, new)
+    assert any("commit_inner" in error for error in validate(fixture))

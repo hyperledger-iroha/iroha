@@ -10,7 +10,7 @@ use iroha_data_model::{
     Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
-    isi::governance::CastPlainBallot,
+    isi::governance::{CastPlainBallot, UpdatePlainConviction},
     permission::Permission,
     prelude::{Account, Domain, Grant},
 };
@@ -95,17 +95,16 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
         }
     }
     assert!(saw_ok, "expected a BallotAccepted event");
-    // Vote again with longer duration to trigger LockExtended
-    let instr2 = CastPlainBallot {
+    // Extend the existing conviction position without resubmitting its choice.
+    let instr2 = UpdatePlainConviction {
         referendum_id: "ref-1".to_string(),
-        direction: 0,
         owner: ALICE_ID.clone(),
         amount: amount.into(),
         duration_blocks: 200,
     };
     instr2
         .execute(&ALICE_ID, &mut stx)
-        .expect("second plain ballot ok");
+        .expect("conviction update ok");
     let events2 = stx.world.take_external_events();
     assert!(events2.iter().any(|event| matches!(
         event.as_data_event(),

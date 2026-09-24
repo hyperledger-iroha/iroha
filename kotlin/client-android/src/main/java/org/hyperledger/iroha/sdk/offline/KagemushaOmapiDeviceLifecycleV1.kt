@@ -31,7 +31,9 @@ object KagemushaOmapiDeviceLifecycleV1 {
         appletAid: ByteArray = DEFAULT_APPLET_AID,
     ) {
         internal val readerName: String? = readerName?.also {
-            require(it.isNotEmpty() && it == it.trim()) { "readerName must be exact and non-empty" }
+            require(isEmbeddedReaderName(it)) {
+                "readerName must name an embedded secure-element reader"
+            }
         }
         internal val appletAid: ByteArray = appletAid.copyOf().also {
             require(it.size in 5..16) { "appletAid must contain 5..16 bytes" }
@@ -44,7 +46,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
      *
      * An absent service, denied AID, incomplete foundation applet, malformed capability frame,
      * ambiguous qualified readers, timeout, or any platform error completes with an online-only
-     * bridge. With no explicit reader pin, eSE, UICC and SD readers are all eligible; exactly one
+     * bridge. With no explicit reader pin, only embedded eSE readers are eligible; exactly one
      * applet must pass the complete capability contract.
      */
     @JvmStatic
@@ -66,10 +68,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
         val shutdownRequested = AtomicBoolean(false)
         val shutdownService: () -> Unit = {
             if (shutdownRequested.compareAndSet(false, true)) {
-                service.whenCompleteAsync(
-                    { connected, _ -> runCatching { connected?.shutdown() } },
-                    executor,
-                )
+                closeServiceWhenReady(service) { connected -> connected.shutdown() }
             }
         }
         val timeout = discoveryTimeoutExecutor.schedule(
@@ -168,7 +167,11 @@ object KagemushaOmapiDeviceLifecycleV1 {
     fun defaultAppletAid(): ByteArray = DEFAULT_APPLET_AID.copyOf()
 
     internal fun acceptsReaderName(candidate: String, configured: String?): Boolean =
-        configured == null || candidate == configured
+        isEmbeddedReaderName(candidate) && (configured == null || candidate == configured)
+
+    // Android OMAPI names embedded readers eSE, eSE1, eSE2, ...; SIM/SD readers can be removable.
+    private fun isEmbeddedReaderName(candidate: String): Boolean =
+        candidate == "eSE" || EMBEDDED_READER_NAME.matches(candidate)
 
     internal fun completeUnavailableUnlessResolved(
         result: CompletableFuture<KagemushaDeviceLifecycleBridgeV1>,
@@ -177,6 +180,17 @@ object KagemushaOmapiDeviceLifecycleV1 {
         val completed = result.complete(KagemushaDeviceLifecycleBridgeV1.onlineOnly())
         if (completed) onTimeout()
         return completed
+    }
+
+    /** Cleanup must still run if the caller shuts down its executor after discovery returns. */
+    internal fun <T : Any> closeServiceWhenReady(
+        service: CompletableFuture<T>,
+        close: (T) -> Unit,
+    ) {
+        service.whenCompleteAsync(
+            { connected, _ -> if (connected != null) runCatching { close(connected) } },
+            serviceShutdownExecutor,
+        )
     }
 
     @TargetApi(Build.VERSION_CODES.P)
@@ -228,6 +242,7 @@ object KagemushaOmapiDeviceLifecycleV1 {
     private val DEFAULT_APPLET_AID = byteArrayOf(
         0xf0.toByte(), 0x4f, 0x44, 0x4a, 0x52, 0x4e, 0x00, 0x01,
     )
+    private val EMBEDDED_READER_NAME = Regex("eSE[1-9][0-9]*")
 
     const val DEFAULT_DISCOVERY_TIMEOUT_MILLIS: Long = 10_000
     private const val MAXIMUM_DISCOVERY_TIMEOUT_MILLIS: Long = 60_000
@@ -235,5 +250,10 @@ object KagemushaOmapiDeviceLifecycleV1 {
     private val discoveryTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "kagemusha-omapi-timeout").apply { isDaemon = true }
+        }
+
+    private val serviceShutdownExecutor: Executor =
+        Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "kagemusha-omapi-shutdown").apply { isDaemon = true }
         }
 }

@@ -132,6 +132,21 @@ mod world_capture_tests;
 mod world_complete_drop_tests;
 #[path = "world_stack_tests.rs"]
 mod world_stack_tests;
+#[test]
+fn lane_consensus_key_role_is_exact() {
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::SINGLE),
+        ConsensusKeyRole::Validator
+    );
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::new(1)),
+        ConsensusKeyRole::Committee
+    );
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::new(42)),
+        ConsensusKeyRole::Committee
+    );
+}
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {
@@ -10832,6 +10847,7 @@ fn seed_autoscale_transport_peers_for_test(state: &State, peer_count: usize) -> 
 }
 fn seed_governed_autoscale_committee_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
     let keypairs = seed_autoscale_transport_peers_for_test(state, peer_count);
+    seed_committee_consensus_keys_with_pops(state, &keypairs);
     let nexus = state.nexus_snapshot();
     install_lane_manifest_registry(
         state,

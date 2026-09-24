@@ -6293,6 +6293,8 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) sibling_state_after: CanonicalIdentityProjection,
 }
 /// Primitive durable application completion returned to the reducer owner.
+// TODO: construct this projection from the native Apply completion path.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native Apply completion"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionApplicationTraceProjection {
     pub(crate) task_tag: TagProjection,
@@ -8496,6 +8498,8 @@ pub(crate) const fn production_reliable_flush_trace_refines_outbound_ownership_k
     production_reliable_flush_trace_body!(projection)
 }
 /// Validate the exact one-shot lane mutation caused by a writer flush.
+// TODO: use this gate when native lane transport owns reliable sidecar flushes.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native sidecar flush"))]
 pub(crate) const fn production_reliable_flush_application_refines_source_lane_kernel(
     projection: ProductionReliableFlushApplicationProjection,
 ) -> bool {
@@ -8509,6 +8513,8 @@ pub(crate) const fn production_reliable_flush_two_phase_link_kernel(
     production_reliable_flush_two_phase_link_body!(worker, application)
 }
 /// Validate the exact durable application completion exposed to the reducer.
+// TODO: check native Apply completion before publishing it to the reducer.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native Apply completion"))]
 pub(crate) const fn production_application_trace_refines_decision_completion_kernel(
     projection: ProductionApplicationTraceProjection,
 ) -> bool {

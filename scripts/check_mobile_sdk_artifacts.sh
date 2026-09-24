@@ -441,6 +441,8 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_core_coordinator_contract_v1
   connect_norito_kagemusha_core_coordinator_open_v1
   connect_norito_kagemusha_core_coordinator_invoke_v1
+  connect_norito_kagemusha_core_coordinator_close_v1
+  connect_norito_kagemusha_testnet_state_proof_observe_v1
   connect_norito_kagemusha_device_capabilities_v1
   connect_norito_kagemusha_device_execute_v1
   connect_norito_kagemusha_device_command_response_v1_verify
@@ -455,6 +457,21 @@ RESERVE_FINALITY_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate
+)
+
+ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeContractVectorV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyCommandResponseV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1
+  Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1
+  Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1
+  Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1
+  Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1
 )
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
@@ -508,7 +525,7 @@ check_binary_symbols() {
     fi
   done
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${RESERVE_FINALITY_JNI_SYMBOLS[@]}"; do
+    for symbol in "${RESERVE_FINALITY_JNI_SYMBOLS[@]}" "${ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS[@]}"; do
       if ! grep -Fxq -- "$symbol" <<<"$symbols"; then
         fail "$label is missing $symbol"
       fi

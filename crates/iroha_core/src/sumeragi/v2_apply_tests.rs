@@ -712,7 +712,51 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
 
 #[cfg(feature = "bls")]
 #[test]
+fn current_carrier_rejects_unrelated_ordinary_external_transaction() {
+    let fixture = ApplyFixture::new_with_lane_lifecycle();
+    let mut store = fixture.reopen_body_store();
+    fixture
+        .service
+        .execute(&fixture.context, &mut store, &fixture.task)
+        .expect("commit the authenticated parent");
+    let successor = build_successor_apply_fixture(&fixture);
+    let verified = verified_context_for_fixture(&fixture, &successor.context);
+    let key = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+        .expect("deterministic ordinary signer");
+    let transaction = TransactionBuilder::new(
+        successor.context.network_id,
+        AccountId::new(key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .sign(key.private_key());
+    let mut body = successor.body;
+    body.set_execution_context(None);
+    body.set_external_entrypoints(vec![TransactionEntrypoint::External(transaction)]);
+    let error = super::native_validation::classify_current_carrier_for_test(
+        Arc::new(fixture.service),
+        verified,
+        &body,
+    )
+    .expect_err("ordinary application inputs remain lane-owned");
+    assert!(matches!(error, V2ApplyError::Validation(message)
+        if message.contains("lifecycle control must contain one certificate instruction")));
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn retained_current_genesis_executes_once_and_publishes_original_owner() {
+    let handle =
+        crate::sumeragi::sumeragi_thread_builder("retained-current-genesis-original-owner")
+            .spawn(retained_current_genesis_on_consensus_stack)
+            .expect("spawn retained genesis test on the production consensus stack");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[inline(never)]
+fn retained_current_genesis_on_consensus_stack() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let verified = verified_context_for_fixture(&fixture, &fixture.context);
     let directory = tempfile::tempdir().unwrap();

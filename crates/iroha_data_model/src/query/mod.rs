@@ -27,6 +27,7 @@ use crate::{
     role::{Role, RoleId},
     rwa::{Rwa, RwaId},
     seal,
+    transaction::TransactionEntrypoint,
     trigger::{Trigger, TriggerId},
 };
 use derive_more::Constructor;
@@ -533,7 +534,7 @@ pub mod json;
 #[cfg(feature = "fault_injection")]
 use crate::{
     ValidationFail,
-    prelude::{InstructionBox, TransactionEntrypoint, TransactionRejectionReason},
+    prelude::{InstructionBox, TransactionRejectionReason},
 };
 /// Builder helpers for constructing query instances.
 #[doc = "Builder utilities for composing typed queries."]
@@ -545,6 +546,7 @@ pub mod dsl;
 /// Query parameter types and helpers.
 #[doc = "Query parameter storage and cursor types."]
 pub mod parameters;
+mod transaction_read_scope;
 pub(crate) mod tx_predicate;
 /// A query that either returns a single value or errors out
 // NOTE: we are planning to remove this class of queries (https://github.com/hyperledger-iroha/iroha/issues/4933)
@@ -2297,6 +2299,46 @@ mod model {
     }
 }
 impl CommittedTransaction {
+    /// Selective exact Network input/output inclusion. The caller MUST first
+    /// authenticate this header, complete ExecutionCommitment, native NetworkId
+    /// and four-validator context from its independently pinned finality root.
+    /// This method does not authorize disclosing the selected record.
+    #[must_use]
+    pub fn verify_selective_in_authenticated_execution(
+        &self,
+        expected_network: &crate::NetworkId,
+        header: &crate::block::BlockHeader,
+        commitment: &crate::block::consensus_v2::ExecutionCommitment,
+    ) -> bool {
+        if commitment.validate().is_err()
+            || commitment.merge_carrier.is_some()
+            || self.block_hash != header.hash()
+            || self.entrypoint_hash != self.entrypoint.hash()
+            || self.output_hash != HashOf::new(&self.output)
+        {
+            return false;
+        }
+        let TransactionEntrypoint::External(signed) = &self.entrypoint else {
+            return false;
+        };
+        if signed.network_id() != Some(expected_network) || signed.verify_signature().is_err() {
+            return false;
+        }
+        let crate::block::execution_output::ExecutionOutputV1::Network(output) = &self.output
+        else {
+            return false;
+        };
+        let (Some(inputs), Some(outputs)) = (
+            commitment.transaction_input_commitment,
+            commitment.transaction_output_commitment,
+        ) else {
+            return false;
+        };
+        output.input_index == self.entrypoint_proof.leaf_index()
+            && self.entrypoint_proof.verify(&self.entrypoint_hash, &inputs)
+            && self.output_proof.verify(&self.output_hash, &outputs)
+    }
+
     /// Borrow the sole full result from this query's typed output.
     pub fn result(&self) -> &crate::transaction::TransactionResult {
         self.output.result()
@@ -2309,7 +2351,9 @@ impl CommittedTransaction {
         block: &SignedBlock,
         commitment: &crate::block::consensus_v2::ExecutionCommitment,
     ) -> bool {
-        if commitment.validate().is_err()
+        if commitment.transaction_input_commitment != block.network_input_merkle_commitment()
+            || commitment.transaction_output_commitment != block.output_merkle_commitment()
+            || commitment.validate().is_err()
             || !block.has_results()
             || block.validate_output_merkle_cache().is_err()
         {

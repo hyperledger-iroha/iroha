@@ -201,7 +201,7 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
     let lane = LaneId::new(17);
-    let (validator, asset, before, share_before, nexus, monetary_plan) = {
+    let (validator, asset, before, share_before, nexus) = {
         let mut stx = state_block.transaction();
         let (validator, _, _, definition) = prepare_accounts(&mut stx);
         stx.nexus.staking.stake_escrow_account_id = validator.to_string();
@@ -230,9 +230,8 @@ fn staking_same_account_bond_cannot_reuse_held_custody() {
             .unwrap()
             .clone();
         let nexus = stx.nexus.clone();
-        let monetary_plan = fixture_bond_plan(&stx, lane, &validator, &validator, Quantity::one());
         stx.apply();
-        (validator, asset, before, share_before, nexus, monetary_plan)
+        (validator, asset, before, share_before, nexus)
     };
     state_block.drain_transfer_transcripts();
     let key = (lane, validator.clone());

@@ -112,8 +112,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'native_execution_metadata.rs',
     ),
     'crates/iroha_core/src/block.rs': (
+        'block/pristine_consensus_effects.rs',
         'block/carrier_preparation.rs',
+        'block/merge_beacon_owner.rs',
         'block/post_execution_tail.rs',
+        'block/canonical_carrier_source_tests.rs',
+        'block/merge_beacon_owner_tests.rs',
         'block/parallel_account_profile_tests.rs',
         'block/post_execution_tail_tests.rs',
         'block/autonomous_merge_carrier_content_tests.rs',
@@ -252,6 +256,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/16_resource_file_admission_tests.rs',
         'kura/tests/17_read_only_evidence_tests.rs',
         'kura/tests/18_snapshot_hash_streaming.rs',
+        'kura/tests/19_transaction_history_budget.rs',
     ),
     'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
         'passive_diagnostic_reads.rs',
@@ -682,6 +687,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lane_work_native_body_recovery.rs',
         'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
         'v2_lane_work/strict_historical_read_tests.rs',
+        'v2_lane_work/canonical_executed_body_worker_source_tests.rs',
         'v2_lane_work/strict_volatile_owner_tests.rs',
         'v2_lane_work/strict_receipt_gate_tests.rs',
         'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',

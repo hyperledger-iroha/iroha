@@ -782,6 +782,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         lane.clone(),
         0,
         0,
+        0,
         old_epoch,
         old_policy,
         snapshot_digest(b"snapshot-old-state-nonce", 8),
@@ -817,6 +818,70 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     };
     machine = snapshot_initial_publish(machine);
 
+    // Enrollment creates index zero without an assertion. The first signed transition
+    // consumes 0→1; a later rotation consumes 1→2 even though its epoch sequence resets.
+    let bootstrap_state = machine.state.clone();
+    assert_eq!(bootstrap_state.secure_index, 0);
+    let mut changed_index = bootstrap_state.clone();
+    changed_index.secure_index = 1;
+    assert_ne!(
+        changed_index
+            .recompute_commitment()
+            .expect("changed index commitment"),
+        bootstrap_state
+            .recompute_commitment()
+            .expect("bootstrap commitment"),
+    );
+    let ordinary = machine
+        .next_state(
+            0,
+            old_epoch,
+            old_policy,
+            snapshot_digest(b"snapshot-index-next-nonce", 41),
+            machine.consumed_credits.root(),
+        )
+        .expect("first selected transition");
+    assert_eq!((ordinary.logical_sequence, ordinary.secure_index), (1, 1));
+    machine.state = ordinary;
+    let rotated_policy = DevicePolicyBindingV1 {
+        device_key_reference: snapshot_digest(b"snapshot-index-rotated-key", 43),
+        hardware_policy_id: snapshot_digest(b"snapshot-index-rotated-policy", 44),
+    };
+    let rotated = machine
+        .next_state(
+            0,
+            current_epoch,
+            rotated_policy,
+            snapshot_digest(b"snapshot-index-rotate-nonce", 42),
+            machine.consumed_credits.root(),
+        )
+        .expect("rotation retains the global index");
+    assert_eq!((rotated.logical_sequence, rotated.secure_index), (0, 2));
+    machine.state = KagemushaStateV1::build(
+        bootstrap_state.context(),
+        bootstrap_state.liability_pool_id,
+        bootstrap_state.lane.clone(),
+        0,
+        0,
+        u128::MAX,
+        old_epoch,
+        old_policy,
+        snapshot_digest(b"snapshot-index-max-nonce", 46),
+        machine.consumed_credits.root(),
+    )
+    .expect("valid state at maximum secure index");
+    assert_eq!(
+        machine.next_state(
+            0,
+            current_epoch,
+            rotated_policy,
+            snapshot_digest(b"snapshot-index-overflow-nonce", 45),
+            machine.consumed_credits.root(),
+        ),
+        Err(KagemushaStateErrorV1::SecureIndexOverflow),
+    );
+    machine.state = bootstrap_state;
+
     let mint_amount = 4;
     let (mint_authorization, mint_credit, mint_opening) = snapshot_mint_credit(
         machine.state(),
@@ -841,6 +906,40 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         reserved_inbox_bytes,
     )
     .expect("snapshot-test mint reservation");
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            Some(&mint_authorization),
+        ),
+        Ok(()),
+    );
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            snapshot_digest(b"different-top-up-operation", 12),
+            Some(&mint_authorization),
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
+    let mut substituted_authorization = mint_authorization.clone();
+    substituted_authorization.proof.eq_proof[0] ^= 1;
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            Some(&substituted_authorization),
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            None,
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
     let reservation_statement = machine
         .preview_mint_reservation(&mint_reservation)
         .expect("preview old-epoch mint reservation");
@@ -891,6 +990,7 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         lane,
         0,
         0,
+        machine.state.secure_index + 1,
         current_epoch,
         current_policy,
         snapshot_digest(b"snapshot-current-state-nonce", 11),
@@ -1188,6 +1288,7 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         lane,
         0,
         0,
+        0,
         hardware_epoch,
         device_policy_binding,
         snapshot_digest(b"aggregate-state-nonce", 7),
@@ -1334,6 +1435,21 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         .expect("derive one ordinary full-balance send");
     assert_eq!(full_send.private_state_link().0.balance, 1_000);
     assert_eq!(full_send.private_state_link().1.balance, 0);
+    full_send
+        .validate_recovered()
+        .expect("send preparation ID matches its exact sealed streams");
+    let mut changed_send = full_send.clone();
+    changed_send.sealed_transition_inputs[0] ^= 1;
+    assert_eq!(
+        changed_send.validate_recovered(),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity)
+    );
+    let mut changed_send_state = full_send.clone();
+    changed_send_state.successor_state.balance = 1;
+    assert_eq!(
+        changed_send_state.validate_recovered(),
+        Err(KagemushaStateErrorV1::StateCommitmentMismatch)
+    );
 
     let restored = KagemushaStateMachineV1::restore(
         decoded,
@@ -1374,6 +1490,21 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         .expect("derive a partial aggregate redemption");
     assert_eq!(partial_redemption.private_state_link().0.balance, 1_000);
     assert_eq!(partial_redemption.private_state_link().1.balance, 600);
+    partial_redemption
+        .validate_recovered()
+        .expect("redemption preparation ID matches its exact sealed streams");
+    let mut changed_redemption = partial_redemption.clone();
+    changed_redemption.sealed_recovery_seeds[0] ^= 1;
+    assert_eq!(
+        changed_redemption.validate_recovered(),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity)
+    );
+    let mut changed_redemption_state = partial_redemption.clone();
+    changed_redemption_state.predecessor_state.balance = 999;
+    assert_eq!(
+        changed_redemption_state.validate_recovered(),
+        Err(KagemushaStateErrorV1::StateCommitmentMismatch)
+    );
     let full_redemption = restored
         .prepare_redeem_split(redeem_preparation(1_000, 16))
         .expect("derive a full aggregate redemption");

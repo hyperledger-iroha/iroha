@@ -2172,6 +2172,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "let (certificate_hash, durable_input) = match outcome",
             "disseminate_queue_plan_admission_publication(app, &durable_input, expected_binding)",
             "notify_pending_queue_plan_admission",
+            ".wait_for_canonical_admission(&app.state, &durable_input)",
+            "PendingQueuePlanAdmissionDisposition::ExactPending\n            | PendingQueuePlanAdmissionDisposition::Applied,\n        ) => queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)",
             "queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)",
         ),
     ),
@@ -2451,6 +2453,25 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     ),
     (
         "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+        "method",
+        "PersistenceDeadline::wait_for_canonical_admission",
+        (
+            "let remaining = self.remaining().map_err(str::to_owned)?;",
+            "let committed_height = u64::try_from(state.committed_height())",
+            "let next_height = committed_height.checked_add(1).ok_or_else(|| {",
+            "classify_pending_queue_plan_admission(complete_input, next_height)",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "PendingQueuePlanAdmissionDisposition::Stale => return Ok(disposition)",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+            "PendingQueuePlanAdmissionDisposition::Future { .. }",
+            "PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}",
+            "tokio::time::timeout(remaining, state.wait_for_committed_height(next_height))",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/queue_plan_publication_wait.rs",
         "fn",
         "publication_overlap_height",
         (
@@ -2498,6 +2519,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "validate_queue_plan_admissions_for_carrier_in_view",
             "stage_queue_plan_admissions",
             "resolve_queue_plan_pending_obligations_for_entrypoints",
+            "PersistenceDeadline::wait_for_canonical_admission",
         )
     ),
     (
@@ -4468,7 +4490,7 @@ def _validate_kura_replica_retention_contract(
         {
             "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "kind": "method",
-            "symbol": "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+            "symbol": "ProductionV2Services::handoff_applied_height_output_inner",
             "required_tokens": list(KURA_RETENTION_HANDOFF_ORDERED_TOKENS),
         },
         {
@@ -5267,6 +5289,36 @@ def _validate_queue_plan_pending_membership_contract(
 
     if not _validate_queue_plan_pending_membership_model_bindings(models, errors):
         return
+
+    registry_model_path = (
+        root / FORMAL_RELATIVE / f"{QUEUE_PLAN_PENDING_MEMBERSHIP_MODULE}.tla"
+    )
+    if _regular_file(registry_model_path, "QueuePlan admission registry model", errors):
+        registry_model = registry_model_path.read_text(encoding="utf-8")
+        for start, end, required in (
+            (
+                "ReturnPublicAccepted(binding) ==",
+                "ActivateExactQueueClaim(binding) ==",
+                "  /\\ canonicalBindings = {binding}",
+            ),
+            (
+                "MLPublic202Exact ==",
+                "MLExecutionRequiresExactBinding ==",
+                "  /\\ publicAccepted \\subseteq canonicalBindings",
+            ),
+        ):
+            if registry_model.count(start) != 1 or registry_model.count(end) != 1:
+                errors.append(
+                    f"{registry_model_path}: QueuePlan canonical 202 model declaration "
+                    f"changed: {start}"
+                )
+                continue
+            body = registry_model.split(start, 1)[1].split(end, 1)[0]
+            if body.count(required) != 1:
+                errors.append(
+                    f"{registry_model_path}: QueuePlan canonical 202 model relation "
+                    f"changed: {required}"
+                )
 
     state_path = root / QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
     if _regular_file(

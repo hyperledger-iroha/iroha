@@ -508,7 +508,7 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
     (
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "method",
-        "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction",
+        "ProductionV2Services::handoff_applied_height_output_inner",
         (
             "let retired_kura_replica_advert_heights =",
             "pending.pending_kura_replica_advert_heights()?",
@@ -694,6 +694,15 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         ),
     ),
 )
+KURA_RETENTION_REQUIRED_BINDINGS += (
+    ("crates/iroha_core/src/sumeragi/v2_worker.rs", "method",
+     "ProductionV2Services::handoff_native_height_output_to_durable_reconstruction", (
+         "authority: &super::v2_runner::NativeFinalizedOutputAuthority<'_>",
+         "authority.authenticate(&self.state, receipt, artifact)?;",
+         "self.handoff_applied_height_output_inner(receipt, artifact, None)",
+     )),
+)
+
 KURA_RETENTION_PRESTAGE_ORDERED_TOKENS = (
     "self.maybe_pause_eviction_before_stage_publication_for_tests();",
     "let fresh_authority = if eviction_authorities.len() == evicted.len() {",

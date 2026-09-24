@@ -1264,8 +1264,39 @@ pub struct ExecutionCommitment {
     pub executed_block_wire_len: u64,
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
+    /// Exact Network input tree derived from the validated executed block.
+    /// Root AND leaf count are CommitQC-authenticated; omission is not a decoder default.
+    #[norito(required)]
+    pub transaction_input_commitment: Option<MerkleTreeCommitment<TransactionEntrypoint>>,
+    /// Exact complete typed-output tree, including internal invocation outputs.
+    #[norito(required)]
+    pub transaction_output_commitment:
+        Option<MerkleTreeCommitment<crate::block::execution_output::ExecutionOutputV1>>,
 }
 impl ExecutionCommitment {
+    /// Bind the mandatory selective commitments from the same full native wire
+    /// whose identity the execution witness already commits. Only validator-side
+    /// execution may call this before constructing/signing a Commit vote.
+    pub fn with_transaction_commitments_from_block(
+        mut self,
+        block: &crate::block::SignedBlock,
+    ) -> Result<Self, ValidationError> {
+        let wire = block
+            .encode_wire()
+            .map_err(|_| ValidationError::InvalidExecutionCommitment)?;
+        if !block.has_results()
+            || block.validate_output_merkle_cache().is_err()
+            || u64::try_from(wire.len()).ok() != Some(self.executed_block_wire_len)
+            || Hash::new(&wire) != self.executed_block_wire_hash
+        {
+            return Err(ValidationError::InvalidExecutionCommitment);
+        }
+        self.transaction_input_commitment = block.network_input_merkle_commitment();
+        self.transaction_output_commitment = block.output_merkle_commitment();
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Construct a transition that contains neither KAGEMUSHA V1 top-ups
     /// nor a compact merge carrier.
     #[must_use]
@@ -1289,6 +1320,8 @@ impl ExecutionCommitment {
             merge_carrier: None,
             executed_block_wire_len,
             executed_block_wire_hash,
+            transaction_input_commitment: None,
+            transaction_output_commitment: None,
         }
     }
     /// Construct a carrier-free commitment and enforce its canonical top-up projection.
@@ -1430,6 +1463,8 @@ impl ExecutionCommitment {
             merge_carrier,
             executed_block_wire_len,
             executed_block_wire_hash,
+            transaction_input_commitment: None,
+            transaction_output_commitment: None,
         };
         commitment.validate()?;
         Ok(commitment)
@@ -1443,6 +1478,12 @@ impl ExecutionCommitment {
     /// incorrect, or the Native AMX manifest version or empty-root convention
     /// is non-canonical.
     pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.transaction_input_commitment.is_some_and(|inputs| {
+            self.transaction_output_commitment
+                .is_none_or(|outputs| outputs.leaf_count() < inputs.leaf_count())
+        }) {
+            return Err(ValidationError::InvalidExecutionCommitment);
+        }
         if self.executed_block_wire_len == 0
             || self.executed_block_wire_len > MAX_EXECUTED_BLOCK_WIRE_BYTES
         {

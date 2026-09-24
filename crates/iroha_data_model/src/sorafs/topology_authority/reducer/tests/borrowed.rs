@@ -172,10 +172,10 @@ fn borrowed_plans_and_cold_replay_share_every_mutating_action_and_idempotent_res
     );
     same_plan(
         &mut f,
-        TopologyActionV1::Revoke {
+        TopologyActionV1::Revoke(TopologyRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
         9,
         195_000,
         31,
@@ -412,10 +412,10 @@ fn indexed_refusal_after_control_planning_preserves_both_custody_and_active_rese
     let row = f.reserve(10, 3, 120_000);
     let original = f.model.retained().clone();
     let control = f.model.control().unwrap().clone();
-    let transition = f.transition(TopologyActionV1::Revoke {
+    let transition = f.transition(TopologyActionV1::Revoke(TopologyRevocationV1 {
         signer: true,
         attester: false,
-    });
+    }));
     let reads = Reads::new(&f.model, ReadFault::SecondOperation);
     assert_eq!(
         reads
@@ -433,10 +433,10 @@ fn indexed_refusal_after_control_planning_preserves_both_custody_and_active_rese
 #[test]
 fn mutations_in_one_block_require_one_exact_block_timestamp() {
     let f = Fixture::new();
-    let transition = f.transition(TopologyActionV1::Revoke {
+    let transition = f.transition(TopologyActionV1::Revoke(TopologyRevocationV1 {
         signer: true,
         attester: false,
-    });
+    }));
     let mut context = f.context(2, 110_000, 31);
     context.execution.ordinal = 1;
     assert!(

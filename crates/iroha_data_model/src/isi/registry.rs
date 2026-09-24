@@ -197,6 +197,7 @@ mod tests {
             crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
             "iroha.instruction.v1::governance::CastZkBallot",
             "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::UpdatePlainConviction",
         ] {
             assert!(
                 registry.contains(active),
@@ -468,6 +469,7 @@ mod tests {
             "iroha.governance.parliament.transition.submit.v1",
             "iroha.instruction.v1::governance::CastZkBallot",
             "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::UpdatePlainConviction",
             "iroha.instruction.v1::governance::SlashGovernanceLock",
             "iroha.instruction.v1::governance::RestituteGovernanceLock",
             "iroha.instruction.v1::governance::RegisterCitizen",
@@ -1557,6 +1559,9 @@ mod final_promotion_authority_tests;
 #[cfg(test)]
 #[path = "registry/release_manifest_authority_tests.rs"]
 mod release_manifest_authority_tests;
+#[cfg(test)]
+#[path = "registry/topology_authority_tests.rs"]
+mod topology_authority_tests;
 
 #[cfg(test)]
 #[path = "registry/final_promotion_account_custody_tests.rs"]

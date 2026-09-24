@@ -59,6 +59,8 @@ pub enum FinalPromotionCheckObservationErrorV1 {
     Provider,
     /// Exact submission or same-envelope reconciliation was unavailable or unresolved.
     Submission,
+    /// The private pending-Reserve journal is unavailable, changed or noncanonical.
+    Journal,
 }
 impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,6 +73,7 @@ impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
             Self::Payload => "final-promotion Check payload rejected",
             Self::Provider => "final-promotion Check observer unavailable",
             Self::Submission => "final-promotion Check submission unavailable",
+            Self::Journal => "final-promotion pending Reserve journal unavailable",
         })
     }
 }

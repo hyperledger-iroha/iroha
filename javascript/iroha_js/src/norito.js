@@ -72,7 +72,6 @@ import {
 const TEXT_SMART_CONTRACT_CODE = "smart_contract_code::";
 const TEXT_MUST_BE_GREATER_THAN_ZERO = " must be greater than zero";
 const TEXT_MUST_BE_AN_OBJECT_2 = " must be an object";
-const TEXT_CONTRACT_ADDRESS_2 = "contract_address";
 const TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION = "CancelConfidentialPolicyTransition";
 
 const TEXT_ASSET_DEFINITION_ID = "asset_definition_id";
@@ -1317,19 +1316,31 @@ function normalizeValidationFeePolicyHashString(value, context) {
  * payload with `Content-Type: application/x-norito`.
  *
  * @param {object} request
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {Buffer}
  */
-export function noritoEncodeMultisigContractCallProposeRequest(request) {
+export function noritoEncodeMultisigContractCallProposeRequest(request, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
+  for (const value of [
+    request?.signer_account_id ?? request?.signerAccountId,
+    request?.multisig_account_id ?? request?.multisigAccountId,
+  ]) {
+    if (value !== undefined && value !== null) {
+      AccountAddress.parseEncoded(value, networkPrefix);
+    }
+  }
   if (!isPlainObject(request)) {
     rejectType(("MultisigContractCallProposeDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   rejectInlinePrivateKeyFields(request, "MultisigContractCallProposeDto");
-  const contractAddress = request.contract_address ?? request.contractAddress ?? null;
   const contractAlias = request.contract_alias ?? request.contractAlias ?? null;
-  if ((contractAddress == null) === (contractAlias == null)) {
-    rejectType("MultisigContractCallProposeDto requires exactly one of contract_address or contract_alias");
+  if (request.contract_address !== undefined || request.contractAddress !== undefined || contractAlias == null) {
+    rejectType("MultisigContractCallProposeDto requires exact contract_alias without contract_address");
   }
-  const payloadValue = request.payload ?? request.contractPayload ?? null;
+  const payloadValue = request.payload;
+  if (!isPlainObject(payloadValue)) {
+    rejectType("MultisigContractCallProposeDto requires an exact object payload");
+  }
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
       ...encodeMultisigAccountSelectorFields(
@@ -1364,18 +1375,10 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
         ),
       ],
       [
-        encodeOptionValue(
-          contractAddress,
-          encodeNoritoStringValue,
-          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + TEXT_CONTRACT_ADDRESS_2),
-        ),
-      ],
-      [
-        encodeOptionValue(
+        encodeNoritoStringValue(assertNonEmptyString(
           contractAlias,
-          encodeNoritoStringValue,
           (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "contract_alias"),
-        ),
+        )),
       ],
       [
         encodeNoritoStringValue(
@@ -1385,13 +1388,7 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
           ),
         ),
       ],
-      [
-        encodeOptionValue(
-          payloadValue,
-          encodeNoritoJsonValue,
-          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "payload"),
-        ),
-      ],
+      [encodeNoritoJsonValue(payloadValue)],
       [
         encodeFeePaymentIntentValue(
           request.fee_payment ?? request.feePayment,
@@ -1411,9 +1408,19 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
  * Encode a `/v1/contracts/call/multisig/approve` request DTO as a native Norito body.
  *
  * @param {object} request
+ * @param {number} networkPrefix Caller-selected I105 deployment prefix (u16).
  * @returns {Buffer}
  */
-export function noritoEncodeMultisigContractCallApproveRequest(request) {
+export function noritoEncodeMultisigContractCallApproveRequest(request, networkPrefix) {
+  requireNetworkPrefix(networkPrefix);
+  for (const value of [
+    request?.signer_account_id ?? request?.signerAccountId,
+    request?.multisig_account_id ?? request?.multisigAccountId,
+  ]) {
+    if (value !== undefined && value !== null) {
+      AccountAddress.parseEncoded(value, networkPrefix);
+    }
+  }
   if (!isPlainObject(request)) {
     rejectType(("MultisigContractCallApproveDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
@@ -1476,6 +1483,19 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
           (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "instructions_hash"),
         ),
       ],
+      [
+        encodeNoritoStringValue(assertNonEmptyString(
+          request.contract_alias,
+          "MultisigContractCallApproveDto.contract_alias",
+        )),
+      ],
+      [
+        encodeNoritoStringValue(assertNonEmptyString(
+          request.entrypoint,
+          "MultisigContractCallApproveDto.entrypoint",
+        )),
+      ],
+      [encodeNoritoJsonValue(requireExactContractApprovalPayload(request.payload))],
     ]),
   );
   return frameNoritoPayload(
@@ -4706,4 +4726,10 @@ function tryDecodeBase64(value) {
   } catch {
     return null;
   }
+}
+function requireExactContractApprovalPayload(payload) {
+  if (!isPlainObject(payload)) {
+    throw new TypeError("MultisigContractCallApproveDto.payload must be the exact contract object");
+  }
+  return payload;
 }

@@ -2437,23 +2437,6 @@ pub mod torii {
             None
         }
     }
-    /// Transaction-history visibility policy defaults.
-    pub mod tx_history {
-        /// Maximum bytes accepted from the mandatory-alias policy file.
-        pub const MANDATORY_ALIASES_MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
-        /// First-release hard ceiling for the mandatory-alias policy file.
-        pub const MANDATORY_ALIASES_MAX_FILE_BYTES_V1: usize = 16 * 1024 * 1024;
-        /// Complete raw-plus-retained units in the startup memory envelope.
-        ///
-        /// Seventeen units cover the raw document plus exact root-key and
-        /// flattened-alias arrays at their JSON grammar maxima, all decoded
-        /// string bytes, and conservative structural slack. The fixed
-        /// allowance below covers one-current normalization scratch and the
-        /// immutable policy handle.
-        pub const MANDATORY_ALIASES_MEMORY_PHASE_UNITS: usize = 17;
-        /// Fixed allowance for small-table rounding and one alias-normalization current.
-        pub const MANDATORY_ALIASES_NORMALIZATION_TRANSIENT_BYTES: usize = 64 * 1024;
-    }
     /// Retail recipient lookup defaults (disabled unless routes are configured).
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.

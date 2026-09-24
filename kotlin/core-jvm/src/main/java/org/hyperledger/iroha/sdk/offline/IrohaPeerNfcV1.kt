@@ -572,8 +572,14 @@ class IrohaPeerNfcReceiverSessionV1(
     }
 
     private fun beginPayment(command: IrohaPeerNfcCommandV1): ByteArray {
-        require(phase == IrohaPeerNfcPhaseV1.REQUEST_READY)
         val next = IrohaPeerNfcPaymentDescriptorV1.decode(command.bytes())
+        if (phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING) {
+            require(requireNotNull(descriptor).encode().contentEquals(next.encode())) {
+                "resume requires the exact retained payment descriptor"
+            }
+            return byteArrayOf()
+        }
+        require(phase == IrohaPeerNfcPhaseV1.REQUEST_READY)
         require(profilePolicy.accepts(next.profile))
         require(next.schemaVersion == profilePolicy.profile.requiredSchemaVersion)
         require(next.messageLength in 1..limits.maximumMessageBytes)
@@ -673,11 +679,22 @@ object IrohaPeerNfcReaderExchangeV1 {
         fun prepare(request: IrohaPeerWireMessageV1): IrohaPeerWireMessageV1
     }
 
+    /**
+     * Accept the exact ACK in the native wallet and durably retain the exchange
+     * before returning. This callback must be idempotent across process restarts.
+     * Throw on persistence/native-acceptance failure; no confirmation is sent.
+     * Shape validation here does not replace native signature/receipt verification.
+     */
+    fun interface PersistAcknowledgement {
+        fun persist(exchange: IrohaPeerNfcReaderExchangeResultV1)
+    }
+
     @JvmStatic fun run(
         profilePolicy: IrohaPeerNfcProfilePolicyV1,
         limits: IrohaPeerNfcLimitsV1,
         transceiver: IrohaPeerNfcReaderTransceiverV1,
         preparePayment: PreparePayment,
+        persistAcknowledgement: PersistAcknowledgement,
     ): IrohaPeerNfcReaderExchangeResultV1 {
         fun send(command: IrohaPeerNfcCommandV1): ByteArray {
             val response = transceiver.transceive(command)
@@ -693,20 +710,45 @@ object IrohaPeerNfcReaderExchangeV1 {
             send(IrohaPeerNfcCommandV1.readRequest(offset, count))
         }
         val request = decodeNfcMessage(requestBytes, profilePolicy.profile, IrohaPeerPayloadKind.REQUEST, limits)
+        require(info.identity.requestCanonicalHash().contentEquals(request.canonicalHash))
+        require(info.identity.requestWireHash().contentEquals(request.wireHash))
+        // For this request the host must recover its retained payment, never
+        // create another debit merely because transport confirmation was lost.
         val payment = preparePayment.prepare(request)
         require(payment.canonicalPayload.profile == profilePolicy.profile)
         require(payment.canonicalPayload.kind == IrohaPeerPayloadKind.PAYMENT)
+        validateKagemushaExchange(request, payment, null)
         val paymentBytes = payment.encode()
-        send(IrohaPeerNfcCommandV1.beginPayment(IrohaPeerNfcPaymentDescriptorV1(payment)))
-        var offset = 0
-        while (offset < paymentBytes.size) {
-            val end = minOf(paymentBytes.size, offset + info.maximumWriteChunkBytes)
-            send(IrohaPeerNfcCommandV1.writePayment(offset, paymentBytes.copyOfRange(offset, end)))
-            offset = end
+        require(paymentBytes.size <= limits.maximumMessageBytes)
+        fun readStatus(): IrohaPeerNfcStatusV1 =
+            IrohaPeerNfcStatusV1.decode(send(IrohaPeerNfcCommandV1.GET_STATUS)).also {
+                require(it.identity.profile == info.identity.profile)
+                require(it.identity.sessionId().contentEquals(info.identity.sessionId()))
+                require(it.identity.requestCanonicalHash().contentEquals(request.canonicalHash))
+                require(it.identity.requestWireHash().contentEquals(request.wireHash))
+            }
+        if (info.phase == IrohaPeerNfcPhaseV1.REQUEST_READY ||
+            info.phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING) {
+            // BEGIN is idempotent only for the byte-identical descriptor. It
+            // authenticates which partial buffer a resumed offset belongs to.
+            send(IrohaPeerNfcCommandV1.beginPayment(IrohaPeerNfcPaymentDescriptorV1(payment)))
+            val partial = readStatus()
+            require(partial.phase == IrohaPeerNfcPhaseV1.PAYMENT_RECEIVING)
+            require(partial.receivedPaymentBytes in 0..paymentBytes.size)
+            var offset = partial.receivedPaymentBytes
+            while (offset < paymentBytes.size) {
+                val end = minOf(paymentBytes.size, offset + info.maximumWriteChunkBytes)
+                send(IrohaPeerNfcCommandV1.writePayment(offset, paymentBytes.copyOfRange(offset, end)))
+                offset = end
+            }
+            send(IrohaPeerNfcCommandV1.COMMIT_PAYMENT)
         }
-        send(IrohaPeerNfcCommandV1.COMMIT_PAYMENT)
-        val status = IrohaPeerNfcStatusV1.decode(send(IrohaPeerNfcCommandV1.GET_STATUS))
+        val status = readStatus()
         require(status.phase == IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY || status.phase == IrohaPeerNfcPhaseV1.COMPLETE)
+        require(status.flags.contains(IrohaPeerNfcFlagsV1.DURABLE_STATE))
+        require(status.receivedPaymentBytes == paymentBytes.size)
+        require(requireNotNull(status.paymentWireHash()).contentEquals(payment.wireHash))
+        require(status.acknowledgementLength in 1..limits.maximumMessageBytes)
         val acknowledgementBytes = readChunks(
             status.acknowledgementLength,
             info.maximumReadChunkBytes,
@@ -720,8 +762,11 @@ object IrohaPeerNfcReaderExchangeV1 {
             limits,
         )
         validateKagemushaExchange(request, payment, acknowledgement)
+        require(requireNotNull(status.acknowledgementWireHash()).contentEquals(acknowledgement.wireHash))
+        val exchange = IrohaPeerNfcReaderExchangeResultV1(request, payment, acknowledgement)
+        persistAcknowledgement.persist(exchange)
         send(IrohaPeerNfcCommandV1.CONFIRM_ACKNOWLEDGEMENT)
-        return IrohaPeerNfcReaderExchangeResultV1(request, payment, acknowledgement)
+        return exchange
     }
 }
 

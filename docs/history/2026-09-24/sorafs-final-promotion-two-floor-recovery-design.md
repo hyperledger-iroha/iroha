@@ -1,9 +1,11 @@
 # Final-promotion two-floor recovery design — 2026-09-24
 
-**Design only; none of the API, native pin, journal, or production provider below is
-implemented.** This is a proposed single V1 replacement for the current
-in-memory Reserved observation path, not a compatibility path or a promotion
-qualification result. Software custody is sufficient; no HSM is prerequisite.
+**Design with a bounded private-journal implementation cut.** The exact signed
+Current Check and Reserve can now be staged before Reserve transport. The
+independent floor issuer, native pin, two-floor Core proof, production provider
+and restart reconciliation below remain unimplemented. This is one proposed V1
+path, not a compatibility path or a promotion qualification result. Software
+custody is sufficient; no HSM is prerequisite.
 
 ## Existing seam and the trust gap
 
@@ -24,14 +26,46 @@ would roll back the Check trust boundary.
 The daemon's `FinalPromotionRetainedFloorV1` currently exposes only `read` and
 `advance_and_readback`; it has no historical pin, durable generation or
 recovery factory. [`reserved_observation.rs`](../../../crates/irohad/src/signer_operation/final_promotion/reserved_observation.rs)
-retains the original signed Reserve and pre-Reserve floor only in memory. Its
-pre-submit equality reread prevents a changed floor from reaching transport in
-that process. The bounded same-height preflight also matches the floor's
-height/hash/context to the local State/Kura/QC artifact and durable receipt.
-It does not independently issue an old pin, protect floor-store rollback after
-restart or prove a whole successor interval. A private file, even with a digest chain, cannot by itself
+retains the original signed Reserve and pre-Reserve floor in its live owner and
+now also pins an exact private pending record. Its pre-submit equality reread
+prevents a changed floor from reaching transport in that process. The bounded
+same-height preflight also matches the floor's height/hash/context to the local
+State/Kura/QC artifact and durable receipt. The journal does not independently
+issue an old pin, protect floor-store rollback after restart or prove a whole
+successor interval. A private file, even with a digest chain, cannot by itself
 prove that it existed before Reserve was submitted or that its highest
 generation survived a rollback.
+
+## Bounded journal cut in the current checkout
+
+[`pending_reserve_journal.rs`](../../../crates/irohad/src/signer_operation/final_promotion/pending_reserve_journal.rs)
+uses a dedicated owner-only `pending-reserve-v1` directory beside the receipt
+journal. It retains a canonical intent and floor (intent at most 4,096 bytes),
+the original signed Current Check and role-15 Reserve frames (each at most
+65,536 bytes), and exact entry hashes in one immutable record (at most 136 KiB).
+The pinned-file substrate retains its exclusive lease and durable fsync/readback
+checks; receipt purpose types and byte ceilings are unchanged. Signed frames
+are canonical and signature-verified. An operation-specific in-progress file is
+synced as a one-use tombstone before its signed bytes are written. Only a
+complete mode-0400 file is published under the recovery name with atomic
+no-replace rename and a directory sync. An interrupted tombstone consumes the
+journal budget and blocks reuse of its ID without blocking recovery of other
+completed records. Live Reserve submission rechecks its pinned record first.
+Reopening after a restart exposes read-only evidence and no signing or
+resubmission method.
+
+Scoped locked daemon tests pass: private journal 5/5, final-promotion Current
+observation and Reserve handoff 18/18, and original receipt journal 9/9. After
+the in-progress staging repair, current-source focused daemon selectors passed:
+`scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p irohad
+--lib signer_operation::journal::tests -- --nocapture` (13/13, including four
+pending-Reserve crash/capacity tests) and the same command with
+`signer_operation::final_promotion::pending_reserve_journal` as the selector
+(5/5). These exercise exact bounds, forged signature, partial record, path
+identity, restart readback and pre-transport tampering. They do **not**
+authenticate a historical two-floor source after restart or reconcile an
+ambiguous native Reserve. The native pin, independent floor generation, funded
+source replay and production provider remain open release gates.
 
 ## Proposed canonical V1 contract
 

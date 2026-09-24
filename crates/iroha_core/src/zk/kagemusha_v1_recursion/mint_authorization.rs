@@ -1491,7 +1491,7 @@ where
         enabled_profiles,
         hardware_authorization,
     )?;
-    let messages = jobs.canonical_messages()?;
+    let messages = jobs.bounded_claim_messages()?;
     drop(assigned);
     drop(jobs);
     drop(builder);

@@ -2780,10 +2780,6 @@ export class ToriiBrowserClient {
     return this._canonicalQueryJson("/v1/transactions/query", options, normalizeTransactionQueryEnvelope(options, "queryTransactions"));
   }
 
-  queryVisibleTransactions(options) {
-    return this._canonicalQueryJson("/v1/transactions/visible/query", options, normalizeTransactionQueryEnvelope(options, "queryVisibleTransactions"));
-  }
-
   /** List committed contract-call activity using Torii's route-specific filters. */
   listContractActivity(options = {}) {
     const context = "listContractActivity options";
@@ -3387,6 +3383,7 @@ export class ToriiBrowserClient {
     return this._json("POST", (TEXT_V1_CONTRACTS + "call/multisig/propose"), {
       rawBody: noritoEncodeMultisigContractCallProposeRequest(
         requireObject(request, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_PROPOSE + "request")),
+        this.#networkPrefix,
       ),
       contentType: FIELD_APPLICATION_X_NORITO,
       headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },
@@ -3401,6 +3398,7 @@ export class ToriiBrowserClient {
     return this._json("POST", (TEXT_V1_CONTRACTS + "call/multisig/approve"), {
       rawBody: noritoEncodeMultisigContractCallApproveRequest(
         requireObject(request, (TEXT_SUBMIT_MULTISIG_CONTRACT_CALL_APPROVE + "request")),
+        this.#networkPrefix,
       ),
       contentType: FIELD_APPLICATION_X_NORITO,
       headers: { Accept: FIELD_APPLICATION_JSON, ...(opts.headers ?? {}) },

@@ -1524,18 +1524,17 @@ mod tests {
             );
             assert!(error.to_string().contains(flag));
         }
-        assert!(
-            parse_command(&[
-                "claim-rewards",
-                "--lane-id",
-                "0",
-                "--claim-plan",
-                "/unused/plan",
-                "--upto-epoch",
-                "12"
-            ])
-            .is_err()
-        );
+        let error = parse_command(&[
+            "claim-rewards",
+            "--lane-id",
+            "0",
+            "--claim-plan",
+            "/unused/plan",
+            "--upto-epoch",
+            "12",
+        ])
+        .expect_err("retired epoch bound cannot replace exact record authorization");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -1566,6 +1565,32 @@ mod tests {
     }
 
     #[test]
+    fn staking_plan_reader_rejects_unknown_fields() {
+        let mut monetary =
+            norito::json::to_value(&registration_plan("1", 1)).expect("monetary plan JSON");
+        monetary
+            .as_object_mut()
+            .expect("monetary plan object")
+            .insert("retired_transfer".into(), norito::json::Value::Null);
+        let file = plan_file(&monetary);
+        assert!(
+            load_staking_plan::<PublicLaneMonetaryPlanV1>(file.path(), "--monetary-plan").is_err()
+        );
+
+        let mut claim =
+            norito::json::to_value(&reward_claim_plan(ALICE_ID.clone(), LaneId::SINGLE))
+                .expect("claim plan JSON");
+        claim
+            .as_object_mut()
+            .expect("claim plan object")
+            .insert("upto_epoch".into(), norito::json::Value::Null);
+        let file = plan_file(&claim);
+        assert!(
+            load_staking_plan::<PublicLaneRewardClaimPlanV1>(file.path(), "--claim-plan").is_err()
+        );
+    }
+
+    #[test]
     fn monetary_plan_rejects_wrong_network_and_invalid_shape() {
         let context = TestContext::new();
         let valid = registration_plan("1", 1);
@@ -1589,6 +1614,15 @@ mod tests {
             },
             PublicLaneMonetaryPlanV1 {
                 amount: iroha_primitives::numeric::Quantity::zero(),
+                ..valid.clone()
+            },
+            PublicLaneMonetaryPlanV1 {
+                precondition: PublicLaneMonetaryPreconditionV1::Bond(
+                    iroha::data_model::nexus::PublicLaneMonetaryBondV1 {
+                        activation_height: 0,
+                        peer_id: valid_peer_id_literal().parse().expect("peer id"),
+                    },
+                ),
                 ..valid.clone()
             },
             PublicLaneMonetaryPlanV1 {
@@ -1733,6 +1767,16 @@ mod tests {
         too_many_sources.sources = vec![valid.sources[0].clone(); 65];
         let mut genesis = valid.clone();
         genesis.network_scope = PublicLaneMonetaryScopeV1::Genesis;
+        let mut foreign_network = valid.clone();
+        foreign_network.network_scope =
+            PublicLaneMonetaryScopeV1::Network(NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"foreign reward network")),
+            ));
+        let mut stale_cursor = valid.clone();
+        stale_cursor.expected_state =
+            Some(iroha::data_model::nexus::PublicLaneRewardClaimStateV1 {
+                through_epoch: Some(valid.records[0].epoch),
+            });
         let mut expired = valid;
         expired.valid_until_height = 0;
         for plan in [
@@ -1742,6 +1786,8 @@ mod tests {
             too_many_records,
             too_many_sources,
             genesis,
+            foreign_network,
+            stale_cursor,
             expired,
         ] {
             let file = plan_file(&plan);
@@ -1771,9 +1817,11 @@ mod tests {
         plan.records.clear();
         plan.sources.clear();
         for epoch in 0..MAX_PUBLIC_LANE_REWARD_CLAIM_RECORDS {
-            let key =
-                KeyPair::try_from_seed(vec![u8::try_from(epoch).unwrap(); 32], Algorithm::Ed25519)
-                    .unwrap();
+            let key = KeyPair::try_from_seed(
+                vec![u8::try_from(epoch + 1).unwrap(); 32],
+                Algorithm::Ed25519,
+            )
+            .unwrap();
             let source = plan_asset(AccountId::new(key.public_key().clone()));
             let record = PublicLaneRewardRecord {
                 lane_id: LaneId::SINGLE,

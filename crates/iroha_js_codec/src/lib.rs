@@ -4667,3 +4667,6 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
 mod atomic_settlement_json_tests;
 #[cfg(test)]
 mod tests;
+
+mod multisig_contract;
+pub use multisig_contract::build_canonical_multisig_contract_call_json;

@@ -31492,6 +31492,7 @@ fn admission_error_reason(err: &AdvertError) -> &'static str {
         AdvertError::UnknownCapabilities { .. } => "unknown_capabilities",
         AdvertError::AdmissionMissing { .. } => "admission_missing",
         AdvertError::AdmissionFailed { error, .. } => match error {
+            crate::sorafs::AdmissionCheckError::NetworkMismatch { .. } => "network_mismatch",
             crate::sorafs::AdmissionCheckError::Digest(_) => "digest_error",
             crate::sorafs::AdmissionCheckError::BodyMismatch => "body_mismatch",
             crate::sorafs::AdmissionCheckError::BodyDigestMismatch { .. } => "body_digest_mismatch",
@@ -38200,6 +38201,7 @@ mod advert_tests {
         .expect("encode range capability");
         let advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: 42,
             expires_at: 99,
             body: ProviderAdvertBodyV1 {
@@ -39516,7 +39518,7 @@ mod advert_tests {
                 spa_fallback: None,
             }],
         }));
-        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         inner.sorafs_gateway_config.enforce_admission = true;
         inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
         inner
@@ -39787,7 +39789,7 @@ mod advert_tests {
     fn authoritative_public_discovery_uses_rate_only_gateway_policy() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let mut gateway_config = inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
         gateway_config.require_manifest_envelope = true;
@@ -41310,7 +41312,7 @@ mod advert_tests {
         let mut context = token_test_context();
         let mut app_inner = Arc::try_unwrap(context.app)
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
         install_api_test_gateway_security(&mut app_inner, gateway_config);
@@ -41961,7 +41963,12 @@ mod advert_tests {
             .collect::<HashSet<_>>();
         let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
             .expect("fixture admission council policy");
-        AdmissionRegistry::from_envelopes(policy, envelopes).expect("fixture envelopes validate")
+        let network_id = envelopes
+            .first()
+            .expect("fixture admission requires at least one envelope")
+            .network_id;
+        AdmissionRegistry::from_envelopes(network_id, policy, envelopes)
+            .expect("fixture envelopes validate")
     }
     fn app_state_with_cache(fixture: &ProviderFixture) -> SharedAppState {
         app_state_with_cache_inner(fixture, false)
@@ -42133,6 +42140,7 @@ mod advert_tests {
         let body_clone = body.clone();
         let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at,
             expires_at,
             body,
@@ -42201,6 +42209,12 @@ mod advert_tests {
         let council_key = SigningKey::from_bytes(&[0x42; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body: body_clone,

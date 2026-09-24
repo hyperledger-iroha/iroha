@@ -188,6 +188,7 @@ fn read_signed_snapshot_physical_fixture(
         fixture.snapshot_directory.path(),
         &fixture.kura,
         &fixture.lane_manifests,
+        &iroha_config::parameters::actual::Nexus::default(),
         LiveQueryStore::start_test,
         fixture.block_count,
         nonzero!(1024_usize),

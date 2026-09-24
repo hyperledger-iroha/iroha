@@ -4,7 +4,7 @@
 //! It later derives the Reserved subject from one real State cut, but only Core's signed-entry,
 //! successful-execution and State/Kura/QC proof can turn that subject into authority. Injected
 //! transport, observer, clock and floor implementations still require production qualification.
-//! TODO: Connect durable pending-envelope recovery, funded proof replay and deployment providers
+//! TODO: Connect the independent native floor pin, funded proof replay and deployment providers
 //! before implementing the production role-14 operation-state source.
 
 use std::{sync::Arc, time::Duration};
@@ -53,6 +53,7 @@ use super::{
     observer_transaction::{
         FinalPromotionObserverTransactionErrorV1, FinalPromotionObserverTransactionsV1,
     },
+    pending_reserve_journal::{FinalPromotionPendingReserveJournalV1, RecoveredPendingReserveV1},
 };
 
 /// Pre-submission Reserve owner with the exact signed role-15 envelope and independent floor.
@@ -64,6 +65,7 @@ pub struct FinalPromotionReservedCheckRuntimeV1 {
     observer: FinalPromotionObserverTransactionsV1,
     request: SignerFinalPromotionRequestV1,
     signed_reserve: SignedFinalPromotionAccountTransactionV1,
+    pending_reserve: RecoveredPendingReserveV1,
     pre_reserve_floor: FinalPromotionCheckFloorV1,
     max_elapsed: Duration,
 }
@@ -83,6 +85,7 @@ impl FinalPromotionReservedCheckRuntimeV1 {
         signed_reserve: SignedFinalPromotionAccountTransactionV1,
         max_elapsed: Duration,
         floor: &mut impl FinalPromotionRetainedFloorV1,
+        journal: FinalPromotionPendingReserveJournalV1,
     ) -> Result<Self, Error> {
         if max_elapsed.is_zero()
             || max_elapsed > Duration::from_secs(60)
@@ -159,11 +162,23 @@ impl FinalPromotionReservedCheckRuntimeV1 {
             return Err(Error::Binding);
         }
         drop(view);
+        let pending_reserve = journal
+            .stage(
+                request,
+                observer.receipt_binding(),
+                observer.account_binding(),
+                observer.observer(),
+                pre_reserve_floor,
+                signed_reserve.original_current_check(),
+                signed_reserve.reconciliation_transaction(),
+            )
+            .map_err(|_| Error::Journal)?;
         Ok(Self {
             state,
             observer,
             request,
             signed_reserve,
+            pending_reserve,
             pre_reserve_floor,
             max_elapsed,
         })
@@ -171,8 +186,8 @@ impl FinalPromotionReservedCheckRuntimeV1 {
 
     /// Submit the original signed Reserve once, reconciling only that same envelope if ambiguous.
     ///
-    /// The returned owner still has no finality claim. On error this in-memory attempt is
-    /// consumed; a production source needs a durable pending-envelope journal for restart.
+    /// The returned owner still has no finality claim. The exact pending envelope was staged and
+    /// read back before this method; recovery can inspect it but cannot submit or renew authority.
     ///
     /// # Errors
     /// Rejects a changed pre-Reserve floor, stale original Checks, unavailable transport or
@@ -196,6 +211,14 @@ impl FinalPromotionReservedCheckRuntimeV1 {
             .signed_reserve
             .for_submission(receipt_time, account_time)
             .map_err(|_| Error::Check)?;
+        self.pending_reserve
+            .matches_live(
+                &self.request,
+                self.pre_reserve_floor,
+                self.signed_reserve.original_current_check(),
+                original,
+            )
+            .map_err(|_| Error::Journal)?;
         let outcome = submission
             .submit_exact(original)
             .map_err(|_| Error::Submission)?;
@@ -258,6 +281,10 @@ impl FinalPromotionSubmittedReserveV1 {
         floor: &mut impl FinalPromotionRetainedFloorV1,
     ) -> Result<FinalPromotionReservedPostPersistenceV1, Error> {
         let owner = self.0;
+        owner
+            .pending_reserve
+            .recheck()
+            .map_err(|_| Error::Journal)?;
         if floor.read().map_err(|_| Error::Floor)? != owner.pre_reserve_floor {
             return Err(Error::Floor);
         }

@@ -34,6 +34,7 @@ impl State {
     /// voting. Historical certificate recovery may still need an ordinary gap
     /// inside that prefix, so only exact authenticated Native coordinates close
     /// a historical slot. Applied-session observation remains independent.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native state publication"))]
     pub(crate) fn native_amx_participant_application_closes_lane_slot(
         &self,
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,

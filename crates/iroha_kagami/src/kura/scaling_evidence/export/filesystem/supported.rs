@@ -1036,12 +1036,14 @@ mod tests;
 
 #[path = "prepare_pair.rs"]
 mod prepare_pair;
-pub(crate) use prepare_pair::{PreparedLaunch, PreparedOutputPair, prepare_bound};
+#[cfg(test)]
+pub(crate) use prepare_pair::PreparedLaunch;
+pub(crate) use prepare_pair::{PreparedOutputPair, prepare_bound};
 
 #[path = "facts.rs"]
 mod facts;
-pub(in crate::kura::scaling_evidence::export) use facts::{PublishedFacts, produce_facts};
+pub(in crate::kura::scaling_evidence::export) use facts::produce_facts;
 
 #[path = "stopped_tip.rs"]
 mod stopped_tip;
-pub(crate) use stopped_tip::{RetainedStoppedTip, observe_stopped_tip};
+pub(crate) use stopped_tip::observe_stopped_tip;

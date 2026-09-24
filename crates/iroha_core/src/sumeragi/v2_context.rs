@@ -103,6 +103,11 @@ pub(crate) struct StagedGenesisNexusAmxContext {
 }
 impl StagedGenesisNexusAmxContext {
     /// Return the exact projection authenticated by staged genesis execution.
+    // TODO: consume this projection in the native genesis runner boundary.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native genesis context cutover")
+    )]
     pub(crate) const fn hash(self) -> Hash {
         self.hash
     }
@@ -848,6 +853,11 @@ pub(crate) fn build_successor_height_context_from_state(
 /// threshold-BLS verification is repeated at this consensus consumption
 /// boundary so restored or directly seeded state cannot turn a shape-valid
 /// pulse into authoritative entropy.
+// TODO: call this authenticated seed helper from native NPoS successor construction.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native NPoS successor cutover")
+)]
 pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
     world: &impl WorldReadOnly,
     block_hashes: &(impl crate::state::BlockHashRead + ?Sized),
@@ -2451,12 +2461,6 @@ mod tests {
     fn genesis_rejects_non_unit_consensus_power() {
         let network_id = test_network_id(0x43);
         let election_roster = roster(&[1, 2, 1, 1]);
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id,
-                10,
-                &election_roster,
-            );
         let error = build_genesis_height_context(GenesisContextInputs {
             network_id,
             election: genesis_election(

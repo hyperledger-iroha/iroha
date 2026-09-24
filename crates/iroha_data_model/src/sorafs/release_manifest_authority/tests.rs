@@ -232,6 +232,46 @@ fn role13_custody_record_has_one_bounded_canonical_frame_and_strict_json() {
 }
 
 #[test]
+fn release_manifest_revocation_has_one_schema_and_strict_roundtrip() {
+    let schema = ReleaseManifestActionV1::schema();
+    let iroha_schema::Metadata::Enum(actions) = schema
+        .get::<ReleaseManifestActionV1>()
+        .expect("release action schema")
+    else {
+        panic!("release action must have an enum schema");
+    };
+    assert_eq!(actions.variants[2].tag, "revoke");
+    assert_eq!(actions.variants[2].discriminant, 2);
+    assert!(matches!(
+        schema.get::<ReleaseManifestRevocationV1>(),
+        Some(iroha_schema::Metadata::Struct(_))
+    ));
+    for signer in [false, true] {
+        for attester in [false, true] {
+            let action =
+                ReleaseManifestActionV1::Revoke(ReleaseManifestRevocationV1 { signer, attester });
+            let frame = norito::encode_canonical(&action).expect("revocation frame");
+            assert_eq!(
+                decode_release_manifest_action_claim_v1(&frame).unwrap(),
+                action
+            );
+            let json = norito::json::to_json(&action).expect("revocation JSON");
+            assert_eq!(
+                norito::json::from_str::<ReleaseManifestActionV1>(&json).unwrap(),
+                action
+            );
+        }
+    }
+    for invalid in [
+        r#"{"action":"revoke","value":{"signer":true,"attester":false,"extra":true}}"#,
+        r#"{"action":"revoke","value":{"signer":true}}"#,
+        r#"{"action":"revoke","value":{"signer":1,"attester":false}}"#,
+    ] {
+        assert!(norito::json::from_str::<ReleaseManifestActionV1>(invalid).is_err());
+    }
+}
+
+#[test]
 fn release_manifest_review_must_equal_independently_expected_request_and_audit() {
     let valid = fixture_review();
     assert_eq!(

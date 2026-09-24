@@ -89,6 +89,7 @@ fn machine_for_payment_scope(
         lane.clone(),
         1000,
         0,
+        0,
         old_epoch,
         old_policy,
         snapshot_digest(b"snapshot-old-state-nonce", 8),

@@ -154,7 +154,7 @@ class _TranscriptBuilder:
             "hardware_counter_after": hardware_after,
         }
 
-    def build(self) -> dict[str, Any]:
+    def build(self, *, include_sender: bool = True) -> dict[str, Any]:
         provider_id = _digest("provider")
         run_id = _digest("physical-run")
         policy_epoch = 7
@@ -506,12 +506,14 @@ class _TranscriptBuilder:
             "events": self.events,
             "approvals": [],
         }
-        self.add_sender_validity(document)
+        if include_sender:
+            self.add_sender_validity(document)
         return document
 
     def add_sender_validity(
         self, document: dict[str, Any], hardware_profile: Mapping[str, Any] | None = None,
         suite_id: str | None = None, vk_digest: str | None = None,
+        fixture_input_capture: list[dict[str, Any]] | None = None,
     ) -> None:
         """Replace the complete synthetic sender segment for the exact release fixture.
 
@@ -553,7 +555,9 @@ class _TranscriptBuilder:
                 "lane_commitment": _digest("sender-lane"), "hardware_epoch_id": _digest("sender-epoch"),
                 "hardware_epoch_generation": last_fold["epoch_after"], "device_public_key": _p256_public(2),
                 "device_key_reference": hashlib.sha256(b"iroha:kagemusha:v1:device-key-reference\0" + bytes.fromhex(_p256_public(2))).hexdigest(),
-                "issued_at_ms": issued, "expires_at_ms": end, "governance_signature": "00" * 64,
+                "issued_at_ms": issued, "expires_at_ms": end,
+                "app_policy_binding_digest": _digest("sender-app-policy-binding"),
+                "governance_signature": "00" * 64,
             }
             credential["credential_id"] = physical.credential_identity(credential)
             credential["governance_signature"] = _p256_sign(physical.credential_signing_bytes(credential), 1)
@@ -564,7 +568,10 @@ class _TranscriptBuilder:
             "hardware_profile": profile, "credentials": credentials,
             "vk_digest": vk_digest or _digest("sender-vk"),
         }
-        native_fixtures = _sender_native_fixtures(context)
+        if fixture_input_capture is not None:
+            assert not fixture_input_capture
+            fixture_input_capture.append({"context": copy.deepcopy(context), "positive_attempts": []})
+        native_fixtures = _sender_native_fixtures(context) if fixture_input_capture is None else {}
         self.add("sender_validity_context", context)
         context_hash = self.events[-1]["event_hash"]
         snapshot = {
@@ -603,6 +610,20 @@ class _TranscriptBuilder:
                     "lease_start_ms": lease[0], "lease_end_ms": lease[1], "before": dict(snapshot),
                 }
                 positive = case in physical.SENDER_POSITIVE_CASES
+                if fixture_input_capture is not None:
+                    if positive:
+                        fixture_input_capture[0]["positive_attempts"].append({
+                            **{field: attempt[field] for field in (
+                                "case", "operation_kind", "operation_id", "credential_id",
+                                "preparation_sha256", "candidate_sha256", "request_start_ms",
+                                "request_end_ms", "source", "commit_evidence_commitment",
+                            )},
+                            "decision_trusted_time_ms": now + 5,
+                        })
+                    # Normal construction emits an attempt and result, each at +10 ms.
+                    # Capture only their source inputs; do not fabricate native evidence.
+                    self.clock = max(self.clock, now) + 20
+                    continue
                 native = native_fixtures[(case, operation)] if positive else None
                 if positive and operation == "send_split":
                     attempt.update({key: native["projection"][key] for key in ("request_sha256", "request_start_ms", "request_end_ms")})
@@ -628,6 +649,8 @@ class _TranscriptBuilder:
                 self.add("sender_admission_result", result)
                 if positive:
                     positives.append((attempt_event, self.events[-1]))
+        if fixture_input_capture is not None:
+            return
         for index, (attempt_event, result_event) in enumerate(positives):
             a, r = attempt_event["data"], result_event["data"]
             native = native_fixtures[(a["case"], a["operation_kind"])]
@@ -971,13 +994,13 @@ class PhysicalDeviceEvidenceTest(unittest.TestCase):
             return result
 
         request = fields(bytes.fromhex(fixture["payment_request"]["norito_hex"])[40:])
-        encoded = next(value for value in request if len(value) == 434)
+        encoded = next(value for value in request if len(value) == 467)
         raw = fields(encoded)
         self.assertEqual(len(raw), len(physical.CREDENTIAL_FIELDS))
         numeric = {"version", "policy_epoch", "hardware_epoch_generation", "issued_at_ms", "expires_at_ms"}
         credential = {name: int.from_bytes(value, "little") if name in numeric else value.hex() for name, value in zip(physical.CREDENTIAL_FIELDS, raw)}
         self.assertEqual(physical.credential_identity(credential), credential["credential_id"])
-        self.assertEqual(len(release._norito_frame("iroha.kagemusha.v1.hardware-credential-id-preimage", physical._credential_payload(credential))), 376)
+        self.assertEqual(len(release._norito_frame("iroha.kagemusha.v1.hardware-credential-id-preimage", physical._credential_payload(credential))), 409)
         # Rust's fixture issuer uses the explicit [8; 32] scalar seed; verify its signature
         # independently of our synthetic signing helper.
         issuer = _p256_public(int.from_bytes(bytes([8]) * 32, "big"))

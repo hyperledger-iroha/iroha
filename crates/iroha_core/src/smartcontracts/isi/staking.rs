@@ -4,7 +4,7 @@ use crate::sumeragi::evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
-        ConsensusKeyGate, EvidencePreparationError, WorldReadOnly, consensus_key_roles_for_lane,
+        ConsensusKeyGate, EvidencePreparationError, WorldReadOnly, consensus_key_role_for_lane,
         peer_consensus_key_gate_for_lane, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
@@ -68,10 +68,20 @@ struct PublicLaneStakeIndexDemand {
 }
 
 impl PublicLaneStakeIndexDemand {
+    #[cfg(test)]
     fn from_rows<'a>(
         rows: impl Iterator<Item = (&'a PublicLaneStakeShareKey, &'a PublicLaneStakeShare)>,
         max_shares: usize,
         max_pending: usize,
+    ) -> Result<Self, Error> {
+        Self::from_rows_with_group_validator(rows, max_shares, max_pending, |_| Ok(()))
+    }
+
+    fn from_rows_with_group_validator<'a>(
+        rows: impl Iterator<Item = (&'a PublicLaneStakeShareKey, &'a PublicLaneStakeShare)>,
+        max_shares: usize,
+        max_pending: usize,
+        mut validate_group: impl FnMut(&PublicLaneStakeShareKey) -> Result<(), Error>,
     ) -> Result<Self, Error> {
         let mut demand = Self {
             share_rows: 0,
@@ -100,6 +110,7 @@ impl PublicLaneStakeIndexDemand {
                 }
             }
             if previous_key.is_none_or(|previous| previous.0 != key.0 || previous.1 != key.1) {
+                validate_group(key)?;
                 demand.validator_groups =
                     demand.validator_groups.checked_add(1).ok_or_else(|| {
                         Error::InvariantViolation(
@@ -305,10 +316,36 @@ impl PublicLaneStakeIndex {
             .expect("u32 stake-share cap fits usize on supported targets");
         let max_pending = usize::try_from(max_pending_unbonds_per_share)
             .expect("u32 pending-unbond cap fits usize on supported targets");
-        let demand = PublicLaneStakeIndexDemand::from_rows(
+        // The validator cursor advances in the same borrowed demand pass. An
+        // orphan or malformed group is refused before a pool charge or clone.
+        let mut validators = world.public_lane_validators().iter();
+        let mut current_validator = validators.next();
+        let demand = PublicLaneStakeIndexDemand::from_rows_with_group_validator(
             world.public_lane_stake_shares().iter(),
             max_shares,
             max_pending,
+            |share_key| {
+                let group = (share_key.0, &share_key.1);
+                while current_validator
+                    .as_ref()
+                    .is_some_and(|(validator_key, _)| (validator_key.0, &validator_key.1) < group)
+                {
+                    current_validator = validators.next();
+                }
+                let Some((validator_key, record)) = current_validator else {
+                    return Err(Error::InvariantViolation(
+                        "public-lane stake-share aggregate has no validator record".into(),
+                    ));
+                };
+                if (validator_key.0, &validator_key.1) != group {
+                    return Err(Error::InvariantViolation(
+                        "public-lane stake-share aggregate has no validator record".into(),
+                    ));
+                }
+                ensure_public_lane_validator_record_matches_key(validator_key, record)?;
+                current_validator = validators.next();
+                Ok(())
+            },
         )?;
         // Reserve the complete fixed and nested-account layouts atomically
         // before any retained key allocation. The charge buffer is declared
@@ -1253,7 +1290,7 @@ impl Execute for RegisterPublicLaneCandidate {
                 &registration.peer_id,
                 activation_height,
             )?;
-            let allowed_roles = consensus_key_roles_for_lane(registration.lane_id);
+            let required_role = consensus_key_role_for_lane(registration.lane_id);
             let exact_live_pop =
                 state_transaction
                     .world
@@ -1261,7 +1298,7 @@ impl Execute for RegisterPublicLaneCandidate {
                     .iter()
                     .any(|(id, record)| {
                         record.id == *id
-                            && allowed_roles.contains(&id.role)
+                            && id.role == required_role
                             && record.public_key == *registration.peer_id.public_key()
                             && record.pop.as_deref() == Some(self.proof_of_possession.as_slice())
                             && record.expiry_height.is_none()
@@ -1347,7 +1384,7 @@ fn register_public_lane_validator(
         .and_then(|candidate| candidate.prepared_peer.as_ref())
     {
         if prepared.public_key != *registration.peer_id.public_key()
-            || !consensus_key_roles_for_lane(registration.lane_id).contains(&prepared.id.role)
+            || prepared.id.role != consensus_key_role_for_lane(registration.lane_id)
             || prepared.expiry_height.is_some()
             || !prepared.is_live_at(activation_height, 0, 0)
         {
@@ -3055,13 +3092,12 @@ fn ensure_validator_peer_registered(
     required_live_height: u64,
 ) -> Result<(), Error> {
     // Lane zero is global Sumeragi and requires a Validator key. Participant
-    // lanes prefer Committee keys while retaining Validator-key compatibility
-    // for existing transparent lane deployments.
-    let allowed_roles = consensus_key_roles_for_lane(lane_id);
+    // lanes require a Committee key.
+    let required_role = consensus_key_role_for_lane(lane_id);
     let role_label = if lane_id == LaneId::SINGLE {
         "validator"
     } else {
-        "committee or validator"
+        "committee"
     };
     if !state_transaction
         .world
@@ -3131,7 +3167,7 @@ fn ensure_validator_peer_registered(
         .get(&peer_public_key.to_string())
         .is_some_and(|ids| {
             ids.iter().any(|id| {
-                allowed_roles.contains(&id.role)
+                id.role == required_role
                     && state_transaction
                         .world
                         .consensus_keys()
@@ -4165,7 +4201,7 @@ mod tests {
         .execute(&validator, &mut stx);
 
         assert!(
-            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded committee or validator consensus key")),
+            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded committee consensus key")),
             "unexpected result: {result:?}"
         );
         assert!(
@@ -4566,7 +4602,7 @@ mod tests {
         assert!(!stx.commit_topology.iter().any(|voter| voter == &peer));
     }
     #[test]
-    fn global_lane_rejects_committee_only_key_while_participant_accepts_validator_key() {
+    fn lane_registration_requires_its_canonical_consensus_key_role() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -4584,7 +4620,7 @@ mod tests {
             height,
             None,
         );
-        RegisterPublicLaneValidator {
+        let participant_error = RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(&stx, &validator, Quantity::from(1_000_u64)),
             lane_id: LaneId::new(43),
             peer_id: participant_peer.clone(),
@@ -4594,12 +4630,18 @@ mod tests {
             metadata: Metadata::default(),
         }
         .execute(&validator, &mut stx)
-        .expect("existing Validator-role peers remain valid participant-lane validators");
+        .expect_err("Validator-role key cannot authorize participant validation");
+        assert!(matches!(
+            participant_error,
+            Error::InvariantViolation(message)
+                if message.contains("required consensus key")
+                    || message.contains("committee consensus key")
+        ));
         assert!(
             stx.world
                 .public_lane_validators
                 .get(&(LaneId::new(43), validator.clone()))
-                .is_some()
+                .is_none()
         );
 
         let global_peer = validator_peer_id(&delegator);

@@ -1269,7 +1269,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
+async fn strict_proxy_finalization_keeps_w_through_canonical_admission_wait() {
     let signers = (0_u8..4)
         .map(|offset| {
             checked_torii_test_keypair_from_seed_byte(
@@ -1310,7 +1310,8 @@ async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
                 &expected.admission_binding,
                 queue_plan_synced_test_entrypoint(&request),
                 super::queue_plan_publication_wait::PersistenceDeadline::new(
-                    Instant::now(),
+                    Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET
+                        + Duration::from_secs(3),
                     request.deadline_unix_ms,
                 ),
             )
@@ -1329,7 +1330,7 @@ async fn strict_proxy_finalization_keeps_w_through_actual_durable_admission() {
             response
         })
         .await;
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(super::is_queue_plan_outcome_unknown_response(&response));
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
     drop(response);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
@@ -2988,7 +2989,7 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queue_plan_quorum_is_accepted_before_registry_application() {
+async fn queue_plan_quorum_is_not_publicly_accepted_before_registry_application() {
     let signers = (0_u8..4)
         .map(|offset| {
             checked_torii_test_keypair_from_seed_byte(
@@ -3031,15 +3032,14 @@ async fn queue_plan_quorum_is_accepted_before_registry_application() {
         &expected.admission_binding,
         queue_plan_synced_test_entrypoint(&request),
         super::queue_plan_publication_wait::PersistenceDeadline::new(
-            Instant::now(),
+            Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET + Duration::from_secs(3),
             request.deadline_unix_ms,
         ),
     );
     let response = response.await;
-    assert_eq!(
-        response.status(),
-        StatusCode::ACCEPTED,
-        "a locally durable f+1 certificate is Accepted before WSV application with an authenticated capacity owner"
+    assert!(
+        super::is_queue_plan_outcome_unknown_response(&response),
+        "an uncarried f+1 certificate cannot promise canonical admission"
     );
     assert_eq!(
         app.kura
@@ -3052,17 +3052,13 @@ async fn queue_plan_quorum_is_accepted_before_registry_application() {
             .queue_plan_admission_binding_registry_match(&expected.admission_binding)
             .expect("inspect unapplied QueuePlan registry"),
         QueuePlanAdmissionRegistryMatch::Absent,
-        "Accepted is a durable-admission receipt, not an Applied receipt"
+        "local durability does not create canonical registry membership"
     );
     let response_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(
-        response_bytes.as_ref(),
-        snapshot.body.as_slice(),
-        "the public response remains the certificate-only quorum receipt"
-    );
-    assert!(super::decode_queue_plan_synced_certificate(&response_bytes).is_ok());
+    assert_ne!(response_bytes.as_ref(), snapshot.body.as_slice());
+    assert!(super::decode_queue_plan_synced_certificate(&response_bytes).is_err());
     assert!(
         norito::decode_canonical::<iroha_data_model::block::lane_admission::LaneAdmittedInputV1>(
             &response_bytes
@@ -4342,7 +4338,7 @@ async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
     app.kura.store_block(Arc::new(successor)).unwrap();
     let memory = super::try_acquire_torii_proxy_memory(&app).unwrap();
     let deadline = super::queue_plan_publication_wait::PersistenceDeadline::new(
-        Instant::now(),
+        Instant::now() - super::TORII_PROXY_EXECUTION_BUDGET + Duration::from_secs(3),
         request.deadline_unix_ms,
     );
     let observed_wait_height = deadline.observed_wait_height.clone();
@@ -4400,7 +4396,7 @@ async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(super::is_queue_plan_outcome_unknown_response(&response));
     assert_eq!(
         app.kura
             .pending_queue_plan_admission_certificate(hash)
@@ -5045,6 +5041,101 @@ fn canonical_queue_plan_retry_fixture_with_entrypoint(
         "canonical custody is independent of the local Queue"
     );
     (app, request, snapshot)
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepared_queue_plan_retry_recovers_durable_pending_after_fresh_expiry() {
+    let seed = 0x5a_u8;
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                seed.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "pending prepared retry admission authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, mut request) = incoming_proxy_submit_fixture_with_validator_signers(
+        seed,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let transaction_signer =
+        checked_torii_test_ed25519_keypair(seed, "expired prepared retry signer");
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction,
+        admission_binding: Some(binding),
+        ..
+    } = &mut request.request
+    else {
+        panic!("exact prepared retry fixture");
+    };
+    let TransactionEntrypoint::External(original) = transaction else {
+        panic!("prepared retry fixture has a signed external entrypoint");
+    };
+    let mut builder = TransactionBuilder::from_payload(original.payload().clone()).unwrap();
+    builder.set_creation_time(Duration::from_millis(1));
+    builder.set_ttl(Duration::from_secs(1));
+    *transaction = TransactionEntrypoint::External(builder.sign(transaction_signer.private_key()));
+    *binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
+        app.state.network_id_ref(),
+        transaction,
+        &binding.routing_plan().unwrap(),
+        binding.admission_context.clone(),
+        1,
+    )
+    .unwrap();
+    request.request_id = binding.request_id;
+    let receipts = signers
+        .iter()
+        .take(2)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 1))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let complete = queue_plan_synced_test_complete_input(&request, &snapshot.body);
+    assert!(matches!(
+        app.state
+            .persist_classified_queue_plan_admission(
+                &complete,
+                iroha_core::state::QueuePlanAdmissionPersistenceScope::Admission,
+            )
+            .expect("persist real quorum before a carrier commits"),
+        iroha_core::state::PendingQueuePlanAdmissionPersistenceOutcome::Durable { .. }
+    ));
+    let TransactionEntrypoint::External(signed) = queue_plan_synced_test_entrypoint(&request)
+    else {
+        panic!("signed prepared retry entrypoint");
+    };
+    assert!(
+        !app.state
+            .queue_plan_admission_registry_entrypoint_present(signed.hash_as_entrypoint())
+            .unwrap()
+    );
+    assert!(matches!(
+        routing::accept_transaction_for_ingress(
+            app.state.clone(),
+            TransactionEntrypoint::External(signed.clone()),
+            &app.telemetry,
+        ),
+        Err(Error::AcceptTransaction(
+            AcceptTransactionFail::TransactionExpired { .. }
+        ))
+    ));
+    let response = routing::certified_prepared_queue_plan_response(&app, signed)
+        .await
+        .expect("authenticated retry worker")
+        .expect("durable pending certificate authorizes retry");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-entrypoint-hash"),
+        Some(signed.hash_as_entrypoint().to_string().as_str())
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-signed-transaction-hash"),
+        Some(signed.hash().to_string().as_str())
+    );
+    assert_eq!(app.queue.active_len(), 0);
 }
 
 #[cfg(feature = "connect")]

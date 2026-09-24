@@ -261,7 +261,9 @@ def test_passive_recovery_contract_rejects_missing_quiet_tick_branch(
     source = path.read_text(encoding="utf-8")
     item, = module._extract_rust_binding_items(source, "fn", symbol)
     token = f"native.poll(native_global, native_network, {now}, receiver)?;"
-    assert item.count(token) == 2
+    if not pending and occurrence == 0:
+        token = 'native\n            .poll(native_global, native_network, now, receiver)\n            .inspect_err(|error| {\n                iroha_logger::error!(\n                    ?error,\n                    height = context.height,\n                    "Sumeragi v2 Native process turn failed closed"\n                );\n            })?;'
+    assert item.count(token) == (2 if pending else 1)
     offset = item.index(token) if occurrence == 0 else item.rindex(token)
     mutated = item[:offset] + item[offset:].replace(token, "skip_native_poll();", 1)
     path.write_text(source.replace(item, mutated, 1), encoding="utf-8")
@@ -662,11 +664,16 @@ def test_native_recovery_generic_bindings_use_actual_sources(tmp_path, mutate_so
     ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "return LaneCurrentGate::ObservationChanged", "return LaneCurrentGate::InstanceClosed"),
     ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_instance", "if gate == LaneCurrentGate::InstanceClosed", "if gate != LaneCurrentGate::ObservationChanged"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::service_sources", ".source_recovery_target(id, observed.as_ref()?)?", ".unchecked_source_target(id)?"),
-    ("v2_runner/native_process.rs", "NativeRunnerProcess::poll", "source_gate != LaneCurrentGate::ObservationChanged", "true"),
+    ("v2_runner/native_process.rs", "NativeRunnerProcess::poll", "if !source_observation_changed", "if true"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "observed.filter(|observed| observed.is_current(state))", "observed"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "source.is_current_in(observed)", "true"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_closed_candidate", "response.is_some()", "false"),
+    ("v2_runner/native_source.rs", "NativeSourceRequest::retire_released_validation", "Arc::ptr_eq(source, owned_source)", "true"),
+    ("v2_runner/native_candidate.rs", "NativeRunnerProcess::prune_closed_candidate_source_waits", "source.is_current_in(observed)", "true"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::next_deadline", "if self.awaiting_current_observation", "if false"),
     ("v2_runner/native_process.rs", "NativeRunnerProcess::note_current_observation", "observed.is_none_or(|observed| !observed.is_current(&self.state))", "observed.is_none()"),
 ])
-def test_native_source_retirement_requires_original_authenticated_closure(tmp_path, relative, symbol, old, new):
+def test_native_source_retirement_requires_original_owner_and_current_lane(tmp_path, relative, symbol, old, new):
     support = load_support()
     module = support.load_checker()
     models = copy_fixture(tmp_path, support, module)
@@ -678,3 +685,72 @@ def test_native_source_retirement_requires_original_authenticated_closure(tmp_pa
     path.write_text(source.replace(item, item.replace(old, new, 1), 1), encoding="utf-8")
     errors = validate_fixture(tmp_path, module, models)
     assert any(symbol in error for error in errors), errors
+
+
+def validate_native_diagnostic_model(tmp_path, support, module, models):
+    """Exercise the real generic consumer on the exact Autonomous runner row."""
+    import copy
+
+    model = copy.deepcopy(next(
+        model for model in models
+        if model["module"] == module.passive_recovery_contract.AUTONOMOUS_MODULE
+    ))
+    model["production_symbols"] = [
+        binding for binding in model["production_symbols"]
+        if (binding["path"], binding["kind"], binding["symbol"]) == (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "fn", "run_lifecycle_active_height",
+        )
+    ]
+    assert len(model["production_symbols"]) == 1
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_model(
+            tmp_path, support.ROOT_DIR / "formal/sumeragi_v2", model, errors
+        )
+    return tuple(errors)
+
+
+def test_native_diagnostic_wrappers_accept_both_actual_consumers(tmp_path):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    assert validate_native_diagnostic_model(tmp_path, support, module, models) == ()
+
+
+@pytest.mark.parametrize("stage,old,new", [
+    ('source', 'service_sources(services, now)', 'service_sources(other_services, now)'),
+    ('source', 'service_sources(services, now)', 'service_sources(services, other_now)'),
+    ('poll', '.poll(native_global, native_network, now, receiver)', '.poll(other_global, native_network, now, receiver)'),
+    ('poll', '.poll(native_global, native_network, now, receiver)', '.poll(native_global, other_network, now, receiver)'),
+    ('poll', '.poll(native_global, native_network, now, receiver)', '.poll(native_global, native_network, other_now, receiver)'),
+    ('poll', '.poll(native_global, native_network, now, receiver)', '.poll(native_global, native_network, now, other_receiver)'),
+    ('source', '})?;', '});'),
+    ('poll', '})?;', '});'),
+    ('source', 'iroha_logger::error!(', 'emit_native_control_action(); iroha_logger::error!('),
+    ('poll', 'iroha_logger::error!(', 'emit_native_control_action(); iroha_logger::error!('),
+
+])
+def test_native_diagnostic_wrappers_reject_changed_arguments_or_error_custody(
+    tmp_path, stage, old, new,
+):
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    assert validate_fixture(tmp_path, module, models) == ()
+    assert validate_native_diagnostic_model(tmp_path, support, module, models) == ()
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    source = path.read_text(encoding="utf-8")
+    symbol = "run_lifecycle_active_height"
+    item, = module._extract_rust_binding_items(source, "fn", symbol)
+    token = 'native.service_sources(services, now).inspect_err(|error| {\n                    iroha_logger::error!(\n                        ?error,\n                        height = context.height,\n                        "Sumeragi v2 Native source service failed closed"\n                    );\n                })?;' if stage == "source" else 'native\n            .poll(native_global, native_network, now, receiver)\n            .inspect_err(|error| {\n                iroha_logger::error!(\n                    ?error,\n                    height = context.height,\n                    "Sumeragi v2 Native process turn failed closed"\n                );\n            })?;'
+    assert item.count(token) == 1
+    assert token.count(old) == 1
+    changed = token.replace(old, new, 1)
+    path.write_text(source.replace(item, item.replace(token, changed, 1), 1), encoding="utf-8")
+    passive_errors = validate_fixture(tmp_path, module, models)
+    generic_errors = validate_native_diagnostic_model(tmp_path, support, module, models)
+    assert any(symbol in error and "source-bound token" in error for error in passive_errors), passive_errors
+    assert any(symbol in error and "Native quiet-loop prefix" in error for error in passive_errors), passive_errors
+    assert any(symbol in error and "source-binding token" in error for error in generic_errors), generic_errors

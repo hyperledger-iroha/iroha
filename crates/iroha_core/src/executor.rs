@@ -472,6 +472,11 @@ fn native_iterable_query_access(
             payload;
             data_model_query::transaction::prelude::FindTransactions
         ) {
+            if let Ok(Some(authority)) = query.exact_transaction_read_authority_with_limits(
+                norito::canonical_decode_limits(query.predicate_bytes.len()),
+            ) {
+                return Ok(NativeQueryAccess::Account(authority));
+            }
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -10826,7 +10831,9 @@ mod tests {
     }
     #[test]
     fn initial_executor_keeps_explicitly_standalone_referendum_ballots() {
-        use iroha_data_model::isi::governance::{CastPlainBallot, CastZkBallot};
+        use iroha_data_model::isi::governance::{
+            CastPlainBallot, CastZkBallot, UpdatePlainConviction,
+        };
 
         let ballots = [
             InstructionBox::from(CastPlainBallot {
@@ -10835,6 +10842,12 @@ mod tests {
                 amount: 1_u64.into(),
                 duration_blocks: 1,
                 direction: 0,
+            }),
+            InstructionBox::from(UpdatePlainConviction {
+                referendum_id: "standalone-plain".to_owned(),
+                owner: checked_account_id(),
+                amount: 2_u64.into(),
+                duration_blocks: 2,
             }),
             InstructionBox::from(CastZkBallot {
                 election_id: "standalone-zk".to_owned(),

@@ -2588,24 +2588,6 @@ export class ToriiClient {
   }
 
   /**
-   * Query committed transactions visible to the authenticated viewer
-   * (`POST /v1/transactions/visible/query`).
-   * @param {IterableQueryOptions & {assetId?: string, authority?: string, resultOk?: boolean, sinceTimestampMs?: number, untilTimestampMs?: number}} [options]
-   * @returns {Promise<{items: Array<object>, total: number}>}
-   */
-  async queryVisibleTransactions(options = {}) {
-    const normalizedOptions = normalizeTransactionQueryOptions(
-      options,
-      "options for /v1/transactions/visible/query",
-    );
-    return this._queryIterable(
-      "/v1/transactions/visible/query",
-      normalizedOptions,
-      normalizeAccountTransactionListResponse,
-    );
-  }
-
-  /**
    * Iterate over transactions involving an account.
    * @param {string} accountId
    * @param {AccountTransactionIteratorOptions} [options]
@@ -2640,15 +2622,6 @@ export class ToriiClient {
    */
   iterateTransactionsQuery(options = {}) {
     return this._iterateIterable(this.queryTransactions.bind(this), options);
-  }
-
-  /**
-   * Iterate committed viewer-visible transactions via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<object, void, unknown>}
-   */
-  iterateVisibleTransactionsQuery(options = {}) {
-    return this._iterateIterable(this.queryVisibleTransactions.bind(this), options);
   }
 
   /**
@@ -22957,7 +22930,10 @@ function normalizeMultisigContractCallProposeRequest(input) {
       record.signer_account_id ?? record.signerAccountId,
       "proposeMultisigContractCall request.signer_account_id",
     ),
-    ...normalizeContractTargetSelector(record, "proposeMultisigContractCall request"),
+    contract_alias: requireNonEmptyString(
+      record.contract_alias ?? record.contractAlias,
+      "proposeMultisigContractCall request.contract_alias",
+    ),
     entrypoint: requireNonEmptyString(
       record.entrypoint,
       "proposeMultisigContractCall request.entrypoint",
@@ -22985,12 +22961,17 @@ function normalizeMultisigContractCallProposeRequest(input) {
       { allowZero: true },
     );
   }
-  if (record.payload !== undefined) {
-    payload.payload = cloneJsonValue(
-      record.payload,
-      "proposeMultisigContractCall request.payload",
+  if (record.contract_address != null || record.contractAddress != null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisigContractCall requires contract_alias without contract_address",
+      "proposeMultisigContractCall.request.contract_alias",
     );
   }
+  payload.payload = ensureRecord(
+    record.payload,
+    "proposeMultisigContractCall request.payload",
+  );
   payload.fee_payment = normalizeFeePaymentIntentValue(
     record.fee_payment ?? record.feePayment,
     "proposeMultisigContractCall request.fee_payment",
@@ -23067,6 +23048,18 @@ function normalizeMultisigContractCallApproveRequest(input) {
   payload.fee_payment = normalizeFeePaymentIntentValue(
     record.fee_payment ?? record.feePayment,
     "approveMultisigContractCall request.fee_payment",
+  );
+  payload.contract_alias = requireNonEmptyString(
+    record.contract_alias,
+    "approveMultisigContractCall request.contract_alias",
+  );
+  payload.entrypoint = requireNonEmptyString(
+    record.entrypoint,
+    "approveMultisigContractCall request.entrypoint",
+  );
+  payload.payload = ensureRecord(
+    record.payload,
+    "approveMultisigContractCall request.payload",
   );
   return payload;
 }

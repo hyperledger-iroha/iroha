@@ -1669,13 +1669,8 @@ impl ProductionLifecycleAdapterStartupV1 {
             .map_err(|_| "recovered signed Broadcast local signer is inconsistent")?
             .ok_or("recovered signed Broadcast has no local signer")?;
         if signer != local_signer
-            || verify_individual_signature(
-                &adapter.wire_context,
-                signer,
-                &signature,
-                &request.signature_preimage(),
-            )
-            .is_err()
+            || verify_completed_consensus_signature(&adapter.wire_context, &request, &signature)
+                .is_err()
         {
             return Err("recovered signed Broadcast signature is not locally authorized");
         }

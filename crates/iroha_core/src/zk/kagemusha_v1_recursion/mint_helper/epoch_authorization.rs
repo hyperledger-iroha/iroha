@@ -3,7 +3,7 @@
 use super::*;
 use halo2_base::gates::GateChip;
 use iroha_data_model::isi::kagemusha_v1::{
-    BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KagemushaMintFinalityEpochAuthorizationV1,
+    BeaconEpochBindingV1, KagemushaMintFinalityEpochAuthorizationV1,
 };
 
 const AUTHORIZATION_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-finality-epoch-authorization";

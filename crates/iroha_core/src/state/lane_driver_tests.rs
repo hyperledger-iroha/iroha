@@ -56,8 +56,8 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
         v2_lane_wire::{LaneAuthenticator, LaneWalRecordV1},
     };
-    use iroha_data_model::block::lane_consensus::LaneMessageV1;
-    use std::{collections::VecDeque, time::Instant};
+    use iroha_data_model::block::lane_consensus::{LaneJustificationV1, LaneMessageV1};
+    use std::{collections::{BTreeSet, VecDeque}, time::Instant};
     let start = Instant::now();
     let fixture = native_process_fixture(false, start);
     let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
@@ -81,11 +81,21 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         assert!(Instant::now() < until, "all real physical opens must complete");
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(drivers.iter().all(|driver| driver.process().instance(id).unwrap().native_records().is_empty()));
+    for driver in &drivers {
+        let instance = driver.process().instance(id).unwrap();
+        assert_eq!(instance.timeout_deadline(), Some(start + Duration::from_secs(1)),
+            "each survivor owns a view-zero timeout before any payload arrives");
+        assert!(instance.native_records().is_empty(), "no payload has produced a WAL record");
+        assert!(driver.take_outbound().unwrap().is_none(), "no survivor may propose before the TC");
+    }
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
     let due = start + Duration::from_secs(1);
     let mut pending = VecDeque::new();
-    let mut saw_successor_proposal = false;
+    let mut signed_timeouts = BTreeSet::new();
+    let mut successor_manifest = None;
+    let survivor_signers = survivors.iter().map(|&signer| signer as u32).collect::<Vec<_>>();
+    let successor = context.roster().iter()
+        .position(|validator| validator.id() == context.leader(1)).unwrap() as u32;
     // These are genuine native signed messages from the actual driver outboxes.
     // There is no global-view argument, fake TC, payload injection or Ready event.
     while drivers.iter().any(|driver| {
@@ -97,11 +107,36 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         for (sender, driver) in drivers.iter().enumerate() {
             while let Some(packet) = driver.take_outbound().unwrap() {
                 assert_eq!(packet.canonical_bytes, norito::encode_canonical(&packet.envelope).unwrap());
-                if let LaneMessageV1::Proposal(proposal) = &packet.envelope.message
-                    && proposal.body.round.instance_id == Hash::from(id.0)
-                {
-                    assert_eq!(proposal.body.round.voting_view, 1);
-                    saw_successor_proposal = true;
+                match &packet.envelope.message {
+                    LaneMessageV1::TimeoutVote(vote)
+                        if vote.body.round.instance_id == Hash::from(id.0) => {
+                        assert_eq!(vote.body.round.voting_view, 0);
+                        assert!(vote.body.highest_prepare.is_none(), "no payload means no high Prepare");
+                        assert_eq!(vote.share.signer, survivor_signers[sender]);
+                        signed_timeouts.insert(vote.share.signer);
+                    }
+                    LaneMessageV1::Proposal(proposal)
+                        if proposal.body.round.instance_id == Hash::from(id.0) => {
+                        assert_eq!(proposal.body.round.voting_view, 1);
+                        assert_eq!(proposal.body.proposer, successor);
+                        assert_eq!(proposal.body.manifest.value.origin_view, 1);
+                        assert_eq!(proposal.body.manifest.value.origin_producer, successor);
+                        assert_eq!(proposal.body.manifest.layout, lane.frozen().da_layout);
+                        proposal.body.manifest.validate_availability().unwrap();
+                        let LaneJustificationV1::Timeout(tc) = &proposal.body.justification else {
+                            panic!("replacement proposal must carry the actual timeout quorum");
+                        };
+                        assert_eq!(tc.round.voting_view, 0);
+                        assert_eq!(tc.votes.len(), 3);
+                        assert_eq!(tc.votes.iter().map(|vote| vote.share.signer).collect::<Vec<_>>(), survivor_signers);
+                        assert!(tc.votes.iter().all(|vote| vote.body.highest_prepare.is_none()));
+                        if let Some(existing) = successor_manifest {
+                            assert_eq!(existing, proposal.body.manifest);
+                        } else {
+                            successor_manifest = Some(proposal.body.manifest);
+                        }
+                    }
+                    _ => {}
                 }
                 for (recipient, &signer) in survivors.iter().enumerate() {
                     if recipient != sender && packet.destinations.contains(&lane.frozen().committee[signer]) {
@@ -123,7 +158,8 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
         assert!(Instant::now() < until, "silent initial author must not own all future payload creation");
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(saw_successor_proposal);
+    assert_eq!(signed_timeouts, survivor_signers.iter().copied().collect());
+    let successor_manifest = successor_manifest.expect("replacement author published signed RS16 proposal");
     // The same bounded cleanup phase used by NativeRunnerProcess must never
     // consume a live Decision or its original unapplied economic effect.
     for driver in &mut drivers {
@@ -142,7 +178,10 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
             LaneWalRecordV1::TimeoutIntent { body, .. } if body.highest_prepare.is_none()));
         assert!(instance.native_records().iter().any(|row| matches!(row.record, LaneWalRecordV1::InstallTimeout(_))));
         let decision = instance.native_decision().unwrap().unwrap();
+        assert_eq!(decision.manifest, successor_manifest);
         assert_eq!(decision.commit_qc.shares.len(), 3);
+        assert_eq!(decision.commit_qc.shares.iter().map(|share| share.signer).collect::<Vec<_>>(),
+            survivor_signers, "offline author cannot pad the exact Commit quorum");
         LaneAuthenticator::new(lane).decision_certificate(&decision).unwrap();
         assert!(instance.held_effects().any(|effect| matches!(effect, core::Effect::Apply { .. })),
             "the candidate consumer still owes exact economic Apply");
@@ -150,6 +189,41 @@ state_test! { sync native_driver_silent_initial_author_reaches_real_decision_wit
     assert!(guards.iter().all(|guard| !guard.restart_required()));
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap(), before);
     for driver in drivers { driver.shutdown().join().unwrap(); }
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_full_effect_reservation_does_not_spin_on_overdue_clock
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_driver::NativeLaneDriver,
+    };
+    use std::time::Instant;
+    let start = Instant::now();
+    let fixture = native_process_fixture(false, start);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let signer = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() != lane.reducer_context().leader(0)).unwrap();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, signer), native_driver_limits_for_test()).unwrap();
+    let until = Instant::now() + Duration::from_secs(15);
+    while driver.process().instance(id).is_none() {
+        driver.poll(&observed, start).unwrap();
+        assert!(Instant::now() < until, "physical lane opening must complete");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let due = driver.next_deadline().expect("fresh active lane has a clock");
+    let tag = driver.process().instance(id).unwrap().tag();
+    driver.restrict_effect_capacity_to_retained_for_test(id);
+    assert_eq!(driver.next_deadline(), None,
+        "an unserviceable overdue clock must use the runner's bounded idle wake");
+    driver.poll(&observed, due + Duration::from_secs(1)).unwrap();
+    assert_eq!(driver.process().instance(id).unwrap().tag(), tag);
+    assert_eq!(driver.next_deadline(), None);
+    assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
 }
 
 #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1259,6 +1333,12 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
         .verified_lane_consensus_contexts()
         .unwrap()
         .unwrap();
+    assert!(source.is_current_in(&current));
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&current)),
+        LaneCurrentGate::Current,
+        "a new global carrier does not cancel the still-current candidate source"
+    );
     assert_eq!(
         retained.retire(driver.process(), Some(&observed)),
         LaneCurrentGate::ObservationChanged
@@ -1291,6 +1371,34 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
         .unwrap()
         .unwrap();
     assert!(closed.contexts().is_empty());
+    assert!(!source.is_current_in(&closed));
+    if buffered_response {
+        let mut completed_candidate = NativeSourceRequestTestProbe::non_instance(
+            Arc::clone(&source), &source_keys[0], now, false,
+        );
+        completed_candidate.accept(response.response().clone(), &request.request().requester);
+        assert_eq!(
+            completed_candidate.retire_closed_candidate(&fixture.state, None),
+            LaneCurrentGate::Current,
+            "an authenticated body can settle while State publication moves"
+        );
+        assert_eq!(
+            completed_candidate.retire_closed_candidate(&fixture.state, Some(&closed)),
+            LaneCurrentGate::Current,
+            "an authenticated buffered body remains available for another current route"
+        );
+        assert!(completed_candidate.retains_request());
+    }
+    #[cfg(feature = "bls")]
+    if !buffered_response && !hold_body {
+        NativeSourceRequestTestProbe::assert_candidate_source_pruning(
+            Arc::clone(&fixture.state),
+            Arc::clone(&source),
+            &current,
+            &closed,
+            &source_keys[0],
+        );
+    }
     assert!(
         driver
             .process()
@@ -1370,6 +1478,47 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
             "validation and candidate owners need their own completion/cancellation authority"
         );
     }
+    let exact_validate = (source.finality().subject, 0, Arc::clone(&source));
+    assert!(!validation.retire_released_validation(Some(&exact_validate)));
+    let validation_ticket = validation.backpressure();
+    let wrong_index = (exact_validate.0, 1, Arc::clone(&source));
+    assert!(validation.retire_released_validation(Some(&wrong_index)));
+    assert!(!validation.retains_request());
+    assert_eq!(validation_ticket.waiter_count(), 0);
+    assert_eq!(validation_ticket.ticket_drop_cancellations(), 1);
+    let mut different_source = NativeSourceRequestTestProbe::non_instance(
+        Arc::clone(&source), &source_keys[0], now, true,
+    );
+    let copied_source = (exact_validate.0, 0, Arc::new(source.as_ref().clone()));
+    assert!(different_source.retire_released_validation(Some(&copied_source)));
+    let mut superseded = NativeSourceRequestTestProbe::non_instance(
+        Arc::clone(&source), &source_keys[0], now, true,
+    );
+    let superseded_ticket = superseded.backpressure();
+    assert!(superseded.retire_released_validation(None));
+    assert_eq!(superseded_ticket.waiter_count(), 0);
+    assert_eq!(superseded_ticket.ticket_drop_cancellations(), 1);
+    assert!(!candidate.retire_released_validation(None));
+    assert!(candidate.retains_request());
+    let candidate_ticket = candidate.backpressure();
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, None),
+        LaneCurrentGate::ObservationChanged,
+        "missing current State cannot cancel an outstanding candidate request"
+    );
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&current)),
+        LaneCurrentGate::ObservationChanged,
+        "a stale observation cannot retire a candidate source"
+    );
+    assert!(candidate.retains_request());
+    assert_eq!(
+        candidate.retire_closed_candidate(&fixture.state, Some(&closed)),
+        LaneCurrentGate::InstanceClosed,
+        "authenticated lane closure frees the shared recovery slot"
+    );
+    assert_eq!(candidate_ticket.waiter_count(), 0);
+    assert_eq!(candidate_ticket.ticket_drop_cancellations(), 1);
     assert_eq!(
         outstanding.len(),
         1,

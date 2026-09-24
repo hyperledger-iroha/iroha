@@ -547,3 +547,70 @@ fn retained_outbound_stage_json_rejects_sent_alias() {
         );
     }
 }
+
+#[test]
+fn execution_commitment_requires_both_selective_root_count_fields() {
+    use iroha_schema::{IntoSchema as _, Metadata};
+    let schema = ExecutionCommitment::schema();
+    let Metadata::Struct(metadata) = schema.get::<ExecutionCommitment>().unwrap() else {
+        panic!("execution commitment must be a struct");
+    };
+    let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+        Hash::new(b"selective parent"),
+        Hash::new(b"selective post"),
+        Hash::new(b"selective writes"),
+        1,
+        Hash::new(b"selective wire"),
+    );
+    let value = norito::json::to_value(&commitment).unwrap();
+    for field in [
+        "transaction_input_commitment",
+        "transaction_output_commitment",
+    ] {
+        assert!(
+            metadata
+                .declarations
+                .iter()
+                .any(|declaration| declaration.name == field)
+        );
+        assert!(
+            value.get(field).is_some(),
+            "empty tree is explicit null, never omitted"
+        );
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(norito::json::from_value::<ExecutionCommitment>(missing).is_err());
+    }
+    #[derive(norito::codec::Encode)]
+    struct WithoutSelectiveCommitments {
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        kagemusha_top_up_root: Option<Hash>,
+        kagemusha_top_up_count: u32,
+        native_amx_application_manifest_version: u16,
+        native_amx_application_manifest_root: Hash,
+        native_amx_application_manifest_count: u32,
+        lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
+        merge_carrier: Option<MergeCarrierCommitmentV1>,
+        executed_block_wire_len: u64,
+        executed_block_wire_hash: Hash,
+    }
+    let wire = WithoutSelectiveCommitments {
+        parent_state_root: commitment.parent_state_root,
+        post_state_root: commitment.post_state_root,
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        kagemusha_top_up_root: commitment.kagemusha_top_up_root,
+        kagemusha_top_up_count: commitment.kagemusha_top_up_count,
+        native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
+        native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
+        native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,
+        lane_finality_manifest: commitment.lane_finality_manifest,
+        merge_carrier: commitment.merge_carrier,
+        executed_block_wire_len: commitment.executed_block_wire_len,
+        executed_block_wire_hash: commitment.executed_block_wire_hash,
+    }
+    .encode();
+    let mut retired = wire.as_slice();
+    assert!(<ExecutionCommitment as norito::codec::DecodeAll>::decode_all(&mut retired).is_err());
+}

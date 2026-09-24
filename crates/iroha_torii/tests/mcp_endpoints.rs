@@ -20,10 +20,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
-use iroha_torii_shared::mcp::{
-    LEGACY_PROTOCOL_VERSION as LEGACY_MCP_PROTOCOL_VERSION,
-    MODERN_PROTOCOL_VERSION as MODERN_MCP_PROTOCOL_VERSION,
-};
+use iroha_torii_shared::mcp::MODERN_PROTOCOL_VERSION as MODERN_MCP_PROTOCOL_VERSION;
 use norito::json::Value;
 use std::{
     collections::BTreeSet,
@@ -104,32 +101,10 @@ async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response:
     service.oneshot(request).await.expect("mcp response")
 }
 async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/mcp")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
-        .body(Body::from(
-            norito::json::to_vec(&payload).expect("serialize payload"),
-        ))
-        .expect("valid request");
-    let response = call_app(app, request).await;
-    let status = response.status();
-    let body = read_json_body(response).await;
-    (status, body)
+    post_mcp_with_headers(app, payload, &[]).await
 }
 async fn post_mcp_bytes(app: &axum::Router, payload: Value) -> (StatusCode, Bytes) {
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/mcp")
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ACCEPT, "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2025-06-18")
-        .body(Body::from(
-            norito::json::to_vec(&payload).expect("serialize payload"),
-        ))
-        .expect("valid request");
+    let request = current_mcp_http_request(payload, &[]);
     let response = call_app(app, request).await;
     let status = response.status();
     let body = read_body_bytes(response).await;
@@ -140,6 +115,35 @@ async fn post_mcp_with_headers(
     payload: Value,
     headers: &[(&str, &str)],
 ) -> (StatusCode, Value) {
+    let request = current_mcp_http_request(payload, headers);
+    let response = call_app(app, request).await;
+    let status = response.status();
+    let body = read_json_body(response).await;
+    (status, body)
+}
+fn current_mcp_http_request(mut payload: Value, headers: &[(&str, &str)]) -> Request<Body> {
+    if let Some(request) = payload.as_object_mut()
+        && request.get("method").and_then(Value::as_str).is_some()
+    {
+        let params = request
+            .entry("params".into())
+            .or_insert_with(|| norito::json!({}));
+        if let Some(params) = params.as_object_mut() {
+            let meta = params
+                .entry("_meta".into())
+                .or_insert_with(|| norito::json!({}));
+            if let Some(meta) = meta.as_object_mut() {
+                meta.entry("io.modelcontextprotocol/protocolVersion".into())
+                    .or_insert_with(|| Value::from(MODERN_MCP_PROTOCOL_VERSION));
+                meta.entry("io.modelcontextprotocol/clientCapabilities".into())
+                    .or_insert_with(|| {
+                        norito::json!({
+                            "extensions": { "org.hyperledger.iroha/tools": {} }
+                        })
+                    });
+            }
+        }
+    }
     let mut builder = Request::builder()
         .method("POST")
         .uri("/v1/mcp")
@@ -149,20 +153,39 @@ async fn post_mcp_with_headers(
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("MCP-Protocol-Version"))
     {
-        builder = builder.header("MCP-Protocol-Version", "2025-06-18");
+        builder = builder.header("MCP-Protocol-Version", MODERN_MCP_PROTOCOL_VERSION);
+    }
+    if let Some(method) = payload.get("method").and_then(Value::as_str) {
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("Mcp-Method"))
+        {
+            builder = builder.header("Mcp-Method", method);
+        }
+        let mirrored = match method {
+            "tools/call" | "prompts/get" => payload.pointer("/params/name").and_then(Value::as_str),
+            "resources/read" => payload.pointer("/params/uri").and_then(Value::as_str),
+            _ => None,
+        };
+        if let Some(mirrored) = mirrored
+            && !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("Mcp-Name"))
+        {
+            builder = builder.header(
+                "Mcp-Name",
+                iroha_torii_shared::mcp::encode_mirrored_header_value(mirrored),
+            );
+        }
     }
     for (name, value) in headers {
         builder = builder.header(*name, *value);
     }
-    let request = builder
+    builder
         .body(Body::from(
             norito::json::to_vec(&payload).expect("serialize payload"),
         ))
-        .expect("valid request");
-    let response = call_app(app, request).await;
-    let status = response.status();
-    let body = read_json_body(response).await;
-    (status, body)
+        .expect("valid request")
 }
 async fn post_mcp_with_exact_headers(
     app: &axum::Router,
@@ -298,7 +321,7 @@ fn assert_single_invalid_request(body: &Value) {
         body.is_object(),
         "expected one JSON-RPC error, got {body:?}"
     );
-    assert_eq!(body.get("id"), Some(&Value::Null));
+    assert!(body.get("id").is_none_or(Value::is_null));
     assert_eq!(
         body.get("error")
             .and_then(|value| value.get("code"))
@@ -727,8 +750,12 @@ async fn mcp_jsonrpc_accepts_only_one_canonical_json_content_type() {
     cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
     cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
     let app = build_router(cfg);
-    let payload =
-        norito::json::to_vec(&initialize_request(1)).expect("serialize initialize request");
+    let payload = norito::json::to_vec(&modern_request(
+        "content-type",
+        "server/discover",
+        norito::json!({}),
+    ))
+    .expect("serialize stateless request");
 
     for content_type in [
         "application/json",
@@ -741,6 +768,8 @@ async fn mcp_jsonrpc_accepts_only_one_canonical_json_content_type() {
                 .method("POST")
                 .uri("/v1/mcp")
                 .header(header::CONTENT_TYPE, content_type)
+                .header("MCP-Protocol-Version", MODERN_MCP_PROTOCOL_VERSION)
+                .header("Mcp-Method", "server/discover")
                 .body(Body::from(payload.clone()))
                 .expect("canonical MCP request"),
         )
@@ -836,7 +865,7 @@ async fn mcp_jsonrpc_rejects_hostile_origin() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": "hostile-origin",
-            "method": "ping"
+            "method": "server/discover"
         }),
         &[("Origin", "https://attacker.example")],
     )
@@ -854,7 +883,7 @@ async fn mcp_jsonrpc_rejects_hostile_origin() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": "trusted-origin",
-            "method": "ping"
+            "method": "server/discover"
         }),
         &[("Origin", "https://trusted.example")],
     )
@@ -1021,7 +1050,7 @@ async fn mcp_all_published_tool_schemas_are_top_level_objects() {
 include!("mcp_endpoints/native_protocol_tests.rs");
 include!("mcp_endpoints/admission_and_cancellation_tests.rs");
 #[tokio::test]
-async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
+async fn mcp_jsonrpc_discover_list_and_call_connect_ticket() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1029,14 +1058,17 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
     cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
     let app = build_router(cfg);
-    let (status, initialize) = post_mcp(&app, initialize_request(1)).await;
+    let (status, discovery) = post_mcp(
+        &app,
+        modern_request("discover", "server/discover", norito::json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        initialize
+        discovery
             .get("result")
-            .and_then(|value| value.get("protocolVersion"))
-            .and_then(Value::as_str),
-        Some("2025-06-18")
+            .and_then(|value| value.get("supportedVersions")),
+        Some(&norito::json!([MODERN_MCP_PROTOCOL_VERSION]))
     );
     let (status, page1) = post_mcp(
         &app,
@@ -1131,20 +1163,14 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_initialized_notification_returns_accepted_without_body() {
+async fn mcp_jsonrpc_retired_initialized_notification_is_rejected() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
     cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
     let app = build_router(cfg);
-    let (status, initialize) = post_mcp(&app, initialize_request(1)).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        initialize.get("result").is_some(),
-        "initialize should succeed before the client sends initialized"
-    );
-    let (status, body) = post_mcp_bytes(
+    let (status, body) = post_mcp(
         &app,
         norito::json!({
             "jsonrpc": "2.0",
@@ -1152,11 +1178,8 @@ async fn mcp_jsonrpc_initialized_notification_returns_accepted_without_body() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert!(
-        body.is_empty(),
-        "initialized notification should return 202 with no response body"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_jsonrpc_error_code(&body, -32600);
     app.shutdown().await;
 }
 #[tokio::test]
@@ -1189,7 +1212,7 @@ async fn mcp_jsonrpc_generic_notifications_return_accepted_without_body() {
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
+async fn mcp_jsonrpc_client_response_messages_are_rejected() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1215,14 +1238,14 @@ async fn mcp_jsonrpc_response_messages_return_accepted_without_body() {
             }),
         ),
     ] {
-        let (status, body) = post_mcp_bytes(&app, payload).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{label}");
-        assert!(body.is_empty(), "{label} must not receive a response body");
+        let (status, body) = post_mcp(&app, payload).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
+        assert_jsonrpc_error_code(&body, -32600);
     }
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_ping_returns_empty_result_object() {
+async fn mcp_jsonrpc_retired_ping_is_not_found() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1238,9 +1261,9 @@ async fn mcp_jsonrpc_ping_returns_empty_result_object() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(ping.get("id").and_then(Value::as_u64), Some(7));
-    assert_eq!(ping.get("result"), Some(&norito::json!({})));
+    assert_jsonrpc_error_code(&ping, -32601);
     app.shutdown().await;
 }
 #[tokio::test]
@@ -1399,13 +1422,13 @@ async fn mcp_jsonrpc_rejects_non_object_request() {
                 .method("POST")
                 .uri("/v1/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
-                .header("MCP-Protocol-Version", "2025-06-18")
+                .header("MCP-Protocol-Version", MODERN_MCP_PROTOCOL_VERSION)
                 .body(Body::from("1"))
                 .expect("valid request"),
         )
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = read_json_body(response).await;
     assert_eq!(
         body.get("error")
@@ -1432,17 +1455,17 @@ async fn mcp_jsonrpc_rejects_invalid_request_ids() {
             norito::json!({
                 "jsonrpc": "2.0",
                 "id": (id),
-                "method": "ping"
+                "method": "server/discover"
             }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{label}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
         assert_single_invalid_request(&body);
     }
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_preserves_fractional_numeric_request_id() {
+async fn mcp_jsonrpc_rejects_fractional_numeric_request_id() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1452,13 +1475,12 @@ async fn mcp_jsonrpc_preserves_fractional_numeric_request_id() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": 1.5,
-            "method": "ping"
+            "method": "server/discover"
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.get("id"), Some(&norito::json!(1.5)));
-    assert_eq!(body.get("result"), Some(&norito::json!({})));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_single_invalid_request(&body);
     app.shutdown().await;
 }
 #[tokio::test]
@@ -1505,7 +1527,7 @@ async fn mcp_jsonrpc_requires_exact_string_version() {
         ),
     ] {
         let (status, body) = post_mcp(&app, request).await;
-        assert_eq!(status, StatusCode::OK, "{label}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}");
         assert_eq!(
             body.get("error")
                 .and_then(|value| value.get("code"))
@@ -1517,7 +1539,7 @@ async fn mcp_jsonrpc_requires_exact_string_version() {
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_rejects_unsupported_protocol_version_header() {
+async fn mcp_jsonrpc_rejects_protocol_header_body_mismatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1527,45 +1549,23 @@ async fn mcp_jsonrpc_rejects_unsupported_protocol_version_header() {
         norito::json!({
             "jsonrpc": "2.0",
             "id": "unsupported-protocol-version",
-            "method": "ping"
+            "method": "server/discover"
         }),
         &[("MCP-Protocol-Version", "2024-11-05")],
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("error_code"))
-            .and_then(Value::as_str),
-        Some("unsupported_protocol_version")
-    );
-    assert_eq!(
-        body.get("error")
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.get("supported_protocol_version"))
-            .and_then(Value::as_str),
-        Some("2025-06-18")
-    );
+    assert_jsonrpc_error_code(&body, -32020);
     app.shutdown().await;
 }
 #[tokio::test]
-async fn mcp_jsonrpc_requires_protocol_header_after_initialize() {
+async fn mcp_jsonrpc_requires_protocol_header_for_discovery() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     let app = build_router(cfg);
-    for (request, expected_status) in [
-        (initialize_request(1), StatusCode::OK),
-        (
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "ping"
-            }),
-            StatusCode::BAD_REQUEST,
-        ),
-    ] {
+    let request = modern_request("missing-version", "server/discover", norito::json!({}));
+    for headers in [vec![("Mcp-Method", "server/discover")], vec![]] {
         let request = Request::builder()
             .method("POST")
             .uri("/v1/mcp")
@@ -1574,8 +1574,15 @@ async fn mcp_jsonrpc_requires_protocol_header_after_initialize() {
                 norito::json::to_vec(&request).expect("serialize payload"),
             ))
             .expect("valid request");
+        let mut request = request;
+        for (name, value) in headers {
+            request.headers_mut().insert(
+                HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                HeaderValue::from_str(value).expect("header value"),
+            );
+        }
         let response = call_app(&app, request).await;
-        assert_eq!(response.status(), expected_status);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     app.shutdown().await;
 }
@@ -1584,15 +1591,19 @@ async fn mcp_jsonrpc_bounds_the_complete_response_envelope() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
-    cfg.torii.mcp.max_request_bytes = 256;
+    cfg.torii.mcp.max_request_bytes = 512;
     let app = build_router(cfg);
-    let (status, body) = post_mcp(&app, initialize_request(1)).await;
+    let (status, body) = post_mcp(
+        &app,
+        modern_request("bounded", "tools/list", norito::json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body.get("error")
             .and_then(|value| value.get("code"))
             .and_then(Value::as_i64),
-        Some(-32002)
+        Some(1_002)
     );
     assert_eq!(
         body.get("error")
@@ -1615,7 +1626,7 @@ async fn mcp_jsonrpc_rejects_oversized_outer_array_as_one_invalid_request() {
                 norito::json!({
                     "jsonrpc": "2.0",
                     "id": (id),
-                    "method": "ping"
+                    "method": "server/discover"
                 })
             })
             .collect(),
@@ -1702,7 +1713,7 @@ async fn mcp_jsonrpc_rejects_valid_outer_array_as_one_invalid_request() {
                 .uri("/v1/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT, "application/json, text/event-stream")
-                .header("MCP-Protocol-Version", "2025-06-18")
+                .header("MCP-Protocol-Version", MODERN_MCP_PROTOCOL_VERSION)
                 .body(Body::from(
                     r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping"}]"#,
                 ))

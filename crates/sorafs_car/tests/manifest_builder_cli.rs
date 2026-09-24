@@ -1,6 +1,7 @@
 //! CLI regression tests for the SoraFS manifest builder.
 #![cfg(feature = "cli")]
 use assert_cmd::cargo::cargo_bin_cmd;
+use ed25519_dalek::SigningKey;
 use std::{env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn canonical_temp_base() -> PathBuf {
@@ -137,4 +138,118 @@ fn provider_admission_proposal_rejects_noncanonical_operator_inputs() {
             "expected {expected:?} for {arg}, got {stderr}"
         );
     }
+}
+
+#[test]
+fn provider_admission_sign_and_verify_require_exact_network() {
+    let temp = tempdir().expect("tempdir");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/sorafs_manifest/provider_admission");
+    let fixture_envelope: sorafs_manifest::ProviderAdmissionEnvelopeV1 =
+        norito::decode_from_bytes(&fs::read(fixtures.join("envelope_v1.to")).expect("fixture"))
+            .expect("decode fixture envelope");
+    let envelope_out = temp.path().join("signed-envelope.to");
+    let sign_args = vec![
+        "provider-admission".to_string(),
+        "sign".to_string(),
+        format!("--proposal={}", fixtures.join("proposal_v1.to").display()),
+        format!("--advert={}", fixtures.join("advert_v1.to").display()),
+        format!("--issued-at={}", fixture_envelope.issued_at),
+        format!("--retention-epoch={}", fixture_envelope.retention_epoch),
+        format!("--policy-id={}", hex::encode(fixture_envelope.policy_id)),
+        format!("--policy-revision={}", fixture_envelope.policy_revision),
+        format!(
+            "--policy-digest={}",
+            hex::encode(fixture_envelope.policy_digest)
+        ),
+        format!(
+            "--admission-revision={}",
+            fixture_envelope.admission_revision
+        ),
+        format!("--council-secret-key={}", "45".repeat(32)),
+        format!("--envelope-out={}", envelope_out.display()),
+    ];
+    let missing_sign = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&sign_args)
+        .output()
+        .expect("sign without network");
+    assert!(!missing_sign.status.success());
+    assert!(String::from_utf8_lossy(&missing_sign.stderr).contains("missing option --network-id"));
+    assert!(!envelope_out.exists());
+
+    let mut foreign_sign_args = sign_args.clone();
+    foreign_sign_args.push(format!("--network-id={}", "b2".repeat(32)));
+    let foreign_sign = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&foreign_sign_args)
+        .output()
+        .expect("sign against foreign network");
+    assert!(!foreign_sign.status.success());
+    assert!(String::from_utf8_lossy(&foreign_sign.stderr).contains("advert network id differs"));
+    assert!(!envelope_out.exists());
+
+    let mut missing_policy_sign_args = sign_args.clone();
+    missing_policy_sign_args.push(format!("--network-id={}", "a1".repeat(32)));
+    missing_policy_sign_args.retain(|arg| !arg.starts_with("--policy-digest="));
+    let missing_policy_sign = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&missing_policy_sign_args)
+        .output()
+        .expect("sign without policy digest");
+    assert!(!missing_policy_sign.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_policy_sign.stderr)
+            .contains("missing option --policy-digest")
+    );
+    assert!(!envelope_out.exists());
+
+    let mut local_sign_args = sign_args;
+    local_sign_args.push(format!("--network-id={}", "a1".repeat(32)));
+    let local_sign = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&local_sign_args)
+        .output()
+        .expect("sign local admission");
+    assert!(
+        local_sign.status.success(),
+        "{}",
+        String::from_utf8_lossy(&local_sign.stderr)
+    );
+    assert!(envelope_out.exists());
+
+    let council_key = SigningKey::from_bytes(&[0x45; 32]);
+    let verify_args = vec![
+        "provider-admission".to_string(),
+        "verify".to_string(),
+        format!("--envelope={}", envelope_out.display()),
+        format!(
+            "--trusted-council-key={}",
+            hex::encode(council_key.verifying_key().to_bytes())
+        ),
+        "--signature-threshold=1".to_string(),
+    ];
+    let missing_verify = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&verify_args)
+        .output()
+        .expect("verify without network");
+    assert!(!missing_verify.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_verify.stderr).contains("missing option --network-id")
+    );
+    let mut foreign_verify_args = verify_args.clone();
+    foreign_verify_args.push(format!("--network-id={}", "b2".repeat(32)));
+    let foreign_verify = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&foreign_verify_args)
+        .output()
+        .expect("verify against foreign network");
+    assert!(!foreign_verify.status.success());
+    assert!(String::from_utf8_lossy(&foreign_verify.stderr).contains("network id differs"));
+    let mut local_verify_args = verify_args;
+    local_verify_args.push(format!("--network-id={}", "a1".repeat(32)));
+    let local_verify = cargo_bin_cmd!("sorafs_manifest_builder")
+        .args(&local_verify_args)
+        .output()
+        .expect("verify local admission");
+    assert!(
+        local_verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&local_verify.stderr)
+    );
 }

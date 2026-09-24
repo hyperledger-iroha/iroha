@@ -192,6 +192,29 @@ impl PreparedDequeuedV2IngressV1 {
             .expect("prepared ordinary turn retains its queue-minted ordinal")
     }
 
+    /// Observe the original Native timeout carrier without transferring its custody.
+    #[cfg(test)]
+    pub(super) fn native_timeout_owner_snapshot_for_test(&self) -> (u64, Hash, *const u8) {
+        let inbound = self.inbound.as_ref().expect("original prepared carrier");
+        let ownership = inbound.ingress_ownership().expect("original fair evidence");
+        assert!(ownership.validate_exact());
+        assert!(ownership.matches_message(inbound.message()));
+        assert_eq!(ownership.runtime_lifecycle_ordinal(), None);
+        let BlockMessage::NativeLane(envelope) = inbound.message() else {
+            panic!("fixture Native control");
+        };
+        let iroha_data_model::block::lane_consensus::LaneMessageV1::TimeoutVote(vote) =
+            &envelope.message
+        else {
+            panic!("fixture Native timeout vote");
+        };
+        (
+            self.physical_ordinal_for_test(),
+            ownership.process_local_projection_hash(),
+            vote.share.signature.as_ptr(),
+        )
+    }
+
     #[cfg(test)]
     pub(in crate::sumeragi) fn has_prepared_serve_for_test(&self) -> bool {
         self.prepared_serve.is_some()

@@ -5189,11 +5189,10 @@ public sealed partial class ToriiClient : IDisposable
                     $"{context}.signed_transaction_wire_hex contains a noncanonical TransactionPayload.");
             }
             var admission = BinaryPrimitives.ReadUInt32LittleEndian(admissionIntent);
-            if (admission != (uint)TransactionAdmissionIntent.Ordinary
-                && admission != (uint)TransactionAdmissionIntent.QueuePlanSynced)
+            if (admission != (uint)TransactionAdmissionIntent.QueuePlanSynced)
             {
                 throw new JsonException(
-                    $"{context}.signed_transaction_wire_hex contains an unknown admission intent.");
+                    $"{context}.signed_transaction_wire_hex must use QueuePlanSynced admission.");
             }
             var ttl = new CanonicalNoritoReader(timeToLive, $"{context} time_to_live_ms", nameof(wireHex));
             if (ttl.ReadByte("tag") != 1)

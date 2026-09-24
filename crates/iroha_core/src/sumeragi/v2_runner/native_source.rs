@@ -20,7 +20,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum NativeSourceTarget {
     Instance(LaneSourceRecoveryTarget),
     Candidate,
-    Validation(Box<wire::BlockSubject>),
+    Validation {
+        subject: Box<wire::BlockSubject>,
+        execution_index: usize,
+    },
 }
 
 pub(super) struct NativeSourceRequest {
@@ -100,6 +103,10 @@ impl NativeSourceRequest {
         matches!(self.target, NativeSourceTarget::Instance(_))
     }
 
+    pub(super) fn targets_candidate(&self) -> bool {
+        matches!(self.target, NativeSourceTarget::Candidate)
+    }
+
     /// Release only the duplicate network request after exact authenticated closure.
     /// Original physical work and closed body/source custody remain in the table.
     /// Dropping a retained actor ticket cancels only its unadmitted waiter position.
@@ -125,6 +132,75 @@ impl NativeSourceRequest {
             retained.take();
         }
         gate
+    }
+
+    /// A candidate has no live reducer owner after its exact lane closes.
+    /// Release only its redundant network request after authenticating current
+    /// membership. Keep an already authenticated body for the settlement phase:
+    /// another current route may share that first admission. A moving
+    /// observation cannot prove closure.
+    pub(super) fn retire_closed_candidate(
+        retained: &mut Option<Self>,
+        state: &State,
+        observed: Option<&crate::state::VerifiedLaneContexts>,
+    ) -> LaneCurrentGate {
+        let Some(Self {
+            target: NativeSourceTarget::Candidate,
+            source,
+            response,
+            ..
+        }) = retained.as_ref()
+        else {
+            return LaneCurrentGate::Current;
+        };
+        // Response authentication is historical and complete. It needs no
+        // current lane read before the Candidate settlement stores the body.
+        if response.is_some() {
+            return LaneCurrentGate::Current;
+        }
+        let Some(observed) = observed.filter(|observed| observed.is_current(state)) else {
+            return LaneCurrentGate::ObservationChanged;
+        };
+        if source.is_current_in(observed) {
+            LaneCurrentGate::Current
+        } else {
+            retained.take();
+            LaneCurrentGate::InstanceClosed
+        }
+    }
+
+    /// Retire only the network duplicate once its exact Validate wait has
+    /// disappeared. The lifecycle owner has already cancelled or dispatched
+    /// its original worker; this source slot cannot keep requesting forever.
+    pub(super) fn retire_released_validation(
+        retained: &mut Option<Self>,
+        current: Option<&(
+            wire::BlockSubject,
+            usize,
+            Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        )>,
+    ) -> bool {
+        let Some(Self {
+            target:
+                NativeSourceTarget::Validation {
+                    subject,
+                    execution_index,
+                },
+            source,
+            ..
+        }) = retained.as_ref()
+        else {
+            return false;
+        };
+        if current.is_some_and(|(owned_subject, owned_index, owned_source)| {
+            **subject == *owned_subject
+                && *execution_index == *owned_index
+                && Arc::ptr_eq(source, owned_source)
+        }) {
+            return false;
+        }
+        retained.take();
+        true
     }
 
     pub(super) fn admits_hash(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
@@ -199,7 +275,7 @@ impl NativeSourceRequest {
                     .map_err(V2RunnerError::Service)?;
                 Ok(true)
             }
-            NativeSourceTarget::Validation(subject) => {
+            NativeSourceTarget::Validation { subject, .. } => {
                 let request = self.request.take().expect("retained request");
                 let response = self.response.take().expect("retained response");
                 match services.complete_native_source(**subject, request, response) {
@@ -326,7 +402,10 @@ impl NativeSourceRequestTestProbe {
         validation: bool,
     ) -> Self {
         let target = if validation {
-            NativeSourceTarget::Validation(Box::new(source.finality().subject))
+            NativeSourceTarget::Validation {
+                subject: Box::new(source.finality().subject),
+                execution_index: 0,
+            }
         } else {
             NativeSourceTarget::Candidate
         };
@@ -349,6 +428,25 @@ impl NativeSourceRequestTestProbe {
     ) -> LaneCurrentGate {
         NativeSourceRequest::retire_closed_instance(&mut self.0, process, observed)
     }
+    pub(crate) fn retire_closed_candidate(
+        &mut self,
+        state: &State,
+        observed: Option<&crate::state::VerifiedLaneContexts>,
+    ) -> LaneCurrentGate {
+        NativeSourceRequest::retire_closed_candidate(&mut self.0, state, observed)
+    }
+    #[cfg(feature = "bls")]
+    pub(crate) fn assert_candidate_source_pruning(
+        state: Arc<State>,
+        source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        current: &crate::state::VerifiedLaneContexts,
+        closed: &crate::state::VerifiedLaneContexts,
+        key: &KeyPair,
+    ) {
+        super::native_process::NativeRunnerProcess::assert_candidate_source_pruning_for_test(
+            state, source, current, closed, key,
+        );
+    }
     #[cfg(feature = "bls")]
     pub(crate) fn assert_observation_deadline(
         self,
@@ -365,6 +463,16 @@ impl NativeSourceRequestTestProbe {
     }
     pub(crate) fn retains_request(&self) -> bool {
         self.0.is_some()
+    }
+    pub(crate) fn retire_released_validation(
+        &mut self,
+        current: Option<&(
+            wire::BlockSubject,
+            usize,
+            Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        )>,
+    ) -> bool {
+        NativeSourceRequest::retire_released_validation(&mut self.0, current)
     }
     pub(crate) fn admits_hash(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.0

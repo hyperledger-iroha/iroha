@@ -247,7 +247,13 @@ impl PendingEnrolledOpenV1 {
         self.deadline
             .check()
             .map(|_| ())
-            .map_err(|_| EnrolledOpenErrorV1::Expired)
+            .map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        if let Some(admission) = &self.initial_enrollment {
+            admission
+                .require_live()
+                .map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        }
+        Ok(())
     }
 
     /// Consume the one-use account/device proof under the retained challenge and native clock.
@@ -313,6 +319,7 @@ impl PendingEnrolledOpenV1 {
         if disposition != ObservationDispositionV1::Fresh {
             return Err(EnrolledOpenErrorV1::DeviceBinding);
         }
+        self.require_unexpired()?;
         let completed_at = self
             .deadline
             .check()
@@ -415,7 +422,13 @@ impl VerifiedEnrolledOpenEvidenceV1 {
         self.deadline
             .check()
             .map(|_| ())
-            .map_err(|_| EnrolledOpenErrorV1::Expired)
+            .map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        if let Some(admission) = &self.initial_enrollment {
+            admission
+                .require_live()
+                .map_err(|_| EnrolledOpenErrorV1::Expired)?;
+        }
+        Ok(())
     }
 }
 

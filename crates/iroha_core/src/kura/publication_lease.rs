@@ -195,6 +195,10 @@ impl Kura {
     /// that consumer still requires its original staged-frontier/source custody.
     /// Every Kura fence is released before this returns, so this is a durable join
     /// before staging, not custody through State visibility.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn reauthenticate_native_amx_prepublication(
         &self,
         token: &super::NativeAmxParticipantApplicationPrepublicationToken,
@@ -219,6 +223,10 @@ impl Kura {
 
     /// Read-only participant reauthentication under this original Kura's four
     /// publication fences. The live wrapper and retained lease share this oracle.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn reauthenticate_native_amx_prepublication_under_publication_guards(
         &self,
         token: &super::NativeAmxParticipantApplicationPrepublicationToken,

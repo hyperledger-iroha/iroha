@@ -5,8 +5,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import io.netty.channel.MultiThreadIoEventLoopGroup;
-import io.netty.channel.nio.NioIoHandler;
+import io.netty.channel.nio.NioEventLoopGroup;
 import javax.net.ssl.SSLContext;
 import okhttp3.Response;
 import okhttp3.WebSocket;
@@ -54,7 +53,7 @@ final class NettyWebSocketJavaConsumerTest {
 
     @Test
     void borrowedConstructorLeavesApplicationExecutorAvailable() throws Exception {
-        MultiThreadIoEventLoopGroup shared = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        NioEventLoopGroup shared = new NioEventLoopGroup(1);
         try (NettyWebSocketConnector connector = new NettyWebSocketConnector(shared, SSLContext.getDefault(), 1024, 2048L)) {
             connector.close();
             TransportRequest request = TransportRequest.builder()

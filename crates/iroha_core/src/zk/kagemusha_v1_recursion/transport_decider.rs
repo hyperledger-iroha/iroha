@@ -50,7 +50,9 @@ use super::{
         deferred_loader_v1, finalize_tagged_deferred_audit_with_u128_binding_v1,
         load_native_accumulator, verify_fold, verify_ordinary_proof_v1,
     },
-    state_relation::{PUBLIC_INSTANCE_COUNT, public_instance},
+    state_relation::{
+        PUBLIC_INSTANCE_COUNT, RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, public_instance,
+    },
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
@@ -58,10 +60,11 @@ const TRANSPORT_DECIDER_EQUATION_TAG_V1: u32 = 6;
 
 /// Public instance count of one compact outer parity.
 ///
-/// The decider deliberately preserves the aggregate-state ABI: 85 semantic
+/// The decider deliberately preserves the recursive aggregate-state ABI: 93 semantic
 /// cells followed by the 34-limb terminal history produced by folding the
 /// private carrier's current opening claim into its complete prior history.
-pub(super) const KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1: usize = 119;
+pub(super) const KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1: usize =
+    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + 34;
 
 /// Private inner cells which differ from the public outer interpretation.
 ///
@@ -404,7 +407,8 @@ where
     if witness.inner_protocol.num_instance != [KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1]
         || witness.inner_instances.len() != KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1
         || witness.outer_instances.len() != KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1
-        || PUBLIC_INSTANCE_COUNT + 34 != KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1
+        || RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + 34
+            != KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1
     {
         return Err("Kagemusha transport decider public instance ABI mismatch".to_owned());
     }
@@ -434,7 +438,9 @@ where
     builder.assigned_instances = vec![outer_cells.clone()];
 
     for index in 0..KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1 {
-        if index < PUBLIC_INSTANCE_COUNT && !INNER_BINDING_INDICES_V1.contains(&index) {
+        if index < RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+            && !INNER_BINDING_INDICES_V1.contains(&index)
+        {
             builder
                 .main(0)
                 .constrain_equal(&inner_cells[index], &outer_cells[index]);
@@ -476,7 +482,7 @@ where
         &loader,
         &inner_history,
         inner_cells
-            .get(PUBLIC_INSTANCE_COUNT..)
+            .get(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..)
             .ok_or_else(|| "private carrier history tail is absent".to_owned())?,
     )
     .map_err(|error| format!("failed to bind private carrier history: {error:?}"))?;
@@ -491,7 +497,7 @@ where
         &loader,
         &transported_history,
         outer_cells
-            .get(PUBLIC_INSTANCE_COUNT..)
+            .get(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..)
             .ok_or_else(|| "transported history tail is absent".to_owned())?,
     )
     .map_err(|error| format!("failed to bind transported carrier history: {error:?}"))?;
@@ -560,7 +566,8 @@ fn assigned_u128_v1<F: halo2_base::utils::ScalarField>(
 
 const _: () = {
     assert!(PUBLIC_INSTANCE_COUNT == 85);
-    assert!(KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1 == 119);
+    assert!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT == 93);
+    assert!(KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1 == 127);
     assert!(INNER_BINDING_INDICES_V1.len() == 8);
 };
 
@@ -600,7 +607,8 @@ mod tests {
     fn only_protocol_audits_and_folded_history_may_differ_from_inner_carrier() {
         let differing = (0..KAGEMUSHA_TRANSPORT_DECIDER_PUBLIC_INSTANCE_COUNT_V1)
             .filter(|index| {
-                *index >= PUBLIC_INSTANCE_COUNT || INNER_BINDING_INDICES_V1.contains(index)
+                *index >= RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+                    || INNER_BINDING_INDICES_V1.contains(index)
             })
             .collect::<Vec<_>>();
         assert_eq!(differing.len(), INNER_BINDING_INDICES_V1.len() + 34);
@@ -610,7 +618,7 @@ mod tests {
         );
         assert_eq!(
             differing[INNER_BINDING_INDICES_V1.len()],
-            PUBLIC_INSTANCE_COUNT
+            RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
         );
         assert_eq!(
             *differing.last().expect("nonempty differing-index set"),

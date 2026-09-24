@@ -452,7 +452,7 @@ fn native_service_retention_fixture(atomic: bool) -> Box<NativeServicePreparatio
 
 // Current first-admission carriers have useful authenticated controls but no
 // Native economic batch. Their one common execution must use the same custody.
-state_test! { sync native_service_control_only_admission_retains_one_execution_and_publishes
+state_test! { consensus_stack native_service_control_only_admission_retains_one_execution_and_publishes
     use crate::sumeragi::{
         v2_body_store::{BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity},
         v2_chunks::encode_payload,
@@ -523,28 +523,37 @@ state_test! { sync native_service_control_only_admission_retains_one_execution_a
 }
 
 // Real production admission and validator through BodyStore marker/cache custody.
-type NativeServiceProductionPhase = crate::sumeragi::v2_apply::native_validation::NativeValidationCandidate;
+type NativeServiceProductionPhase =
+    crate::sumeragi::v2_apply::native_validation::NativeValidationCandidate;
 
 fn native_service_retained_source_allocations(phase: &NativeServiceProductionPhase) -> [usize; 4] {
     let super::RetainedCarrier::Validated(journals) = phase.carrier_for_test().unwrap() else {
         panic!("ready original archive indexes must finish the retained capture");
     };
-    let groups = journals.native_source_for_test().unwrap().sources_for_test();
+    let groups = journals
+        .native_source_for_test()
+        .unwrap()
+        .sources_for_test();
     assert_eq!(groups.len(), 1);
-    [groups.as_ptr() as usize, groups[0].body().canonical_bytes().as_ptr() as usize,
-     groups[0].decisions().as_ptr() as usize, groups[0].contexts().as_ptr() as usize]
+    [
+        groups.as_ptr() as usize,
+        groups[0].body().canonical_bytes().as_ptr() as usize,
+        groups[0].decisions().as_ptr() as usize,
+        groups[0].contexts().as_ptr() as usize,
+    ]
 }
 
-state_test! { sync native_service_single_body_store_retries_reuse_original_execution
+state_test! { consensus_stack native_service_single_body_store_retries_reuse_original_execution
     assert_native_service_body_store_retention(native_service_retention_fixture(false));
 }
 
-state_test! { sync native_service_atomic_body_store_retries_reuse_original_execution
+state_test! { consensus_stack native_service_atomic_body_store_retries_reuse_original_execution
     assert_native_service_body_store_retention(native_service_retention_fixture(true));
 }
 
 #[inline(never)]
 fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparationFixture>) {
+    use crate::sumeragi::v2_apply::validation_custody::RetainedValidationOwner;
     use crate::sumeragi::{
         v2_body_store::{
             BlockSignaturePolicy, V2BodyStore, V2BodyStoreCapacity, V2BodyStoreError,
@@ -553,7 +562,6 @@ fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparat
         v2_chunks::encode_payload,
     };
     use iroha_data_model::block::consensus_v2 as wire;
-    use crate::sumeragi::v2_apply::validation_custody::RetainedValidationOwner;
 
     let fixture: Arc<NativeServicePreparationFixture> = fixture.into();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
@@ -588,7 +596,10 @@ fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparat
         .clone();
     let durable = store.store(manifest, bytes.clone()).unwrap();
     let budget = fixture.service.carrier_shell_budget_for_test();
-    let mut service = fixture.service.retained_validation_service(&store, fixture.context.clone()).unwrap();
+    let mut service = fixture
+        .service
+        .retained_validation_service(&store, fixture.context.clone())
+        .unwrap();
     let descriptor_bytes = budget.reserved_bytes();
     assert!(descriptor_bytes > 0);
     fail_next_marker_file_sync();
@@ -667,17 +678,31 @@ fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparat
     // A process restart reconstructs actual execution once, then every recovered
     // round and the live cache keep that same replay-created candidate owner.
     let mut reopened = V2BodyStore::open_with_policy_and_capacity(
-        directory.path(), context.clone(), BlockSignaturePolicy::RotatingLeader, capacity,
-    ).unwrap();
-    let mut replay = fixture.service.retained_validation_service(&reopened, fixture.context.clone()).unwrap();
+        directory.path(),
+        context.clone(),
+        BlockSignaturePolicy::RotatingLeader,
+        capacity,
+    )
+    .unwrap();
+    let mut replay = fixture
+        .service
+        .retained_validation_service(&reopened, fixture.context.clone())
+        .unwrap();
     reopened.revalidate_retained_markers(&mut replay).unwrap();
-    let replay_allocations = native_service_retained_source_allocations(replay.owner_for_test(subject).unwrap());
+    let replay_allocations =
+        native_service_retained_source_allocations(replay.owner_for_test(subject).unwrap());
     assert_eq!(fixture.service.candidate_executions_for_test(), 2);
     assert_eq!(replay.marker_counts_for_test(), (0, 2));
-    let cached = reopened.execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut replay)
-        .unwrap().into_validated_receipt().unwrap();
+    let cached = reopened
+        .execute_retained_durable_validation(later.clone(), later.manifest_hash(), &mut replay)
+        .unwrap()
+        .into_validated_receipt()
+        .unwrap();
     assert_eq!(cached.execution_commitment(), commitment);
-    assert_eq!(native_service_retained_source_allocations(replay.owner_for_test(subject).unwrap()), replay_allocations);
+    assert_eq!(
+        native_service_retained_source_allocations(replay.owner_for_test(subject).unwrap()),
+        replay_allocations
+    );
     assert_eq!(fixture.service.candidate_executions_for_test(), 2);
     drop(replay);
     assert_eq!(budget.reserved_bytes(), 0);
@@ -782,8 +807,7 @@ impl NativeServicePreparationFixture {
     }
 }
 
-
-state_test! { sync native_service_postpublication_refusal_retains_original_owner_and_notifies_once
+state_test! { consensus_stack native_service_postpublication_refusal_retains_original_owner_and_notifies_once
     use crate::sumeragi::{
         v2_apply::native_validation::fail_next_post_publication_queue_tail_for_test,
         v2_body_store::{BlockSignaturePolicy, LocalValidationRefusal, V2BodyStore, V2BodyStoreCapacity},
@@ -853,20 +877,39 @@ state_test! { sync native_service_postpublication_refusal_retains_original_owner
     assert_eq!(fixture.service.carrier_shell_budget_for_test().reserved_bytes(), 0);
 }
 
-
 impl State {
     /// Genuine immutable first-admission authority for lifecycle wait-custody tests.
     /// The returned token survives its fixture State, as historical source tokens do.
-    pub(crate) fn authenticated_native_source_for_lifecycle_test(
-    ) -> Arc<super::AuthenticatedLaneAdmittedInputSourceV1> {
+    pub(crate) fn authenticated_native_source_for_lifecycle_test()
+    -> Arc<super::AuthenticatedLaneAdmittedInputSourceV1> {
         let fixture = native_publication_fixture(false);
         let state = fixture.state();
         let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
-        let lane = observed.contexts().first().expect("fixture opens its actual Native lane");
+        let lane = observed
+            .contexts()
+            .first()
+            .expect("fixture opens its actual Native lane");
         match state.first_lane_admitted_input(&observed, lane).unwrap() {
             super::FirstLaneAdmittedInputReadV1::Ready(input) => Arc::new(input.source().clone()),
-            super::FirstLaneAdmittedInputReadV1::CanonicalBodyRecoveryRequired(source) => Arc::new(source),
+            super::FirstLaneAdmittedInputReadV1::CanonicalBodyRecoveryRequired(source) => {
+                Arc::new(source)
+            }
             _ => panic!("genuine fixture source must retain its exact current observation"),
         }
     }
+}
+
+// Fix the ordinary libtest budget even if a caller raises RUST_MIN_STACK. This
+// covers actual Native execution, original World detachment, marker retries,
+// restart revalidation, and final release through the production call chain.
+state_test! { sync native_service_body_store_retention_uses_ordinary_stack
+    std::thread::Builder::new()
+        .name("native-retained-ordinary-stack".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            assert_native_service_body_store_retention(native_service_retention_fixture(false));
+        })
+        .expect("spawn retained Native validation on the ordinary stack")
+        .join()
+        .expect("retained Native validation must fit the ordinary stack");
 }

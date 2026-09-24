@@ -158,7 +158,8 @@ DELEGATED_STATE_BINDINGS += (('composed_external_events',
    'authorization.validated_publication_event_bytes.is_some()',
    'actual_events.as_deref() != authorization.external_event_bytes.as_deref()',
    '!Self::canonical_wsv_merge_commit_authorization_matches(',
-   'original_root,\n            )',
+   'let current_base_hash = self\n            .read_releases\n            .lane_execution_state_hash()\n            .map_err(|error| eyre::eyre!(error.to_string()))?;',
+   '!Self::canonical_wsv_merge_commit_authorization_matches(\n            authorization,\n            entry,\n            batch,\n            header.height().get(),\n            header.hash(),\n            u64::try_from(self.state_ref.committed_height()).unwrap_or(u64::MAX),\n            current_base_hash,\n            original_root,\n        )',
    'self.apply_pristine_npos_consensus_effects(',
    'let external_event_bytes = (!self.world.external_event_buf.is_empty())',
    'publication_events.push(self.create_time_event(&header).into());',
@@ -218,8 +219,14 @@ DELEGATED_STATE_DIAGNOSTIC_TOKENS = (
     "certified merge entry has no exact durable carrier before state commit",
 )
 
+# Preserve both original local-admission kinds across the selector's generic
+# conversion; substituting one resource's wake for the other is not a retry.
+ADMISSION_CONVERSION_BINDING = ('crates/iroha_core/src/state/block_hashes_admission.rs', 'method', 'From<StateAdmissionError> for StateBlockStartError<E>::from', ('    fn from(error: StateAdmissionError) -> Self {\n        match error {\n            StateAdmissionError::History(e) => Self::History(e),\n            StateAdmissionError::Membership(e) => Self::Membership(e),\n        }\n    }',))
+
+
 DELEGATED_STATE_SOURCE_RELATIVES = (
     Path(STATE),
+    Path(ADMISSION_CONVERSION_BINDING[0]),
     Path("scripts/formal/sumeragi_v2_multilane_delegated_state_contract.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_delegated_state_contract_test.py"),
 )
@@ -263,6 +270,17 @@ def validate_delegated_state_contract(
                 elif _code(token).rstrip(",") not in items[symbol]:
                     errors.append(f"delegated State {symbol} missing executable relation {token!r}")
 
+    path, kind, symbol, tokens = ADMISSION_CONVERSION_BINDING
+    matches = [b for b in bindings if isinstance(b, dict)
+               and (b.get("path"), b.get("kind"), b.get("symbol")) == (path, kind, symbol)]
+    if len(matches) != 1:
+        errors.append(f"delegated State ledger owner {symbol} must occur exactly once")
+    elif tuple(matches[0].get("required_tokens", ())) != tokens:
+        errors.append(f"delegated State reviewed tokens changed for {symbol}")
+    item = rust_binding_item(root, path, kind, symbol, "delegated State", errors)
+    if item is not None and _code(item).strip() != _code(tokens[0]).strip():
+        errors.append(f"delegated State {symbol} must preserve the exact original admission refusal")
+
     def require(symbol: str, *relations: str) -> None:
         for relation in relations:
             if symbol in items and _code(relation) not in items[symbol]:
@@ -288,13 +306,13 @@ def validate_delegated_state_contract(
             "match replay_authority.as_ref() { Some(authority) => authority, None => &*state_block, }")
     require("stage_certified_merge_entry_with_replay",
             "self.ensure_pristine_execution_control_stage()?; if let Some(authority) = replay { authority.validate_merge_stage(&self._curr_block, &*self, entry).map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?; }",
-            ".validate_certified_merge_entry_for_global_order_with_replay(entry, frozen_mode, replay,)?;",
+            "self.read_releases.state().validate_certified_merge_entry_for_global_order_with_replay(entry, frozen_mode, replay, &mut self.read_releases.lifecycle,)?;",
             "State::preexecute_merge_execution_sources_into_with_replay(self, sources, replay)")
 
     wrapper = items.get("validate_merge_execution_batch")
     if wrapper is not None:
         body = wrapper.partition("{")[2].rsplit("}", 1)[0]
-        expected = _code("self.validate_merge_execution_batch_with_replay(active_lanes, batch, validation_authority, None,)")
+        expected = _code("let mut releases = LaneLifecycleReleases::new(self); self.validate_merge_execution_batch_with_replay(active_lanes, batch, validation_authority, None, &mut releases,)")
         if body != expected:
             errors.append("delegated State validate_merge_execution_batch must return the exact no-replay owner result")
     require("validate_merge_execution_batch_with_replay",
@@ -342,7 +360,7 @@ def validate_delegated_state_contract(
             "Self::merge_execution_write_set_root_from_overlay_with_external_events(&self.world, &self.merge_carrier_entrypoints, composed_event_bytes, self.merge_execution_runtime_effects().as_ref(),)")
     # Presence alone cannot permit minting before metadata/event validation succeeds.
     for symbol, ordered in (
-        ("apply_verified_merge_beacon_pulse", ("capability.into_parts()", "self.validate_merge_execution_commit_surface(", "let original_root =", "!Self::canonical_wsv_merge_commit_authorization_matches(", "self.apply_pristine_npos_consensus_effects(", "let external_event_bytes =", "let seal =", ".beacon_composition = Some(seal)")),
+        ("apply_verified_merge_beacon_pulse", ("capability.into_parts()", "self.validate_merge_execution_commit_surface(", "let original_root =", "let current_base_hash = self.read_releases.lane_execution_state_hash()", "!Self::canonical_wsv_merge_commit_authorization_matches(", "self.apply_pristine_npos_consensus_effects(", "let external_event_bytes =", "let seal =", ".beacon_composition = Some(seal)")),
         ("apply_without_execution_inner", ("self.prepare_deterministic_carrier_metadata(", "self.prepare_carrier_publication_events(", "self.mint_canonical_carrier_commit_metadata_authorization(")),
         ("prepare_carrier_publication_events", ("if header != self._curr_block", "self.validate_merge_execution_external_event_publication_surface()?", "self.world.external_event_buf.push(", "self.world.take_external_events()")),
     ):

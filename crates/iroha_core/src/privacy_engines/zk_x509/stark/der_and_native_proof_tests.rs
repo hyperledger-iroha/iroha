@@ -474,6 +474,140 @@ fn full_main_proof_budget_rejects_before_witness_or_entropy() {
     );
     assert!(136 * 2 * 5623 * 8 > super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 }
+
+/// Count the current direct-opening owners without trusting width-only sums.
+/// This is a sizing audit, not a replacement proof or an admission path.
+fn full_main_opening_partition_for_test_v1(
+    layout: &AggregateProofLayoutV1,
+) -> Result<([usize; 3], [usize; 3]), &'static str> {
+    const P256: usize = 0;
+    const SHA: usize = 1;
+    const RESIDUAL: usize = 2;
+    let mut owners = layout
+        .trace_groups
+        .iter()
+        .map(|group| (vec![None; group.base_width], vec![None; group.aux_width]))
+        .collect::<Vec<(Vec<Option<usize>>, Vec<Option<usize>>)>>();
+    let mut registrations = [0_usize; 3];
+    let mut columns = [0_usize; 3];
+    for registration in &layout.registered_segments {
+        let family = match registration.segment.adapter {
+            SegmentAdapterIdV1::P256Arithmetic
+            | SegmentAdapterIdV1::P256Reduction
+            | SegmentAdapterIdV1::P256LowS
+            | SegmentAdapterIdV1::P256Window
+            | SegmentAdapterIdV1::P256ValueBus => P256,
+            SegmentAdapterIdV1::Sha256CallBus => SHA,
+            SegmentAdapterIdV1::ByteMemory
+            | SegmentAdapterIdV1::StrictDer
+            | SegmentAdapterIdV1::Rfc5280
+            | SegmentAdapterIdV1::Projection
+            // The five log-8 scalar buses remain in MAIN. The proposed
+            // receipt replaces the log-5/16/19 P-256 openings only, and
+            // must still prove its links to these retained bus terminals.
+            | SegmentAdapterIdV1::P256ScalarBitBus => RESIDUAL,
+            SegmentAdapterIdV1::CaAccumulator => return Err("CA is not a MAIN registration"),
+        };
+        registrations[family] += 1;
+        let group = owners
+            .get_mut(registration.trace_group)
+            .ok_or("registration has no trace group")?;
+        for (slots, start, width) in [
+            (
+                &mut group.0,
+                registration.base_start,
+                registration.segment.base_width,
+            ),
+            (
+                &mut group.1,
+                registration.aux_start,
+                registration.segment.aux_width,
+            ),
+        ] {
+            let end = start.checked_add(width).ok_or("column range overflow")?;
+            for owner in slots
+                .get_mut(start..end)
+                .ok_or("column outside its trace group")?
+            {
+                if owner.replace(family).is_some() {
+                    return Err("overlapping trace column");
+                }
+                columns[family] += 1;
+            }
+        }
+    }
+    if owners
+        .iter()
+        .any(|(base, aux)| base.iter().chain(aux).any(Option::is_none))
+    {
+        return Err("unowned trace column");
+    }
+    Ok((registrations, columns))
+}
+
+#[test]
+fn full_main_replacement_partition_covers_every_registration_and_opening() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+    layout
+        .validate_exact_full_profile_registration_v1()
+        .expect("verifier-owned registration");
+    assert_eq!(layout.registered_segments.len(), 49);
+    let (registrations, columns) =
+        full_main_opening_partition_for_test_v1(&layout).expect("complete MAIN partition");
+    assert_eq!(registrations, [36, 4, 9]);
+    assert_eq!(columns, [4_000, 668, 955]);
+    let retained_scalar_bus_columns = layout
+        .registered_segments
+        .iter()
+        .filter(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256ScalarBitBus)
+        .map(|registration| registration.segment.base_width + registration.segment.aux_width)
+        .sum::<usize>();
+    assert_eq!(retained_scalar_bus_columns, 190);
+    assert_eq!(
+        columns.iter().sum::<usize>(),
+        layout
+            .trace_groups
+            .iter()
+            .map(|group| group.base_width + group.aux_width)
+            .sum::<usize>()
+    );
+    assert_eq!(columns.iter().sum::<usize>(), 5_623);
+
+    // This credits only current/next base-field and DEEP openings. The new
+    // receipt, roots, claims, transcript and padding must all fit the balance.
+    let sampled_bytes_per_column =
+        usize::from(ZK_X509_FRI_QUERY_COUNT_V1) * 2 * core::mem::size_of::<u64>();
+    let deep_bytes_per_column = 2 * core::mem::size_of::<[u64; 4]>();
+    assert_eq!(sampled_bytes_per_column, 2_176);
+    assert_eq!(deep_bytes_per_column, 64);
+    let current_maximum = super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
+    let hypothetical_remainder = current_maximum
+        - (columns[0] + columns[1]) * (sampled_bytes_per_column + deep_bytes_per_column);
+    assert_eq!(hypothetical_remainder, 8_699_754);
+    assert_eq!(
+        super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize - hypothetical_remainder,
+        737_430
+    );
+}
+
+#[test]
+fn full_main_replacement_partition_rejects_omitted_and_overlapping_columns() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+    let mut omitted = layout.clone();
+    omitted.registered_segments.pop();
+    assert_eq!(
+        full_main_opening_partition_for_test_v1(&omitted),
+        Err("unowned trace column")
+    );
+    let mut overlapping = layout.clone();
+    overlapping
+        .registered_segments
+        .push(layout.registered_segments[0]);
+    assert_eq!(
+        full_main_opening_partition_for_test_v1(&overlapping),
+        Err("overlapping trace column")
+    );
+}
 #[test]
 fn main_verifier_profile_is_pinned_and_rejects_substitution() {
     let mut profile =

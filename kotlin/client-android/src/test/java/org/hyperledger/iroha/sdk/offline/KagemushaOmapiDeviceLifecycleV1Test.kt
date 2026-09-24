@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -10,13 +12,16 @@ import org.junit.jupiter.api.Test
 
 class KagemushaOmapiDeviceLifecycleV1Test {
     @Test
-    fun `default discovery admits every reader class but an explicit pin stays exact`() {
-        for (candidate in listOf("eSE1", "SIM1", "SD1", "vendor-secure-element")) {
+    fun `default discovery admits only embedded readers and explicit pins stay exact`() {
+        for (candidate in listOf("eSE", "eSE1", "eSE2", "eSE10")) {
             assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName(candidate, null))
         }
-        assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("SIM2", "SIM2"))
-        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("SIM1", "SIM2"))
-        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("sim2", "SIM2"))
+        for (candidate in listOf("SIM1", "SD1", "vendor-secure-element", "eSE0", "eSE01", "eSE1junk")) {
+            assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName(candidate, null))
+        }
+        assertTrue(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("eSE2", "eSE2"))
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("eSE1", "eSE2"))
+        assertFalse(KagemushaOmapiDeviceLifecycleV1.acceptsReaderName("ese2", "eSE2"))
     }
 
     @Test
@@ -34,6 +39,9 @@ class KagemushaOmapiDeviceLifecycleV1Test {
         )
         assertFailsWith<IllegalArgumentException> {
             KagemushaOmapiDeviceLifecycleV1.Configuration(" eSE1 ")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOmapiDeviceLifecycleV1.Configuration("SIM1")
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaOmapiDeviceLifecycleV1.Configuration(appletAid = ByteArray(8))
@@ -68,5 +76,29 @@ class KagemushaOmapiDeviceLifecycleV1Test {
             },
         )
         assertEquals(1, timeoutCallbacks)
+    }
+
+    @Test
+    fun `service cleanup runs after late completion without a caller executor`() {
+        val pending = CompletableFuture<Int>()
+        var closed: Int? = null
+        val firstCleanup = CountDownLatch(1)
+        KagemushaOmapiDeviceLifecycleV1.closeServiceWhenReady(pending) {
+            closed = it
+            firstCleanup.countDown()
+        }
+        assertEquals(null, closed)
+        pending.complete(7)
+        assertTrue(firstCleanup.await(5, TimeUnit.SECONDS))
+        assertEquals(7, closed)
+
+        val alreadyCompleted = CompletableFuture.completedFuture(9)
+        val secondCleanup = CountDownLatch(1)
+        KagemushaOmapiDeviceLifecycleV1.closeServiceWhenReady(alreadyCompleted) {
+            closed = it
+            secondCleanup.countDown()
+        }
+        assertTrue(secondCleanup.await(5, TimeUnit.SECONDS))
+        assertEquals(9, closed)
     }
 }

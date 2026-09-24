@@ -11,6 +11,188 @@ async fn creates_all_dirs_while_writing_snapshots() {
     assert_canonical_snapshot_generation(&snapshot_store_dir);
 }
 #[tokio::test]
+async fn signed_snapshot_restore_keeps_configured_governance_catalog() {
+    let tmp_root = tempdir().unwrap();
+    let store_dir = tmp_root.path().join("snapshot");
+    let mut state = state_factory();
+    let mut configured_nexus = state.nexus_snapshot();
+    configured_nexus.governance.modules.insert(
+        "parliament".to_owned(),
+        iroha_config::parameters::actual::GovernanceModule {
+            module_type: Some("parliament_sortition_jit".to_owned()),
+            ..Default::default()
+        },
+    );
+    state
+        .set_nexus_from_config(configured_nexus.clone())
+        .expect("install the configured static governance catalog before snapshot");
+    let key_pair = checked_random_snapshot_keypair();
+    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+    let restored = try_read_snapshot(
+        &store_dir,
+        &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
+        &configured_nexus,
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        &state.network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+    )
+    .expect("signed restart must retain configured static governance before manifest binding");
+    assert!(
+        restored
+            .nexus_snapshot()
+            .governance
+            .modules
+            .contains_key("parliament"),
+        "the snapshot's dynamic runtime cannot erase configured governance modules"
+    );
+    assert_eq!(
+        canonical_state_snapshot_bytes_for_tests(&restored),
+        canonical_state_snapshot_bytes_for_tests(&state),
+    );
+}
+
+#[tokio::test]
+async fn signed_snapshot_restore_accepts_configured_governed_lane() {
+    let tmp_root = tempdir().unwrap();
+    let manifest_dir = tmp_root.path().join("manifests");
+    std::fs::create_dir(&manifest_dir).unwrap();
+    std::fs::write(
+        manifest_dir.join("governed.manifest.json"),
+        r#"{"lane":"governed","governance":"parliament","version":1}"#,
+    )
+    .unwrap();
+    let mut configured_nexus = iroha_config::parameters::actual::Nexus::default();
+    let governed_lane = ModelLaneConfig {
+        id: LaneId::new(1),
+        alias: "governed".to_owned(),
+        governance: Some("parliament".to_owned()),
+        ..ModelLaneConfig::default()
+    };
+    configured_nexus.lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![ModelLaneConfig::default(), governed_lane],
+    )
+    .unwrap();
+    configured_nexus.configured_lane_catalog = configured_nexus.lane_catalog.clone();
+    configured_nexus.lane_config = LaneConfig::from_catalog(&configured_nexus.lane_catalog);
+    configured_nexus.governance.modules.insert(
+        "parliament".to_owned(),
+        iroha_config::parameters::actual::GovernanceModule {
+            module_type: Some("parliament_sortition_jit".to_owned()),
+            ..Default::default()
+        },
+    );
+    configured_nexus.registry.manifest_directory = Some(manifest_dir);
+
+    let kura_config =
+        kura_config_for_snapshot_test(&tmp_root.path().join("kura"), nonzero!(1_usize));
+    let (kura, block_count) = Kura::new_with_configured_lane_catalog(
+        &kura_config,
+        &configured_nexus.lane_config,
+        &configured_nexus.configured_lane_catalog,
+    )
+    .expect("open exact configured lane geometry");
+    let mut world = crate::queue::tests::world_with_test_domains();
+    crate::sns::try_seed_default_namespace_policies(
+        &mut world,
+        &configured_nexus.fees.fee_asset_id,
+    )
+    .unwrap();
+    let mut state = State::try_new_with_chain_and_network_id(
+        world,
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        ChainId::from(TEST_CHAIN_ID),
+        snapshot_test_network_id(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::default(),
+    )
+    .expect("construct the pre-genesis State");
+    let manifests = Arc::new(
+        crate::governance::manifest::LaneManifestRegistry::from_config(
+            &configured_nexus.configured_lane_catalog,
+            &configured_nexus.governance,
+            &configured_nexus.registry,
+        ),
+    );
+    manifests
+        .validate_active_coverage_for_catalog(&configured_nexus.lane_catalog)
+        .expect("governed lane has a frozen matching source");
+    state.install_lane_manifests(&manifests);
+    state
+        .prepare_configured_primary_geometry_anchor(&configured_nexus.configured_lane_catalog)
+        .unwrap();
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .unwrap();
+    state
+        .set_nexus_from_config(configured_nexus.clone())
+        .unwrap();
+    state.install_active_lane_markers_for_tests();
+    state.configure_test_runtime_defaults();
+    let store_dir = tmp_root.path().join("snapshot");
+    let key_pair = checked_random_snapshot_keypair();
+    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+        .expect("write a signed snapshot with an active governed lane");
+
+    let restored = try_read_snapshot(
+        &store_dir,
+        &kura,
+        &manifests,
+        &configured_nexus,
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        state.network_id_ref(),
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::default(),
+        &snapshot_read_budget_for_testing(),
+    )
+    .expect("signed restore must rebind the governed lane from configured policy");
+    restored
+        .lane_manifests
+        .read()
+        .validate_active_coverage_for_catalog(&configured_nexus.lane_catalog)
+        .expect("restored governed lane remains ready");
+    assert_eq!(
+        canonical_state_snapshot_bytes_for_tests(&restored),
+        canonical_state_snapshot_bytes_for_tests(&state),
+    );
+
+    let mut missing_governance = configured_nexus.clone();
+    missing_governance.governance.modules.clear();
+    assert!(
+        try_read_snapshot(
+            &store_dir,
+            &kura,
+            &manifests,
+            &missing_governance,
+            LiveQueryStore::start_test,
+            block_count,
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            state.network_id_ref(),
+            &crate::state::default_zk_config(),
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+            &snapshot_read_budget_for_testing(),
+        )
+        .is_err(),
+        "a local configuration missing the governed module must fail closed"
+    );
+}
+
+#[tokio::test]
 async fn can_read_snapshot_after_writing() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
@@ -23,6 +205,7 @@ async fn can_read_snapshot_after_writing() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -86,6 +269,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -387,6 +571,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(0),
         TEST_CHUNK_SIZE,
@@ -477,6 +662,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -549,6 +735,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -592,6 +779,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -635,6 +823,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -723,6 +912,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -965,6 +1155,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
             &store_dir,
             &kura,
             &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
             LiveQueryStore::start_test,
             BlockCount(1),
             TEST_CHUNK_SIZE,
@@ -1032,6 +1223,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1088,6 +1280,7 @@ async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -1222,6 +1415,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1251,6 +1445,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1281,6 +1476,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1323,6 +1519,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
             &store_dir,
             &Kura::blank_kura_for_testing(),
             &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1375,6 +1572,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
             &store_dir,
             &Kura::blank_kura_for_testing(),
             &state.lane_manifests.read().clone(),
+            &state.nexus_snapshot(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1413,6 +1611,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         &store_dir,
         &Kura::blank_kura_for_testing(),
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1459,6 +1658,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1492,6 +1692,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         &store_dir,
         &kura,
         &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,

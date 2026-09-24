@@ -314,6 +314,7 @@ impl V2EffectServices for ProductionV2Services {
                     .as_ref()
                     .map(|_| task.sources().to_vec())
                     .unwrap_or_default();
+                let retry_request_hash = existing_task.certified_request().map(HashOf::new);
                 let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
                     "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
                 })?;
@@ -326,6 +327,17 @@ impl V2EffectServices for ProductionV2Services {
                 if let Some(data) = certified_message {
                     let peers =
                         self.current_archive_targets_with_frozen_fallback(&certified_sources);
+                    if let Some(request_hash) = retry_request_hash {
+                        // A delivered request can be refused by a temporarily
+                        // busy archive while another topology target retains
+                        // the old fanout indefinitely. The reducer's periodic
+                        // Fetch must retire that transport attempt before
+                        // re-offering the same signed request and fetch owner.
+                        let mut pending = self.lock_pending_exact_output()?;
+                        if !self.exact_output_handoff_owner.is_sealed() {
+                            pending.cancel_certified_body_request(request_hash)?;
+                        }
+                    }
                     if self.enqueue_exact_fanout_while_guarded(
                         vec![data],
                         peers,
@@ -840,6 +852,10 @@ impl V2EffectServices for ProductionV2Services {
 /// because their exact task owner, rather than a later certified view, controls
 /// retirement. Height-only recovery requests also return `None`; global
 /// threshold-beacon partials retain their exact round.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native runner cutover")
+)]
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;
@@ -1012,6 +1028,10 @@ impl PendingExactFanout {
     }
 }
 impl PendingExactOutput {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     fn retain_native_amx_round(
         &mut self,
         retained_round: wire::ConsensusRound,
@@ -1062,6 +1082,10 @@ impl PendingExactOutput {
     /// responsive peer. Every removed message is bound to this exact height
     /// context and a strictly lower view; request-bound acquisition/recovery
     /// traffic and epoch-wide traffic are retained.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     fn retain_certified_global_view_output(
         &mut self,
         retained_round: wire::ConsensusRound,
@@ -1116,6 +1140,10 @@ impl ProductionV2Services {
     /// A terminal Decision retires every height-local Native-AMX occurrence.
     /// Matching by the complete round also removes stale predecessor-height
     /// output carried through the exact-output rollover corridor.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) fn retain_native_amx_round(
         &self,
         retained_round: wire::ConsensusRound,
@@ -1131,6 +1159,10 @@ impl ProductionV2Services {
     }
     /// Retire view-scoped global control, payload, and merge output below the
     /// active certified round.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) fn retain_certified_global_view_output(
         &self,
         retained_round: wire::ConsensusRound,

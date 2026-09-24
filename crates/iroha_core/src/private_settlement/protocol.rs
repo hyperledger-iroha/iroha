@@ -176,11 +176,9 @@ pub struct PrivateSettlementCommitteeAuthorityErrorV1;
 /// validator roster resolved for the lane/dataspace route at
 /// `authority_context_height`, the exact active lane incarnation, and the V1
 /// four-validator/`f = 1` geometry. Every member must also hold a live
-/// purpose-specific [`ConsensusKeyRole::Committee`] key at that height; the
-/// generic participant-lane compatibility fallback to global `Validator` keys
-/// is deliberately forbidden for private settlement. A self-signed
-/// caller-selected or global-validator-only committee can therefore never
-/// authorize a private state transition.
+/// purpose-specific [`ConsensusKeyRole::Committee`] key at that height.
+/// A self-signed caller-selected or global-validator-only committee can
+/// therefore never authorize a private state transition.
 ///
 /// # Errors
 ///

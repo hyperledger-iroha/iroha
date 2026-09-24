@@ -45,6 +45,7 @@ pub(crate) struct CanonicalExecutedBodyServeTask {
 impl CanonicalExecutedBodyServeTask {
     fn validate_binding(
         request: &LaneHistoricalRecoveryRequestV1,
+        message: &BlockMessage,
         recipient: &PeerId,
         authenticated_via: &PeerId,
         reply_routes: &NetworkReplyRoutes,
@@ -70,11 +71,10 @@ impl CanonicalExecutedBodyServeTask {
                     .to_owned(),
             ));
         }
-        // TODO: Fund this request clone and the nested ingress comparison from
-        // the original physical admission owner before connecting live ingress.
-        let exact_message = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone()));
+        // TODO: Fund the nested ingress comparison from the original physical
+        // admission owner before connecting live ingress.
         if !ingress_ownership.validate_exact()
-            || !ingress_ownership.matches_message(&exact_message)
+            || !ingress_ownership.matches_message(message)
             || !ingress_ownership.matches_semantic_origin(recipient)
             || !ingress_ownership.matches_reply_routes(Some(reply_routes))
         {
@@ -123,6 +123,7 @@ impl CanonicalExecutedBodyServeTask {
         };
         if let Err(error) = Self::validate_binding(
             request,
+            inbound.message(),
             inbound.sender(),
             inbound.via(),
             reply_routes,

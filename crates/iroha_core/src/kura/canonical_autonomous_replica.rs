@@ -161,6 +161,7 @@ impl Kura {
 
     /// Return whether two READY certificates authenticate the same immutable
     /// availability subject while differing only in quorum proof bytes.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn canonical_autonomous_lane_replica_ready_qcs_certify_same_subject(
         left: Option<&iroha_data_model::block::consensus::LanePayloadAvailabilityQcV1>,
         right: Option<&iroha_data_model::block::consensus::LanePayloadAvailabilityQcV1>,
@@ -180,6 +181,7 @@ impl Kura {
 
     /// Return whether two lane QCs certify one Prepare/Commit decision while
     /// differing only in signer selection and aggregate signature bytes.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn canonical_autonomous_lane_replica_qcs_certify_same_decision(
         left: &LaneBlockQcV1,
         right: &LaneBlockQcV1,
@@ -202,6 +204,7 @@ impl Kura {
     /// variants for one decision, not part of the replicated lane-block
     /// identity. Callers must validate both records before using this
     /// comparison as an idempotence shortcut.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn canonical_autonomous_lane_replicas_certify_same_decision(
         left: &CanonicalAutonomousLaneReplicaV1,
         right: &CanonicalAutonomousLaneReplicaV1,
@@ -632,6 +635,7 @@ impl Kura {
     /// Exact replay and a different fully validated quorum proof for the same
     /// decision are idempotent. A different carrier, payload, READY subject,
     /// or Prepare/Commit decision for the same active lane slot fails closed.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn persist_canonical_autonomous_lane_replica(
         &self,
         certified: &CertifiedLaneBlockArtifact,

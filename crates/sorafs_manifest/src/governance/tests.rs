@@ -725,6 +725,7 @@ fn governance_node_validation_succeeds() {
         supports_merkle_proof: true,
     };
     let _ = builder
+        .network_id([0xA1; 32])
         .profile_id("sorafs.sf1@1.0.0")
         .profile_aliases(vec![
             "sorafs.sf1@1.0.0".to_string(),

@@ -2,13 +2,14 @@
 use ed25519_dalek::{Signer, SigningKey};
 use norito::json::Value;
 use sorafs_manifest::{
-    AdmissionRecord, CouncilSignature, ProviderAdmissionCouncilPolicy,
-    ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
-    ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError,
-    ProviderAdmissionRevocationV1, ProviderAdmissionSignatureError, ProviderAdvertV1,
-    compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
-    compute_proposal_digest, validate_provider_admission_renewal_bytes,
-    validate_provider_admission_revocation_bytes, verify_advert_against_record,
+    AdmissionRecord, AdvertSignature, AdvertValidationError, CouncilSignature,
+    ProviderAdmissionAdvertError, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeError,
+    ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdmissionRenewalError,
+    ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
+    ProviderAdmissionSignatureError, ProviderAdmissionValidationError, ProviderAdvertBodyV1,
+    ProviderAdvertV1, compute_advert_body_digest, compute_envelope_authorization_digest,
+    compute_envelope_digest, compute_proposal_digest, validate_provider_admission_renewal_bytes,
+    validate_provider_admission_revocation_bytes, verify_advert_against_record, verify_envelope,
     verify_revocation_signatures,
 };
 use std::{fs, path::PathBuf};
@@ -42,6 +43,217 @@ fn resign_revocation(revocation: &mut ProviderAdmissionRevocationV1, key: &Signi
         signer: key.verifying_key().to_bytes(),
         signature: key.sign(&digest).to_bytes().to_vec(),
     });
+}
+fn resign_advert(advert: &mut ProviderAdvertV1, key: &SigningKey) {
+    let payload = advert
+        .signature_payload_bytes()
+        .expect("canonical network-bound advert signing payload");
+    advert.signature.signature = key.sign(&payload).to_bytes().to_vec();
+}
+
+#[derive(norito::NoritoSchema, norito::NoritoSerialize)]
+#[norito_schema(
+    name = "tests::RetiredAdmissionEnvelopeWithoutNetwork",
+    frame = "sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1"
+)]
+struct RetiredAdmissionEnvelopeWithoutNetwork {
+    version: u8,
+    proposal: ProviderAdmissionProposalV1,
+    proposal_digest: [u8; 32],
+    advert_body: ProviderAdvertBodyV1,
+    advert_body_digest: [u8; 32],
+    issued_at: u64,
+    retention_epoch: u64,
+    council_signatures: Vec<CouncilSignature>,
+    #[norito(default)]
+    notes: Option<String>,
+}
+
+#[derive(norito::NoritoSchema, norito::NoritoSerialize)]
+#[norito_schema(
+    name = "tests::RetiredAdmissionEnvelopeWithoutLineage",
+    frame = "sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1"
+)]
+struct RetiredAdmissionEnvelopeWithoutLineage {
+    version: u8,
+    network_id: [u8; 32],
+    proposal: ProviderAdmissionProposalV1,
+    proposal_digest: [u8; 32],
+    advert_body: ProviderAdvertBodyV1,
+    advert_body_digest: [u8; 32],
+    issued_at: u64,
+    retention_epoch: u64,
+    council_signatures: Vec<CouncilSignature>,
+    #[norito(default)]
+    notes: Option<String>,
+}
+
+#[derive(norito::NoritoSchema, norito::NoritoSerialize)]
+#[norito_schema(
+    name = "tests::RetiredProviderAdvertWithoutNetwork",
+    frame = "sorafs_manifest::provider_advert::ProviderAdvertV1"
+)]
+struct RetiredProviderAdvertWithoutNetwork {
+    version: u8,
+    issued_at: u64,
+    expires_at: u64,
+    body: ProviderAdvertBodyV1,
+    signature: AdvertSignature,
+    signature_strict: bool,
+    #[norito(default)]
+    allow_unknown_capabilities: bool,
+}
+
+#[derive(norito::NoritoSchema, norito::NoritoSerialize)]
+#[norito_schema(
+    name = "tests::RetiredAdmissionRevocationWithoutNetwork",
+    frame = "sorafs_manifest::provider_admission::ProviderAdmissionRevocationV1"
+)]
+struct RetiredAdmissionRevocationWithoutNetwork {
+    version: u8,
+    provider_id: [u8; 32],
+    envelope_digest: [u8; 32],
+    revoked_at: u64,
+    reason: String,
+    council_signatures: Vec<CouncilSignature>,
+    #[norito(default)]
+    notes: Option<String>,
+}
+
+#[derive(norito::NoritoSchema, norito::NoritoSerialize)]
+#[norito_schema(
+    name = "tests::RetiredAdmissionRevocationWithoutLineage",
+    frame = "sorafs_manifest::provider_admission::ProviderAdmissionRevocationV1"
+)]
+struct RetiredAdmissionRevocationWithoutLineage {
+    version: u8,
+    network_id: [u8; 32],
+    provider_id: [u8; 32],
+    envelope_digest: [u8; 32],
+    revoked_at: u64,
+    reason: String,
+    council_signatures: Vec<CouncilSignature>,
+    #[norito(default)]
+    notes: Option<String>,
+}
+
+#[test]
+fn retired_pre_lineage_v1_frames_fail_canonical_decode() {
+    let envelope: ProviderAdmissionEnvelopeV1 =
+        norito::decode_from_bytes(&read_fixture("envelope_v1.to")).expect("current envelope");
+    let revocation: ProviderAdmissionRevocationV1 =
+        norito::decode_from_bytes(&read_fixture("revocation_v1.to")).expect("current revocation");
+    let old_envelope = RetiredAdmissionEnvelopeWithoutLineage {
+        version: envelope.version,
+        network_id: envelope.network_id,
+        proposal: envelope.proposal,
+        proposal_digest: envelope.proposal_digest,
+        advert_body: envelope.advert_body,
+        advert_body_digest: envelope.advert_body_digest,
+        issued_at: envelope.issued_at,
+        retention_epoch: envelope.retention_epoch,
+        council_signatures: envelope.council_signatures,
+        notes: envelope.notes,
+    };
+    let old_revocation = RetiredAdmissionRevocationWithoutLineage {
+        version: revocation.version,
+        network_id: revocation.network_id,
+        provider_id: revocation.provider_id,
+        envelope_digest: revocation.envelope_digest,
+        revoked_at: revocation.revoked_at,
+        reason: revocation.reason,
+        council_signatures: revocation.council_signatures,
+        notes: revocation.notes,
+    };
+    let old_envelope_bytes = norito::encode_canonical(&old_envelope).expect("retired envelope");
+    let old_revocation_bytes =
+        norito::encode_canonical(&old_revocation).expect("retired revocation");
+    assert!(norito::decode_canonical::<ProviderAdmissionEnvelopeV1>(&old_envelope_bytes).is_err());
+    assert!(
+        norito::decode_canonical::<ProviderAdmissionRevocationV1>(&old_revocation_bytes).is_err()
+    );
+}
+
+#[test]
+fn retired_networkless_v1_frames_fail_canonical_decode() {
+    let envelope: ProviderAdmissionEnvelopeV1 =
+        norito::decode_from_bytes(&read_fixture("envelope_v1.to")).expect("current envelope");
+    let advert: ProviderAdvertV1 =
+        norito::decode_from_bytes(&read_fixture("advert_v1.to")).expect("current advert");
+    let revocation: ProviderAdmissionRevocationV1 =
+        norito::decode_from_bytes(&read_fixture("revocation_v1.to")).expect("current revocation");
+    let old_envelope = RetiredAdmissionEnvelopeWithoutNetwork {
+        version: envelope.version,
+        proposal: envelope.proposal,
+        proposal_digest: envelope.proposal_digest,
+        advert_body: envelope.advert_body,
+        advert_body_digest: envelope.advert_body_digest,
+        issued_at: envelope.issued_at,
+        retention_epoch: envelope.retention_epoch,
+        council_signatures: envelope.council_signatures,
+        notes: envelope.notes,
+    };
+    let old_advert = RetiredProviderAdvertWithoutNetwork {
+        version: advert.version,
+        issued_at: advert.issued_at,
+        expires_at: advert.expires_at,
+        body: advert.body,
+        signature: advert.signature,
+        signature_strict: advert.signature_strict,
+        allow_unknown_capabilities: advert.allow_unknown_capabilities,
+    };
+    let old_revocation = RetiredAdmissionRevocationWithoutNetwork {
+        version: revocation.version,
+        provider_id: revocation.provider_id,
+        envelope_digest: revocation.envelope_digest,
+        revoked_at: revocation.revoked_at,
+        reason: revocation.reason,
+        council_signatures: revocation.council_signatures,
+        notes: revocation.notes,
+    };
+    let old_envelope_frame =
+        norito::encode_canonical(&old_envelope).expect("retired envelope frame");
+    let old_advert_frame = norito::encode_canonical(&old_advert).expect("retired advert frame");
+    let old_revocation_frame =
+        norito::encode_canonical(&old_revocation).expect("retired revocation frame");
+    assert_eq!(
+        norito::core::from_bytes_view(&old_envelope_frame)
+            .expect("retired envelope archive")
+            .schema(),
+        norito::schema::identity::frame_hash::<ProviderAdmissionEnvelopeV1>()
+    );
+    assert_eq!(
+        norito::core::from_bytes_view(&old_advert_frame)
+            .expect("retired advert archive")
+            .schema(),
+        norito::schema::identity::frame_hash::<ProviderAdvertV1>()
+    );
+    assert_eq!(
+        norito::core::from_bytes_view(&old_revocation_frame)
+            .expect("retired revocation archive")
+            .schema(),
+        norito::schema::identity::frame_hash::<ProviderAdmissionRevocationV1>()
+    );
+    for (label, rejected) in [
+        (
+            "envelope",
+            norito::decode_canonical::<ProviderAdmissionEnvelopeV1>(&old_envelope_frame).is_err(),
+        ),
+        (
+            "advert",
+            norito::decode_canonical::<ProviderAdvertV1>(&old_advert_frame).is_err(),
+        ),
+        (
+            "revocation",
+            norito::decode_canonical::<ProviderAdmissionRevocationV1>(&old_revocation_frame)
+                .is_err(),
+        ),
+    ] {
+        assert!(
+            rejected,
+            "retired networkless {label} V1 frame must fail closed"
+        );
+    }
 }
 macro_rules! decode_canonical_fixture {
     ($type:ty, $name:literal) => {{
@@ -144,6 +356,96 @@ fn committed_provider_admission_fixtures_are_canonical_and_linked() {
         norito::decode_from_bytes::<ProviderAdmissionEnvelopeV1>(&trailing).is_err(),
         "canonical fixture with trailing bytes must fail closed"
     );
+}
+#[test]
+fn network_identity_is_signed_and_linked_across_admission_lifecycle() {
+    let envelope = decode_canonical_fixture!(ProviderAdmissionEnvelopeV1, "envelope_v1.to");
+    let advert = decode_canonical_fixture!(ProviderAdvertV1, "advert_v1.to");
+    let renewal = decode_canonical_fixture!(ProviderAdmissionRenewalV1, "renewal_v1.to");
+    let revocation = decode_canonical_fixture!(ProviderAdmissionRevocationV1, "revocation_v1.to");
+    let council_key = SigningKey::from_bytes(&COUNCIL_KEY_BYTES);
+    let provider_key = SigningKey::from_bytes(&[0x21; 32]);
+    let policy = fixture_policy();
+    let record = AdmissionRecord::new(envelope.clone(), &policy).expect("fixture admission");
+    assert_eq!(envelope.network_id, [0xA1; 32]);
+    assert_eq!(advert.network_id, envelope.network_id);
+    assert_eq!(renewal.envelope.network_id, envelope.network_id);
+    assert_eq!(revocation.network_id, envelope.network_id);
+
+    let mut altered_envelope = envelope.clone();
+    altered_envelope.network_id[0] ^= 1;
+    assert!(matches!(
+        AdmissionRecord::new(altered_envelope.clone(), &policy),
+        Err(ProviderAdmissionEnvelopeError::Signature(
+            ProviderAdmissionSignatureError::Verification { .. }
+        ))
+    ));
+    resign_envelope(&mut altered_envelope, &council_key);
+    verify_envelope(&altered_envelope, &policy).expect("independently signed foreign envelope");
+
+    let mut altered_advert = advert.clone();
+    altered_advert.network_id[0] ^= 1;
+    assert!(altered_advert.verify_signature().is_err());
+    resign_advert(&mut altered_advert, &provider_key);
+    altered_advert
+        .verify_signature()
+        .expect("valid foreign-network provider signature");
+    assert!(matches!(
+        sorafs_manifest::verify_advert_against_record(&altered_advert, &record),
+        Err(ProviderAdmissionAdvertError::NetworkMismatch { .. })
+    ));
+
+    let mut altered_renewal = renewal.clone();
+    altered_renewal.envelope.network_id[0] ^= 1;
+    resign_envelope(&mut altered_renewal.envelope, &council_key);
+    altered_renewal.envelope_digest =
+        compute_envelope_digest(&altered_renewal.envelope).expect("foreign renewal digest");
+    verify_envelope(&altered_renewal.envelope, &policy)
+        .expect("independently signed foreign renewal envelope");
+    assert!(matches!(
+        record.apply_renewal(&altered_renewal, &policy),
+        Err(ProviderAdmissionRenewalError::NetworkMismatch { .. })
+    ));
+
+    let mut altered_revocation = revocation.clone();
+    altered_revocation.network_id[0] ^= 1;
+    assert!(matches!(
+        verify_revocation_signatures(&altered_revocation, &policy),
+        Err(ProviderAdmissionRevocationError::Signature(
+            ProviderAdmissionSignatureError::Verification { .. }
+        ))
+    ));
+    resign_revocation(&mut altered_revocation, &council_key);
+    verify_revocation_signatures(&altered_revocation, &policy)
+        .expect("independently signed foreign revocation");
+    assert!(matches!(
+        record.verify_revocation(&altered_revocation, &policy),
+        Err(ProviderAdmissionRevocationError::NetworkMismatch { .. })
+    ));
+
+    let mut zero_envelope = envelope;
+    zero_envelope.network_id = [0; 32];
+    resign_envelope(&mut zero_envelope, &council_key);
+    assert!(matches!(
+        AdmissionRecord::new(zero_envelope, &policy),
+        Err(ProviderAdmissionEnvelopeError::Validation(
+            ProviderAdmissionValidationError::InvalidNetworkId
+        ))
+    ));
+    let mut zero_advert = advert.clone();
+    zero_advert.network_id = [0; 32];
+    resign_advert(&mut zero_advert, &provider_key);
+    assert!(matches!(
+        zero_advert.validate(zero_advert.issued_at),
+        Err(AdvertValidationError::InvalidNetworkId)
+    ));
+    let mut zero_revocation = revocation;
+    zero_revocation.network_id = [0; 32];
+    resign_revocation(&mut zero_revocation, &council_key);
+    assert!(matches!(
+        verify_revocation_signatures(&zero_revocation, &policy),
+        Err(ProviderAdmissionRevocationError::InvalidNetworkId)
+    ));
 }
 #[test]
 fn provider_admission_fixture_lifecycle_rejects_adversarial_mutations() {

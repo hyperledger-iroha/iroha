@@ -124,6 +124,7 @@ fn fixture_with_torii_authority(authority: &str) -> Fixture {
     let public = PublicKey::from(PrivateKey::from_bytes(Algorithm::Ed25519, &[0x45; 32]).unwrap());
     let key = public.to_bytes().1.try_into().unwrap();
     let registry = AdmissionRegistry::from_envelopes(
+        envelope.network_id,
         ProviderAdmissionCouncilPolicy::new([key], 1).unwrap(),
         [envelope],
     )

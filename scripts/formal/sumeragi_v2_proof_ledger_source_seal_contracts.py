@@ -1475,7 +1475,7 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
+        "d5549586e3eee7cbd0993ec0496cec15f1ce8130f91b19dfb7fdbe86ce8fccd3"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -3223,10 +3223,10 @@ _PRODUCTION_MERGE_SIDECAR_ARTIFACT_HELPER_SHA256 = {
         "db337960ec3b7ec95115625706916eb8fe37bd6fca838194b517e651eb7f6838",
     ),
     "verify_open_lifecycle_directory": (
-        "5ec718f669775d8ffc986775be5b35d023b4d17422cec6a1527332d5dc9225e4",
+        "23293a4b23f31f4fb85c10521c814104568ccb6161260822087b19adb0d5c754",
     ),
     "open_lifecycle_directory": (
-        "1c480a6f24d1d39a6fe9c7c37bb9cfc738cad69609082b66c60531f141f3fdec",
+        "642c45e23166064b4256a2b6242f9238b20287f944f9cedae11ca0d9641efc24",
         "cfc8db5f4cd9eaee8a95a476440bb53c2f39423b12860d444ffd713c051f1ceb",
     ),
     "verify_open_lifecycle_regular": (
@@ -4848,7 +4848,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "cb5b0f1088bd200ae57a9d5c8ca6fcdf97332fa376379e2f354d0b9706e36d67"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "c55656b8ec95bbb766c81c2e6366251087127686224f0c490e64bea95b30121d"
+        "d5549586e3eee7cbd0993ec0496cec15f1ce8130f91b19dfb7fdbe86ce8fccd3"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"

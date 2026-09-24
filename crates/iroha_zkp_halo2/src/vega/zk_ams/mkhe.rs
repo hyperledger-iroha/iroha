@@ -207,6 +207,8 @@ mod rns_native_qpcs_fri_complete;
 mod rns_native_qpcs_initial;
 #[path = "mkhe/rns_native_qpcs_leaf.rs"]
 mod rns_native_qpcs_leaf;
+#[path = "mkhe/rns_native_qpcs_opening_work.rs"]
+mod rns_native_qpcs_opening_work;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
 #[path = "mkhe/rns_native_resource_budget.rs"]

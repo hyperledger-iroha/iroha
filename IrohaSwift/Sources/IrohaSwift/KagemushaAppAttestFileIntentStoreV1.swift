@@ -9,7 +9,7 @@ private func kagemushaFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 ///
 /// The caller supplies a dedicated, existing, owner-only directory in app-private storage.
 /// `bootstrapNew` is the only way to establish its first key and counter. Missing, malformed,
-  /// or interrupted journal files are never interpreted as an unused key. This journal is not a
+/// or interrupted journal files are never interpreted as an unused key. This journal is not a
 /// hardware counter, an App Attest verifier, or monetary authority.
 public final class KagemushaAppAttestFileIntentStoreV1:
   KagemushaAppAttestAssertionIntentStoringV1, @unchecked Sendable {
@@ -33,11 +33,11 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     defer { _ = Darwin.close(directory) }
   }
 
-  /// Establishes one new journal, after enrollment has fixed the dedicated App Attest key.
-  /// The initial counter must come from the caller's independently checked enrollment state.
+  /// Establishes one new journal for a freshly attested, unused App Attest key.
+  /// Enrollment verifies signCount zero; a caller cannot choose a later counter here.
   /// A failed or interrupted bootstrap leaves the directory unusable until explicit recovery.
-  public static func bootstrapNew(directoryURL: URL, keyID: String,
-    initialCounter: UInt32 = 0) throws -> KagemushaAppAttestFileIntentStoreV1 {
+  public static func bootstrapNew(directoryURL: URL, keyID: String) throws
+    -> KagemushaAppAttestFileIntentStoreV1 {
     let key = try keyBytes(keyID)
     let store = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directoryURL)
     let directory = try openDirectory(store.directoryPath)
@@ -55,7 +55,7 @@ public final class KagemushaAppAttestFileIntentStoreV1:
     guard !exists(directory, name: recordName), !exists(directory, name: temporaryName) else {
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }
-    try writeRecord(directory, record: Record(key: key, intent: .ready(counter: initialCounter)))
+    try writeRecord(directory, record: Record(key: key, intent: .ready(counter: 0)))
     return store
   }
 
@@ -84,9 +84,8 @@ public final class KagemushaAppAttestFileIntentStoreV1:
       default:
         throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
       }
-      // TODO: accept another assertion only after authenticated native Core
-      // commits the predecessor and durably acknowledges its exact raw bytes.
-      // Caller-supplied counters cannot promote a complete record to ready.
+      // Only advanceAfterCommitted can promote a completed assertion to ready;
+      // caller-supplied counters cannot bypass the native Core acknowledgment.
       try Self.writeRecord(directory, record: Record(key: key,
         intent: .pending(previousCounter: previousCounter, selectionDigest: selectionDigest)))
     }
@@ -111,6 +110,31 @@ public final class KagemushaAppAttestFileIntentStoreV1:
       try Self.writeRecord(directory, record: Record(key: key,
         intent: .complete(counter: counter, selectionDigest: selectionDigest,
           rawAssertion: rawAssertion)))
+    }
+  }
+
+  /// Atomically consume only the exact completed assertion acknowledged by native Core.
+  /// The SDK creates the acknowledgment only after exact method-13 frame correlation.
+  public func advanceAfterCommitted(keyID: String, counter: UInt32,
+    selectionDigest: Data, rawAssertion: Data,
+    acknowledgment: KagemushaAppAttestCoreCommitAcknowledgmentV1) throws {
+    let key = try Self.keyBytes(keyID)
+    try Self.validateDigest(selectionDigest)
+    guard counter > 0,
+      acknowledgment.committedCounter == counter,
+      acknowledgment.keyIDDigest == Data(SHA256.hash(data: key)),
+      acknowledgment.selectionDigest == selectionDigest,
+      acknowledgment.rawAssertionDigest == Data(SHA256.hash(data: rawAssertion)) else {
+      throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+    }
+    try withLock { directory in
+      let current = try Self.readRecord(directory)
+      guard current.key == key,
+        current.intent == .complete(counter: counter, selectionDigest: selectionDigest,
+          rawAssertion: rawAssertion) else {
+        throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
+      }
+      try Self.writeRecord(directory, record: Record(key: key, intent: .ready(counter: counter)))
     }
   }
 

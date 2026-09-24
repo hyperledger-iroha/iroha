@@ -131,10 +131,10 @@ pub enum ConvictionErrorV1 {
     #[error("conviction units or weight exceed u128")]
     Overflow,
     /// A replacement reduces its amount, requested duration or absolute expiry.
-    #[error("re-vote cannot reduce existing lock amount, duration or expiry")]
+    #[error("conviction update cannot reduce existing lock amount, duration or expiry")]
     ReducedLock,
     /// A replacement increases neither its bond nor its absolute expiry.
-    #[error("re-vote must increase the bond or extend its lock")]
+    #[error("conviction update must increase the bond or extend its lock")]
     UnchangedLock,
 }
 

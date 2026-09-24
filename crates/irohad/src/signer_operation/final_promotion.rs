@@ -89,6 +89,8 @@ pub mod account_transaction;
 pub mod current_observation;
 /// Exact observer Check signing with retained native challenges and independent fee approval.
 pub mod observer_transaction;
+/// Purpose-specific immutable pending-Reserve records, without recovery submission authority.
+pub mod pending_reserve_journal;
 mod receipt_core;
 /// BeforeProvider source owner retaining the original signed Reserve and independent floor.
 pub mod reserved_observation;

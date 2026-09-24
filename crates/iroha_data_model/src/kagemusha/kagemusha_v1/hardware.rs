@@ -12,7 +12,8 @@ use super::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
     KAGEMUSHA_WIRE_VERSION_V1, KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
-    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1, KagemushaHardwareTerminalBodyV1,
+    KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaHardwareTerminalBodyCommitmentLayoutV1, KagemushaHardwareTerminalBodyV1,
     KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaOutboxReservationV1,
     KagemushaValidationErrorV1, LIFECYCLE_BINDING_DIGEST_DOMAIN,
     OUTBOX_RESERVATION_COMMITMENT_DOMAIN, SUITE_COMMITMENT_DOMAIN,
@@ -465,12 +466,46 @@ impl KagemushaOutboxReservationV1 {
 }
 
 impl KagemushaHardwareTerminalBodyV1 {
+    /// Return the exact flat first-release commitment preimage without validating the body.
+    ///
+    /// Monetary callers use `canonical_commitment` to validate all fields before hashing.
+    /// Proof circuits can use the fixed ranges to bind these same bytes to assigned cells.
+    pub fn commitment_preimage_bytes(
+        &self,
+    ) -> [u8; KagemushaHardwareTerminalBodyCommitmentLayoutV1::BODY_BYTES] {
+        use KagemushaHardwareTerminalBodyCommitmentLayoutV1 as Layout;
+
+        let mut bytes = [0_u8; Layout::BODY_BYTES];
+        bytes[Layout::VERSION].copy_from_slice(&self.version.to_le_bytes());
+        bytes[Layout::CANDIDATE_ENVELOPE_DIGEST].copy_from_slice(&self.candidate_envelope_digest);
+        bytes[Layout::LIFECYCLE_BINDING_DIGEST].copy_from_slice(&self.lifecycle_binding_digest);
+        bytes[Layout::TRANSITION_NULLIFIER].copy_from_slice(&self.transition_nullifier);
+        bytes[Layout::OUTBOX_RESERVATION_COMMITMENT]
+            .copy_from_slice(&self.outbox_reservation_commitment);
+        let (evidence_tag, evidence_commitment) = match self.commit_evidence {
+            KagemushaCommitEvidenceV1::TrustedTime(value) => (0_u8, value.time_evidence_commitment),
+            KagemushaCommitEvidenceV1::MonotonicLease(value) => {
+                (1_u8, value.lease_evidence_commitment)
+            }
+        };
+        bytes[Layout::EVIDENCE_TAG.start] = evidence_tag;
+        bytes[Layout::EVIDENCE_COMMITMENT].copy_from_slice(&evidence_commitment);
+        bytes[Layout::HARDWARE_PROFILE_ID].copy_from_slice(&self.hardware_profile_id);
+        bytes[Layout::POLICY_EPOCH].copy_from_slice(&self.policy_epoch.to_le_bytes());
+        bytes[Layout::PRIVATE_SUCCESSOR_COMMITMENT]
+            .copy_from_slice(&self.private_successor_commitment);
+        bytes[Layout::PRIVATE_JOURNAL_COMMITMENT].copy_from_slice(&self.private_journal_commitment);
+        bytes[Layout::PRIVATE_RECOVERY_COMMITMENT]
+            .copy_from_slice(&self.private_recovery_commitment);
+        bytes
+    }
+
     /// Return the hiding commitment used by the terminal certificate.
     ///
     /// # Errors
     ///
-    /// Returns an error for a reserved field, unsupported version, invalid
-    /// commit evidence, or canonical encoding failure.
+    /// Returns an error for a reserved field, unsupported version, or invalid
+    /// commit evidence.
     pub fn canonical_commitment(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
         if self.version != KAGEMUSHA_WIRE_VERSION_V1 || self.policy_epoch == 0 {
             return Err(invalid("kagemusha.hardware_terminal_body.context"));
@@ -512,7 +547,10 @@ impl KagemushaHardwareTerminalBodyV1 {
         ] {
             require_nonzero(field, value)?;
         }
-        digest_encoded(HARDWARE_TERMINAL_BODY_COMMITMENT_DOMAIN, self)
+        Ok(digest_bytes(
+            HARDWARE_TERMINAL_BODY_COMMITMENT_DOMAIN,
+            &self.commitment_preimage_bytes(),
+        ))
     }
 }
 
@@ -669,5 +707,124 @@ impl KagemushaCommitCertificateV1 {
             decode_bounded_canonical(bytes, KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1)?;
         certificate.validate_against(lifecycle, expected_evidence, expected_nullifier)?;
         Ok(certificate)
+    }
+}
+
+#[cfg(test)]
+mod terminal_body_commitment_tests {
+    use super::super::{KagemushaMonotonicLeaseV1, KagemushaTrustedCommitTimeV1};
+    use super::*;
+
+    fn body() -> KagemushaHardwareTerminalBodyV1 {
+        KagemushaHardwareTerminalBodyV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            candidate_envelope_digest: [1; 32],
+            lifecycle_binding_digest: [2; 32],
+            transition_nullifier: [3; 32],
+            outbox_reservation_commitment: [4; 32],
+            commit_evidence: KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
+                time_evidence_commitment: [5; 32],
+            }),
+            hardware_profile_id: [6; 32],
+            policy_epoch: 7,
+            private_successor_commitment: [8; 32],
+            private_journal_commitment: [9; 32],
+            private_recovery_commitment: [10; 32],
+        }
+    }
+
+    #[test]
+    fn terminal_body_preimage_has_exact_flat_layout_and_digest() {
+        use KagemushaHardwareTerminalBodyCommitmentLayoutV1 as Layout;
+
+        let body = body();
+        let bytes = body.commitment_preimage_bytes();
+        assert_eq!(Layout::BODY_BYTES, 299);
+        assert_eq!(&bytes[Layout::VERSION], &1_u16.to_le_bytes());
+        for (range, expected) in [
+            (Layout::CANDIDATE_ENVELOPE_DIGEST, 1),
+            (Layout::LIFECYCLE_BINDING_DIGEST, 2),
+            (Layout::TRANSITION_NULLIFIER, 3),
+            (Layout::OUTBOX_RESERVATION_COMMITMENT, 4),
+            (Layout::EVIDENCE_COMMITMENT, 5),
+            (Layout::HARDWARE_PROFILE_ID, 6),
+            (Layout::PRIVATE_SUCCESSOR_COMMITMENT, 8),
+            (Layout::PRIVATE_JOURNAL_COMMITMENT, 9),
+            (Layout::PRIVATE_RECOVERY_COMMITMENT, 10),
+        ] {
+            assert_eq!(&bytes[range], &[expected; 32]);
+        }
+        assert_eq!(bytes[Layout::EVIDENCE_TAG.start], 0);
+        assert_eq!(&bytes[Layout::POLICY_EPOCH], &7_u64.to_le_bytes());
+        assert_eq!(
+            body.canonical_commitment().expect("valid terminal body"),
+            [
+                0xe9, 0xf7, 0x04, 0x3c, 0xa2, 0x4a, 0x22, 0x28, 0x57, 0xee, 0x83, 0xf2, 0xc3, 0x11,
+                0xc2, 0x23, 0xe2, 0x67, 0x26, 0x1a, 0xcf, 0x4d, 0xe4, 0x9e, 0xce, 0x94, 0xff, 0x39,
+                0xc3, 0x56, 0x3f, 0x1e,
+            ]
+        );
+    }
+
+    #[test]
+    fn terminal_body_commitment_binds_every_field_and_evidence_variant() {
+        let baseline = body();
+        let expected = baseline
+            .canonical_commitment()
+            .expect("baseline terminal body");
+        let mut changes = Vec::new();
+        let mut changed = baseline;
+        changed.candidate_envelope_digest[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.lifecycle_binding_digest[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.transition_nullifier[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.outbox_reservation_commitment[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.commit_evidence =
+            KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
+                time_evidence_commitment: [11; 32],
+            });
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.commit_evidence =
+            KagemushaCommitEvidenceV1::MonotonicLease(KagemushaMonotonicLeaseV1 {
+                lease_evidence_commitment: [5; 32],
+            });
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.hardware_profile_id[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.policy_epoch += 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.private_successor_commitment[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.private_journal_commitment[0] ^= 1;
+        changes.push(changed);
+        let mut changed = baseline;
+        changed.private_recovery_commitment[0] ^= 1;
+        changes.push(changed);
+        for (index, changed) in changes.into_iter().enumerate() {
+            assert_ne!(
+                changed.canonical_commitment().expect("valid changed body"),
+                expected,
+                "terminal body field {index} was omitted",
+            );
+        }
+        let mut wrong_version = baseline;
+        wrong_version.version += 1;
+        assert_ne!(
+            wrong_version.commitment_preimage_bytes(),
+            baseline.commitment_preimage_bytes()
+        );
+        assert!(wrong_version.canonical_commitment().is_err());
     }
 }

@@ -25,9 +25,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
 ) -> Result<Option<PreparedControl>, TopologyPreparationErrorV1<L::Error>> {
     if !matches!(
         transition.action,
-        TopologyActionV1::Configure(_)
-            | TopologyActionV1::Enroll(_)
-            | TopologyActionV1::Revoke { .. }
+        TopologyActionV1::Configure(_) | TopologyActionV1::Enroll(_) | TopologyActionV1::Revoke(_)
     ) {
         return Ok(None);
     }
@@ -39,7 +37,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
         .ok_or(Error::Capacity)?;
     if revision > TOPOLOGY_CONTROL_LIMIT_V1
         || (revision > TOPOLOGY_CONTROL_NORMAL_LIMIT_V1
-            && !matches!(transition.action, TopologyActionV1::Revoke { .. }))
+            && !matches!(transition.action, TopologyActionV1::Revoke(_)))
     {
         return Err(Error::Capacity.into());
     }
@@ -60,7 +58,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
             (state, None)
         }
         TopologyActionV1::Enroll(bytes) => enroll(model, bytes, context)?,
-        TopologyActionV1::Revoke { signer, attester } => {
+        TopologyActionV1::Revoke(TopologyRevocationV1 { signer, attester }) => {
             let mut next = model.state.cloned().ok_or(Error::Conflict)?;
             if !(*signer && !next.signer_revoked || *attester && !next.attester_revoked) {
                 return Err(Error::Conflict.into());

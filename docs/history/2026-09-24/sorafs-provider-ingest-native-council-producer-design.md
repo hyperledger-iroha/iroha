@@ -1,8 +1,9 @@
 # SoraFS native provider-admission producer design
 
-2026-09-24, `optimizations`. **Design only; not implemented.** This records the
-next F05/G06 source-authority cut after the retained admission-cursor ancestry
-check. It does not authorize HTTPS grants or qualify provider ingest for release.
+2026-09-24, `optimizations`. The network-bound V1 wire and fixture slice below
+is implemented. The native council and finalized source-authority design remains
+open. This record does not authorize HTTPS grants or qualify provider ingest for
+release.
 
 ## Authority and V1 wire decision
 
@@ -88,8 +89,8 @@ and the HTTPS grant producers remain separate open release gates.
 
 ## 2026-09-24 wire and fixture impact audit
 
-**Read-only inventory; no network-binding source change or qualification has
-landed.** The smallest single-V1 wire cut adds a required raw 32-byte genesis
+**Pre-implementation audit; the wire cut described here is now implemented.**
+The smallest single-V1 wire cut adds a required raw 32-byte genesis
 network ID, without `#[norito(default)]`, to `ProviderAdmissionEnvelopeV1` and
 `ProviderAdmissionRevocationV1` in
 `crates/sorafs_manifest/src/provider_admission.rs` and `ProviderAdvertV1` in
@@ -178,8 +179,68 @@ advert/record mismatch even when both objects have valid signatures; reject
 foreign-network revocation, replay, and missing-field retired V1 bytes without
 state mutation; prove owned/borrowed advert signing frames remain identical;
 and check regenerated fixture bytes twice plus native-reference SDK parity.
-This wire cut leaves finalized council custody, native tombstones, HTTPS grant
-production, and F05 release qualification open.
+
+## 2026-09-24 network-bound wire implementation slice
+
+`ProviderAdmissionEnvelopeV1`, `ProviderAdmissionRevocationV1`, and
+`ProviderAdvertV1` now carry a required nonzero 32-byte network identity in the
+single V1 Norito layout. The council envelope authorization preimage, the
+independent revocation body preimage, and both the owned and borrowed advert
+signature preimages include it. Renewal, revocation, and advert-to-record
+checks reject a foreign network even when the foreign object is independently
+signed. The software-signing CLIs require an explicit network ID for advert
+preparation/emission and admission signing; verification requires the expected
+network ID. The fetch CLI requires the same explicit expectation whenever it
+uses provider adverts or admission files, and rejects a correctly signed
+foreign pair before fetching. Offline revocation inherits the identity from
+its cryptographically checked input envelope, without claiming a finalized
+council policy.
+No decoder defaults or alternate legacy layout were added. The fixture-only
+identity is synthetic and is not a production network selection.
+
+Torii and the daemon now pass the authoritative `State::network_id_ref()` to
+the admission registry. Startup loading, runtime insertion, and reload reject
+a fully signed envelope from another network. The durable advert replay
+checkpoint carries that identity in its single V1 entry layout and rejects a
+foreign checkpoint on restart, even when the provider ID is admitted on both
+networks. The canonical entry has no retired checkpoint decoder.
+
+The compiler-observed Norito schema identities remain unchanged because these
+owner identities are tied to their nominal frame names. The canonical bytes,
+signatures, digests, and independent preimage captures changed and are pinned
+by the regenerated fixtures and tests. This source slice does not create
+finalized native council policy, admission heads, tombstones, or an HTTPS grant.
+F05/G06 production admission and all release qualification therefore remain
+open.
+
+Validation in the `optimizations` checkout: `cargo test -p sorafs_manifest`
+passed 1,085 library and 64 integration tests, including signed same/foreign
+network lifecycle cases and rejection of retired networkless V1 frames under
+the same nominal schema IDs. The advert CLI suite passed 9 tests, including
+missing-input and foreign-network verification failures. The admission
+sign/verify CLI regression passed with missing, foreign, and local network
+inputs. `cargo check -p iroha_torii -p sorafs_node -p irohad -p xtask` passed
+against the migrated constructors; Torii reports an explicit
+`network_mismatch` admission reason. The canonical reference fixture generator
+passed `--write` and `--check`, and
+`scripts/check_sorafs_reference_sdk_fixtures.py` verified 85 payload artifacts,
+35 golden outcomes, and 41 negative vectors. Two independent provider fixture
+generations and two independent reference fixture generations under `target/`
+were byte-identical to one another and to the updated working-tree fixtures.
+`ci/check_sorafs_fixtures.sh` was not run because it creates Git worktrees,
+which this checkout's task boundary prohibits.
+
+Follow-up local-lineage validation in the same checkout:
+`cargo check -p iroha_torii -p irohad --all-targets` passed. The fetch CLI
+passed 30 integration and 50 inline tests, including signed foreign-network
+admission/advert rejection and missing expected-network preflight. Torii passed
+the signed foreign-envelope registry test, all 14 replay-checkpoint unit
+tests, and both grouped cross-network restart and authoritative startup
+rejection tests. The daemon shared-cache matching-network restart and
+signed foreign-envelope rejection tests passed. Scoped Rust formatting,
+`git diff --check`, and `scripts/check_no_legacy_codec.sh` passed. These
+focused results do not qualify a production HTTPS grant, finalized council
+authority, or the release candidate.
 
 ## 2026-09-24 signed-transition and constructor audit
 

@@ -205,7 +205,7 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
   const payload = buildMultisigContractCallProposeRequest({
     multisigAccountAlias: "mintops@banka",
     signerAccountId: ALICE_ID,
-    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    contractAlias: "apps_review::universal",
     entrypoint: "execute",
     trigger: "staged_mint_request_hbl",
     argPreset: "lifecycle",
@@ -223,7 +223,7 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
   assert.deepEqual(payload, {
     multisig_account_alias: "mintops@banka",
     signer_account_id: ALICE_ID,
-    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    contract_alias: "apps_review::universal",
     entrypoint: "execute",
     payload: {
       trigger: "staged_mint_request_hbl",
@@ -238,12 +238,35 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
   });
 });
 
+test("contract-call propose builder rejects address-only targets and scalar payloads", () => {
+  const request = {
+    multisigAccountAlias: "mintops@banka",
+    signerAccountId: ALICE_ID,
+    contractAlias: "apps_review::universal",
+    entrypoint: "execute",
+    trigger: "review",
+    args: { probe: true },
+    feePayment: authorityFeePayment(5),
+  };
+  assert.throws(
+    () => buildMultisigContractCallProposeRequest({ ...request, contractAlias: null }),
+    /exact contractAlias/,
+  );
+  assert.throws(
+    () => buildMultisigContractCallProposeRequest({ ...request, payload: "scalar" }),
+    /payload/,
+  );
+});
+
 test("buildMultisigContractCallApproveRequest normalizes selector and lookup keys", () => {
   const payload = buildMultisigContractCallApproveRequest({
     multisigAccountId: CONTROLLER_ID,
     signerAccountId: BOB_ID,
     instructionsHash: "AA".repeat(32),
     signatureB64: "AQ==",
+    contract_alias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
     feePayment: authorityFeePayment(),
   });
 
@@ -252,6 +275,9 @@ test("buildMultisigContractCallApproveRequest normalizes selector and lookup key
     signer_account_id: BOB_ID,
     instructions_hash: "aa".repeat(32),
     signature_b64: "AQ==",
+    contract_alias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
     fee_payment: authorityFeePayment(),
   });
 });

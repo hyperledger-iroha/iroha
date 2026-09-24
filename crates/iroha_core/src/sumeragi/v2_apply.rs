@@ -109,6 +109,8 @@ use std::{
 use thiserror::Error;
 
 /// Fixed-size local diagnostics; no samples enter consensus or persisted state.
+// TODO: retain exact Apply diagnostics until the tested ordinary Apply path is retired.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct ApplyStageTimings<const N: usize> {
     height: u64,
     scope: &'static str,
@@ -116,6 +118,7 @@ struct ApplyStageTimings<const N: usize> {
     samples: ApplyStageSamples<N>,
 }
 
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct ApplyStageSamples<const N: usize> {
     stages: [(&'static str, Option<u64>); N],
     completed: usize,
@@ -123,6 +126,7 @@ struct ApplyStageSamples<const N: usize> {
 }
 
 impl<const N: usize> ApplyStageSamples<N> {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn new(labels: [&'static str; N]) -> Self {
         Self {
             stages: labels.map(|label| (label, None)),
@@ -131,6 +135,7 @@ impl<const N: usize> ApplyStageSamples<N> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn record_elapsed(&mut self, elapsed: Duration) -> bool {
         let Some(duration) = elapsed.checked_sub(self.last_elapsed) else {
             return false;
@@ -146,6 +151,7 @@ impl<const N: usize> ApplyStageSamples<N> {
 }
 
 impl<const N: usize> ApplyStageTimings<N> {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn new(height: u64, scope: &'static str, labels: [&'static str; N]) -> Self {
         Self {
             height,
@@ -155,6 +161,7 @@ impl<const N: usize> ApplyStageTimings<N> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn record(&mut self) {
         let _ = self.samples.record_elapsed(self.started.elapsed());
     }
@@ -518,12 +525,14 @@ pub(crate) enum V2ReservationLifecycleError {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// The canonical carrier lost its exact full merge entry.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("committed merge carrier lost sidecar {entry_hash}")]
     MissingCommittedMergeEntry {
         /// Hash committed by the carrier's compact reference.
         entry_hash: HashOf<MergeLedgerEntry>,
     },
     /// The full entry no longer matches the carrier's compact projection.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     #[error("committed merge sidecar {entry_hash} differs from its carrier reference")]
     CommittedMergeReferenceMismatch {
         /// Hash committed by the carrier's compact reference.
@@ -701,6 +710,8 @@ fn authenticate_committed_canonical_carrier(
         groups,
     })
 }
+// TODO: retire the tested ordinary Apply queue finalization with its old runner path.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn finalize_certified_merge_reservations(
     state: &State,
     queue: &Queue,
@@ -776,6 +787,7 @@ fn finalize_certified_merge_reservations(
     )?;
     Ok(finalized_reservations)
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn committed_block_merge_entry(
     kura: &Kura,
     block: &SignedBlock,
@@ -800,6 +812,7 @@ fn committed_block_merge_entry(
     }
     Ok(Some(entry))
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn certified_merge_queue_reservation_hashes(
     entry: Option<&MergeLedgerEntry>,
 ) -> Result<BTreeSet<HashOf<TransactionEntrypoint>>, MergeLedgerCommitError> {
@@ -811,6 +824,7 @@ fn certified_merge_queue_reservation_hashes(
         .map(|(transaction_hash, _)| transaction_hash)
         .collect())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn finalize_committed_block_merge_reservations(
     state: &State,
     queue: &Queue,
@@ -929,6 +943,7 @@ pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
 /// replica-specific terminal state. The authorization accepts only a complete
 /// ordinary FIFO replica or exhaustive Queue absence; partial or reservation-
 /// owning cuts remain fail-closed in Queue.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) fn retire_autonomous_lane_replica_with_queue_disposition(
     kura: &Kura,
     queue: &Queue,
@@ -2437,6 +2452,8 @@ pub(crate) fn apply_lane_reservation_reconciliation_plan(
     queue.complete_lane_reservation_startup_reconciliation(replay_receipt)?;
     Ok(summary)
 }
+// TODO: migrate the ordinary Apply refinement tests to the retained native path.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn application_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -2444,9 +2461,11 @@ fn application_typed_identity<T>(
 ) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn application_hash_identity(domain: u8, kind: u8, hash: Hash) -> CanonicalIdentityProjection {
     CanonicalIdentityProjection::from_bytes(domain, kind, *hash.as_ref())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn application_decision_projection(
     decision: wire::QuorumCertificateRef,
 ) -> ProductionDecisionIdentityProjection {
@@ -2488,6 +2507,7 @@ fn application_decision_projection(
         ),
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn application_certificate_projection(
     certificate: &wire::QuorumCertificate,
 ) -> Option<ProductionQuorumCertificateIdentityProjection> {
@@ -2502,6 +2522,7 @@ fn application_certificate_projection(
         aggregate_signature_len: u64::try_from(certificate.aggregate_signature.len()).ok()?,
     })
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn application_body_projection(
     receipt: &ValidatedBodyReceipt,
 ) -> ProductionDurableBodyIdentityProjection {
@@ -2542,6 +2563,7 @@ fn application_body_projection(
         ),
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn prospective_application_refinement_projection(
     context: &wire::HeightContext,
     task: &ApplyTask,
@@ -2640,6 +2662,7 @@ fn prospective_application_refinement_projection(
 /// on the repository's reviewed collision-resistance contract.
 #[derive(Clone, Debug)]
 #[must_use]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) struct DurableApplicationEvidence {
     task_tag: EventTag,
     owner_tag: EventTag,
@@ -2662,6 +2685,7 @@ pub(crate) struct DurableApplicationEvidence {
     completion_work_id: EffectWorkId,
     state_height_after: usize,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl DurableApplicationEvidence {
     /// Reducer incarnation which created the Apply task.
     pub(crate) const fn task_tag(&self) -> EventTag {
@@ -3368,6 +3392,7 @@ fn authenticated_autonomous_carrier_application_projections(
     Ok(applications)
 }
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct CheckedCarrierApplication {
     checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -3378,12 +3403,14 @@ struct CheckedCarrierApplication {
 /// checked transition tokens. This prevents an empty or unrelated token collection
 /// from authorizing a block that actually carries an autonomous execution batch.
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct CheckedCarrierApplications {
     carrier_block_hash: HashOf<BlockHeader>,
     execution_reference: Option<CertifiedMergeLedgerReference>,
     expected_lane_count: usize,
     applications: Vec<CheckedCarrierApplication>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl CheckedCarrierApplications {
     fn for_block(block: &SignedBlock) -> Self {
         Self {
@@ -3487,6 +3514,7 @@ impl StateBlockCommitAuthorization for CheckedCarrierApplications {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn submit_fastpq_witness_job(
     block_hash: HashOf<BlockHeader>,
     height: u64,
@@ -3530,7 +3558,7 @@ pub(crate) mod archive_reservations;
 
 #[cfg_attr(
     not(test),
-    expect(
+    allow(
         dead_code,
         reason = "TODO: connect resource-admitted Native preparation to retained validation"
     )
@@ -3539,9 +3567,7 @@ mod native_preparation;
 
 /// Production retained Native validation and its finite shell policy.
 pub(crate) mod native_validation;
-pub(crate) use native_validation::{
-    CarrierShellAdmission, NativeApplyService, OwnedNativeCarrierValidator, PublishedNativeCarrier,
-};
+pub(crate) use native_validation::{NativeApplyService, PublishedNativeCarrier};
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
@@ -3656,6 +3682,7 @@ impl LifecycleDecisionApplyTaskV1 {
         };
         (self.dispatch_key().lineage() == lineage).then_some(lineage)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn live_tag(&self) -> Option<EventTag> {
         match self.lineage {
             LifecycleDecisionApplyTaskLineageV1::Live { tag } => Some(tag),
@@ -3829,6 +3856,7 @@ impl<'task> ExactApplyTaskRef<'task> {
 }
 /// Closed pre-Kura refinement owned only by a live lifecycle Apply carrier.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct LiveLifecycleApplicationProjectionV1 {
     tag: EventTag,
     dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
@@ -3841,6 +3869,7 @@ struct LiveLifecycleApplicationProjectionV1 {
     artifact: wire::finality::V2FinalityArtifact,
 }
 impl LiveLifecycleApplicationProjectionV1 {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn from_task(
         context: &wire::HeightContext,
         task: &LifecycleDecisionApplyTaskV1,
@@ -3873,6 +3902,7 @@ impl LiveLifecycleApplicationProjectionV1 {
         })
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 struct ExactApplyExecutionMaterial {
     context: wire::HeightContext,
     commit_qc: wire::QuorumCertificate,
@@ -3890,9 +3920,11 @@ struct ExactApplyExecutionMaterial {
     artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
     state_height_after: usize,
     ordinary_projection: Option<ProductionApplicationTraceProjection>,
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     live_lifecycle_projection: Option<LiveLifecycleApplicationProjectionV1>,
 }
 impl ExactApplyExecutionMaterial {
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     fn exactly_matches_lifecycle_task(&self, task: &LifecycleDecisionApplyTaskV1) -> bool {
         let certificate = task.certificate();
         let durable = task.validated_receipt().durable();
@@ -3990,6 +4022,7 @@ impl V2ApplyService {
     /// `RegisterVerifiedLaneRelay` transaction. Callers must first cross the
     /// durable WSV/Kura finality boundary; candidate validation must never call
     /// this function.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn publish_finalized_lane_relays(
         &self,
         block: &SignedBlock,
@@ -4175,6 +4208,7 @@ impl V2ApplyService {
             ))
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_lane_payload_plan(
         &self,
         context: &wire::HeightContext,
@@ -4324,6 +4358,7 @@ impl V2ApplyService {
             && self.validator_set_pops == validator_set_pops
     }
     /// Apply one exact CommitQC task or complete its interrupted sidecar write.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn execute(
         &self,
         context: &wire::HeightContext,
@@ -4596,6 +4631,7 @@ impl V2ApplyService {
         Ok(())
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn execute_exact_apply(
         &self,
         context: &wire::HeightContext,
@@ -4945,6 +4981,7 @@ impl V2ApplyService {
         timings.record();
         Ok(material)
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn finish_durable_apply_completion_against(
         &self,
         evidence: DurableApplicationEvidence,
@@ -4976,6 +5013,7 @@ impl V2ApplyService {
             evidence.artifact,
         ))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn publish_committed_block_merge_entry(
         &self,
         committed_block: &SignedBlock,
@@ -5042,6 +5080,7 @@ impl V2ApplyService {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn retain_decided_merge_sidecar(
         &self,
         context: &wire::HeightContext,
@@ -5055,6 +5094,7 @@ impl V2ApplyService {
             )?;
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn classify_lane_lifecycle_validation_error(
         error: crate::state::LaneLifecycleError,
     ) -> V2ApplyError {
@@ -5072,6 +5112,7 @@ impl V2ApplyService {
             _ => V2ApplyError::Validation(error.to_string()),
         }
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn prospective_autoscale_retirement_queue_binding(
         block: &SignedBlock,
         state_block: &mut crate::state::StateBlock<'_>,
@@ -5101,12 +5142,21 @@ impl V2ApplyService {
         else {
             return Ok(());
         };
+        self.queue
+            .reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
+            .map_err(|error| V2ApplyError::LocalCanonicalState(error.to_string()))?;
         self.try_validate_autoscale_retirement_queue_binding(
             lane_id,
             dataspace_id,
             lane_incarnation,
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
@@ -5118,6 +5168,14 @@ impl V2ApplyService {
             return Ok(());
         };
         Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        self.queue
+            .reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            )
+            .map_err(|error| V2ApplyError::LocalCanonicalState(error.to_string()))?;
         // Apply has no retained local-dependency continuation yet. Keep its original
         // blocking order and final veto until the prepared publication owner
         // can retain the decided execution across physical contention.
@@ -5132,6 +5190,7 @@ impl V2ApplyService {
             self.queue.sumeragi_waker(),
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_autoscale_retirement_incarnation(
         lane_incarnation: Hash,
     ) -> Result<(), V2ApplyError> {
@@ -5142,6 +5201,7 @@ impl V2ApplyService {
         }
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn try_validate_autoscale_retirement_queue_binding(
         &self,
         lane_id: LaneId,
@@ -5193,6 +5253,7 @@ impl V2ApplyService {
         drop(queue_cleanup);
         result
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_autoscale_retirement_queue_binding(
         queue_retirement_observer: &QueueLaneRetirementObserver<'_>,
         lane_id: LaneId,
@@ -5213,6 +5274,7 @@ impl V2ApplyService {
             lane_incarnation,
         )
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn classify_autoscale_retirement_queue_release(
         release: Result<
             Option<concread::release::ReleaseWait>,
@@ -5240,6 +5302,7 @@ impl V2ApplyService {
     /// origin-view block signature. Dropping the returned `StateBlock` keeps
     /// Prepare validation side-effect free while exercising the same
     /// deterministic execution path used during application.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn validate_candidate(
         &self,
         context: &wire::HeightContext,
@@ -5307,6 +5370,7 @@ impl V2ApplyService {
     /// execution. At H, Apply only repairs durable completion. Marker replay
     /// must not execute either finalized case or infer State application from
     /// Kura finality alone.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn revalidate_recovered_candidate(
         &self,
         context: &wire::HeightContext,
@@ -5397,6 +5461,7 @@ impl V2ApplyService {
             subject: artifact.subject,
         }))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn validate_and_apply(
         &self,
         context: &wire::HeightContext,
@@ -5911,6 +5976,7 @@ impl V2ApplyService {
         timings.record();
         Ok(())
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     fn persist_post_apply_metadata(
         &self,
         context: &wire::HeightContext,

@@ -1694,6 +1694,156 @@ pub(super) fn java_byte_array_pair(
         .map_err(|err| err.to_string())?;
     Ok(array.into_raw())
 }
+
+fn java_account_read_permission_args(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: &jni::objects::JByteArray<'_>,
+    authority: &jni::objects::JByteArray<'_>,
+    reporting_account: &jni::objects::JByteArray<'_>,
+    change: jni::sys::jint,
+    creation_time_ms: jni::sys::jlong,
+) -> Result<(String, String, String, u8, u64), String> {
+    let change = u8::try_from(change).map_err(|_| "invalid permission change".to_owned())?;
+    if change != 1 && change != 2 {
+        return Err("permission change must be grant (1) or revoke (2)".to_owned());
+    }
+    let creation_time_ms =
+        u64::try_from(creation_time_ms).map_err(|_| "negative creationTimeMs".to_owned())?;
+    let network_id = java_text_array(env, network_id, "networkId")?;
+    let authority = java_text_array(env, authority, "authority")?;
+    let reporting_account = java_text_array(env, reporting_account, "reportingAccount")?;
+    Ok((
+        network_id,
+        authority,
+        reporting_account,
+        change,
+        creation_time_ms,
+    ))
+}
+
+pub(super) fn java_native_account_read_permission_multisig_payload_hash(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    reporting_account: jni::objects::JByteArray<'_>,
+    change: jni::sys::jint,
+    creation_time_ms: jni::sys::jlong,
+    fee_payment_json: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let (network, source, reporter, change, created) = java_account_read_permission_args(
+            env,
+            &network_id,
+            &authority,
+            &reporting_account,
+            change,
+            creation_time_ms,
+        )?;
+        let mut hash = [0_u8; 32];
+        let fee = read_java_byte_array_bounded(env, &fee_payment_json, "feePaymentJson", 4096)
+            .ok_or_else(|| "invalid feePaymentJson".to_owned())?;
+        let code = unsafe {
+            connect_norito_account_read_permission_multisig_payload_hash(
+                network.as_ptr().cast(),
+                network.len() as c_ulong,
+                source.as_ptr().cast(),
+                source.len() as c_ulong,
+                reporter.as_ptr().cast(),
+                reporter.len() as c_ulong,
+                change,
+                created,
+                fee.as_ptr(),
+                fee.len() as c_ulong,
+                hash.as_mut_ptr(),
+                hash.len() as c_ulong,
+            )
+        };
+        if code != 0 {
+            return Err(format!(
+                "native account permission prehash rejected input ({code})"
+            ));
+        }
+        env.byte_array_from_slice(&hash)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+pub(super) fn java_native_finalize_account_read_permission_multisig(
+    env: &mut jni::JNIEnv<'_>,
+    network_id: jni::objects::JByteArray<'_>,
+    authority: jni::objects::JByteArray<'_>,
+    reporting_account: jni::objects::JByteArray<'_>,
+    change: jni::sys::jint,
+    creation_time_ms: jni::sys::jlong,
+    fee_payment_json: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let (network, source, reporter, change, created) = java_account_read_permission_args(
+            env,
+            &network_id,
+            &authority,
+            &reporting_account,
+            change,
+            creation_time_ms,
+        )?;
+        let signature = read_java_byte_array_bounded(env, &signature, "signature", 64)
+            .ok_or_else(|| "invalid signature".to_owned())?;
+        let fee = read_java_byte_array_bounded(env, &fee_payment_json, "feePaymentJson", 4096)
+            .ok_or_else(|| "invalid feePaymentJson".to_owned())?;
+        if signature.len() != 64 {
+            return Err("signature must be 64 bytes".to_owned());
+        }
+        let mut signed_ptr = std::ptr::null_mut();
+        let mut signed_len: c_ulong = 0;
+        let mut hash = [0_u8; 32];
+        let code = unsafe {
+            connect_norito_account_read_permission_multisig_finalize(
+                network.as_ptr().cast(),
+                network.len() as c_ulong,
+                source.as_ptr().cast(),
+                source.len() as c_ulong,
+                reporter.as_ptr().cast(),
+                reporter.len() as c_ulong,
+                change,
+                created,
+                fee.as_ptr(),
+                fee.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut signed_ptr,
+                &mut signed_len,
+                hash.as_mut_ptr(),
+                hash.len() as c_ulong,
+            )
+        };
+        if code != 0 || signed_ptr.is_null() || signed_len == 0 || signed_len > 1024 * 1024 {
+            connect_norito_free(signed_ptr);
+            return Err(format!(
+                "native account permission finalize rejected signature ({code})"
+            ));
+        }
+        let signed =
+            unsafe { std::slice::from_raw_parts(signed_ptr, signed_len as usize).to_vec() };
+        connect_norito_free(signed_ptr);
+        java_signed_transaction_pair(env, &signed, &hash)
+    })();
+    match result {
+        Ok(value) => value,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
 #[allow(clippy::too_many_arguments)]
 pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
     env: &mut jni::JNIEnv<'_>,

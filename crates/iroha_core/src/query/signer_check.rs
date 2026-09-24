@@ -22,13 +22,13 @@ use iroha_data_model::{
         InstructionBox,
         sorafs::{
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsStreamTokenAuthority,
+            MutateSorafsStreamTokenAuthority, MutateSorafsTopologyAuthority,
         },
     },
     sorafs::{
         final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
         final_promotion_authority::FinalPromotionAuthorityActionV1,
-        stream_token_authority::StreamTokenAuthorityActionV1,
+        stream_token_authority::StreamTokenAuthorityActionV1, topology_authority::TopologyActionV1,
     },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -135,12 +135,18 @@ pub(crate) enum NativeCustodyCheckPurposeV1 {
     FinalPromotion,
     FinalPromotionAccount,
     StreamToken,
+    /// Proof binding only; role-16 Core execution and current authority remain closed.
+    Topology,
 }
-/// Only the three native instruction owners can enter the common proof path.
+/// Purpose-typed native instructions can enter the common proof path.
+///
+/// The role-16 variant only binds a signed Check to execution evidence. It cannot produce a
+/// topology authority result while its Core instruction remains explicitly closed.
 pub(crate) enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
     StreamToken(&'a MutateSorafsStreamTokenAuthority),
+    Topology(&'a MutateSorafsTopologyAuthority),
 }
 impl NativeCustodyCheckRefV1<'_> {
     fn coordinates(
@@ -196,6 +202,21 @@ impl NativeCustodyCheckRefV1<'_> {
                     Some(check.floor.context_id),
                 ))
             }
+            Self::Topology(instruction) => {
+                let TopologyActionV1::Check(check) = &instruction.transition.action else {
+                    return Err(Error::Transaction);
+                };
+                // The signed role-16 Check carries height/hash, while the independent floor
+                // owner supplies the context ID. This is proof plumbing, not topology authority.
+                Ok((
+                    NativeCustodyCheckPurposeV1::Topology,
+                    check.challenge,
+                    check.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    None,
+                ))
+            }
         }
     }
     fn instruction(&self) -> InstructionBox {
@@ -203,6 +224,7 @@ impl NativeCustodyCheckRefV1<'_> {
             Self::FinalPromotion(instruction) => (*instruction).clone().into(),
             Self::FinalPromotionAccount(instruction) => (*instruction).clone().into(),
             Self::StreamToken(instruction) => (*instruction).clone().into(),
+            Self::Topology(instruction) => (*instruction).clone().into(),
         }
     }
 }

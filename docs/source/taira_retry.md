@@ -47,6 +47,9 @@ must be owned by the caller with mode `0700`. The command creates a new evidence
 directory for each invocation and reports the current phase and elapsed time
 every 30 seconds. Native failures report an operation and errno when available;
 arbitrary stderr stays in the private log path.
+Remote SSH commands also report their phase and private evidence directory when
+submitted. A nonzero SSH exit reports its code and directory without relaying
+the remote stdout or stderr, and never triggers an automatic replay.
 
 The approved guest must provide executable `/usr/bin/curl`; both guest entry
 points check this prerequisite before deployment work or output creation.

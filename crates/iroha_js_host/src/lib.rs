@@ -14385,3 +14385,14 @@ seiyaku Privacy {
         assert!(summary.proofs.iter().all(|proof| proof.verified));
     }
 }
+
+/// Pure shared native construction of exact contract-multisig material.
+#[napi]
+pub fn build_canonical_multisig_contract_call_json(
+    input: String,
+    network_prefix: f64,
+) -> napi::Result<String> {
+    let prefix = iroha_js_codec::checked_network_prefix(network_prefix).map_err(codec_to_napi)?;
+    iroha_js_codec::build_canonical_multisig_contract_call_json(&input, prefix)
+        .map_err(codec_to_napi)
+}

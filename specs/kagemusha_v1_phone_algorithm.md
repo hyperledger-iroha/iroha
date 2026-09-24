@@ -91,18 +91,41 @@ constant-size release contract. The proving witness may contain raw evidence,
 while the accepted compact proof must bind its verified result to the
 governed credential and exact public state transition.
 
-One Core-derived canonical selection subject must be shared by every phone
-adapter and proof verifier. An Apple App Attest assertion signs its own
-authenticator data combined with the hash of that subject; its authenticated
+One Core-derived canonical selection subject `S` must be shared by every phone
+adapter and proof verifier.
+
+`S` is exactly 460 bytes: the 49-byte NUL-terminated domain
+`iroha:kagemusha:v1:hardware-transition-selection\0`, the body length 403 as
+u64-LE, then fixed-width fields in this order: version u16-LE; release ID,
+provider-policy root, app-policy digest, credential ID, raw 32-byte `NetworkId`,
+lane commitment and hardware-profile ID (32 bytes each); policy epoch u64-LE;
+hardware-epoch ID (32 bytes); hardware-epoch generation u64-LE; operation tag
+u8; transition-statement digest, candidate-envelope digest and terminal-body
+commitment (32 bytes each); secure indices before and after as u128-LE. The
+provider-policy root is the receipt-authenticated provider credential Merkle
+root from the admitted release. Bootstrap establishes index zero without a
+signed selection; the first later operation signs 0→1. Norito remains the
+storage and transport format, but its header and checksum are not part of `S`.
+The model-owned byte ranges in `hardware_selection.rs` define the exact proof
+binding offsets.
+
+For Apple App Attest, `clientDataHash = SHA256(S)`,
+`nonce = SHA256(authenticatorData || clientDataHash)`, and ECDSA-P256-SHA256
+verifies the nonce (so the ECDSA prehash is `SHA256(nonce)`). Its authenticated
 counter is inside the authenticator data, not a free field in the subject.
 For an Apple release profile, the governed app signing identity is the SHA-256
 hash of the exact App ID and must equal the assertion's RP ID. The complete
-authenticator data, including any extensions, is signed; the release verifier
-must check its validation category and bundle version against the app policy.
-The parser uses the complete signed suffix rather than trusting the WebAuthn
-extension flag: Apple's published App Attest attestation fixture appends its
-extension map while leaving that flag unset. Assertion flag values still need
-device qualification.
+authenticator data is signed. Where Apple supplies signed validation-category
+and bundle-version extensions, the release verifier must check them against
+the app policy. The physically tested iPhone 17 Pro Max returned 37-byte
+assertion authenticator data with flag `0x40`, counter values 1 then 2, and
+no extension suffix. That form authenticates the App ID, attested key and
+counter, but it **does not attest the app version in each assertion**. The
+issuer must bind release policy at enrollment and cannot label an assertion's
+release ID as an independent binary measurement. Apple's iOS 27 extension
+format adds release signals; it is a distinct current platform format to
+qualify on a physical device. The parser must not reject the observed `0x40`
+flag or require absent extensions.
 For that profile, `app_release_digest` is SHA-256 of the domain
 `iroha:kagemusha:v1:app-attest-release\0`, the validation category as u32-LE,
 the UTF-8 bundle-version byte length as u16-LE, and those exact version bytes.
@@ -113,7 +136,9 @@ App Attest candidate now hashes the Core canonical selection frame;
 Core also checks its assertion signature, signed release extensions, and
 exact-next counter against the persisted candidate before proof construction.
 The Core verifier now requires the original two-field CBOR assertion rather
-than trusting extracted authenticator and signature fields. Governed profile
+than trusting extracted authenticator and signature fields, and accepts the
+observed 37-byte assertion header while verifying release extensions when
+present. Governed profile
 classes separately bind the OEM checkpoint guarantee set, Apple App Attest
 guarantees, and Android KeyMint one-use-key guarantees; the app profiles do not
 inherit checkpoint-service claims. Cross-language byte vectors and recursive
@@ -122,6 +147,23 @@ monetary authority. The pinned generic
 Halo2 ECC helper assumes a curve coefficient of zero and is unsuitable for
 P-256. A dedicated `a = -3` point and bounded ECDSA relation is present, but
 its full-width proof and recursive assertion binding remain unqualified.
+The current paired terminal relation also checks its supplied
+`hardware_terminal_commitment` for nonzero but does not yet derive it from the
+authenticated canonical terminal-body bytes. The staged terminal-body and
+durable-recovery helpers are not connected to the production recursive fold.
+The recursive State proof now carries six public limbs for the outgoing
+preparation ID and two sealed-stream digests, and the native preparation ID
+uses a fixed, domain-separated pre-proof transcript. These are candidate
+commitments. An isolated terminal helper now opens the exact 475-byte
+preparation transcript and both bounded sealed streams against recursively
+verified State carriers, with both-parity mutation tests. The live terminal
+fold has a release-authenticated redemption-manifest source in its 83-cell
+terminal public column, but no room for these SHA jobs in its fixed claim
+geometry; it leaves `verified_preparation_id`
+absent. The ID cannot authorize a terminal outcome until the complete opening
+is installed and qualified in the live proof.
+This is an unsatisfied proof obligation even for an OEM checkpoint profile;
+testnet execution must not be cited as proof of production hardware backing.
 
 `Valid` is the conjunction of the recursive monetary relation, authenticated
 online issuance/finality anchors, complete hardware/credential history and
@@ -148,6 +190,13 @@ reconciliation procedure exists. Neither counter candidate is currently an
 enabled production profile. No external card, cloud serialization, debug
 service, software monetary fallback, or compatibility path is part of the
 qualified production profile.
+
+Apple [documents](https://developer.apple.com/videos/play/wwdc2026/201/) that an
+App Attest key is invalidated when its app is reinstalled or the device is
+restored. A newly attested key is a new credential; it cannot
+continue an old offline head or reset the old counter. Such a lane stays frozen
+unless an authenticated online recovery procedure can reconcile all exposed
+value and authorize a new hardware lineage.
 
 ## Authoritative state: durable-checkpoint profile
 
@@ -240,12 +289,38 @@ index is invalid because an unseen payment at that index may exist.
    exact FI, authentication namespace, account, network, ledger dataspace,
    asset incarnation and scale, release scope and hardware policy.
    Bind an app-attestation challenge and a secure-service key-possession
-   challenge to the same enrollment transcript.
+   challenge to the same enrollment transcript. Persist the native nonce and
+   selected release, profile and lane before any external call. Use the
+   six-field attestation transcript
+   `domain || client_nonce || server_nonce || release_id || profile_id ||
+   attested_key_id || lane_id`, where `domain` is
+   `iroha:kagemusha:v1:app-device-attestation-challenge\0` and each field is
+   exactly 32 bytes. The issuer signs a 273-byte preparation containing those
+   six fields and its issue/expiry times before platform attestation.
+   On Apple, generate and retain the App Attest key first; its key ID is
+   SHA-256 of the attested SEC1 public point. On Android KeyMint, obtain the
+   signed preparation first and use the all-zero key-ID sentinel only under
+   a governed Android profile, since KeyMint fixes its challenge during key
+   generation. Generate the key with that challenge and derive its actual
+   point/reference from verified attestation. No key may be qualified from
+   a device-provided claim alone.
 2. Verify the app attestation using its platform trust chain and approved app
-   identity. Separately verify the secure-service credential, non-exportable
-   key, epoch, access rule, policy and qualification report against the signed
-   release. A device-feature bit or an app-provided Boolean cannot create
-   either capability.
+   identity. The independent verifier signs both the actual SHA-256 key ID and
+   the derived device-key reference from the same raw attested point, together
+   with the exact raw-evidence digest. Apple's signed preparation key ID must
+   equal that certificate key ID. Android's signed preparation contains the
+   governed zero sentinel, while its certificate carries the actual attested
+   point's key ID. The verifier durably issues at most one certificate for an
+   attested key. Obtain the governed operation-1 qualification afterward;
+   the issuer checks its exact public point, profile, lane and app-policy
+   binding against the signed preparation and verifier certificate. The native
+   pending selection retains its original nonce and deadline across this
+   certificate-before-qualification phase; resuming never creates a second
+   key, nonce or qualification after an ambiguous result. Separately
+   verify the secure-service credential, non-exportable key, epoch, access
+   rule, policy and qualification report against the signed release. A
+   device-feature bit or an app-provided Boolean cannot create either
+   capability.
 3. Select a new lane only through authenticated provisioning of its one-use
    hardware authority. A checkpoint lane restores from the challenged
    current selection plus exact retained journal prefixes. A ratchet lane
@@ -339,6 +414,25 @@ on devices without the relevant hardware feature. The verifier must check the
 hardware-enforced one-use and rollback-resistance authorizations, app scope
 and key continuity. Lost-signature recovery remains unresolved. Vendor and
 firmware tuples require separate evidence.
+The mandatory Pixel 6 profile cannot use this KeyMint ratchet as presently
+specified. On a physical Pixel 6 running Android 16, a forced StrongBox
+`setMaxUsageCount(1)` diagnostic produced StrongBox attestation but placed the
+use limit in `softwareEnforced` (tag 405), with neither hardware use-limit nor
+rollback-resistance (tag 303). The first signature verified and the second
+failed in the framework; that failure does not prove hardware one-use. Its
+connected embedded SE has no observed access rule for the current applet.
+Pixel 6 needs a separately provisioned, app-accessible hardware counter or
+checkpoint service with signed original-result recovery, or a new physically
+verified primitive satisfying the same no-fork relation. An attested app and
+StrongBox key alone cannot be substituted for that relation.
+After the connected Pixel 6 moved to an Android 17 user build, it still
+advertised neither hardware single-use nor limited-use Keystore support, and
+did not advertise the hardware Identity Credential feature.
+Its embedded `eSE1` reader was present, but no access rule for the current
+applet AID was observed. This recheck does not establish that an applet is
+installed or that this app can select it. The concrete internal eSE service
+and physical acceptance contract is in
+[`kagemusha_pixel6_ese_service_contract_v1.md`](kagemusha_pixel6_ese_service_contract_v1.md).
 
 On iPhone, an HCE entitlement permits app-hosted card emulation but does not
 grant the app access to implement the **checkpoint-service profile** in the
@@ -381,6 +475,27 @@ release; submitted operations must reach applied finality before counting as
 funded or redeemed. A testnet experimental device profile therefore needs
 explicit release/network-scoped proof and runtime installation, not a global
 hardware-admission bypass.
+The native testnet State observer now requires operator-pinned network, asset
+identity, asset incarnation, scale, reserve liability pool, and authenticated
+release; it verifies the actual paired State proof and returns only an
+unqualified observation. A Rust-only owner retains that concrete
+verifier and one process-local lane lineage. No app-facing native installation
+or durable monetary capability exists yet; the terminal hardware fold and
+monetary admission remain separate.
+On Pixel 6, a source-staged experimental collector binds a StrongBox signature,
+attestation challenge and app-private intent journal to the canonical selection
+frame and exact network, release, lane and counter inputs. Its latest source
+hardening still awaits the focused JVM and physical-device test rerun. It can
+exercise peer exchange and later online conflict detection, but the software
+use limit leaves no-fork unproven. Its raw observation carries an experimental
+profile and cannot be relabeled as hardware one-use evidence.
+The testnet phone probe can obtain a 460-byte frame directly from the Rust
+data model without pasted hex. For this raw observation only, eight synthetic
+identifiers use a distinct Pixel 6 diagnostic domain, the current app-owner
+scope and exact network; the operation is Rotate with index 0→1. These bytes
+are model-canonical but are not an issuer release, enrolled credential, real
+transition statement or monetary lineage. The diagnostic JNI export is separate
+from the coordinator and cannot satisfy production release admission.
 
 Testnet admission should still enforce finalized issuance, conservation,
 unique credit use, exact network/release binding, durable idempotency and
@@ -431,6 +546,14 @@ native/SDK transport and partial journal/service components. It does not yet
 compose a production native owner with a provisioned phone service, real
 funded proof corridor and signed device qualification. This distinction is a
 release condition, not an alternate V1 algorithm.
+
+The iPhone App Attest intent journal may move a completed assertion to the next
+ready counter only after native coordinator method 13 acknowledges the exact
+enrolled key, signed selection, original raw assertion, predecessor/next
+counter, committed terminal certificate and installed envelope. The native
+backend hook is unavailable by default; its future implementation must verify
+those fields against the authenticated durable Core journal. The mobile CAS
+and frame correlation do not themselves qualify a monetary commit.
 
 The implementation gap is concrete: Core's structural exact-next checks and
 recovery metadata exist, but its production hardware-guard hooks default to

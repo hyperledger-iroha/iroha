@@ -41,8 +41,9 @@ const ENVELOPE_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-envelope-v1";
 const REVOCATION_DIGEST_DOMAIN: &[u8] = b"sorafs-provider-admission-revocation-v1";
 /// Trusted council keys and quorum required to authorise provider admission changes.
 ///
-/// Production callers must construct this policy from operator-controlled configuration. Keys
-/// embedded in an envelope are never trust roots.
+/// Keys embedded in an envelope are never trust roots. The current local-key constructors are a
+/// provisional admission boundary; production authorization requires an exact finalized
+/// State/Kura council-policy projection matching the signed policy identity, revision, and digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAdmissionCouncilPolicy {
     trusted_signers: BTreeSet<[u8; 32]>,
@@ -439,6 +440,19 @@ impl EndpointAttestationV1 {
 pub struct ProviderAdmissionEnvelopeV1 {
     /// Schema version (`PROVIDER_ADMISSION_ENVELOPE_VERSION_V1`).
     pub version: u8,
+    /// Exact genesis block-header hash identifying the network for this council approval.
+    pub network_id: [u8; 32],
+    /// Claimed identity of the council policy, covered by the signature but requiring finalized
+    /// State/Kura verification before production authorization.
+    pub policy_id: [u8; 32],
+    /// Monotonic revision of that council policy.
+    pub policy_revision: u64,
+    /// Digest of the exact council policy claimed by this signed event.
+    pub policy_digest: [u8; 32],
+    /// Monotonic admission-event revision, starting at one.
+    pub admission_revision: u64,
+    /// Exact current admission-event digest expected by this transition; absent at admission.
+    pub expected_current_event_digest: Option<[u8; 32]>,
     /// Canonical proposal bundle.
     pub proposal: ProviderAdmissionProposalV1,
     /// BLAKE3 digest of the canonical proposal payload.
@@ -466,6 +480,21 @@ impl ProviderAdmissionEnvelopeV1 {
                     found: self.version,
                 },
             );
+        }
+        if self.network_id == [0; 32] {
+            return Err(ProviderAdmissionValidationError::InvalidNetworkId);
+        }
+        if self.policy_id == [0; 32] || self.policy_digest == [0; 32] || self.policy_revision == 0 {
+            return Err(ProviderAdmissionValidationError::InvalidPolicyBinding);
+        }
+        if self.admission_revision == 0
+            || (self.admission_revision == 1 && self.expected_current_event_digest.is_some())
+            || (self.admission_revision > 1
+                && self
+                    .expected_current_event_digest
+                    .is_none_or(|digest| digest == [0; 32]))
+        {
+            return Err(ProviderAdmissionValidationError::InvalidEventLineage);
         }
         self.proposal.validate()?;
         let expected_proposal_digest =
@@ -685,6 +714,11 @@ impl AdmissionRecord {
         advert_digest: [u8; 32],
         trust: AdmissionRecordTrust,
     ) -> Result<Self, ProviderAdmissionEnvelopeError> {
+        if envelope.admission_revision != 1 {
+            return Err(ProviderAdmissionEnvelopeError::NonInitialEvent {
+                revision: envelope.admission_revision,
+            });
+        }
         let envelope_digest = compute_envelope_digest(&envelope).map_err(|err| {
             ProviderAdmissionEnvelopeError::Serialization {
                 context: "envelope",
@@ -805,6 +839,26 @@ impl AdmissionRecord {
                 provided: renewal.previous_envelope_digest,
             });
         }
+        if renewal.envelope.expected_current_event_digest != Some(expected_prev) {
+            return Err(ProviderAdmissionRenewalError::SignedPredecessorMismatch);
+        }
+        if self.envelope.admission_revision.checked_add(1)
+            != Some(renewal.envelope.admission_revision)
+        {
+            return Err(ProviderAdmissionRenewalError::AdmissionRevisionMismatch);
+        }
+        if renewal.envelope.policy_id != self.envelope.policy_id
+            || renewal.envelope.policy_revision != self.envelope.policy_revision
+            || renewal.envelope.policy_digest != self.envelope.policy_digest
+        {
+            return Err(ProviderAdmissionRenewalError::PolicyLineageMismatch);
+        }
+        if renewal.envelope.network_id != self.envelope.network_id {
+            return Err(ProviderAdmissionRenewalError::NetworkMismatch {
+                expected: self.envelope.network_id,
+                provided: renewal.envelope.network_id,
+            });
+        }
         let computed_digest = compute_envelope_digest(&renewal.envelope).map_err(|err| {
             ProviderAdmissionRenewalError::Envelope(ProviderAdmissionEnvelopeError::Serialization {
                 context: "envelope",
@@ -903,6 +957,24 @@ impl AdmissionRecord {
                 provided: revocation.envelope_digest,
             });
         }
+        if revocation.expected_current_event_digest != *self.envelope_digest() {
+            return Err(ProviderAdmissionRevocationError::SignedPredecessorMismatch);
+        }
+        if self.envelope.admission_revision.checked_add(1) != Some(revocation.transition_revision) {
+            return Err(ProviderAdmissionRevocationError::AdmissionRevisionMismatch);
+        }
+        if revocation.policy_id != self.envelope.policy_id
+            || revocation.policy_revision != self.envelope.policy_revision
+            || revocation.policy_digest != self.envelope.policy_digest
+        {
+            return Err(ProviderAdmissionRevocationError::PolicyLineageMismatch);
+        }
+        if revocation.network_id != self.envelope.network_id {
+            return Err(ProviderAdmissionRevocationError::NetworkMismatch {
+                expected: self.envelope.network_id,
+                provided: revocation.network_id,
+            });
+        }
         verify(revocation)?;
         Ok(())
     }
@@ -950,6 +1022,12 @@ pub fn verify_advert_against_record(
     advert: &ProviderAdvertV1,
     record: &AdmissionRecord,
 ) -> Result<(), ProviderAdmissionAdvertError> {
+    if advert.network_id != record.envelope.network_id {
+        return Err(ProviderAdmissionAdvertError::NetworkMismatch {
+            expected: record.envelope.network_id,
+            provided: advert.network_id,
+        });
+    }
     if advert.body != record.envelope.advert_body {
         return Err(ProviderAdmissionAdvertError::BodyMismatch);
     }
@@ -1073,6 +1151,14 @@ pub enum ProviderAdmissionValidationError {
     UnsupportedProposalVersion { found: u8 },
     #[error("unsupported envelope version {found}")]
     UnsupportedEnvelopeVersion { found: u8 },
+    #[error("provider admission network id must be the nonzero genesis block-header hash")]
+    InvalidNetworkId,
+    #[error("provider admission policy id, revision, and digest must be nonzero")]
+    InvalidPolicyBinding,
+    #[error(
+        "provider admission revision and expected current event digest have invalid lineage shape"
+    )]
+    InvalidEventLineage,
     #[error("provider id must be non-zero")]
     InvalidProviderId,
     #[error("advertisement key must be non-zero")]
@@ -1163,6 +1249,8 @@ impl Eq for ProviderAdmissionValidationError {}
 /// Errors surfaced while verifying admission envelopes.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionEnvelopeError {
+    #[error("admission revision {revision} requires its exact signed predecessor event")]
+    NonInitialEvent { revision: u64 },
     #[error("envelope validation failed: {0}")]
     Validation(ProviderAdmissionValidationError),
     #[error("council signature validation failed: {0}")]
@@ -1204,6 +1292,11 @@ pub enum ProviderAdmissionSignatureError {
 /// Errors surfaced when verifying provider adverts against governance records.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionAdvertError {
+    #[error("advert network id {provided:02x?} differs from admission network {expected:02x?}")]
+    NetworkMismatch {
+        expected: [u8; 32],
+        provided: [u8; 32],
+    },
     #[error("failed to compute advert digest: {0}")]
     Digest(#[source] NoritoError),
     #[error("advert body does not match governance envelope")]
@@ -1252,6 +1345,11 @@ impl ProviderAdmissionRenewalV1 {
 /// Errors surfaced when applying a provider admission renewal.
 #[derive(Debug, Error)]
 pub enum ProviderAdmissionRenewalError {
+    #[error("renewal network id {provided:02x?} differs from admission network {expected:02x?}")]
+    NetworkMismatch {
+        expected: [u8; 32],
+        provided: [u8; 32],
+    },
     #[error("council-verified renewal requires a council-verified base admission record")]
     UntrustedBaseRecord,
     #[error("unsupported renewal version {found}")]
@@ -1272,6 +1370,12 @@ pub enum ProviderAdmissionRenewalError {
         expected: [u8; 32],
         provided: [u8; 32],
     },
+    #[error("renewal outer predecessor differs from the council-signed expected current event")]
+    SignedPredecessorMismatch,
+    #[error("renewal admission revision is not the next revision")]
+    AdmissionRevisionMismatch,
+    #[error("renewal council policy binding differs from the active admission")]
+    PolicyLineageMismatch,
     #[error("provider id mismatch between renewal ({renewal:02x?}) and record ({record:02x?})")]
     ProviderMismatch { renewal: [u8; 32], record: [u8; 32] },
     #[error("profile id changed from `{previous}` to `{updated}` during renewal")]
@@ -1296,6 +1400,18 @@ pub enum ProviderAdmissionRenewalError {
 pub struct ProviderAdmissionRevocationV1 {
     /// Schema version (`PROVIDER_ADMISSION_REVOCATION_VERSION_V1`).
     pub version: u8,
+    /// Exact genesis block-header hash covered by the council revocation signature.
+    pub network_id: [u8; 32],
+    /// Identity of the enacted council policy claimed by this signed event.
+    pub policy_id: [u8; 32],
+    /// Monotonic revision of that council policy.
+    pub policy_revision: u64,
+    /// Digest of the exact council policy claimed by this signed event.
+    pub policy_digest: [u8; 32],
+    /// Next admission-event revision consumed by this terminal transition.
+    pub transition_revision: u64,
+    /// Exact current admission-event digest expected by this revocation.
+    pub expected_current_event_digest: [u8; 32],
     /// Provider identifier being revoked.
     pub provider_id: [u8; 32],
     /// Digest of the envelope being revoked.
@@ -1315,6 +1431,17 @@ pub struct ProviderAdmissionRevocationV1 {
 pub enum ProviderAdmissionRevocationError {
     #[error("unsupported revocation version {found}")]
     UnsupportedVersion { found: u8 },
+    #[error("provider admission revocation network id must be nonzero")]
+    InvalidNetworkId,
+    #[error("provider admission revocation policy id, revision, and digest must be nonzero")]
+    InvalidPolicyBinding,
+    #[error("provider admission revocation event lineage must be nonzero")]
+    InvalidEventLineage,
+    #[error("revocation network id {provided:02x?} differs from admission network {expected:02x?}")]
+    NetworkMismatch {
+        expected: [u8; 32],
+        provided: [u8; 32],
+    },
     #[error(
         "provider id mismatch between revocation ({revocation:02x?}) and record ({record:02x?})"
     )]
@@ -1335,6 +1462,12 @@ pub enum ProviderAdmissionRevocationError {
         expected: [u8; 32],
         provided: [u8; 32],
     },
+    #[error("revocation signed expected current event differs from the active admission")]
+    SignedPredecessorMismatch,
+    #[error("revocation transition revision is not the next admission revision")]
+    AdmissionRevisionMismatch,
+    #[error("revocation council policy binding differs from the active admission")]
+    PolicyLineageMismatch,
 }
 impl ProviderAdmissionRevocationV1 {
     /// Computes the canonical digest signed by council members.
@@ -1345,6 +1478,12 @@ impl ProviderAdmissionRevocationV1 {
         )]
         struct RevocationBody<'a> {
             version: u8,
+            network_id: [u8; 32],
+            policy_id: [u8; 32],
+            policy_revision: u64,
+            policy_digest: [u8; 32],
+            transition_revision: u64,
+            expected_current_event_digest: [u8; 32],
             provider_id: [u8; 32],
             envelope_digest: [u8; 32],
             revoked_at: u64,
@@ -1354,6 +1493,12 @@ impl ProviderAdmissionRevocationV1 {
         }
         let body = RevocationBody {
             version: self.version,
+            network_id: self.network_id,
+            policy_id: self.policy_id,
+            policy_revision: self.policy_revision,
+            policy_digest: self.policy_digest,
+            transition_revision: self.transition_revision,
+            expected_current_event_digest: self.expected_current_event_digest,
             provider_id: self.provider_id,
             envelope_digest: self.envelope_digest,
             revoked_at: self.revoked_at,
@@ -1396,6 +1541,18 @@ where
         return Err(ProviderAdmissionRevocationError::UnsupportedVersion {
             found: revocation.version,
         });
+    }
+    if revocation.network_id == [0; 32] {
+        return Err(ProviderAdmissionRevocationError::InvalidNetworkId);
+    }
+    if revocation.policy_id == [0; 32]
+        || revocation.policy_digest == [0; 32]
+        || revocation.policy_revision == 0
+    {
+        return Err(ProviderAdmissionRevocationError::InvalidPolicyBinding);
+    }
+    if revocation.transition_revision == 0 || revocation.expected_current_event_digest == [0; 32] {
+        return Err(ProviderAdmissionRevocationError::InvalidEventLineage);
     }
     if revocation.reason.trim().is_empty() {
         return Err(ProviderAdmissionRevocationError::ReasonEmpty);
@@ -1628,6 +1785,12 @@ mod tests {
             compute_advert_body_digest(&advert_body).expect("advert body digest");
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1666,6 +1829,8 @@ mod tests {
         let mut renewed_envelope = base_envelope;
         renewed_envelope.issued_at += 1;
         renewed_envelope.retention_epoch += 1;
+        renewed_envelope.admission_revision = 2;
+        renewed_envelope.expected_current_event_digest = Some(*trusted.envelope_digest());
         sign_envelope(&mut renewed_envelope, &[&council_key]);
         let renewal = ProviderAdmissionRenewalV1 {
             version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
@@ -1839,6 +2004,12 @@ mod tests {
         let advert_digest = compute_advert_body_digest(&advert_body).expect("digest");
         let envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1857,6 +2028,12 @@ mod tests {
         let proposal_digest = compute_proposal_digest(&proposal).expect("digest");
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1884,6 +2061,12 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x22; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1909,6 +2092,12 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x44; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1940,6 +2129,12 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x44; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -1975,6 +2170,12 @@ mod tests {
             let council_key = SigningKey::from_bytes(&[0x44; 32]);
             let mut envelope = ProviderAdmissionEnvelopeV1 {
                 version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+                network_id: [0xA1; 32],
+                policy_id: [0xC1; 32],
+                policy_revision: 1,
+                policy_digest: [0xD1; 32],
+                admission_revision: 1,
+                expected_current_event_digest: None,
                 proposal,
                 proposal_digest,
                 advert_body,
@@ -2169,6 +2370,7 @@ mod tests {
         let advert_body = advert_body_from_proposal(&proposal);
         let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: 10,
             expires_at: 40,
             body: advert_body.clone(),
@@ -2186,6 +2388,12 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x66; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -2211,6 +2419,7 @@ mod tests {
         let advert_body = advert_body_from_proposal(&proposal);
         let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: 20,
             expires_at: 60,
             body: advert_body.clone(),
@@ -2228,6 +2437,12 @@ mod tests {
         let council_key = SigningKey::from_bytes(&[0x88; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,
@@ -2256,6 +2471,12 @@ mod tests {
         let base_advert_digest = compute_advert_body_digest(&base_advert).expect("digest");
         let mut base_envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal: base_proposal.clone(),
             proposal_digest: base_proposal_digest,
             advert_body: base_advert.clone(),
@@ -2291,6 +2512,12 @@ mod tests {
             compute_advert_body_digest(&renewal_advert).expect("renewal advert digest");
         let mut renewal_envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 2,
+            expected_current_event_digest: Some(*record.envelope_digest()),
             proposal: renewal_proposal,
             proposal_digest: renewal_proposal_digest,
             advert_body: renewal_advert,
@@ -2346,6 +2573,12 @@ mod tests {
         let base_advert_digest = compute_advert_body_digest(&base_advert).expect("digest");
         let mut base_envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal: base_proposal,
             proposal_digest: base_proposal_digest,
             advert_body: base_advert.clone(),
@@ -2387,6 +2620,8 @@ mod tests {
         renewal_envelope.advert_body_digest = renewal_advert_digest;
         renewal_envelope.issued_at += 1;
         renewal_envelope.retention_epoch += 100;
+        renewal_envelope.admission_revision = 2;
+        renewal_envelope.expected_current_event_digest = Some(*record.envelope_digest());
         sign_envelope(&mut renewal_envelope, &[&council_key]);
         let renewal_envelope_digest = compute_envelope_digest(&renewal_envelope).expect("digest");
         let renewal = ProviderAdmissionRenewalV1 {
@@ -2414,6 +2649,8 @@ mod tests {
         let mut renewed_envelope = base_envelope;
         renewed_envelope.issued_at += 1;
         renewed_envelope.retention_epoch += 1;
+        renewed_envelope.admission_revision = 2;
+        renewed_envelope.expected_current_event_digest = Some(*record.envelope_digest());
         sign_envelope(&mut renewed_envelope, &[&rogue]);
         let renewal = ProviderAdmissionRenewalV1 {
             version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
@@ -2433,6 +2670,12 @@ mod tests {
         ));
         let mut revocation = ProviderAdmissionRevocationV1 {
             version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            transition_revision: 2,
+            expected_current_event_digest: *record.envelope_digest(),
             provider_id: *record.provider_id(),
             envelope_digest: *record.envelope_digest(),
             revoked_at: 200,
@@ -2472,6 +2715,12 @@ mod tests {
         let advert_digest = compute_advert_body_digest(&advert).expect("digest");
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body: advert,
@@ -2486,6 +2735,12 @@ mod tests {
         let record = AdmissionRecord::new(envelope, &policy).expect("record");
         let mut revocation = ProviderAdmissionRevocationV1 {
             version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            transition_revision: 2,
+            expected_current_event_digest: *record.envelope_digest(),
             provider_id: *record.provider_id(),
             envelope_digest: *record.envelope_digest(),
             revoked_at: 10,
@@ -2506,6 +2761,95 @@ mod tests {
         assert!(matches!(
             err,
             ProviderAdmissionRevocationError::EnvelopeDigestMismatch { .. }
+        ));
+    }
+    #[test]
+    fn signed_lineage_refuses_outer_predecessor_substitution() {
+        let council_key = SigningKey::from_bytes(&[0x65; 32]);
+        let policy = council_policy(&[&council_key], 1);
+        let base = signed_sample_envelope(&[&council_key]);
+        let first = AdmissionRecord::new(base.clone(), &policy).expect("first admission");
+        let mut malformed_policy = base.clone();
+        malformed_policy.policy_id = [0; 32];
+        assert!(matches!(
+            malformed_policy.validate(),
+            Err(ProviderAdmissionValidationError::InvalidPolicyBinding)
+        ));
+        let mut missing_predecessor = base.clone();
+        missing_predecessor.admission_revision = 2;
+        assert!(matches!(
+            missing_predecessor.validate(),
+            Err(ProviderAdmissionValidationError::InvalidEventLineage)
+        ));
+        let mut alternate = base.clone();
+        alternate.notes = Some("alternate admitted event".to_owned());
+        sign_envelope(&mut alternate, &[&council_key]);
+        let second = AdmissionRecord::new(alternate, &policy).expect("second admission");
+
+        let mut successor = base;
+        successor.admission_revision = 2;
+        successor.expected_current_event_digest = Some(*first.envelope_digest());
+        successor.issued_at += 1;
+        successor.retention_epoch += 1;
+        sign_envelope(&mut successor, &[&council_key]);
+        assert!(matches!(
+            AdmissionRecord::new(successor.clone(), &policy),
+            Err(ProviderAdmissionEnvelopeError::NonInitialEvent { revision: 2 })
+        ));
+        let mut renewal = ProviderAdmissionRenewalV1 {
+            version: PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
+            provider_id: *first.provider_id(),
+            previous_envelope_digest: *second.envelope_digest(),
+            envelope_digest: compute_envelope_digest(&successor).expect("successor digest"),
+            envelope: successor.clone(),
+            notes: None,
+        };
+        assert!(matches!(
+            second.apply_renewal(&renewal, &policy),
+            Err(ProviderAdmissionRenewalError::SignedPredecessorMismatch)
+        ));
+        renewal.previous_envelope_digest = *first.envelope_digest();
+        first
+            .apply_renewal(&renewal, &policy)
+            .expect("exact predecessor");
+        let mut substituted_policy = successor;
+        substituted_policy.policy_digest[0] ^= 1;
+        assert!(matches!(
+            verify_envelope(&substituted_policy, &policy),
+            Err(ProviderAdmissionEnvelopeError::Signature(_))
+        ));
+
+        let mut revocation = ProviderAdmissionRevocationV1 {
+            version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+            network_id: first.envelope().network_id,
+            policy_id: first.envelope().policy_id,
+            policy_revision: first.envelope().policy_revision,
+            policy_digest: first.envelope().policy_digest,
+            transition_revision: 2,
+            expected_current_event_digest: *first.envelope_digest(),
+            provider_id: *first.provider_id(),
+            envelope_digest: *second.envelope_digest(),
+            revoked_at: 200,
+            reason: "key compromise".to_owned(),
+            council_signatures: Vec::new(),
+            notes: None,
+        };
+        let digest = revocation.digest().expect("revocation digest");
+        revocation.council_signatures = vec![council_signature_from_key(&council_key, &digest)];
+        let mut invalid_revocation_lineage = revocation.clone();
+        invalid_revocation_lineage.transition_revision = 0;
+        assert!(matches!(
+            verify_revocation_signatures(&invalid_revocation_lineage, &policy),
+            Err(ProviderAdmissionRevocationError::InvalidEventLineage)
+        ));
+        assert!(matches!(
+            second.verify_revocation(&revocation, &policy),
+            Err(ProviderAdmissionRevocationError::SignedPredecessorMismatch)
+        ));
+        revocation.envelope_digest = *first.envelope_digest();
+        assert!(matches!(
+            verify_revocation_signatures(&revocation, &policy),
+            Err(ProviderAdmissionRevocationError::Signature(_))
         ));
     }
     include!("provider_admission/tests/canonical_preimages.rs");

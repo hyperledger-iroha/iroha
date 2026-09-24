@@ -989,6 +989,70 @@ fn provider_cache_persists_replay_high_water_across_restart() {
     assert!(restarted_again.is_empty());
 }
 #[test]
+fn provider_cache_rejects_foreign_network_checkpoint_with_same_admitted_provider() {
+    let signing_key = SigningKey::from_bytes(&[0x98; 32]);
+    let fixture = make_signed_advert(
+        &signing_key,
+        [0xA5; 32],
+        [0xB6; 32],
+        vec![CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        }],
+        false,
+    );
+    let local_registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
+    let temp = tempdir().expect("temporary replay checkpoint directory");
+    let checkpoint = temp
+        .path()
+        .canonicalize()
+        .expect("canonical replay checkpoint parent")
+        .join("provider-advert-replay.to");
+    let capacity = NonZeroUsize::new(8).expect("nonzero checkpoint bound");
+    {
+        let mut cache = ProviderAdvertCache::new_persistent(
+            [CapabilityType::ToriiGateway],
+            local_registry,
+            checkpoint.clone(),
+            capacity,
+        )
+        .expect("initialize local-network cache");
+        cache
+            .ingest(fixture.advert.clone(), ISSUED_AT + 1)
+            .expect("persist local-network high-water mark");
+    }
+    let foreign_network = [0xB3; 32];
+    let mut foreign = fixture;
+    foreign.advert.network_id = foreign_network;
+    resign_advert(&mut foreign.advert, &signing_key);
+    foreign.envelope.network_id = foreign_network;
+    let council_key = SigningKey::from_bytes(&[0x42; 32]);
+    let digest = compute_envelope_authorization_digest(&foreign.envelope)
+        .expect("compute foreign-network council preimage");
+    foreign.envelope.council_signatures = vec![CouncilSignature {
+        signer: council_key.verifying_key().to_bytes(),
+        signature: council_key.sign(&digest).to_bytes().to_vec(),
+    }];
+    let foreign_registry = admission_registry_from_fixtures(std::slice::from_ref(&foreign));
+    let mut foreign_cache =
+        ProviderAdvertCache::new([CapabilityType::ToriiGateway], foreign_registry.clone());
+    foreign_cache
+        .ingest(foreign.advert, ISSUED_AT + 1)
+        .expect("foreign advert and council envelope are valid as a pair");
+    let error = ProviderAdvertCache::new_persistent(
+        [CapabilityType::ToriiGateway],
+        foreign_registry,
+        checkpoint,
+        capacity,
+    )
+    .expect_err("checkpoint from another genesis network must reject restart");
+    assert!(matches!(
+        error,
+        ReplayCheckpointError::NetworkMismatch { expected, provided }
+            if expected == foreign_network && provided == [0xA1; 32]
+    ));
+}
+#[test]
 fn provider_cache_corrupt_replay_checkpoint_fails_closed_on_restart() {
     let signing_key = SigningKey::from_bytes(&[0x99; 32]);
     let fixture = make_signed_advert(
@@ -1356,6 +1420,7 @@ fn make_signed_advert(
     let body_clone = body.clone();
     let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
+        network_id: [0xA1; 32],
         issued_at: ISSUED_AT,
         expires_at: ISSUED_AT
             .checked_add(TTL_SECS)
@@ -1423,6 +1488,12 @@ fn make_signed_advert(
     let council_key = SigningKey::from_bytes(&[0x42; 32]);
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+        network_id: [0xA1; 32],
+        policy_id: [0xC1; 32],
+        policy_revision: 1,
+        policy_digest: [0xD1; 32],
+        admission_revision: 1,
+        expected_current_event_digest: None,
         proposal,
         proposal_digest,
         advert_body: body_clone,
@@ -1506,7 +1577,11 @@ fn admission_registry_from_fixtures(fixtures: &[ProviderFixture]) -> Arc<Admissi
         .collect::<HashSet<_>>();
     let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
         .expect("fixture council policy must be valid");
-    let registry = AdmissionRegistry::from_envelopes(policy, envelopes)
+    let network_id = envelopes
+        .first()
+        .expect("fixture admission requires at least one envelope")
+        .network_id;
+    let registry = AdmissionRegistry::from_envelopes(network_id, policy, envelopes)
         .expect("fixture admission registry must be valid");
     Arc::new(registry)
 }
@@ -2579,6 +2654,22 @@ async fn sorafs_discovery_startup_rejects_empty_trust_set() {
     let mut admission = test_admission_config(temp.path().to_path_buf());
     admission.trusted_council_keys.clear();
     cfg.torii.sorafs_discovery.admission = Some(admission);
+    let _ = build_torii_harness(&cfg);
+}
+#[tokio::test]
+#[should_panic(expected = "differs from local network")]
+async fn sorafs_discovery_startup_rejects_signed_foreign_network_envelope() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.genesis.expected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB3; 32]));
+    let temp = tempdir().expect("admission directory");
+    fs::copy(
+        fixtures_root().join("envelope_v1.to"),
+        temp.path().join("provider.to"),
+    )
+    .expect("install fully signed foreign-network envelope");
+    cfg.torii.sorafs_discovery.discovery_enabled = true;
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config(temp.path().to_path_buf()));
     let _ = build_torii_harness(&cfg);
 }
 #[tokio::test]

@@ -600,7 +600,7 @@ async fn tools_call_batch_returns_per_call_errors_for_unknown_tools() {
 async fn retired_async_job_methods_fail_as_unknown_without_retained_state() {
     let app = mk_app_state_for_tests();
     for method in ["tools/call_async", "tools/jobs/get"] {
-        let response = handle_jsonrpc_request(
+        let response = handle_tool_call_request(
             app.clone(),
             &HeaderMap::new(),
             norito::json!({
@@ -629,12 +629,7 @@ async fn tools_list_list_changed_tracks_toolset_version() {
     let visible_tools = visible_tools_for_app(&app);
     let version = compute_toolset_version(&visible_tools);
     let same_version = norito::json!({ "toolsetVersion": version });
-    let same_response = handle_tools_list(
-        None,
-        &app,
-        same_version.as_object().expect("map"),
-        ProtocolEra::Legacy,
-    );
+    let same_response = handle_tools_list(None, &app, same_version.as_object().expect("map"));
     assert_eq!(
         same_response
             .get("result")
@@ -645,12 +640,8 @@ async fn tools_list_list_changed_tracks_toolset_version() {
         Some(false)
     );
     let different_version = norito::json!({ "toolset_version": "different" });
-    let different_response = handle_tools_list(
-        None,
-        &app,
-        different_version.as_object().expect("map"),
-        ProtocolEra::Legacy,
-    );
+    let different_response =
+        handle_tools_list(None, &app, different_version.as_object().expect("map"));
     assert_eq!(
         different_response
             .get("result")
@@ -661,12 +652,7 @@ async fn tools_list_list_changed_tracks_toolset_version() {
         Some(true)
     );
     let terminal = norito::json!({ "cursor": (visible_tools_for_app(&app).len().to_string()) });
-    let terminal_response = handle_tools_list(
-        None,
-        &app,
-        terminal.as_object().expect("map"),
-        ProtocolEra::Legacy,
-    );
+    let terminal_response = handle_tools_list(None, &app, terminal.as_object().expect("map"));
     assert!(
         terminal_response
             .get("result")
@@ -675,12 +661,7 @@ async fn tools_list_list_changed_tracks_toolset_version() {
     );
 
     let invalid = norito::json!({ "cursor": "not-a-cursor" });
-    let invalid_response = handle_tools_list(
-        None,
-        &app,
-        invalid.as_object().expect("map"),
-        ProtocolEra::Legacy,
-    );
+    let invalid_response = handle_tools_list(None, &app, invalid.as_object().expect("map"));
     assert_eq!(
         invalid_response
             .get("error")

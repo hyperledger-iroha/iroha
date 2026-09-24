@@ -58,6 +58,30 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Use the actual finalized State head before waiting again on a retained
+    /// pre-execution Native proposal.
+    pub(in crate::sumeragi) fn native_proposal_superseded(
+        &self,
+        proposal_height: u64,
+    ) -> Result<Option<bool>, String> {
+        self.state.native_proposal_superseded(proposal_height)
+    }
+
+    /// Stop requesting a first input after its exact proposal lost authority.
+    pub(in crate::sumeragi) fn retire_superseded_native_source_wait(
+        &mut self,
+        subject: wire::BlockSubject,
+    ) {
+        if self
+            .native_source_wait
+            .as_ref()
+            .is_some_and(|wait| wait.subject == subject)
+        {
+            self.native_source_wait.take();
+            self.native_source_completion.take();
+        }
+    }
+
     /// Keep the actual State/Kura publication until the process driver takes it.
     pub(in crate::sumeragi) fn retain_native_publication(
         &mut self,
@@ -1036,6 +1060,7 @@ impl ProductionV2Services {
         executor.matches_lifecycle_output_guard(&self.output_guard)
     }
     /// Return whether one lane adapter shares this exact height and storage owner.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(in crate::sumeragi) fn matches_lifecycle_lane_work(
         &self,
         lane_work: &V2LaneWorkAdapter,
@@ -1069,6 +1094,7 @@ impl ProductionV2Services {
             && self.kura.get_durable_block_hash(height) == Some(expected.block_hash())
     }
 
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     fn owns_lifecycle_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
         self.io
             .as_ref()
@@ -2269,6 +2295,7 @@ impl ProductionV2Services {
             .rearm_ready_delivery(tag, round, subject)
     }
     /// Take the next exact validation deferral for bounded sidecar recovery.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
         if self.output_guard.restart_required() {
             return None;
@@ -2277,6 +2304,7 @@ impl ProductionV2Services {
     }
     /// Put back a transiently capacity-blocked deferral without losing its
     /// exact durable validation intent.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn requeue_merge_sidecar_deferral(
         &mut self,
         deferred: DeferredMergeSidecarWork,
@@ -4630,7 +4658,7 @@ impl ProductionV2Services {
         Ok(pending_remains)
     }
     /// Transfer global output only after original Native publication and settlement.
-    pub(crate) fn handoff_native_height_output_to_durable_reconstruction(
+    pub(in crate::sumeragi) fn handoff_native_height_output_to_durable_reconstruction(
         &self,
         receipt: &KuraV2CommitReceipt,
         artifact: &wire::finality::V2FinalityArtifact,
@@ -4641,7 +4669,7 @@ impl ProductionV2Services {
     }
 
     /// Seal the exact global corridor while retaining the actual published owner.
-    pub(crate) fn seal_native_height_output_handoff(
+    pub(in crate::sumeragi) fn seal_native_height_output_handoff(
         &self,
         receipt: &KuraV2CommitReceipt,
         artifact: &wire::finality::V2FinalityArtifact,
@@ -4787,6 +4815,7 @@ impl ProductionV2Services {
     }
     /// Drain process-local sidecar receipts after the exact peer writer flushes
     /// their response chunks.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(
         &self,
         limit: usize,
@@ -4803,6 +4832,7 @@ impl ProductionV2Services {
     /// Cancel every queued or writer-pending response occurrence covered by an
     /// authenticated cumulative close for the exact durable stream incarnation
     /// before any newer output is dispatched.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn close_certified_merge_sidecar_prefix(
         &self,
         prefix: &CertifiedMergeSidecarClosedPrefix,
@@ -4841,6 +4871,7 @@ impl ProductionV2Services {
         pending.cancel_commit_certificate_request(request_hash)
     }
     /// Cancel requester-side sidecar output after its transport attempt retires.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn cancel_certified_merge_sidecar_requests(
         &self,
         request_hashes: &BTreeSet<HashOf<CertifiedMergeSidecarRequestV1>>,
@@ -4854,6 +4885,7 @@ impl ProductionV2Services {
     }
     /// Cancel canonical requester Request/Close output made obsolete by each
     /// authenticated successor-generation fence for its exact endpoint pair.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn cancel_obsolete_certified_merge_sidecar_generation_hints(
         &self,
         hints: &[CertifiedMergeSidecarGenerationHintV1],
@@ -4866,6 +4898,7 @@ impl ProductionV2Services {
         pending.cancel_obsolete_certified_merge_sidecar_generation_hints(hints)
     }
     /// Cancel requester-side Close retries covered by cumulative acknowledgements.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn cancel_acknowledged_certified_merge_sidecar_closes(
         &self,
         acknowledgements: &[CertifiedMergeSidecarCloseAckV1],

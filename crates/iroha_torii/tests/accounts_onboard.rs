@@ -7,17 +7,16 @@ use axum::{
 };
 use http::StatusCode;
 use iroha_core::{
-    block::BlockBuilder,
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
     state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
-    tx::{AcceptedTransaction, TransactionBuilder},
+    tx::TransactionBuilder,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    NetworkId, Registrable,
+    IntoKeyValue, NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
     isi::{
@@ -29,6 +28,7 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
     sns::{NameControllerV1, NameRecordV1},
+    transaction::TransactionAdmissionIntent,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -49,9 +49,8 @@ use iroha_torii_shared::{
     },
 };
 use std::{
-    borrow::Cow,
     collections::BTreeSet,
-    num::NonZeroU8,
+    num::{NonZeroU8, NonZeroU64},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -361,6 +360,68 @@ fn build_onboarding_test_context_at(
         chain_id,
         _data_dir: data_dir,
     }
+}
+
+fn install_conflicting_onboarding_state_for_test(
+    context: &OnboardingTestContext,
+    alias_literal: &str,
+    account_id: &AccountId,
+) {
+    use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+
+    let catalog = context.state.nexus_snapshot().dataspace_catalog;
+    let alias = AccountAlias::from_literal(alias_literal, &catalog).expect("fixture account alias");
+    let selector =
+        iroha_core::sns::selector_for_account_alias(&alias, &catalog).expect("fixture selector");
+    let address = AccountAddress::from_account_id(account_id).expect("fixture account address");
+    let record = NameRecordV1::new(
+        selector.clone(),
+        account_id.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Default::default(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("fixture height"),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = context.state.block(header);
+    let mut tx = block.transaction();
+    let world = tx.world_mut_for_testing();
+    let authority = checked_key_pair(0xD1, Algorithm::Ed25519, "fixture authority");
+    let authority_id = AccountId::new(authority.public_key().clone());
+    world.insert_account_for_testing(
+        account_id.clone(),
+        Account::new(account_id.clone())
+            .build(&authority_id)
+            .into_key_value()
+            .1,
+    );
+    world.smart_contract_state_mut_for_testing().insert(
+        iroha_core::sns::record_storage_key(&selector),
+        norito::codec::Encode::encode(&record),
+    );
+    world
+        .account_aliases_mut_for_testing()
+        .insert(alias.clone(), account_id.clone());
+    world
+        .account_aliases_by_account_mut_for_testing()
+        .insert(account_id.clone(), BTreeSet::from([alias.clone()]));
+    world.replace_account_rekey_record_for_testing(AccountRekeyRecord::new(
+        alias,
+        account_id.clone(),
+    ));
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("install competing account and alias without a synthetic block");
 }
 fn distinct_onboarding_network_id(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
@@ -784,7 +845,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
 }
 
 #[tokio::test]
-async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe() {
+async fn sponsored_onboarding_prepared_submit_fails_closed_without_quorum() {
     let context = build_onboarding_test_context();
     let target_key_pair =
         checked_key_pair(0xD3, Algorithm::Ed25519, "derive onboarding target fixture");
@@ -822,6 +883,23 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
     );
     assert_eq!(response_field(&prepared.payload, "operation"), "onboarding");
     assert_eq!(disposition_kind(&prepared.payload), "create");
+    let typed_prepared: iroha::client::AccountOnboardingPreparedTransactionV1 =
+        norito::json::from_value(prepared.payload.clone()).expect("typed prepared envelope");
+    let sdk_request: iroha::client::AccountOnboardingPlanRequestV1 =
+        norito::json::from_value(plan_request).expect("typed onboarding request");
+    let signed = iroha::client::verify_account_onboarding_prepared_transaction_v1(
+        *context.state.network_id_ref(),
+        &sdk_request,
+        &typed_prepared,
+        &typed_prepared.receipt,
+        &typed_prepared.binding,
+        &typed_prepared.fee_payment,
+    )
+    .expect("prepared envelope authenticates its exact signed transaction");
+    assert_eq!(
+        signed.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
     assert_eq!(
         context.queue.active_len(),
         0,
@@ -840,33 +918,39 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         submitted.status,
-        StatusCode::ACCEPTED,
+        StatusCode::SERVICE_UNAVAILABLE,
         "{}",
         submitted.raw_body
     );
-    assert_eq!(response_field(&submitted.payload, "outcome"), "Pending");
-    assert_eq!(
-        response_field(&submitted.payload, "transaction_hash_hex"),
-        selected_hash
+    assert!(
+        submitted
+            .payload
+            .as_object()
+            .and_then(|body| body.get("outcome"))
+            .is_none(),
+        "a peer without an f+1 admission quorum must not claim Pending"
     );
-    assert_eq!(context.queue.active_len(), 1);
+    assert_eq!(context.queue.active_len(), 0);
 
     let response_loss_replay =
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         response_loss_replay.status,
-        StatusCode::OK,
+        StatusCode::SERVICE_UNAVAILABLE,
         "{}",
         response_loss_replay.raw_body
     );
-    assert_eq!(
-        response_field(&response_loss_replay.payload, "outcome"),
-        "Pending"
+    assert!(
+        response_loss_replay
+            .payload
+            .as_object()
+            .and_then(|body| body.get("outcome"))
+            .is_none()
     );
     assert_eq!(
         context.queue.active_len(),
-        1,
-        "replay must not enqueue twice"
+        0,
+        "retry without a quorum must not create local queue custody"
     );
     let wrong_scope_replay = send_onboarding_request_with_token(
         &context.app,
@@ -881,68 +965,26 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
         "a known hash must not bypass receipt credential scope: {}",
         wrong_scope_replay.raw_body
     );
-    assert_eq!(context.queue.active_len(), 1);
-
-    let expected_height = u64::try_from(context.state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    assert_eq!(
-        iroha_torii::test_utils::apply_queued_in_one_block(
-            &context.state,
-            &context.queue,
-            &context.chain_id,
-            expected_height,
-        ),
-        1,
-        "exact submit must enqueue one atomic transaction"
-    );
-    let applied_replay =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
-    assert_eq!(
-        applied_replay.status,
-        StatusCode::OK,
-        "{}",
-        applied_replay.raw_body
-    );
-    assert_eq!(
-        response_field(&applied_replay.payload, "outcome"),
-        "Applied"
-    );
     assert_eq!(context.queue.active_len(), 0);
-    let proof_required = send_onboarding_request(
+    let still_preparable = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
         &onboarding_prepare_request(plan.payload.clone()),
     )
     .await;
     assert_eq!(
-        proof_required.status,
+        still_preparable.status,
         StatusCode::OK,
         "{}",
-        proof_required.raw_body
+        still_preparable.raw_body
     );
     assert_eq!(
-        response_field(&proof_required.payload, "schema"),
-        "iroha.accounts.onboard.prepare-proof-required.v1"
+        response_field(&still_preparable.payload, "schema"),
+        "iroha.prepared-transaction.v1"
     );
-    assert_eq!(
-        response_field(&proof_required.payload, "outcome"),
-        "ProofRequired"
-    );
-    assert_eq!(
-        response_field(&proof_required.payload, "proof_kind"),
-        "account_alias_current_state"
-    );
-    assert_eq!(disposition_kind(&proof_required.payload), "no_op");
-    assert!(
-        proof_required
-            .payload
-            .as_object()
-            .is_some_and(|payload| !payload.contains_key("signed_transaction_wire_hex")),
-        "a proof-required prepare result must not fabricate a transaction"
-    );
+    assert_eq!(disposition_kind(&still_preparable.payload), "create");
     assert_eq!(context.queue.active_len(), 0);
-    assert_secret_free(&proof_required);
+    assert_secret_free(&still_preparable);
 
     let current_state = send_onboarding_request(
         &context.app,
@@ -978,13 +1020,14 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
             .latest_block_hash()
             .expect("fixture has a committed block")
     );
-    assert!(current_state.account_exists);
-    assert_eq!(alias_target, Some(target_id));
+    assert!(!current_state.account_exists);
+    assert_eq!(alias_target, None);
+    assert_eq!(context.state.view().height(), 1);
     context.shutdown().await;
 }
 
 #[tokio::test]
-async fn sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor() {
+async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs_quorum() {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time");
@@ -1055,20 +1098,13 @@ async fn sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor() 
         send_onboarding_request(&context.app, "/v1/accounts/onboard", &prepared.payload).await;
     assert_eq!(
         submitted.status,
-        StatusCode::ACCEPTED,
+        StatusCode::SERVICE_UNAVAILABLE,
         "{}",
         submitted.raw_body
     );
-    assert_eq!(
-        iroha_torii::test_utils::apply_queued_in_one_block(
-            &context.state,
-            &context.queue,
-            &context.chain_id,
-            2,
-        ),
-        1
-    );
-    assert!(context.state.view().world().account(&target).is_ok());
+    assert_eq!(context.queue.active_len(), 0);
+    assert_eq!(context.state.view().height(), 1);
+    assert!(context.state.view().world().account(&target).is_err());
     assert_secret_free(&prepared);
     context.shutdown().await;
 }
@@ -1176,7 +1212,7 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
 }
 
 #[tokio::test]
-async fn expired_onboarding_envelope_only_reconciles_an_already_known_hash() {
+async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() {
     use iroha_torii_shared::prepared_transaction::{
         OnboardingPreparedSignatureFieldsV1, PreparedOperationBindingRefV1,
         onboarding_prepared_signature_transcript_v1, prepared_signature_digest_v1,
@@ -1294,43 +1330,38 @@ async fn expired_onboarding_envelope_only_reconciles_an_already_known_hash() {
         (envelope, transaction)
     };
     let (known, known_transaction) = historical(0);
-    let (unknown, _) = historical(1);
+    let (unknown, unknown_transaction) = historical(1);
     assert_ne!(known.transaction_hash_hex, unknown.transaction_hash_hex);
-    // Admit the exact known transaction into historical committed state while its signed
-    // lifetime was valid. HTTP reconciliation now runs at the real, already-expired time.
-    let leader = checked_key_pair(0xD2, Algorithm::BlsNormal, "historical block leader");
-    let unverified = BlockBuilder::new_with_time_source(
-        vec![AcceptedTransaction::new_unchecked(Cow::Owned(
-            known_transaction,
-        ))],
-        iroha_primitives::time::TimeSource::new_fixed(creation + Duration::from_secs(5)),
-    )
-    .chain(0, context.state.view().latest_block().as_deref())
-    .sign(leader.private_key())
-    .unpack(|_| {});
-    let mut state_block = context.state.block(unverified.header());
-    state_block.chain_id = context.chain_id.clone();
-    let valid = unverified
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    iroha_torii::test_utils::finalize_committed_block(&context.state, state_block, committed);
-    assert!(context.state.view().world().account(&target).is_ok());
+    assert_eq!(
+        known_transaction.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    assert_eq!(
+        unknown_transaction.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
     let known = norito::json::to_value(&known).expect("known envelope JSON");
     let unknown = norito::json::to_value(&unknown).expect("unknown envelope JSON");
-    let reconciled = send_onboarding_request(&context.app, "/v1/accounts/onboard", &known).await;
-    assert_eq!(reconciled.status, StatusCode::OK, "{}", reconciled.raw_body);
-    assert_eq!(response_field(&reconciled.payload, "outcome"), "Applied");
-    let expired_unknown =
-        send_onboarding_request(&context.app, "/v1/accounts/onboard", &unknown).await;
-    assert_eq!(
-        expired_unknown.status,
-        StatusCode::BAD_REQUEST,
-        "{}",
-        expired_unknown.raw_body
-    );
+    for expired in [known, unknown] {
+        let response =
+            send_onboarding_request(&context.app, "/v1/accounts/onboard", &expired).await;
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            response.raw_body
+        );
+        assert!(
+            response
+                .payload
+                .as_object()
+                .and_then(|body| body.get("outcome"))
+                .is_none()
+        );
+    }
     assert_eq!(context.queue.active_len(), 0);
-    assert_eq!(context.state.view().height(), 2);
+    assert_eq!(context.state.view().height(), 1);
+    assert!(context.state.view().world().account(&target).is_err());
     context.shutdown().await;
 }
 
@@ -1356,6 +1387,7 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
         .clone(),
     );
     let alias = "driftuser@universal";
+    let conflicting_request = onboarding_plan_request(alias, &conflicting_target);
     let original_plan = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/plan",
@@ -1365,7 +1397,7 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     let conflicting_plan = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/plan",
-        &onboarding_plan_request(alias, &conflicting_target),
+        &conflicting_request,
     )
     .await;
     for plan in [&original_plan, &conflicting_plan] {
@@ -1393,22 +1425,39 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     .await;
     assert_eq!(
         conflicting_submit.status,
-        StatusCode::ACCEPTED,
+        StatusCode::SERVICE_UNAVAILABLE,
         "{}",
         conflicting_submit.raw_body
     );
-    let expected_height = u64::try_from(context.state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
+    assert_eq!(context.queue.active_len(), 0);
+    // This one-router fixture has no f+1 peer quorum. Install the competing
+    // account and alias as a test-only world overlay so the stale-receipt test
+    // exercises live-state revalidation without inventing a canonical block.
+    let prepared: iroha::client::AccountOnboardingPreparedTransactionV1 =
+        norito::json::from_value(conflicting_prepared.payload).expect("typed racing envelope");
+    let request: iroha::client::AccountOnboardingPlanRequestV1 =
+        norito::json::from_value(conflicting_request).expect("typed racing request");
+    let transaction = iroha::client::verify_account_onboarding_prepared_transaction_v1(
+        *context.state.network_id_ref(),
+        &request,
+        &prepared,
+        &prepared.receipt,
+        &prepared.binding,
+        &prepared.fee_payment,
+    )
+    .expect("racing envelope authenticates its exact transaction");
     assert_eq!(
-        iroha_torii::test_utils::apply_queued_in_one_block(
-            &context.state,
-            &context.queue,
-            &context.chain_id,
-            expected_height,
-        ),
-        1,
-        "the racing create must commit before stale receipt revalidation"
+        transaction.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    install_conflicting_onboarding_state_for_test(&context, alias, &conflicting_target);
+    assert!(
+        context
+            .state
+            .view()
+            .world()
+            .account(&conflicting_target)
+            .is_ok()
     );
     let stale = send_onboarding_request(
         &context.app,

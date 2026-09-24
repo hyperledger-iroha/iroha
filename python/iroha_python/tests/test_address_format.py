@@ -629,7 +629,7 @@ def test_query_envelope_rejects_invalid_aggregate_shape() -> None:
         ).to_dict()
 
 
-def test_query_transactions_routes_visible_aggregate_query() -> None:
+def test_query_transactions_routes_aggregate_query() -> None:
     session = RecordingSession()
     client = authenticated_query_client(session)
     aggregate = AggregateSpec(
@@ -637,11 +637,11 @@ def test_query_transactions_routes_visible_aggregate_query() -> None:
         metrics=[AggregateMetric("transactions", AggregateFn.COUNT)],
     )
 
-    client.query_transactions(aggregate=aggregate, visible=True)
+    client.query_transactions(aggregate=aggregate)
 
     call = session.calls[0]
     assert call["method"] == "POST"
-    assert call["url"] == "https://torii.example/v1/transactions/visible/query"
+    assert call["url"] == "https://torii.example/v1/transactions/query"
     body = json.loads(call["data"].decode("utf-8"))
     assert body["aggregate"] == aggregate.to_dict()
 

@@ -375,14 +375,13 @@ fn tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool() 
         Some(1),
         &version,
         false,
-        ProtocolEra::Modern,
     );
     let exact = bounded_json_value_len(&expected, usize::MAX).expect("one decorated tool");
     Arc::get_mut(&mut app)
         .expect("exclusive fixture")
         .mcp
         .max_request_bytes = exact;
-    let page = handle_tools_list(id.clone(), &app, &Map::new(), ProtocolEra::Modern);
+    let page = handle_tools_list(id.clone(), &app, &Map::new());
     assert_eq!(
         page, expected,
         "an exact-boundary descriptor must be admitted with its cursor"
@@ -397,7 +396,7 @@ fn tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool() 
         .expect("exclusive fixture")
         .mcp
         .max_request_bytes = exact - 1;
-    let rejected = handle_tools_list(id, &app, &Map::new(), ProtocolEra::Modern);
+    let rejected = handle_tools_list(id, &app, &Map::new());
     assert_eq!(
         rejected
             .pointer("/error/data/error_code")
@@ -429,38 +428,25 @@ fn tool_batch_rate_cost_matches_nested_dispatch_count() {
         jsonrpc_dispatch_cost(&norito::json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "ping"
+            "method": "server/discover"
         })),
         1
     );
 }
 
 #[test]
-fn native_early_transport_errors_omit_an_unreadable_request_id() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        protocol::HEADER_PROTOCOL_VERSION,
-        HeaderValue::from_static(protocol::MODERN_PROTOCOL_VERSION),
-    );
-    let mut native = jsonrpc_request_timeout();
-    adapt_transport_error_for_headers(&headers, &mut native);
-    assert!(native.get("id").is_none());
+fn stateless_early_transport_errors_omit_an_unreadable_request_id() {
+    let mut error = jsonrpc_request_timeout();
+    adapt_transport_error(&mut error);
+    assert!(error.get("id").is_none());
     assert_eq!(
-        native.pointer("/error/code").and_then(Value::as_i64),
+        error.pointer("/error/code").and_then(Value::as_i64),
         Some(MODERN_IROHA_REQUEST_TIMEOUT)
-    );
-
-    let mut legacy = jsonrpc_request_timeout();
-    adapt_transport_error_for_headers(&HeaderMap::new(), &mut legacy);
-    assert!(legacy.get("id").is_some_and(Value::is_null));
-    assert_eq!(
-        legacy.pointer("/error/code").and_then(Value::as_i64),
-        Some(MCP_REQUEST_TIMEOUT)
     );
 }
 
 #[test]
-fn native_batch_results_remap_legacy_application_error_types() {
+fn stateless_batch_results_remap_internal_application_error_types() {
     let mut response = norito::json!({
         "jsonrpc": "2.0",
         "id": "batch",
@@ -509,48 +495,6 @@ fn bounded_json_array_rejects_before_retaining_an_over_budget_value() {
         Err(BoundedJsonError::BodyTooLarge)
     );
     assert_eq!(values.into_values(), vec![Value::String("abc".to_owned())]);
-}
-
-#[tokio::test]
-async fn bounded_jsonrpc_response_falls_back_to_typed_limit_error() {
-    use http_body_util::BodyExt as _;
-
-    let response = bounded_jsonrpc_http_response(
-        jsonrpc_result_response(
-            Some(Value::from(7_u64)),
-            norito::json!({ "body": ("x".repeat(512)) }),
-        ),
-        128,
-    );
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL),
-        Some(&HeaderValue::from_static("private, no-store"))
-    );
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("fixed fallback body")
-        .to_bytes();
-    assert!(bytes.len() <= 128, "fallback exceeded configured cap");
-    let payload: Value = json::from_slice(&bytes).expect("typed JSON-RPC fallback");
-    assert_eq!(payload.get("id").and_then(Value::as_u64), Some(7));
-    assert_eq!(
-        payload
-            .get("error")
-            .and_then(|error| error.get("code"))
-            .and_then(Value::as_i64),
-        Some(MCP_RESPONSE_TOO_LARGE)
-    );
-    assert_eq!(
-        payload
-            .get("error")
-            .and_then(|error| error.get("data"))
-            .and_then(|data| data.get("error_code"))
-            .and_then(Value::as_str),
-        Some(MCP_RESPONSE_TOO_LARGE_CODE)
-    );
 }
 
 #[tokio::test]

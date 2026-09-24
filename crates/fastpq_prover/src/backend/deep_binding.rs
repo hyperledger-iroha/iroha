@@ -21,7 +21,7 @@ use super::{
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1 as F};
 
 /// Complete protocol identity; every fixed geometry field is also in the context.
-pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair:ood604:components606:lambda-powers:trace-shift2:quotient-shift1:arity16-16-8-8-4:terminal128:q64:c74:v1";
+pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair:ood604:components606:lambda-powers:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q64:c74:v1";
 const MAX_STATEMENT_BYTES: usize = 240 * 1024;
 const OOD_VALUES: usize = 2 * COMMITTED_COLUMN_COUNT + 2;
 

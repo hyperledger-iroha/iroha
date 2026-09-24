@@ -8,7 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -997,6 +999,27 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(value["errno_name"], "ENOSPC")
         self.assertFalse(value["automatic_replay"])
         self.assertEqual(popen.call_count, 1)
+
+    def test_remote_ssh_failure_reports_phase_exit_and_private_path_once(self):
+        output = self.root / "remote"
+        child = [sys.executable, "-c",
+                 "import sys; sys.stderr.write('private-secret\\n'); sys.exit(255)"]
+        printed = io.StringIO()
+        with mock.patch.object(retry.subprocess, "Popen", wraps=subprocess.Popen) as popen, \
+             contextlib.redirect_stdout(printed):
+            with self.assertRaises(retry.RetryError):
+                retry.remote_command(child, b"", output, "native-retry")
+        events = [json.loads(line) for line in printed.getvalue().splitlines()]
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual([(event["phase"], event["status"]) for event in events],
+                         [("native-retry", "started"), ("native-retry", "failed")])
+        self.assertEqual(events[-1]["exit_code"], 255)
+        self.assertEqual(events[-1]["private_log"], str(output))
+        self.assertFalse(events[-1]["automatic_replay"])
+        self.assertNotIn("private-secret", printed.getvalue())
+        self.assertEqual((output / "stderr").read_bytes(), b"private-secret\n")
+        self.assertEqual(stat.S_IMODE((output / "stderr").stat().st_mode), 0o600)
+        self.assertEqual(json.loads((output / "result.json").read_bytes())["exit_code"], 255)
 
     def test_future_import_module_payload_does_not_run_cli_main(self):
         source = b'from __future__ import annotations\ndef evaluate(value): return value\nif __name__ == "__main__": raise AssertionError("CLI main")\n'

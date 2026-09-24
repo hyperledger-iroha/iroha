@@ -3643,7 +3643,7 @@ async fn block_proof_handler_emits_norito() {
     for (index, entry) in block.network_entrypoints().enumerate() {
         let entry_hash = entry.hash();
         let entry_hex = hex::encode(entry_hash.as_ref());
-        let resp = super::handler_block_proof(
+        let resp = super::block_proof_response(
             State(Arc::clone(&app)),
             axum::extract::Path((1, entry_hex)),
         )
@@ -3727,7 +3727,7 @@ fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
             u64::try_from(expected_wire.len()).unwrap()
         );
         let response =
-            super::handler_ledger_executed_block_wire(State(app), axum::extract::Path(1))
+            super::ledger_executed_block_wire_response(State(app), axum::extract::Path(1))
                 .await
                 .expect("finalized block wire");
         assert_eq!(response.status(), StatusCode::OK);
@@ -3760,7 +3760,7 @@ fn executed_block_wire_handler_rejects_missing_and_unfinalized_heights() {
         let (staged, _) = make_signed_block(1, None);
         store_block(&app, staged);
         for height in [1_u64, 2] {
-            let error = super::handler_ledger_executed_block_wire(
+            let error = super::ledger_executed_block_wire_response(
                 State(app.clone()),
                 axum::extract::Path(height),
             )
@@ -3769,7 +3769,7 @@ fn executed_block_wire_handler_rejects_missing_and_unfinalized_heights() {
             assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
         }
         let error =
-            super::handler_ledger_executed_block_wire(State(app.clone()), axum::extract::Path(0))
+            super::ledger_executed_block_wire_response(State(app.clone()), axum::extract::Path(0))
                 .await
                 .expect_err("zero height must fail");
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
@@ -3781,18 +3781,19 @@ fn executed_block_wire_handler_rejects_missing_and_unfinalized_heights() {
             .spawn(move || {
                 for height in [1_u64, 2] {
                     let error =
-                        futures::executor::block_on(super::handler_ledger_executed_block_wire(
+                        futures::executor::block_on(super::ledger_executed_block_wire_response(
                             State(small_stack_app.clone()),
                             axum::extract::Path(height),
                         ))
                         .expect_err("small-stack staged or missing block must fail");
                     assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
                 }
-                let error = futures::executor::block_on(super::handler_ledger_executed_block_wire(
-                    State(small_stack_app),
-                    axum::extract::Path(0),
-                ))
-                .expect_err("small-stack zero height must fail");
+                let error =
+                    futures::executor::block_on(super::ledger_executed_block_wire_response(
+                        State(small_stack_app),
+                        axum::extract::Path(0),
+                    ))
+                    .expect_err("small-stack zero height must fail");
                 assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
             })
             .expect("spawn small-stack executed-block handler caller");
@@ -3813,7 +3814,7 @@ fn executed_block_wire_handler_fails_closed_on_hash_and_execution_shape_drift() 
         ));
         record_committed_block_hash_for_test(&mismatched, header, other_hash);
         let error =
-            super::handler_ledger_executed_block_wire(State(mismatched), axum::extract::Path(1))
+            super::ledger_executed_block_wire_response(State(mismatched), axum::extract::Path(1))
                 .await
                 .expect_err("state/Kura hash drift must fail");
         assert_eq!(
@@ -3827,7 +3828,7 @@ fn executed_block_wire_handler_fails_closed_on_hash_and_execution_shape_drift() 
         let block_hash = store_block(&resultless, block);
         record_committed_block_hash_for_test(&resultless, header, block_hash);
         let error =
-            super::handler_ledger_executed_block_wire(State(resultless), axum::extract::Path(1))
+            super::ledger_executed_block_wire_response(State(resultless), axum::extract::Path(1))
                 .await
                 .expect_err("resultless proposal must not be exposed as executed wire");
         assert_eq!(
@@ -3923,3 +3924,147 @@ include!("part_5b_sccp_bundle.rs");
 
 #[cfg(feature = "connect")]
 include!("part_5_threshold_key_lifecycle.rs");
+
+#[tokio::test]
+async fn full_ledger_carrier_authentication_precedes_height_or_hash_lookup() {
+    let app = mk_app_state_for_tests();
+    let wire = super::handler_ledger_executed_block_wire(
+        State(Arc::clone(&app)),
+        axum::extract::Path(0),
+        HeaderMap::new(),
+        Method::GET,
+        "/v1/ledger/block/0".parse().unwrap(),
+    )
+    .await
+    .expect_err("unsigned request cannot inspect height validity");
+    assert_eq!(wire.into_response().status(), StatusCode::UNAUTHORIZED);
+    let proof = super::handler_block_proof(
+        State(app),
+        axum::extract::Path((0, "invalid-hash".to_owned())),
+        HeaderMap::new(),
+        Method::GET,
+        "/v1/ledger/block/0/proof/invalid-hash".parse().unwrap(),
+    )
+    .await
+    .expect_err("unsigned request cannot inspect proof selectors");
+    assert_eq!(proof.into_response().status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn full_ledger_carrier_rejects_account_and_dataspace_grants_and_rechecks_revocation() {
+    use iroha_executor_data_model::permission::query::CanReadAccountData;
+    let key = checked_torii_test_ed25519_keypair(0xc4, "full carrier caller");
+    let account = AccountId::new(key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let uri: Uri = "/v1/ledger/block/1".parse().unwrap();
+    let authenticate = || {
+        let headers = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &account,
+            &key,
+            &Method::GET,
+            &uri,
+            &[],
+        );
+        super::authenticate_full_ledger_carrier_reader(&app, &headers, &Method::GET, &uri)
+    };
+    assert!(authenticate().is_err());
+    grant_account_permission_for_test(
+        &app,
+        &account,
+        CanReadAccountData {
+            account: account.clone(),
+        }
+        .into(),
+    );
+    assert!(
+        authenticate().is_err(),
+        "one account does not authorize unrelated outputs"
+    );
+    grant_account_permission_for_test(
+        &app,
+        &account,
+        CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(2),
+        }
+        .into(),
+    );
+    assert!(
+        authenticate().is_err(),
+        "one dataspace does not authorize a mixed carrier"
+    );
+    let permission: Permission = CanReadAllLedgerData.into();
+    grant_account_permission_for_test(&app, &account, permission.clone());
+    assert_eq!(authenticate().unwrap(), account);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    assert!(
+        tx.world_mut_for_testing()
+            .remove_account_permission(&account, &permission)
+    );
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    assert!(
+        authenticate().is_err(),
+        "committed revocation applies to the next read"
+    );
+}
+
+#[test]
+fn full_ledger_carrier_rejects_foreign_network_and_changed_path() {
+    let uri: Uri = "/v1/ledger/block/1".parse().unwrap();
+    let (app, headers) = foreign_network_signed_app_fixture(&Method::GET, &uri, &[], 0xc5, 0xc7);
+    let foreign_key = checked_torii_test_ed25519_keypair(0xc5, "foreign carrier caller");
+    let foreign_account = AccountId::new(foreign_key.public_key().clone());
+    grant_account_permission_for_test(&app, &foreign_account, CanReadAllLedgerData.into());
+    assert!(
+        super::authenticate_full_ledger_carrier_reader(&app, &headers, &Method::GET, &uri).is_err()
+    );
+    let key = checked_torii_test_ed25519_keypair(0xc6, "bound carrier request");
+    let account = AccountId::new(key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    grant_account_permission_for_test(&app, &account, CanReadAllLedgerData.into());
+    let headers = signed_network_app_headers(
+        app.state.network_id_ref(),
+        &account,
+        &key,
+        &Method::GET,
+        &uri,
+        &[],
+    );
+    let altered: Uri = "/v1/ledger/block/2".parse().unwrap();
+    assert!(
+        super::authenticate_full_ledger_carrier_reader(&app, &headers, &Method::GET, &altered)
+            .is_err()
+    );
+}
+
+#[test]
+fn full_ledger_carrier_honors_exact_role_and_role_revocation() {
+    use iroha_data_model::role::{Role, RoleId};
+    let key = checked_torii_test_ed25519_keypair(0xc8, "role-bound carrier reader");
+    let account = AccountId::new(key.public_key().clone());
+    let role_id: RoleId = "full_carrier_reader".parse().unwrap();
+    let role = Role::new(role_id.clone(), account.clone())
+        .add_permission(CanReadAllLedgerData)
+        .build(&account);
+    let mut world = World::with_assets_and_roles(
+        [],
+        [Account::new(account.clone()).build(&account)],
+        [],
+        [],
+        [],
+        [role],
+    );
+    world.grant_role_for_tests(account.clone(), role_id);
+    let app = mk_app_state_for_tests_with_world(world);
+    assert!(super::require_full_ledger_carrier_permission(&app, &account).is_ok());
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing().remove_account_roles(&account);
+    tx.apply();
+    block.commit_world_overlay_for_testing().unwrap();
+    assert!(super::require_full_ledger_carrier_permission(&app, &account).is_err());
+}

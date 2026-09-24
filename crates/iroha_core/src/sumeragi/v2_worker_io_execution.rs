@@ -892,6 +892,10 @@ pub(crate) struct DeferredMergeSidecarWork {
 }
 impl DeferredMergeSidecarWork {
     /// Exact executor work identifier owning this deferral.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) const fn work_id(&self) -> EffectWorkId {
         self.work_id
     }
@@ -904,6 +908,10 @@ impl DeferredMergeSidecarWork {
         self.subject
     }
     /// Complete compact reference recovered from the durable body.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) const fn reference(&self) -> &CertifiedMergeLedgerReference {
         &self.reference
     }
@@ -2339,6 +2347,10 @@ impl PendingExactFanout {
                 .chain(&candidate.targets)
                 .all(|target| matches!(&target.route, ExactTargetRoute::Reply(_)))
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     fn is_certified_sidecar_chunk_fanout(&self) -> bool {
         matches!(
             self.messages.as_slice(),

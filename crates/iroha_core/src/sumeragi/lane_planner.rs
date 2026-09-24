@@ -2024,6 +2024,8 @@ pub(crate) struct AutonomousLaneReservationSlotPlan {
 /// plan. Keeping the committee geometry beside the exact queue scope prevents
 /// Queue from accepting an unbound validator count or proposer bit merely to
 /// manufacture a formal projection.
+// TODO: connect autonomous reservation planning to the native lane producer.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 #[allow(missing_copy_implementations)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct AutonomousLaneReservationSelectionAuthorization {
@@ -2032,6 +2034,7 @@ pub(crate) struct AutonomousLaneReservationSelectionAuthorization {
     validator_count: u8,
     producer: u128,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 impl AutonomousLaneReservationSelectionAuthorization {
     /// Return the exact queue scope frozen by the canonical slot plan.
     #[must_use]
@@ -2075,6 +2078,7 @@ impl AutonomousLaneReservationSlotPlan {
     /// Returns [`AutonomousLaneReservationSlotPlanError::InvalidQuorum`] if a
     /// caller somehow presents a slot whose canonical committee/author
     /// invariants no longer hold.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn selection_authorization(
         &self,
     ) -> Result<
@@ -2106,6 +2110,7 @@ impl AutonomousLaneReservationSlotPlan {
     }
     /// Convert the plan into the exact scope accepted by the durable queue.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) fn reservation_scope(&self) -> LaneQueueReservationScopeV1 {
         LaneQueueReservationScopeV1 {
             lane_id: self.lane_id,
@@ -2120,6 +2125,7 @@ impl AutonomousLaneReservationSlotPlan {
     }
 }
 /// Failure while deriving an autonomous queue-reservation slot.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub(crate) enum AutonomousLaneReservationSlotPlanError {
     /// The supplied global context is structurally invalid.
@@ -2206,6 +2212,7 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
 
 impl AutonomousLaneReservationSlotPlanError {
     /// Whether a later producer tick can succeed after State or Kura advances.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
     pub(crate) const fn is_retryable_after_state_or_kura_progress(&self) -> bool {
         matches!(
             self,
@@ -2345,6 +2352,7 @@ fn v2_lane_context_mode_tag(context: &wire::HeightContext) -> String {
         context.epoch
     )
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn autonomous_lane_predecessor_blocked(
     state: &State,
     lane_id: LaneId,
@@ -2355,6 +2363,7 @@ fn autonomous_lane_predecessor_blocked(
     Ok(raw.contains_key(&(lane_id, dataspace_id))
         || certified.contains_key(&(lane_id, dataspace_id)))
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn validate_autonomous_lane_reservation_eligibility(
     context_height: u64,
     committed_height: u64,
@@ -2383,6 +2392,7 @@ fn validate_autonomous_lane_reservation_eligibility(
     }
     Ok(())
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn autonomous_lane_reservation_committee(
     state: &State,
     context: &wire::HeightContext,
@@ -2403,6 +2413,7 @@ fn autonomous_lane_reservation_committee(
     })
 }
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 fn assemble_autonomous_lane_reservation_slot(
     context: &wire::HeightContext,
     lane_id: LaneId,
@@ -2500,6 +2511,7 @@ fn assemble_autonomous_lane_reservation_slot(
 /// Returns [`AutonomousLaneReservationSlotPlanError`] when the context is
 /// stale, the route/incarnation/committee is not authoritative, the predecessor
 /// is unavailable, or the observed state changes while the plan is assembled.
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]
 pub(crate) fn plan_autonomous_lane_reservation_slot(
     state: &State,
     kura: &Kura,
@@ -2648,6 +2660,10 @@ pub(crate) fn prepare_v2_lane_payload_plan(
 /// case the authenticated canonical block body is immutable planning input;
 /// rejecting its exact successor would turn local recovery lag into consensus
 /// divergence.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native lane payload validation")
+)]
 pub(crate) fn prepare_v2_lane_payload_validation_plan(
     state: &State,
     kura: &Kura,

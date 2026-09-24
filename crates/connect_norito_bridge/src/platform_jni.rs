@@ -16,7 +16,9 @@ use iroha_data_model::{
     },
 };
 mod account_address;
+mod committed_transaction_inclusion;
 mod gpu;
+mod kagemusha_testnet_observation;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");

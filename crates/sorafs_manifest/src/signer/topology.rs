@@ -69,7 +69,19 @@ impl From<SignerReceiptErrorV1> for SignerTopologyReceiptErrorV1 {
 type Error = SignerTopologyReceiptErrorV1;
 
 /// Exact topology request admitted under one immutable custody identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_manifest::signer::topology::SignerTopologyRequestV1")]
 pub struct SignerTopologyRequestV1 {
     /// Independently assigned operation id, never taken from a candidate receipt.

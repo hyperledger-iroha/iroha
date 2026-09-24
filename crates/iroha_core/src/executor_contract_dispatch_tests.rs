@@ -1222,3 +1222,106 @@ fn migrate_fails_on_invalid_bytecode() {
     // Ensure executor remains unchanged
     matches!(executor, super::Executor::Initial);
 }
+
+#[test]
+fn native_exact_transaction_read_requires_source_account_grant_and_revalidates_revocation() {
+    use iroha_data_model::query::{
+        CommittedTransaction, CommittedTxFilters, Query,
+        dsl::{CommittedTxPredicate as P, CompoundPredicate, SelectorTuple},
+        parameters::QueryParams,
+        transaction::prelude::FindTransactions,
+    };
+    let transaction_hash = HashOf::from_untyped_unchecked(Hash::new(b"exact-read-auth-fixture"));
+    let exact = CompoundPredicate::from_filters(CommittedTxFilters {
+        authority_eq: Some(BOB_ID.clone()),
+        entry_eq: Some(transaction_hash),
+        ..CommittedTxFilters::default()
+    });
+    let query = |predicate: CompoundPredicate<CommittedTransaction>| {
+        let query = FindTransactions::new();
+        QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: query.dyn_encode(),
+            item: query.query_item_kind(),
+            predicate_bytes: predicate.encode(),
+            selector_bytes: SelectorTuple::<CommittedTransaction>::default().encode(),
+            params: QueryParams::default(),
+        })
+    };
+    let request = query(exact.clone());
+    let mut world = World::with(
+        [],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [],
+    );
+    let executor = super::Executor::Initial;
+    validate_native_query_with_world(&executor, &world, &BOB_ID, &request)
+        .expect("source may read its own exact transaction");
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect_err("hash possession does not grant foreign transaction access");
+    world.account_permissions.insert(
+        ALICE_ID.clone(),
+        BTreeSet::from([
+            executor_permission::query::CanReadAccountData {
+                account: ALICE_ID.clone(),
+            }
+            .into(),
+            Permission::new("CanReadAccountData".to_owned(), Json::new(())),
+        ]),
+    );
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect_err("wrong target and malformed grants do not authorize recovery");
+    let exact_grant: Permission = executor_permission::query::CanReadAccountData {
+        account: BOB_ID.clone(),
+    }
+    .into();
+    world
+        .account_permissions
+        .insert(ALICE_ID.clone(), BTreeSet::from([exact_grant.clone()]));
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect("exact source-account delegation authorizes recovery");
+    for predicate in [
+        CompoundPredicate::PASS,
+        CompoundPredicate::from_filters(CommittedTxFilters {
+            entry_eq: Some(transaction_hash),
+            ..CommittedTxFilters::default()
+        }),
+        CompoundPredicate::from_committed_tx_predicate(P::Or(vec![
+            P::AuthorityEq(BOB_ID.clone()),
+            P::EntryEq(transaction_hash),
+        ])),
+        CompoundPredicate::from_committed_tx_predicate(P::Not(Box::new(P::AuthorityEq(
+            BOB_ID.clone(),
+        )))),
+    ] {
+        validate_native_query_with_world(&executor, &world, &ALICE_ID, &query(predicate))
+            .expect_err("account delegation does not authorize inventory, hash-only, OR or NOT");
+    }
+    assert!(remove_committed_storage_entry(&world.account_permissions, ALICE_ID.clone()).is_some());
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect_err("revocation is effective before another signed recovery query");
+    let role_id: RoleId = "exact_transaction_reader".parse().expect("role id");
+    world.roles.insert(
+        role_id.clone(),
+        Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([exact_grant]),
+            permission_epochs: BTreeMap::new(),
+        },
+    );
+    world.grant_role_for_tests(ALICE_ID.clone(), role_id.clone());
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect("assigned exact account-read role authorizes recovery");
+    assert!(
+        remove_committed_storage_entry(
+            &world.account_roles,
+            crate::role::RoleIdWithOwner::new(ALICE_ID.clone(), role_id)
+        )
+        .is_some()
+    );
+    validate_native_query_with_world(&executor, &world, &ALICE_ID, &request)
+        .expect_err("role revocation is effective");
+}

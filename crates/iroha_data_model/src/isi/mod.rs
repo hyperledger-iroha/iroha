@@ -359,6 +359,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenAuthorit
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsTopologyAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MatchSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::MaintainSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt);
@@ -521,6 +522,8 @@ impl_direct_instruction_box!(crate::isi::governance::SubmitParliamentLifecycleTr
 impl_direct_instruction_box!(crate::isi::governance::CastZkBallot);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::CastPlainBallot);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::UpdatePlainConviction);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::SlashGovernanceLock);
 #[cfg(feature = "governance")]
@@ -2777,14 +2780,15 @@ pub mod prelude {
             MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
-            MutateSorafsStreamTokenCustody, PublishSorafsPopRevocationList,
-            RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
-            RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
-            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsModerationJurorEligibility,
-            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-            ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
-            ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
-            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,
+            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
+            RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
+            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,

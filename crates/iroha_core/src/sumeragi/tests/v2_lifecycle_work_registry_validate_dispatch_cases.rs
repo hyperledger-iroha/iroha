@@ -1747,6 +1747,73 @@ fn waiting_durable_validate_fixture_from_store(
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn superseded_waiting_validate_cancels_exact_row_and_carrier_durably() {
+    let WaitingDurableValidateFixture {
+        fixture,
+        _directory: _,
+        store: _,
+        durable: _,
+        mut coordinator,
+        mut holder,
+        dispatch,
+    } = waiting_durable_validate_fixture(0xD8);
+    let ledger_directory = TempDir::new().unwrap();
+    coordinator
+        .attach_empty_test_ledger(ledger_directory.path())
+        .unwrap();
+    let ordinal = fixture.lease.ordinal();
+    assert!(matches!(
+        coordinator.records[&ordinal].state,
+        LifecycleState::Waiting(_)
+    ));
+    assert!(holder
+        .registry_for_test()
+        .exactly_matches_waiting_validate_dispatch(&dispatch));
+
+    coordinator
+        .cancel_superseded_durable_validate_dispatch(&mut holder, &dispatch)
+        .expect("superseded unexecuted proposal retires its original Waiting row");
+    assert_eq!(
+        coordinator.records[&ordinal].state,
+        LifecycleState::Terminal(TerminalOutcome::Cancelled)
+    );
+    assert!(!holder.registry_for_test().entries.contains_key(&fixture.address));
+    let durable_ledger = coordinator.ledger_store.as_ref().unwrap().load().unwrap();
+    assert_eq!(
+        durable_ledger,
+        super::super::LifecycleLedgerV1::from_coordinator(&coordinator).unwrap()
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn superseded_waiting_validate_preserves_owner_on_ledger_failure() {
+    let WaitingDurableValidateFixture {
+        fixture,
+        _directory: _,
+        store: _,
+        durable: _,
+        mut coordinator,
+        mut holder,
+        dispatch,
+    } = waiting_durable_validate_fixture(0xD9);
+    let ledger_directory = TempDir::new().unwrap();
+    coordinator
+        .attach_empty_test_ledger(ledger_directory.path())
+        .unwrap();
+    let before = coordinator.records[&fixture.lease.ordinal()].clone();
+    coordinator.redirect_test_ledger_to_missing_parent(ledger_directory.path());
+    assert!(coordinator
+        .cancel_superseded_durable_validate_dispatch(&mut holder, &dispatch)
+        .is_err());
+    assert_eq!(coordinator.records[&fixture.lease.ordinal()], before);
+    assert!(holder
+        .registry_for_test()
+        .exactly_matches_waiting_validate_dispatch(&dispatch));
+}
+
+#[cfg(feature = "bls")]
 #[derive(Clone, Copy)]
 enum ReadyDurableValidateFixtureOutcome {
     Validated,

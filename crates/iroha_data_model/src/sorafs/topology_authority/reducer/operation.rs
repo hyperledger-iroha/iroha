@@ -169,10 +169,10 @@ fn complete<L: TopologyIndexedReadV1 + ?Sized>(
     {
         return Err(Error::Conflict.into());
     }
-    let outcome = TopologyOutcomeV1::Completed {
+    let outcome = TopologyOutcomeV1::Completed(TopologyCompletionV1 {
         commitment: request.commitment,
         signatures_digest: request.signatures_digest,
-    };
+    });
     if old.outcome == outcome {
         return Ok(None);
     } // Observation only; fresh Check still gates release.

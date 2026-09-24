@@ -183,6 +183,91 @@ class HttpClientTransport private constructor(
         }
     }
 
+    /**
+     * Execute one wallet-signed, nonce-bearing native selective query. The caller
+     * must create [signedQuery] with [CommittedTransactionInclusionBridge] and
+     * verify its returned row against independently pinned finality before use.
+     * This POST is one-shot: transport retries and redirects are forbidden.
+     */
+    fun postSignedCommittedTransactionQuery(signedQuery: ByteArray): CompletableFuture<ByteArray> {
+        require(signedQuery.isNotEmpty() && signedQuery.size <= 16 * 1024) {
+            "signed committed-transaction query exceeds its native bound"
+        }
+        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "signed committed-transaction query requires HTTPS"
+        }
+        val ownedHeaders = listOf("Accept", "Content-Type", "Accept-Encoding", "Content-Encoding", "Cache-Control")
+        require(config.defaultHeaders().keys.none { candidate ->
+            ownedHeaders.any { it.equals(candidate, ignoreCase = true) }
+        }) { "selective query transport headers must not be overridden" }
+        requireCanonicalHeadersUnset()
+        val target = resolvePath("/v1/query")
+        val request = TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .setBody(signedQuery.copyOf())
+            .addHeader("Content-Type", APPLICATION_NORITO)
+            .addHeader("Accept", APPLICATION_NORITO)
+            .addHeader("Accept-Encoding", "identity")
+            .addHeader("Cache-Control", "no-store")
+            .setMaximumResponseBytes(32L * 1024 * 1024)
+            .setTimeout(config.requestTimeout())
+            .apply {
+                for ((name, value) in config.defaultHeaders()) addHeader(name, value)
+            }
+            .build()
+        TransportSecurity.requireHttpRequestAllowed(
+            "signed committed-transaction query", config.baseUri(), target,
+            config.defaultHeaders(), signedQuery,
+        )
+        return fetchExactNoritoBytes(
+            request, "signed committed-transaction query",
+            requireIdentityEncoding = true,
+            forbidRejectCodeHeader = true,
+            allowExplicitIdentityEncoding = true,
+            requireExactResponseProvenance = true,
+        )
+    }
+
+    /**
+     * Fetch one untrusted bridge bundle for a checkpoint-inclusive, consecutive
+     * finality scan. The caller must bound the whole chain to 4096 bundles and
+     * 16 MiB, locate the candidate hash, then invoke the native verifier.
+     */
+    fun getBridgeFinalityBundleJson(height: Long): CompletableFuture<ByteArray> {
+        require(height > 0) { "bridge finality height must be positive" }
+        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "bridge finality bundle fetch requires HTTPS"
+        }
+        val ownedHeaders = listOf("Accept", "Accept-Encoding", "Cache-Control")
+        require(config.defaultHeaders().keys.none { candidate ->
+            ownedHeaders.any { it.equals(candidate, ignoreCase = true) }
+        }) { "bridge finality transport headers must not be overridden" }
+        requireCanonicalHeadersUnset()
+        val request = TransportRequest.builder()
+            .setUri(resolvePath("/v1/bridge/finality/bundle/$height"))
+            .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .addHeader("Accept-Encoding", "identity")
+            .addHeader("Cache-Control", "no-store")
+            .setMaximumResponseBytes(4L * 1024 * 1024)
+            .setTimeout(config.requestTimeout())
+            .apply { for ((name, value) in config.defaultHeaders()) addHeader(name, value) }
+            .build()
+        return executeResponse(request, "bridge finality bundle") { response ->
+            requireExactSignedResponseProvenance(request, response, "bridge finality bundle")
+            requireExactJsonResponse(response, "bridge finality bundle")
+            requireAbsentOrIdentityEncoding(response.headers, "bridge finality bundle")
+            val body = response.body
+            require(body.isNotEmpty() && body.size.toLong() <= requireNotNull(request.maximumResponseBytes)) {
+                "bridge finality bundle exceeds its response bound"
+            }
+            requireExactOptionalContentLength(response.headers, body.size, "bridge finality bundle")
+            notifyResponse(request, ClientResponse(response.statusCode, body, response.message, null, extractRejectCode(response)))
+            body.copyOf()
+        }
+    }
+
     override fun submitTransactionEntrypointJson(encodedVersionedEntrypointJson: ByteArray): CompletableFuture<ClientResponse> {
         val request = ToriiRequestBuilder.buildSubmitEntrypointJsonRequest(
             config.baseUri(),
@@ -3099,8 +3184,8 @@ class HttpClientTransport private constructor(
             expectedNetworkId: NetworkId,
         ): MultisigResponse {
             check(response.ok) { "multisig response.ok must be true" }
-            check(request.feePayment.hasSamePayerAndGasBound(response.feePayment)) {
-                "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
+            check(request.feePayment == response.feePayment) {
+                "multisig response fee_payment changed the exact requested fee intent"
             }
             request.creationTimeMs?.let { expected ->
                 check(response.creationTimeMs == expected) {
@@ -3116,15 +3201,14 @@ class HttpClientTransport private constructor(
             ) {
                 "multisig response proposal hash does not match the exact requested instructions"
             }
-            if (response.submitted) return response
-
             val requestedMultisigAccount = requestPayload["multisig_account_id"] as? String
                 ?: throw IllegalStateException(
-                    "unsigned multisig alias drafts require a caller-trusted resolved account",
+                    "multisig aliases require a caller-trusted resolved account",
                 )
             check(response.resolvedMultisigAccountId == requestedMultisigAccount) {
                 "multisig response resolved account does not match the requested account"
             }
+            if (response.submitted) return response
             val transactionBytes = Base64.getDecoder().decode(
                 checkNotNull(response.transactionPayloadB64) {
                     "unsigned multisig response omitted transaction_payload_b64"

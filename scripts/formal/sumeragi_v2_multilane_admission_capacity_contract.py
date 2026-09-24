@@ -274,9 +274,17 @@ BINDINGS = tuple(
 )
 
 # Existing registry bindings retain this owner's full persistence obligations.
-EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))
+NATIVE_CANDIDATE = "crates/iroha_core/src/sumeragi/v2_runner/native_candidate.rs"
+EXTRA_ITEMS = (
+    (TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR),
+    (RUNNER, "fn", "candidate_attachments"),
+    (RUNNER, "fn", "schedule_local_proposal"),
+    (NATIVE_CANDIDATE, "method", "NativeRunnerProcess::assemble_candidate"),
+    (CANDIDATE, "method", "V2CandidateAssembler::assemble_native"),
+    (CANDIDATE, "method", "NativeCandidateWork::prepare"),
+)
 SOURCE_RELATIVES = (
-    *(Path(p) for p in sorted({p for p, _, _, _ in BINDINGS})),
+    *(Path(p) for p in sorted({p for p, _, _, _ in BINDINGS} | {p for p, _, _ in EXTRA_ITEMS})),
     Path("scripts/formal/sumeragi_v2_multilane_admission_capacity_contract.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_admission_capacity_contract_test.py"),
 )
@@ -330,17 +338,52 @@ def validate_owners(root, models, errors, rust_binding_item):
     prefix = items.get("npos_effects_prefix", "")
     if any(token in prefix for token in ("penalty_actions", "finalized_global_beacon_pulse")):
         errors.append("Admission capacity evidence selection edits mandatory effects")
-    merge = items.get("candidate_attachments", "")
-    for token in (
-        "super::v2_candidate::candidate_economic_work_first(context.height)",
-        "&& effects.penalty_actions.is_empty() && queue_plan_admissions.is_empty()",
-        ".filter(|(_, entry, _)| entry.execution_batch.is_some())",
-        "if preferred_merge_entry.is_some() { effects.v2_evidence_admissions.clear(); }",
-        "let selected_merge_entry = if preferred_merge_entry.is_some() { preferred_merge_entry }",
-        "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
-    ):
-        if _code(token) not in merge:
-            errors.append(f"Admission capacity merge opportunity lost {token!r}")
+    # The sole economic source is the authenticated Native handoff. The former
+    # runner-side certified-merge selector is retired; priority and exact fitting
+    # belong to the existing assembler, which preserves mandatory NPoS effects.
+    native_relations = {
+        "NativeRunnerProcess::assemble_candidate": (
+            "self.poll_candidate()?", "if completed.owner == owner",
+            "return Ok(Some(completed.result))", "self.retain_candidate_source(assembly.source)",
+            "if self.candidate_job.is_some() { return Ok(None); }",
+            "let Some(decisions) = self.capture_decisions()? else { return Ok(None); }",
+            "decisions.with_recovered_sources(self.recovered_sources.clone())",
+            "let (send, receive) = mpsc::sync_channel(1)",
+            "assembler.assemble_native(CandidateRequest {", "work_provider: &decisions",
+            "output_guard: &guard", "if send.send(result).is_err()",
+            "guard.close_admission_for_restart()",
+        ),
+        "V2CandidateAssembler::assemble_native": (
+            "if !request.work_provider.belongs_to(request.state)",
+            "if request.attachments.certified_merge_entry.is_some() || request.attachments.certified_merge_carrier_header.is_some()",
+            "let source = request.work_provider.prepare_candidate()",
+            "let outcome = self.assemble(CandidateRequest {",
+            "work_provider: NativeCandidateWork(&source)",
+            "Ok(NativeCandidateAssembly { source, outcome })",
+        ),
+        "NativeCandidateWork::prepare": (
+            "LaneDecisionGroupPreparationV1::ObservationChanged",
+            "CandidateWorkDeferral::NativeLaneSource",
+            "if let Some(mut ready) = self.0.work.as_ref()",
+            "return ready.prepare(context, view, candidates)",
+            "if !candidates.is_empty()",
+            "(0..candidates.len()).collect()",
+        ),
+        "schedule_local_proposal": (
+            "let Some(assembly) = native.assemble_candidate(",
+            "proposal_state.defer_candidate_snapshot(owner, Instant::now())",
+            "native.retain_candidate_source(source)", "let assembly = outcome?",
+        ),
+    }
+    for symbol, relations in native_relations.items():
+        for token in relations:
+            if _code(token) not in items.get(symbol, ""):
+                errors.append(f"Admission capacity {symbol} lost Native custody relation {token!r}")
+    attachments = items.get("candidate_attachments", "")
+    for retired in ("preferred_merge_entry", "select_pending_certified_merge_entry_for_round",
+                    "v2_evidence_admissions.clear(", "penalty_actions.clear("):
+        if retired in attachments:
+            errors.append(f"Admission capacity attachments restored retired selection or erased effects: {retired}")
 
     def ordered(symbol, *relations):
         item = items.get(symbol, "")
@@ -355,8 +398,11 @@ def validate_owners(root, models, errors, rust_binding_item):
     ordered("V2CandidateAssembler::assemble", "let original_npos_effects =", "fit_evidence_prefix(",
             "let mut builder = self.prepare_block_builder(", "let (fitted, count) = fit_evidence_prefix(",
             "report.evidence_deferred =", "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()")
-    ordered("candidate_attachments", "let preferred_merge_entry =", "effects.v2_evidence_admissions.clear()",
-            "let npos_consensus_effects =", "let merge_selection =", "let selected_merge_entry =")
+    ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
+            "native.retain_candidate_source(source)", "let assembly = outcome?", "let candidate = match assembly")
+    ordered("NativeRunnerProcess::assemble_candidate", "self.poll_candidate()?", "if completed.owner == owner",
+            "self.retain_candidate_source(assembly.source)", "if self.candidate_job.is_some()",
+            "self.capture_decisions()?", "mpsc::sync_channel(1)", "assembler.assemble_native(CandidateRequest {")
     ordered("publish_authenticated_capacity", "capacity.check_payload_size(",
             "require_local_payload_capacity(capacity.layout, config)?", "slot.set(capacity)")
     ordered("run_inner", "terminal.verified_context(), &shared_config,)",

@@ -363,6 +363,7 @@ impl std::error::Error for SharedSoraFsProviderCacheError {
 }
 fn build_shared_sorafs_provider_cache(
     config: &Config,
+    network_id: &NetworkId,
 ) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
@@ -419,8 +420,12 @@ fn build_shared_sorafs_provider_cache(
         return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
     }
     let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-            .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
+            &admission_cfg.envelopes_dir,
+            *network_id.as_bytes(),
+            policy,
+        )
+        .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
     );
     let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
         discovery.replay_checkpoint_path.clone()
@@ -1179,7 +1184,7 @@ impl SumeragiRelayCapacityGeometry {
 pub(crate) enum SumeragiRelayTerminalOutcome {
     /// Ordinary ingress accepted or coalesced.
     Delivered,
-    /// Its authenticated reply authority retired before ingress succeeded.
+    /// Its authenticated reply authority or finalized height retired before ingress.
     Retired,
     /// Preparation or downstream semantic admission failed.
     Failed,
@@ -2977,6 +2982,7 @@ fn sumeragi_ingress_terminal_outcome<T>(
     use SumeragiRelayTerminalOutcome::{Delivered, Failed, Retired};
     match (disposition, reply_route_active) {
         (Accepted | Coalesced, _) => Some(Delivered),
+        (Stale(_), _) => Some(Retired),
         (Obsolete, _) | (Rejected(_), true) => Some(Failed),
         (Rejected(_), false) => Some(Retired),
         (Retry(_) | Closed(_) | FailStop(_), _) => None,
@@ -3033,7 +3039,7 @@ fn finish_sumeragi_ingress_attempt<T>(
             retention_guard,
             completion,
         },
-        Accepted | Coalesced | Obsolete | Rejected(_) => {
+        Accepted | Coalesced | Obsolete | Stale(_) | Rejected(_) => {
             unreachable!("terminal dispositions return before owned ingress handling")
         }
     }
@@ -5400,6 +5406,19 @@ mod network_relay_tests {
         let disposition = SumeragiIngressDisposition::<InboundBlockMessage>::Obsolete;
         assert_eq!(
             sumeragi_ingress_terminal_outcome(&disposition, true),
+            Some(SumeragiRelayTerminalOutcome::Failed)
+        );
+    }
+    #[test]
+    fn finalized_height_ingress_retires_held_release_without_masking_other_rejections() {
+        let stale = SumeragiIngressDisposition::Stale(());
+        assert_eq!(
+            sumeragi_ingress_terminal_outcome(&stale, true),
+            Some(SumeragiRelayTerminalOutcome::Retired)
+        );
+        let rejected = SumeragiIngressDisposition::Rejected(());
+        assert_eq!(
+            sumeragi_ingress_terminal_outcome(&rejected, true),
             Some(SumeragiRelayTerminalOutcome::Failed)
         );
     }
@@ -8146,6 +8165,7 @@ impl Iroha {
                 config.snapshot.store_dir.resolve_relative_path(),
                 &kura,
                 &configured_lane_manifests,
+                &config.nexus,
                 || live_query_store.clone(),
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
@@ -10159,7 +10179,7 @@ impl Iroha {
         let shared_sorafs_cache = if emergency_fast {
             None
         } else {
-            build_shared_sorafs_provider_cache(&config)
+            build_shared_sorafs_provider_cache(&config, state.network_id_ref())
                 .map_err(Report::new)
                 .change_context(StartError::StartTorii)?
         };

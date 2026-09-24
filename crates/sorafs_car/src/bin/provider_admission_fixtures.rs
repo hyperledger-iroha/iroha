@@ -17,7 +17,7 @@ use sorafs_manifest::{
     SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol,
     XorQuantity, chunker_registry, compute_advert_body_digest,
     compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
-    verify_advert_against_record, verify_revocation_signatures,
+    verify_advert_against_record, verify_envelope, verify_revocation_signatures,
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -38,6 +38,8 @@ const INTERMEDIATE_CERT: &[u8] = &[0x11, 0x22, 0x33, 0x44];
 const QUIC_REPORT: &[u8] = &[0x10, 0x20, 0x30];
 const COUNCIL_KEY_BYTES: [u8; 32] = [0x45; 32];
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
+// Synthetic fixture identity only; production tools require the exact genesis hash as input.
+const FIXTURE_NETWORK_ID: [u8; 32] = [0xA1; 32];
 const RETIRED_FIXTURE_NAMES: &[&str] = &[
     "proposal_legacy_v1.json",
     "proposal_legacy_v1.to",
@@ -127,6 +129,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         120,
         600,
         &council_key,
+        None,
     )?;
     let record_v1 = AdmissionRecord::new(envelope_v1.clone(), &council_policy)?;
     verify_advert_against_record(&advert_v1, &record_v1)?;
@@ -174,6 +177,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         220,
         900,
         &council_key,
+        Some(&record_v1),
     )?;
     let renewed_envelope_v1_digest = compute_envelope_digest(&renewed_envelope_v1)?;
     let renewal = ProviderAdmissionRenewalV1 {
@@ -228,6 +232,12 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
     )?;
     let mut revocation = ProviderAdmissionRevocationV1 {
         version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+        network_id: FIXTURE_NETWORK_ID,
+        policy_id: record_v1.envelope().policy_id,
+        policy_revision: record_v1.envelope().policy_revision,
+        policy_digest: record_v1.envelope().policy_digest,
+        transition_revision: record_v1.envelope().admission_revision + 1,
+        expected_current_event_digest: *record_v1.envelope_digest(),
         provider_id,
         envelope_digest: *record_v1.envelope_digest(),
         revoked_at: 970,
@@ -425,6 +435,7 @@ fn build_advert(
     };
     let mut advert = ProviderAdvertV1 {
         version: 1,
+        network_id: FIXTURE_NETWORK_ID,
         issued_at,
         expires_at: retention_epoch,
         body,
@@ -447,7 +458,18 @@ fn build_envelope(
     issued_at: u64,
     retention_epoch: u64,
     council_key: &SigningKey,
+    predecessor: Option<&AdmissionRecord>,
 ) -> Result<ProviderAdmissionEnvelopeV1, Box<dyn std::error::Error>> {
+    let admission_revision = match predecessor {
+        Some(record) => record
+            .envelope()
+            .admission_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "admission revision overflow")
+            })?,
+        None => 1,
+    };
     let proposal_digest = compute_proposal_digest(&proposal).map_err(|source| {
         ProviderAdmissionEnvelopeError::Serialization {
             context: "proposal",
@@ -462,6 +484,12 @@ fn build_envelope(
     })?;
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: 1,
+        network_id: FIXTURE_NETWORK_ID,
+        policy_id: [0xC1; 32],
+        policy_revision: 1,
+        policy_digest: [0xD1; 32],
+        admission_revision,
+        expected_current_event_digest: predecessor.map(|record| *record.envelope_digest()),
         proposal,
         proposal_digest,
         advert_body,
@@ -484,7 +512,7 @@ fn build_envelope(
         signature: signature.to_bytes().to_vec(),
     });
     let policy = ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)?;
-    AdmissionRecord::new(envelope.clone(), &policy)?;
+    verify_envelope(&envelope, &policy)?;
     Ok(envelope)
 }
 fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
@@ -539,6 +567,10 @@ fn build_proposal_summary(proposal: &ProviderAdmissionProposalV1) -> Map {
 }
 fn build_advert_summary(advert: &ProviderAdvertV1) -> Map {
     let mut map = Map::new();
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(hex_lower(advert.network_id)),
+    );
     map.insert("issued_at".into(), Value::from(advert.issued_at));
     map.insert("expires_at".into(), Value::from(advert.expires_at));
     map.insert(
@@ -578,6 +610,32 @@ fn build_envelope_summary(
     record: &AdmissionRecord,
 ) -> Result<Map, Box<dyn std::error::Error>> {
     let mut map = Map::new();
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(hex_lower(envelope.network_id)),
+    );
+    map.insert(
+        "policy_id_hex".into(),
+        Value::from(hex_lower(envelope.policy_id)),
+    );
+    map.insert(
+        "policy_revision".into(),
+        Value::from(envelope.policy_revision),
+    );
+    map.insert(
+        "policy_digest_hex".into(),
+        Value::from(hex_lower(envelope.policy_digest)),
+    );
+    map.insert(
+        "admission_revision".into(),
+        Value::from(envelope.admission_revision),
+    );
+    if let Some(predecessor) = envelope.expected_current_event_digest {
+        map.insert(
+            "expected_current_event_digest_hex".into(),
+            Value::from(hex_lower(predecessor)),
+        );
+    }
     let authorization_digest = compute_envelope_authorization_digest(envelope)?;
     map.insert(
         "proposal_digest_hex".into(),
@@ -619,6 +677,19 @@ fn build_renewal_summary(renewal: &ProviderAdmissionRenewalV1) -> Map {
         Value::from(hex_lower(renewal.previous_envelope_digest)),
     );
     map.insert(
+        "admission_revision".into(),
+        Value::from(renewal.envelope.admission_revision),
+    );
+    map.insert(
+        "expected_current_event_digest_hex".into(),
+        Value::from(hex_lower(
+            renewal
+                .envelope
+                .expected_current_event_digest
+                .expect("validated renewal has signed predecessor"),
+        )),
+    );
+    map.insert(
         "envelope_digest_hex".into(),
         Value::from(hex_lower(renewal.envelope_digest)),
     );
@@ -633,6 +704,30 @@ fn build_revocation_summary(
     revocation_digest: &[u8; 32],
 ) -> Map {
     let mut map = Map::new();
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(hex_lower(revocation.network_id)),
+    );
+    map.insert(
+        "policy_id_hex".into(),
+        Value::from(hex_lower(revocation.policy_id)),
+    );
+    map.insert(
+        "policy_revision".into(),
+        Value::from(revocation.policy_revision),
+    );
+    map.insert(
+        "policy_digest_hex".into(),
+        Value::from(hex_lower(revocation.policy_digest)),
+    );
+    map.insert(
+        "transition_revision".into(),
+        Value::from(revocation.transition_revision),
+    );
+    map.insert(
+        "expected_current_event_digest_hex".into(),
+        Value::from(hex_lower(revocation.expected_current_event_digest)),
+    );
     map.insert(
         "envelope_digest_hex".into(),
         Value::from(hex_lower(revocation.envelope_digest)),
@@ -656,6 +751,10 @@ fn build_metadata_summary(
     record: &AdmissionRecord,
 ) -> Result<Map, Box<dyn std::error::Error>> {
     let mut map = Map::new();
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(hex_lower(record.envelope().network_id)),
+    );
     let proposal_digest = compute_proposal_digest(proposal)?;
     map.insert(
         "proposal_digest_hex".into(),
@@ -976,19 +1075,19 @@ mod tests {
         let summary = generate_fixtures(&dir_path).expect("fixtures");
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "65ce8b32017a665c413844ad0c6ee725a2e7ca83820e9bc0d45f5fec3e8aef64"
+            "8ebd7463b2c6c72bdf50eea5536420ada3540a056956dec00b0a0ca36a7952df"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "5401f0d026142e83241decbe120c6d5219fd5314f1aba4a7d829dab3d6941d4b"
+            "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "14c4e80d9134e260c91590fd98edb6593682bd25e7375745863dbe37c8e8f10e"
+            "beef94ab215a87cafe92743cd7b8a37afbe24fcfcd50476a93cc64ac77b080a6"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "c848c9205487cc40236c25926c69991420959f0794637a7e5d2a0c0b057b745b"
+            "0c286de308fee9a436442ab1382c3e1fcda28da5033da1e0d663e640b9f5651d"
         );
         let generated_names: BTreeSet<String> = fs::read_dir(&dir_path)
             .expect("read generated fixture directory")

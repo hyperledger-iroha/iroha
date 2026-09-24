@@ -1166,22 +1166,24 @@ fn ensure_runtime_peer_binding_for_test(
     RegisterPeerWithPop::new(peer_id.clone(), pop)
         .execute(validator, &mut tx)
         .expect("peer registration");
-    let consensus_id = ConsensusKeyId::new(ConsensusKeyRole::Validator, consensus_label);
-    let consensus_record = ConsensusKeyRecord {
-        id: consensus_id.clone(),
-        public_key: peer_keypair.public_key().clone(),
-        pop: Some(consensus_pop),
-        activation_height: next_height,
-        expiry_height: None,
-        replaces: None,
-        status: ConsensusKeyStatus::Active,
-    };
-    RegisterConsensusKey {
-        id: consensus_id,
-        record: consensus_record,
+    for role in [ConsensusKeyRole::Validator, ConsensusKeyRole::Committee] {
+        let consensus_id = ConsensusKeyId::new(role, consensus_label);
+        let consensus_record = ConsensusKeyRecord {
+            id: consensus_id.clone(),
+            public_key: peer_keypair.public_key().clone(),
+            pop: Some(consensus_pop.clone()),
+            activation_height: next_height,
+            expiry_height: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+        RegisterConsensusKey {
+            id: consensus_id,
+            record: consensus_record,
+        }
+        .execute(validator, &mut tx)
+        .expect("consensus key registration");
     }
-    .execute(validator, &mut tx)
-    .expect("consensus key registration");
     tx.apply();
     block
         .commit_world_overlay_for_testing()

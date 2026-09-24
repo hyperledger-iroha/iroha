@@ -240,6 +240,7 @@ use crate::{json_array, json_entry, json_object, json_value};
 pub(crate) struct DataspaceReadVisibility {
     visible_dataspaces: BTreeSet<DataSpaceId>,
     can_read_all: bool,
+    exact_account: Option<AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -248,13 +249,29 @@ impl DataspaceReadVisibility {
         Self {
             visible_dataspaces,
             can_read_all,
+            exact_account: None,
         }
+    }
+
+    /// Restrict an authorized account-assets route to one exact account.
+    /// The account grant opens its balance routes, not the caller's siblings.
+    pub(crate) fn exact_account(dataspace: DataSpaceId, account: AccountId) -> Self {
+        Self {
+            visible_dataspaces: BTreeSet::from([dataspace]),
+            can_read_all: false,
+            exact_account: Some(account),
+        }
+    }
+
+    pub(crate) fn exact_account_id(&self) -> Option<&AccountId> {
+        self.exact_account.as_ref()
     }
 
     pub(crate) fn all() -> Self {
         Self {
             visible_dataspaces: BTreeSet::new(),
             can_read_all: true,
+            exact_account: None,
         }
     }
 
@@ -310,6 +327,9 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         account_id: &AccountId,
     ) -> bool {
+        if let Some(exact_account) = &self.exact_account {
+            return exact_account == account_id && world.accounts().get(account_id).is_some();
+        }
         if self.can_read_all {
             return true;
         }
@@ -18190,7 +18210,9 @@ pub(crate) fn prepare_contract_call_request(
         arguments,
     };
     let builder = builder
-        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
+        .with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        )
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
@@ -21337,21 +21359,17 @@ fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
-    payload: Option<&IrohaJson>,
+    payload: &IrohaJson,
     code_hash: &Hash,
 ) -> Result<iroha_data_model::trigger::TriggerId> {
-    let payload_repr = payload
-        .map(|value| norito::json::to_json(value).unwrap_or_else(|_| "<payload>".to_owned()))
-        .unwrap_or_default();
-    let seed = format!(
-        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{}",
-        hex::encode(code_hash.as_ref())
-    );
-    let digest = blake3_hash(seed.as_bytes());
-    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
-    let trigger_name = Name::from_str(&trigger_name)
-        .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
-    Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
+    iroha_data_model::smart_contract::multisig_call::derive_multisig_contract_call_trigger_id(
+        multisig_account_id,
+        contract_address,
+        entrypoint,
+        payload,
+        code_hash,
+    )
+    .map_err(conversion_error)
 }
 fn build_multisig_contract_call_instructions(
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -21366,62 +21384,32 @@ fn build_multisig_contract_call_instructions(
     Vec<iroha_data_model::isi::InstructionBox>,
     HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
 )> {
-    let descriptor = advertised_contract_entrypoint(manifest, entrypoint)?;
-    if matches!(
-        descriptor.kind,
-        manifest::EntryPointKind::Hajimari | manifest::EntryPointKind::Kaizen
-    ) {
-        return Err(conversion_error(format!(
-            "`{entrypoint}` is a hajimari/始まり or kaizen/改善 entrypoint and cannot be invoked through a multisig trigger"
-        )));
-    }
+    ensure_contract_entrypoint_kind(manifest, entrypoint, manifest::EntryPointKind::Kotoage)?;
+    let contract_alias = contract_alias.ok_or_else(|| {
+        multisig_selector_conflict_error(
+            "multisig_contract_alias_required",
+            "contract multisig proposals require an exact contract_alias",
+        )
+    })?;
+    let payload = payload.ok_or_else(|| {
+        multisig_selector_conflict_error(
+            "multisig_contract_object_payload_required",
+            "contract multisig proposals require an exact object payload",
+        )
+    })?;
     let arguments =
         bound_signed_contract_arguments(arguments.map(<[u8]>::to_vec)).map_err(conversion_error)?;
-    let trigger_id = derive_multisig_contract_call_trigger_id(
+    let call = iroha_data_model::smart_contract::multisig_call::build_multisig_contract_call(
         multisig_account_id,
         contract_address,
+        contract_alias,
         entrypoint,
         payload,
+        arguments,
         code_hash,
-    )?;
-    let trigger_metadata = build_contract_call_metadata(
-        manifest,
-        contract_address,
-        code_hash,
-        contract_alias,
-        Some(entrypoint),
-        payload,
-    );
-    let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
-        .for_trigger(trigger_id.clone());
-    let action = iroha_data_model::trigger::action::Action::new(
-        iroha_data_model::transaction::Executable::ContractCall(
-            iroha_data_model::transaction::executable::ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: *code_hash,
-                entrypoint: entrypoint.to_owned(),
-                arguments,
-            },
-        ),
-        iroha_data_model::trigger::action::Repeats::Exactly(1),
-        multisig_account_id.clone(),
-        filter,
     )
-    .map_err(|error| conversion_error(format!("invalid multisig trigger action: {error}")))?
-    .with_metadata(trigger_metadata);
-    let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
-    let execute_trigger = payload.cloned().map_or_else(
-        || iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()),
-        |payload| iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload),
-    );
-    let instructions = vec![
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
-            trigger,
-        )),
-        iroha_data_model::isi::InstructionBox::from(execute_trigger),
-    ];
-    let instructions_hash = HashOf::new(&instructions);
-    Ok((instructions, instructions_hash))
+    .map_err(conversion_error)?;
+    Ok((call.instructions, call.instructions_hash))
 }
 const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
 fn multisig_account_state_contract_key(
@@ -23230,7 +23218,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "main",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23238,7 +23226,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "main",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23247,7 +23235,7 @@ mod multisig_contract_call_tests {
             &multisig,
             &contract_address,
             "alternate",
-            Some(&payload),
+            &payload,
             &code_hash,
         )
         .expect("trigger id");
@@ -23282,10 +23270,13 @@ mod multisig_contract_call_tests {
         }]));
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
+        let contract_alias = "review_invoice::universal"
+            .parse()
+            .expect("contract alias");
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
             &contract_address,
-            None,
+            Some(&contract_alias),
             "main",
             Some(&payload),
             None,
@@ -25951,7 +25942,6 @@ mod multisig_selector_tests {
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
         );
-        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let outsider =
             checked_multisig_selector_account_id(0x6b, "derive multisig outsider signer key");
         let err = handle_post_contract_call_multisig_propose(
@@ -25967,10 +25957,9 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
-                contract_address: Some(contract_address),
-                contract_alias: None,
+                contract_alias: "review_signer::universal".parse().expect("contract alias"),
                 entrypoint: "main".to_owned(),
-                payload: None,
+                payload: IrohaJson::new(norito::json!({ "probe": true })),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
@@ -27106,58 +27095,34 @@ mod multisig_selector_tests {
         );
         assert_exact_unsigned_transaction_draft(&payload);
     }
-    #[tokio::test]
-    async fn multisig_propose_prepares_with_concrete_selector_and_returns_resolved_account_id() {
-        let (
-            state,
-            multisig_account_id,
-            authority_account_id,
-            signer_two_id,
-            _alias_literal,
-            authority_keypair,
-        ) = multisig_contract_test_fixture();
-        install_contract_instance(
-            state.as_ref(),
-            &authority_account_id,
-            &authority_keypair,
-            &derived_universal_contract_address(&authority_account_id, 1),
+    routing_test! { sync multisig_contract_propose_wire_requires_alias_and_payload
+        let account = checked_multisig_selector_account_id(
+            0x76,
+            "derive strict contract-call DTO fixture account",
         );
-        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
-        let response = handle_post_contract_call_multisig_propose(
-            build_queue(),
-            state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(MultisigContractCallProposeDto {
-                selector: concrete_selector(multisig_account_id.clone()),
-                signer_account_id: signer_two_id,
-                public_key_hex: None,
-                signature_b64: None,
-                creation_time_ms: Some(1_700_000_000_234),
-                contract_address: Some(contract_address),
-                contract_alias: None,
-                entrypoint: "main".to_owned(),
-                payload: None,
-                fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
-            }),
-        )
-        .await
-        .expect("propose response");
-        let payload = decode_json_response(response).await;
-        assert_eq!(payload["ok"].as_bool(), Some(true));
-        assert_eq!(payload["submitted"].as_bool(), Some(false));
-        assert_eq!(
-            payload["resolved_multisig_account_id"].as_str(),
-            Some(multisig_account_id.to_string().as_str())
+        let valid = format!(
+            r#"{{"multisig_account_id":"{account}","signer_account_id":"{account}","contract_alias":"review_zero_param::universal","entrypoint":"main","payload":{{}},"fee_payment":{{"payer":"authority","value":{{"charge_limits":[],"gas_limit":10000}}}}}}"#,
         );
-        let proposal_id = payload["proposal_id"]
-            .as_str()
-            .expect("proposal id")
-            .to_owned();
-        assert_eq!(
-            payload["instructions_hash"].as_str(),
-            Some(proposal_id.as_str())
-        );
-        assert_exact_unsigned_transaction_draft(&payload);
+        assert!(norito::json::from_str::<MultisigContractCallProposeDto>(&valid).is_ok());
+        for (label, malformed) in [
+            (
+                "missing alias",
+                valid.replace("\"contract_alias\":\"review_zero_param::universal\",", ""),
+            ),
+            (
+                "missing payload",
+                valid.replace("\"payload\":{},", ""),
+            ),
+            (
+                "address-only target",
+                valid.replace("\"contract_alias\":\"review_zero_param::universal\",", "\"contract_address\":\"address-only\","),
+            ),
+        ] {
+            assert!(
+                norito::json::from_str::<MultisigContractCallProposeDto>(&malformed).is_err(),
+                "{label} must fail wire decoding",
+            );
+        }
     }
     routing_test! { async multisig_contract_propose_validates_payload_before_hashing
         let (
@@ -27178,13 +27143,16 @@ seiyaku BytesPayloadNormalizeTest {
 "#,
             )
             .expect("compile bytes contract");
+        let contract_alias = "review_blob::universal"
+            .parse::<iroha_data_model::smart_contract::ContractAlias>()
+            .expect("contract alias");
         install_contract_instance_with_code(
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
             &derived_universal_contract_address(&authority_account_id, 1),
             code,
-            None,
+            Some(contract_alias.clone()),
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let request_payload = IrohaJson::new(norito::json!({
@@ -27200,10 +27168,9 @@ seiyaku BytesPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                contract_address: Some(contract_address.clone()),
-                contract_alias: None,
+                contract_alias: contract_alias.clone(),
                 entrypoint: "create".to_owned(),
-                payload: Some(request_payload.clone()),
+                payload: request_payload.clone(),
                 fee_payment: dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
             }),
         )
@@ -27235,7 +27202,7 @@ seiyaku BytesPayloadNormalizeTest {
         let (_, expected_hash) = build_multisig_contract_call_instructions(
             &multisig_account_id,
             &contract_address,
-            None,
+            Some(&contract_alias),
             "create",
             Some(&normalized_payload),
             arguments.as_deref(),
@@ -28019,7 +27986,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        contract_address,
         contract_alias,
         entrypoint,
         payload,
@@ -28044,8 +28010,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             ),
         ));
     }
-    let prepared =
-        resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
+    let prepared = resolve_contract_call_target(&state, None, Some(&contract_alias))?;
     let PreparedContractCall {
         program,
         code_hash,
@@ -28056,7 +28021,18 @@ pub async fn handle_post_contract_call_multisig_propose(
         contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_callable_contract_entrypoint(&manifest, &entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, Some(&payload))?;
+    if !normalized_payload
+        .as_ref()
+        .cloned()
+        .and_then(|value| value.try_into_any_norito::<Value>().ok())
+        .is_some_and(|value| value.as_object().is_some())
+    {
+        return Err(multisig_selector_conflict_error(
+            "multisig_contract_object_payload_required",
+            "contract multisig proposals require an exact object payload",
+        ));
+    }
     let mint_request_alias: iroha_data_model::smart_contract::ContractAlias =
         "apps_mint_request::cbsi"
             .parse()
@@ -31992,17 +31968,12 @@ pub struct MultisigContractCallProposeDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Optional canonical contract address.
-    #[norito(default)]
-    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
-    #[norito(default)]
-    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Exact on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
     /// Entrypoint selector.
     pub entrypoint: String,
-    /// Optional payload forwarded to the contract.
-    #[norito(default)]
-    pub payload: Option<IrohaJson>,
+    /// Exact object payload forwarded to the contract.
+    pub payload: IrohaJson,
     /// Explicit signature-bound payer, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
@@ -32080,14 +32051,11 @@ mod multisig_native_norito_dto_tests {
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: Some(1_700_000_000_234),
-            contract_address: None,
-            contract_alias: Some(
-                "apps_mint_request::sbp"
-                    .parse::<ContractAlias>()
-                    .expect("contract alias"),
-            ),
+            contract_alias: "apps_mint_request::sbp"
+                .parse::<ContractAlias>()
+                .expect("contract alias"),
             entrypoint: "create_mint_request".to_owned(),
-            payload: Some(IrohaJson::new(norito::json::Value::from(111_u64))),
+            payload: IrohaJson::new(norito::json!({ "amount": 111_u64 })),
             fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
                 std::num::NonZeroU64::new(10_000),
@@ -32112,9 +32080,9 @@ mod multisig_native_norito_dto_tests {
             Some("cbdc@hbl.sbp")
         );
         assert_eq!(decoded.entrypoint, "create_mint_request");
-        let payload = decoded.payload.expect("payload");
+        let payload = decoded.payload;
         let payload: norito::json::Value = payload.try_into_any_norito().expect("json payload");
-        assert_eq!(payload.as_u64(), Some(111));
+        assert_eq!(payload["amount"].as_u64(), Some(111));
         assert_eq!(
             decoded
                 .fee_payment
@@ -38739,7 +38707,6 @@ pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
-pub const ENDPOINT_TRANSACTIONS_VISIBLE_QUERY: &str = "/v1/transactions/visible/query";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
 pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
@@ -39862,26 +39829,6 @@ pub(crate) async fn handle_v1_transactions_query_with_visibility_policy(
         ENDPOINT_TRANSACTIONS_QUERY,
         None,
         Some(visibility),
-    )
-    .await
-}
-/// POST `/v1/transactions/visible/query` with server-side viewer visibility.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_transactions_visible_query_with_policy(
-    state: Arc<CoreState>,
-    NoritoJson(envelope): NoritoJson<QueryEnvelope>,
-    telemetry: MaybeTelemetry,
-    visibility: TxHistoryVisibilityScope,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-) -> Result<impl IntoResponse> {
-    handle_v1_transactions_query_scoped_with_policy(
-        state,
-        NoritoJson(envelope),
-        telemetry,
-        allowed_asset_definition_id,
-        ENDPOINT_TRANSACTIONS_VISIBLE_QUERY,
-        Some(visibility),
-        None,
     )
     .await
 }
@@ -51509,6 +51456,9 @@ pub struct AccountTransactionsGetParams {
     pub offset: u64,
     /// Filter transactions by asset definition selector.
     pub asset_id: Option<String>,
+    /// Exact dataspace alias selected by the signed history-feed query.
+    #[norito(default)]
+    pub dataspace_id: Option<String>,
     /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
     #[norito(default)]
     pub count_mode: Option<String>,
@@ -52296,6 +52246,10 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
             if let Some(ts) = it.timestamp_ms {
                 m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
             }
+            m.insert(
+                "entrypoint_kind".into(),
+                norito::json::Value::from(it.entrypoint_kind.clone()),
+            );
             m.insert(
                 "entrypoint_hash".into(),
                 norito::json::Value::from(it.entrypoint_hash.clone()),
@@ -54909,6 +54863,21 @@ mod tx_projection_display_tests {
             .expect("authority field");
         assert_eq!(authority, account.to_string());
     }
+    routing_test! { sync projections_emit_entrypoint_kind
+        for kind in ["external", "sealed_commitment", "sealed_reveal"] {
+            let projection = TxProjection {
+                authority: None,
+                timestamp_ms: Some(123),
+                entrypoint_kind: kind.to_owned(),
+                entrypoint_hash: "feedbabe".into(),
+                result_ok: true,
+                memo: None,
+            };
+            let items = tx_projections_to_json(&[projection]);
+            assert_eq!(items[0]["entrypoint_kind"].as_str(), Some(kind));
+            assert_eq!(items[0]["entrypoint_hash"].as_str(), Some("feedbabe"));
+        }
+    }
     routing_test! { sync projections_emit_memo_when_present
         let projection = TxProjection {
             authority: None,
@@ -56459,7 +56428,10 @@ pub(crate) async fn handle_v1_account_assets_with_visibility(
     let fetch_cap = limits
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
-    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let scoped_accounts = visibility.exact_account_id().map_or_else(
+        || scoped_accounts_for_subject_sorted(&world, &acct),
+        |account| vec![account.clone()],
+    );
     let projected_assets = collect_projected_account_assets(
         state.as_ref(),
         &world,
@@ -59362,6 +59334,7 @@ mod prepared_transaction_signature_fixture_tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata)
         .with_instructions(instructions);
         builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
@@ -60966,12 +60939,13 @@ fn revalidate_onboarding_prepared_work(
 
 fn prepared_submit_outcome(
     app: &crate::SharedAppState,
-    transaction_hash: &HashOf<SignedTransaction>,
+    transaction: &SignedTransaction,
 ) -> Result<Option<&'static str>> {
+    let transaction_hash = transaction.hash();
     let entrypoint_hash =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
     if app.state.has_committed_entrypoint(entrypoint_hash) {
-        let status = crate::pipeline_status_from_state(&app.state, &app.kura, transaction_hash)?
+        let status = crate::pipeline_status_from_state(&app.state, &app.kura, &transaction_hash)?
             .ok_or(Error::AppServiceUnavailable {
                 code: "prepared_transaction_status_unavailable",
                 message: "the exact prepared transaction is committed but its canonical outcome is unavailable"
@@ -60979,7 +60953,16 @@ fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    if let Some(status) = app.pipeline_status_cache.lookup(transaction_hash) {
+    // A local Queue entry or cached Queued event is only one authority's claim.
+    // It cannot acknowledge a QueuePlanSynced prepared mutation before the
+    // global f+1 certificate has been durably persisted. Its replay must enter
+    // the same strict public admission path as a fresh submission.
+    if transaction.admission_intent()
+        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Ok(None);
+    }
+    if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
     if app
@@ -60989,6 +60972,166 @@ fn prepared_submit_outcome(
         return Ok(Some("Pending"));
     }
     Ok(None)
+}
+
+/// Admit one exact prepared transaction through the public QueuePlan quorum owner.
+/// An accepted response means the complete certificate crossed its durable
+/// publication boundary; local Queue custody alone is not a public success.
+async fn submit_prepared_queue_plan_transaction(
+    app: &crate::SharedAppState,
+    transaction: SignedTransaction,
+    telemetry: &MaybeTelemetry,
+) -> Result<Response> {
+    let compute_permit = crate::try_acquire_transaction_ingress_compute(
+        &app.transaction_ingress_compute_inflight,
+    )?;
+    let state = app.state.clone();
+    let telemetry = telemetry.clone();
+    let (accepted, compute_permit) = crate::run_transaction_ingress_compute_job(
+        compute_permit,
+        "prepared_transaction_admission_worker_failed",
+        move || accept_transaction_for_ingress(state, transaction, &telemetry),
+    )
+    .await?;
+    drop(compute_permit);
+    let prepared = crate::prepare_fresh_transaction_ingress(app, accepted)?;
+    crate::submit_prepared_transaction_ingress(
+        app,
+        prepared,
+        true,
+        crate::utils::ResponseFormat::Json,
+    )
+    .await
+}
+
+#[cfg(feature = "connect")]
+pub(crate) async fn certified_prepared_queue_plan_response(
+    app: &crate::SharedAppState,
+    transaction: &SignedTransaction,
+) -> Result<Option<Response>> {
+    let compute_permit = crate::try_acquire_transaction_ingress_compute(
+        &app.transaction_ingress_compute_inflight,
+    )?;
+    let app = app.clone();
+    let transaction = transaction.clone();
+    let (response, compute_permit) = crate::run_transaction_ingress_compute_job(
+        compute_permit,
+        "prepared_transaction_retry_worker_failed",
+        move || {
+            let Some(authenticated) = crate::AuthenticatedQueuePlanRetry::from_signed(
+                app.state.network_id_ref(),
+                &transaction,
+            )? else {
+                return Ok(None);
+            };
+            if let Some(response) = crate::canonical_queue_plan_submission_response(
+                app.as_ref(),
+                &authenticated,
+                true,
+                crate::utils::ResponseFormat::Json,
+            ) {
+                return Ok(Some(response));
+            }
+            let entrypoint_hash = authenticated.entrypoint_hash();
+            let signed_transaction_hash = authenticated.signed_transaction_hash();
+            match app.state.pending_queue_plan_admission_for_transaction(
+                entrypoint_hash,
+                signed_transaction_hash,
+            ) {
+                Ok(false) => Ok(crate::canonical_queue_plan_submission_response(
+                    app.as_ref(),
+                    &authenticated,
+                    true,
+                    crate::utils::ResponseFormat::Json,
+                )),
+                Ok(true) => Ok(Some(crate::transaction_submission_receipt_response(
+                    app.as_ref(),
+                    entrypoint_hash,
+                    Some(signed_transaction_hash),
+                    true,
+                    crate::utils::ResponseFormat::Json,
+                ))),
+                Err(error) => Ok(Some(crate::queue_plan_admission_registry_conflict_response(
+                    entrypoint_hash,
+                    format!("pending QueuePlan admission cannot be authenticated: {error}"),
+                ))),
+            }
+        },
+    )
+    .await?;
+    drop(compute_permit);
+    Ok(response)
+}
+
+fn prepared_queue_plan_submit_response(
+    submission: Response,
+    binding: PreparedOperationBindingV1,
+    operation: &str,
+    transaction_hash_hex: String,
+) -> Response {
+    if submission.status() != StatusCode::ACCEPTED {
+        return submission;
+    }
+    let mut response = prepared_submit_response(binding, operation, transaction_hash_hex, "Pending");
+    *response.status_mut() = StatusCode::ACCEPTED;
+    for (name, value) in submission.headers() {
+        if name.as_str().starts_with("x-iroha-") {
+            response.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    response
+}
+
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async prepared_queue_plan_submit_response_requires_real_acceptance
+    let binding = PreparedOperationBindingV1 {
+        schema: PreparedOperationBindingV1::SCHEMA.to_owned(),
+        semantic_hash_hex: "11".repeat(32),
+        kind: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+        request_id: "22".repeat(32),
+        execution_expires_at_unix_ms: u64::MAX,
+    };
+    let mut accepted = Response::new(Body::empty());
+    *accepted.status_mut() = StatusCode::ACCEPTED;
+    accepted.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-entrypoint-hash"),
+        axum::http::HeaderValue::from_static("certified-entrypoint"),
+    );
+    let accepted = prepared_queue_plan_submit_response(
+        accepted,
+        binding.clone(),
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        "33".repeat(32),
+    );
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        accepted
+            .headers()
+            .get("x-iroha-entrypoint-hash")
+            .and_then(|value| value.to_str().ok()),
+        Some("certified-entrypoint")
+    );
+    let body = axum::body::to_bytes(accepted.into_body(), usize::MAX)
+        .await
+        .expect("prepared accepted body");
+    let accepted: PreparedTransactionSubmitResponseDto =
+        norito::json::from_slice(&body).expect("prepared accepted envelope");
+    assert_eq!(accepted.outcome, "Pending");
+    assert_eq!(accepted.binding, binding);
+
+    let mut unavailable = Response::new(Body::from("quorum unavailable"));
+    *unavailable.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    let unavailable = prepared_queue_plan_submit_response(
+        unavailable,
+        binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        "33".repeat(32),
+    );
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(unavailable.into_body(), usize::MAX)
+        .await
+        .expect("prepared unavailable body");
+    assert_eq!(body.as_ref(), b"quorum unavailable");
 }
 
 fn prepared_outcome_from_pipeline_status(kind: crate::PipelineStatusKind) -> &'static str {
@@ -61102,6 +61245,9 @@ pub async fn handle_v1_accounts_onboard_prepare(
         signer.authority.clone(),
         request.fee_payment.clone(),
     )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -61189,6 +61335,13 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared onboarding transaction requires QueuePlanSynced admission",
+        ));
+    }
     // A known hash is still scoped to the credential that prepared its signed receipt. Only the
     // time-sensitive/live-state checks below are skipped while reconciling response-loss replay.
     validate_onboarding_prepared_receipt_context(
@@ -61196,7 +61349,7 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
         &authenticated_scope,
         &prepared.receipt,
     )?;
-    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
         return Ok((
             StatusCode::OK,
             prepared_submit_response(
@@ -61206,6 +61359,18 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
                 outcome,
             ),
         ));
+    }
+    // A certified retry has already crossed the durable f+1 boundary. Serve it before
+    // the live expiry and state checks, which apply only to fresh admission.
+    #[cfg(feature = "connect")]
+    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
+        let response = prepared_queue_plan_submit_response(
+            submission,
+            prepared.binding,
+            AccountOnboardingPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+        );
+        return Ok((response.status(), response));
     }
     validate_prepared_mutation_binding(
         &prepared.binding,
@@ -61241,44 +61406,14 @@ pub async fn handle_v1_accounts_onboard_submit_prepared(
             "prepared onboarding transaction no longer matches its receipt, binding, result identity, or exact fee intent",
         ));
     }
-    let transaction_hash = transaction.hash();
-    let submission = handle_transaction_with_metrics(
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-        telemetry,
-        ENDPOINT_ACCOUNTS_ONBOARD,
-    )
-    .await;
-    let outcome = match submission {
-        Ok(_) => "Pending",
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
-        {
-            "Pending"
-        }
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
-        {
-            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
-                Error::AppServiceUnavailable {
-                    code: "prepared_transaction_status_unavailable",
-                    message: "the exact prepared onboarding transaction is committed but its outcome is unavailable"
-                        .to_owned(),
-                },
-            )?
-        }
-        Err(error) => return Err(error),
-    };
-    Ok((
-        StatusCode::ACCEPTED,
-        prepared_submit_response(
-            prepared.binding,
-            AccountOnboardingPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-            outcome,
-        ),
-    ))
+    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_queue_plan_submit_response(
+        submission,
+        prepared.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        prepared.transaction_hash_hex,
+    );
+    Ok((response.status(), response))
 }
 /// Advertise the operator's exact faucet issuer, asset and amount before account registration.
 #[iroha_futures::telemetry_future]
@@ -61552,6 +61687,9 @@ pub async fn handle_v1_accounts_faucet_prepare(
         faucet.authority.clone(),
         request.fee_payment.clone(),
     )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
     .with_metadata(metadata)
     .with_instructions(work.instructions);
     let creation_ms = current_time_millis();
@@ -61641,7 +61779,14 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
         &prepared.signed_transaction_wire_hex,
         &prepared.signed_transaction_wire_sha256,
     )?;
-    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+    if transaction.admission_intent()
+        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet transaction requires QueuePlanSynced admission",
+        ));
+    }
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction)? {
         return Ok((
             StatusCode::OK,
             prepared_submit_response(
@@ -61651,6 +61796,16 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
                 outcome,
             ),
         ));
+    }
+    #[cfg(feature = "connect")]
+    if let Some(submission) = certified_prepared_queue_plan_response(&app, &transaction).await? {
+        let response = prepared_queue_plan_submit_response(
+            submission,
+            prepared.binding,
+            AccountFaucetPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+        );
+        return Ok((response.status(), response));
     }
     validate_prepared_mutation_binding(
         &prepared.binding,
@@ -61689,44 +61844,14 @@ pub async fn handle_v1_accounts_faucet_submit_prepared(
             "prepared faucet transaction no longer matches its claim, binding, result identity, or exact fee intent",
         ));
     }
-    let transaction_hash = transaction.hash();
-    let submission = handle_transaction_with_metrics(
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-        telemetry,
-        ENDPOINT_ACCOUNTS_FAUCET,
-    )
-    .await;
-    let outcome = match submission {
-        Ok(_) => "Pending",
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
-        {
-            "Pending"
-        }
-        Err(Error::PushIntoQueue { source, .. })
-            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
-        {
-            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
-                Error::AppServiceUnavailable {
-                    code: "prepared_transaction_status_unavailable",
-                    message: "the exact prepared faucet transaction is committed but its outcome is unavailable"
-                        .to_owned(),
-                },
-            )?
-        }
-        Err(error) => return Err(error),
-    };
-    Ok((
-        StatusCode::ACCEPTED,
-        prepared_submit_response(
-            prepared.binding,
-            AccountFaucetPreparedTransactionDto::OPERATION,
-            prepared.transaction_hash_hex,
-            outcome,
-        ),
-    ))
+    let submission = submit_prepared_queue_plan_transaction(&app, transaction, &telemetry).await?;
+    let response = prepared_queue_plan_submit_response(
+        submission,
+        prepared.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        prepared.transaction_hash_hex,
+    );
+    Ok((response.status(), response))
 }
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,
@@ -71393,7 +71518,10 @@ pub(crate) async fn handle_v1_account_assets_query_with_visibility(
         ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
     let world = state.world_view();
-    let scoped_accounts = scoped_accounts_for_subject_sorted(&world, &acct);
+    let scoped_accounts = visibility.exact_account_id().map_or_else(
+        || scoped_accounts_for_subject_sorted(&world, &acct),
+        |account| vec![account.clone()],
+    );
     let projected_assets = collect_projected_account_assets(
         state.as_ref(),
         &world,

@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-23. **Production qualification is unavailable.** The selected
+Updated: 2026-09-24. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -137,11 +137,22 @@ owners are not yet a complete smaller proof format or production verifier. The
 September 22 record binds the executable and subsequent registration correction.
 The September 24 [source-projection record](../docs/history/2026-09-24/fastpq-f07-source-projection-and-prover-blocker.md)
 adds a borrowed exact 342-to-301 physical-source bridge with focused Cargo
-validation pending. The test-only 506,351-byte DEEP DTO still lacks a genuine
-producer. Its degree-`<N` base-field row openings cannot directly consume the
-existing nonzero Fp4 vanishing masks: those raise trace degree to at least `N`,
-and opening 64 complete masked Fp4 rows would already exceed 512 KiB. A reviewed
-hiding/opening redesign and bounded prover remain prerequisites.
+validation passing 1/1. The test-only 506,351-byte DEEP DTO still lacks a genuine
+producer. The original degree-`<N` base-field row layout could not consume any
+nonzero subgroup-vanishing mask; opening 64 complete masked Fp4 rows would also
+exceed 512 KiB. The [original DEEP preflight](../docs/history/2026-09-24/fastpq-f07-deep-preflight-and-resource-floor.md)
+established that obstruction with six focused tests against its then-current
+geometry. A reviewed hiding/opening redesign and bounded prover remain
+prerequisites.
+The inactive [doubled-degree terminal boundary](../docs/history/2026-09-24/fastpq-f07-doubled-degree-terminal-boundary.md)
+now binds the screened `<2N` FRI progression into its transcript and checks all
+128 terminal values at degree `<2` on the folded coset. Its producer preflight
+still refuses every private mask: degree fit alone does not provide the missing
+base-field hiding, quotient blinding, committed composition mask, or security
+argument. The 506,351-byte DTO has not gained the proposed `R(x)` opening or a
+genuine producer, and no Core admission changes. The selected test-only DEEP
+suite passes 53/53; this does not qualify a private proof or its concrete
+soundness and resource bounds.
 
 ## Completion goals
 

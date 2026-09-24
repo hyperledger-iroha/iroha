@@ -2039,6 +2039,17 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
 
 #[test]
 fn lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry() {
+    let handle =
+        crate::sumeragi::sumeragi_thread_builder("lifecycle-effect-refusal-preserves-retry")
+            .spawn(lifecycle_effect_refusal_on_consensus_stack)
+            .expect("spawn physical-publication test on the production consensus stack");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[inline(never)]
+fn lifecycle_effect_refusal_on_consensus_stack() {
     let (state, mut decision) = fixture_lifecycle_decision();
     let checkpoint = decision.journals.checkpoint;
     let lifecycle = decision.journals.effects.lifecycle.take().unwrap();

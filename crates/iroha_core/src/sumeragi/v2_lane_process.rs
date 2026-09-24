@@ -594,13 +594,21 @@ impl LaneProcessOwner {
     pub(crate) fn instance_ids(&self) -> impl Iterator<Item = HeightContextId> + '_ {
         self.entries.keys().copied()
     }
-    /// Derive the next timer wake directly from current live instance clocks.
+    /// Derive the next timer wake from clocks that can enter the reducer now.
+    /// A full effect reservation or pending completion needs a later service
+    /// turn, not an immediate wake on the same overdue, unserviceable clock.
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
         self.entries
             .values()
             .filter_map(|entry| match &entry.owner {
                 Owner::Active(owner) => Some(owner),
                 _ => None,
+            })
+            .filter(|owner| {
+                !owner.failed
+                    && owner.completion.is_none()
+                    && owner.clock.tag == owner.tag()
+                    && owner.reserve_ingress()
             })
             .flat_map(|owner| {
                 owner

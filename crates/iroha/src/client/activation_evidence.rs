@@ -16,6 +16,12 @@ const BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const GENESIS_FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
 
+#[derive(Clone, Copy)]
+enum ActivationEvidenceReadAuth {
+    Public,
+    Account,
+}
+
 /// One authenticated-ready result or an unsigned non-success observation.
 #[derive(Debug)]
 #[expect(
@@ -112,6 +118,7 @@ impl Client {
             &path,
             BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
             Some(challenge),
+            ActivationEvidenceReadAuth::Public,
         )?;
         if response.status() != StatusCode::OK {
             let failure = Self::decode_finality_attestation_failure(
@@ -275,23 +282,33 @@ impl Client {
             .map_err(|error| eyre!("{context}: failed to decode canonical Norito payload: {error}"))
     }
 
-    fn canonical_norito_get_request(&self, path: &str, maximum: usize) -> DefaultRequestBuilder {
-        let mut headers = self.headers.clone();
+    fn canonical_norito_get_request(
+        &self,
+        path: &str,
+        maximum: usize,
+        auth: ActivationEvidenceReadAuth,
+    ) -> Result<DefaultRequestBuilder> {
+        let url = join_torii_url(&self.torii_url, path);
+        let mut headers = match auth {
+            ActivationEvidenceReadAuth::Public => self.headers_without_canonical_account_auth(),
+            ActivationEvidenceReadAuth::Account => {
+                self.account_signed_headers(&HttpMethod::GET, &url, &[])?
+            }
+        };
         headers.retain(|name, _| {
             !name.eq_ignore_ascii_case("accept")
                 && !name.eq_ignore_ascii_case("content-type")
                 && !name.eq_ignore_ascii_case("x-iroha-finality-challenge")
         });
-        let mut builder =
-            DefaultRequestBuilder::new(HttpMethod::GET, join_torii_url(&self.torii_url, path))
-                .with_transport(self.http_transport.clone())
-                .headers(headers)
-                .header("Accept", APPLICATION_NORITO)
-                .max_response_bytes(maximum);
+        let mut builder = DefaultRequestBuilder::new(HttpMethod::GET, url)
+            .with_transport(self.http_transport.clone())
+            .headers(headers)
+            .header("Accept", APPLICATION_NORITO)
+            .max_response_bytes(maximum);
         if self.torii_request_timeout != Duration::ZERO {
             builder = builder.timeout(self.torii_request_timeout);
         }
-        builder
+        Ok(builder)
     }
 
     // Only an explicit operation deadline authorizes repeated reads. A one-shot
@@ -302,10 +319,13 @@ impl Client {
         path: &str,
         maximum: usize,
         challenge: Option<[u8; 32]>,
+        auth: ActivationEvidenceReadAuth,
     ) -> Result<Response<Vec<u8>>> {
         loop {
             self.ensure_activation_evidence_deadline()?;
-            let mut request = self.canonical_norito_get_request(path, maximum);
+            // Account authentication is constructed inside the retry loop: a 429
+            // retry must carry a fresh nonce for the same exact-network GET.
+            let mut request = self.canonical_norito_get_request(path, maximum, auth)?;
             if let Some(challenge) = challenge {
                 request = request.header("X-Iroha-Finality-Challenge", &hex::encode(challenge));
             }
@@ -388,6 +408,7 @@ impl Client {
             &path,
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
             None,
+            ActivationEvidenceReadAuth::Account,
         )?;
         let body = Self::bounded_norito_response_body(
             &response,
@@ -455,6 +476,7 @@ impl Client {
             &path,
             BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
             None,
+            ActivationEvidenceReadAuth::Public,
         )?;
         let proof: BridgeFinalityProof = Self::decode_canonical_norito_response(
             &response,
@@ -555,7 +577,8 @@ impl Client {
                         .canonical_norito_get_request(
                             &path,
                             GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES,
-                        )
+                            ActivationEvidenceReadAuth::Public,
+                        )?
                         .replace_header(GENESIS_FINALITY_CHALLENGE_HEADER, &hex::encode(challenge)),
                 )?;
                 Self::ensure_genesis_readiness_deadline(deadline)?;

@@ -1,4 +1,4 @@
-//! Test-only process-local deadlines whose clocks advance while the handset sleeps.
+//! Process-local deadlines whose clocks advance while the handset sleeps.
 //!
 //! These values are never serialized and are not trusted UTC, MiBank approval, or monetary
 //! commit-time authority. They only bound a native-owned challenge. Apple uses the public
@@ -42,6 +42,7 @@ impl NativeContinuousInstantV1 {
         Ok(Self { process_id, nanos })
     }
 
+    #[cfg(test)]
     pub(super) fn checked_duration_since(self, earlier: Self) -> Option<Duration> {
         if self.process_id != earlier.process_id {
             return None;

@@ -2429,6 +2429,12 @@ mod tests {
         };
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal_digest: compute_proposal_digest(&proposal).expect("proposal digest"),
             advert_body_digest: compute_advert_body_digest(&advert_body)
                 .expect("advert body digest"),

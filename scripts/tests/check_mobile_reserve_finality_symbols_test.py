@@ -45,6 +45,7 @@ class ReserveFinalitySymbolTests(unittest.TestCase):
         exported = symbols("KAGEMUSHA_C_SYMBOLS") + symbols("REQUIRED_PROTOCOL_C_SYMBOLS")
         if mode == "elf":
             exported += symbols("RESERVE_FINALITY_JNI_SYMBOLS")
+            exported += symbols("ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS")
         if missing is not None:
             self.assertIn(missing, exported)
             exported.remove(missing)
@@ -78,6 +79,13 @@ check_binary_symbols test-only-library test-only-inventory "$2"
                     result = self.check(mode, missing)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("is missing " + missing, result.stderr)
+
+    def test_every_missing_android_coordinator_or_diagnostic_endpoint_is_rejected(self) -> None:
+        for missing in symbols("ANDROID_COORDINATOR_AND_DIAGNOSTIC_JNI_SYMBOLS"):
+            with self.subTest(missing=missing):
+                result = self.check("elf", missing)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("is missing " + missing, result.stderr)
 
 
 if __name__ == "__main__":

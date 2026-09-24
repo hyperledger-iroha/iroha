@@ -190,9 +190,8 @@ Validation rules:
 - `peer_id` MUST resolve to a registered world-state peer. Lane `0` requires
   an unbounded `Validator` consensus key and current global topology membership
   until the prepared epoch-key transition is implemented. Participant-lane
-  admission does not confer global committee membership. A non-zero participant lane prefers an unbounded
-  `Committee` key and accepts an unbounded `Validator` key for transparent-path
-  compatibility; either key must be live at the scheduled `activation_height`,
+  admission does not confer global committee membership. A non-zero participant lane requires an unbounded
+  `Committee` key live at the scheduled `activation_height`,
   and any peer with a live `Validator` key at that height must already belong to
   the nonempty global topology. This closes admission through another lane while
   global epoch-key transitions remain unavailable.
@@ -354,8 +353,7 @@ account migration and entity deletion preserve these obligations.
   `peer_id`. Lane `0` requires a registered peer with a live, unbounded
   `Validator` key. Fresh global candidates outside the frozen topology are
   refused until prepared epoch-key transitions can safely activate them. Non-zero participant lanes
-  prefer a live, unbounded `Committee` key and accept a `Validator` key for
-  transparent-path compatibility without adding that peer to global quorum.
+  require a live, unbounded `Committee` key without adding that peer to global quorum.
   Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release

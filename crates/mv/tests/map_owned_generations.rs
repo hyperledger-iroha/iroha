@@ -119,6 +119,11 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
 fn balanced_allocation_lifetime(operation: impl FnOnce()) {
+    // parking_lot installs process-wide and per-thread lock bookkeeping on
+    // first use. Initialize it on this test thread before measuring an actual
+    // map's complete allocation lifetime, so that runtime state is not
+    // misclassified as an unreclaimed tree allocation.
+    drop(Map::from_iter(std::iter::empty()));
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {

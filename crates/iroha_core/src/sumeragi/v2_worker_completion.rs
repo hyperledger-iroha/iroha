@@ -360,7 +360,9 @@ impl PreparedLifecycleValidateCompletionV1 {
             super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, .. } => {
                 Some(wait.clone().wait_for_release())
             }
-            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
+            super::v2_body_store::LocalValidationRefusal::ObservationChanged { .. }
+            | super::v2_body_store::LocalValidationRefusal::Superseded
+            | super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
             | super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
         };
         Err(RetainedLocalLifecycleValidateV1 {
@@ -426,8 +428,6 @@ impl LifecycleValidateCompletionAckV1 {
         self.queue.acknowledge_lifecycle_validate(self.key);
         self.drop_guard.disarm();
     }
-
-
 }
 /// Original Validate dispatch and completion acknowledgement parked on local ownership.
 #[must_use = "local refusal must retain the same dispatch until retry or recovery"]
@@ -444,26 +444,72 @@ pub(in crate::sumeragi) enum LocalLifecycleValidateRetryV1 {
     Waiting(RetainedLocalLifecycleValidateV1),
     /// The exact original dispatch re-entered the worker queue.
     Requeued,
+    /// Finalized State passed the original unexecuted Native proposal.
+    Superseded(RetainedLocalLifecycleValidateV1),
     /// The original owner remains quarantined while output is closed for recovery.
     RecoveryRequired(RetainedLocalLifecycleValidateV1),
 }
 impl RetainedLocalLifecycleValidateV1 {
+    /// Borrow the original dispatch for exact durable cancellation.
+    pub(in crate::sumeragi) fn dispatch_for_supersession(&self) -> &DurableValidateDispatch {
+        &self.dispatch
+    }
+
+    /// Return whether this retained refusal still owns a pre-execution Native
+    /// source and can be retired if finalized State passes its proposal height.
+    pub(in crate::sumeragi) fn awaits_native_source(&self) -> bool {
+        matches!(
+            &self.refusal,
+            super::v2_body_store::LocalValidationRefusal::ObservationChanged { .. }
+                | super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { .. }
+                | super::v2_body_store::LocalValidationRefusal::Superseded
+        )
+    }
+
+    /// The worker already authenticated a stable finalized-height advance.
+    pub(in crate::sumeragi) fn is_superseded(&self) -> bool {
+        matches!(
+            &self.refusal,
+            super::v2_body_store::LocalValidationRefusal::Superseded
+        )
+    }
+
+    /// Retire the worker index only after the exact lifecycle row was cancelled.
+    pub(in crate::sumeragi) fn acknowledge_superseded(self) {
+        self.ack.acknowledge_after_publication();
+    }
     /// Borrow the exact authenticated source still owned by the original dispatch.
-    pub(in crate::sumeragi) fn native_source_recovery(&self) -> Option<(
-        wire::BlockSubject, usize, &Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+    pub(in crate::sumeragi) fn native_source_recovery(
+        &self,
+    ) -> Option<(
+        wire::BlockSubject,
+        usize,
+        &Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
     )> {
         match &self.refusal {
-            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery { execution_index, authenticated_source, .. }
-                if !self.native_source_recovered => Some((self.dispatch.subject(), *execution_index, authenticated_source)),
+            super::v2_body_store::LocalValidationRefusal::NativeSourceRecovery {
+                execution_index,
+                authenticated_source,
+                ..
+            } if !self.native_source_recovered => Some((
+                self.dispatch.subject(),
+                *execution_index,
+                authenticated_source,
+            )),
             _ => None,
         }
     }
     /// Only the exact response-settlement receipt can release this source wait.
     pub(in crate::sumeragi) fn accept_native_source_completion(
-        &mut self, completion: &super::v2_apply::native_validation::NativeSourceRecoveryCompletion,
+        &mut self,
+        completion: &super::v2_apply::native_validation::NativeSourceRecoveryCompletion,
     ) -> bool {
-        let Some((subject, index, source)) = self.native_source_recovery() else { return false; };
-        if !completion.matches(subject, index, source) { return false; }
+        let Some((subject, index, source)) = self.native_source_recovery() else {
+            return false;
+        };
+        if !completion.matches(subject, index, source) {
+            return false;
+        }
         self.native_source_recovered = true;
         true
     }
@@ -475,11 +521,17 @@ impl RetainedLocalLifecycleValidateV1 {
 
         let wake = match &self.refusal {
             LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
+            LocalValidationRefusal::ObservationChanged { wake } => wake.clone(),
+            LocalValidationRefusal::Superseded => {
+                return LocalLifecycleValidateRetryV1::Superseded(self);
+            }
             LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
             LocalValidationRefusal::NativeSourceRecovery { wake, .. } => {
-                if !self.native_source_recovered { return LocalLifecycleValidateRetryV1::Waiting(self); }
+                if !self.native_source_recovered {
+                    return LocalLifecycleValidateRetryV1::Waiting(self);
+                }
                 wake.clone()
-            },
+            }
             LocalValidationRefusal::RecoveryRequired(reason) => {
                 self.ack
                     .drop_guard
@@ -754,11 +806,16 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
             }
             LifecycleDecisionApplyWorkerResultV1::Applied(_) => None,
         };
-        Self { guarded, work_ack, dependency }
+        Self {
+            guarded,
+            work_ack,
+            dependency,
+        }
     }
 
     /// Compare service queue, output guard, and recovery owner without releasing
     /// guarded completion or process-local dependencies.
+    #[allow(dead_code, reason = "TODO: native runner cutover")]
     pub(in crate::sumeragi) fn authorizes_sidecar_owner(
         &self,
         services: &ProductionV2Services,
@@ -779,7 +836,11 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
     pub(in crate::sumeragi) fn acknowledge_after_owner_settlement(
         self,
     ) -> LifecycleDecisionApplyWorkerResultV1 {
-        let Self { guarded, work_ack, dependency: _ } = self;
+        let Self {
+            guarded,
+            work_ack,
+            dependency: _,
+        } = self;
         work_ack.acknowledge();
         (*guarded).into_result()
     }
@@ -789,14 +850,18 @@ impl PreparedLifecycleDecisionApplyCompletionV1 {
     pub(in crate::sumeragi) fn retry_deferred(mut self) -> LifecycleDecisionApplyDeferredRetryV1 {
         match self.dependency.as_mut().map(RetainedApplyDependency::ready) {
             Some(Ok(false)) => return LifecycleDecisionApplyDeferredRetryV1::Unavailable(self),
-            Some(Ok(true)) => {},
+            Some(Ok(true)) => {}
             Some(Err(reason)) => {
                 self.work_ack.output_guard.retain_effect_failure(reason);
                 return LifecycleDecisionApplyDeferredRetryV1::RestartRequired;
             }
             None => return LifecycleDecisionApplyDeferredRetryV1::RestartRequired,
         }
-        let Self { guarded, work_ack, dependency } = self;
+        let Self {
+            guarded,
+            work_ack,
+            dependency,
+        } = self;
         let (result, mut completion_guard) = (*guarded).into_retry_parts();
         let LifecycleDecisionApplyWorkerResultV1::Deferred { task, refusal } = result else {
             drop(work_ack);

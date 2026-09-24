@@ -2029,6 +2029,18 @@ pub(super) struct DurableValidateCompletionAuthority {
     lifecycle_stage: LifecycleStage,
     payload: DurablePayloadReference,
 }
+/// Exact installed Waiting Validate row retained by a local dispatch.
+/// Cancellation can consume this only after finalized State supersedes its
+/// unexecuted Native source; it is not a body-validation verdict.
+#[derive(Clone, Copy)]
+pub(super) struct DurableValidateWaitingAuthority {
+    pub(super) address: ConcreteWorkAddress,
+    pub(super) digest: LifecycleDigest,
+    pub(super) wait_token: WaitToken,
+    pub(super) lifecycle_key: LifecycleKey,
+    pub(super) lifecycle_stage: LifecycleStage,
+    pub(super) payload: DurablePayloadReference,
+}
 /// Typed location of one published successful validation carrier.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2070,6 +2082,8 @@ enum ReadyValidateSuccessorIdentityV1 {
     /// A rejected volatile Validate completion replaced its same-address carrier.
     PublishedRejected(DurableValidatePublishedLocation),
     /// A durable merge-sidecar registration woke its unchanged carrier.
+    // TODO: wire the native sidecar wake into Ready Validate recovery.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native Validate sidecar wake"))]
     SidecarWake {
         dispatch_key: LifecycleValidateDispatchKeyV1,
         round: wire::ConsensusRound,
@@ -2143,6 +2157,7 @@ impl ReadyValidateSuccessorV1 {
     }
 
     /// Bind a consumed sidecar registration to the fresh unchanged Ready carrier.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native Validate sidecar wake"))]
     pub(super) fn from_sidecar_wake(
         dispatch_key: LifecycleValidateDispatchKeyV1,
         round: wire::ConsensusRound,
@@ -2871,6 +2886,59 @@ impl ConcreteLifecycleWorkRegistry {
 }
 
 include!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+impl ConcreteLifecycleWorkRegistry {
+    /// Rejoin the retained worker dispatch to its original, unexecuted
+    /// Waiting Validate carrier before a superseded-source cancellation.
+    pub(super) fn exactly_matches_waiting_validate_dispatch(
+        &self,
+        dispatch: &DurableValidateDispatch,
+    ) -> bool {
+        let request = &dispatch.request;
+        let Some(work) = self.entries.get(&request.address) else {
+            return false;
+        };
+        let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
+            return false;
+        };
+        let AdapterEffect::ValidateBody {
+            tag: _,
+            round,
+            subject,
+        } = &validate.effect else {
+            return false;
+        };
+        work.digest == request.incumbent_digest
+            && work.validates_at(request.address)
+            && validate.validates(work.digest)
+            && *round == request.round
+            && *subject == request.subject
+            && validate.durable_receipt == request.durable_receipt
+            && validate.expected_manifest_hash == request.expected_manifest_hash
+            && *validate.pending.causal_lifecycle_key() == request.causal_lifecycle_key
+            && validate.pending.candidate_statement() == request.candidate_statement
+            && durable_validation_wait_source_from_exact_parts(
+                request.address,
+                work.digest,
+                validate.pending.causal_lifecycle_key(),
+                validate.pending.candidate_statement(),
+                &validate.durable_receipt,
+                validate.expected_manifest_hash,
+                request.lifecycle_key,
+                request.lifecycle_stage,
+            ) == dispatch.wake.wait_token.source()
+    }
+
+    /// Retire only the preflighted same-address carrier after LedgerV1 fsync.
+    pub(super) fn retire_waiting_validate_dispatch(
+        &mut self,
+        dispatch: &DurableValidateDispatch,
+    ) -> bool {
+        if !self.exactly_matches_waiting_validate_dispatch(dispatch) {
+            return false;
+        }
+        self.entries.remove(&dispatch.request.address).is_some()
+    }
+}
 fn sealed_successor_parent<'a>(
     registry: &'a ConcreteLifecycleWorkRegistry,
     address: ConcreteWorkAddress,

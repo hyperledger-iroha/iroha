@@ -311,7 +311,7 @@ object TransferWirePayloadEncoder {
             return if (scope.isGlobal) {
                 "$definitionAddress#$accountId"
             } else {
-                "$definitionAddress#$accountId#dataspace:${scope.dataspaceId}"
+                "$definitionAddress#$accountId#dataspace:${java.lang.Long.toUnsignedString(scope.dataspaceId)}"
             }
         }
 
@@ -327,12 +327,17 @@ object TransferWirePayloadEncoder {
                 val scopePayload = if (parts.size == 2) {
                     globalScopePayload()
                 } else {
-                    val match = Regex("^dataspace:(\\d+)$").matchEntire(parts[2])
+                    val match = Regex("^dataspace:(0|[1-9][0-9]*)$").matchEntire(parts[2])
                         ?: throw IllegalArgumentException(
-                            "AssetId.scope must use 'dataspace:<id>' when present"
+                            "AssetId.scope must use a canonical 'dataspace:<u64>' suffix"
                         )
+                    val dataspaceId = try {
+                        java.lang.Long.parseUnsignedLong(match.groupValues[1])
+                    } catch (error: NumberFormatException) {
+                        throw IllegalArgumentException("AssetId.scope exceeds the u64 range", error)
+                    }
                     encodeAssetBalanceScopePayload(
-                        AssetBalanceScopePayload.dataspace(match.groupValues[1].toLong())
+                        AssetBalanceScopePayload.dataspace(dataspaceId)
                     )
                 }
                 return AssetId(accountId, assetDef, null, scopePayload)

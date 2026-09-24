@@ -83,7 +83,7 @@ CREDENTIAL_FIELDS = (
     "version", "credential_id", "network_id", "hardware_profile_id", "suite_id",
     "firmware_policy_digest", "policy_epoch", "lane_commitment", "hardware_epoch_id",
     "hardware_epoch_generation", "device_public_key", "device_key_reference",
-    "issued_at_ms", "expires_at_ms", "governance_signature",
+    "issued_at_ms", "expires_at_ms", "app_policy_binding_digest", "governance_signature",
 )
 PHYSICAL_CHECKS = (
     "airplane_mode",
@@ -697,7 +697,7 @@ def _sender_sequence() -> list[str]:
 
 
 def _credential_payload(credential: Mapping[str, Any]) -> bytes:
-    """Encode the exact existing Rust compact credential ID preimage payload."""
+    """Encode the exact first-release Rust compact credential ID preimage payload."""
     c = credential
     return release._norito_struct(
         release._u16(c["version"]), bytes.fromhex(c["network_id"]),
@@ -706,7 +706,7 @@ def _credential_payload(credential: Mapping[str, Any]) -> bytes:
         bytes.fromhex(c["lane_commitment"]), bytes.fromhex(c["hardware_epoch_id"]),
         release._u64(c["hardware_epoch_generation"]), bytes.fromhex(c["device_public_key"]),
         bytes.fromhex(c["device_key_reference"]), release._u64(c["issued_at_ms"]),
-        release._u64(c["expires_at_ms"]),
+        release._u64(c["expires_at_ms"]), bytes.fromhex(c["app_policy_binding_digest"]),
     )
 
 
@@ -781,6 +781,7 @@ def _sender_context(
         for field in (
             "credential_id", "network_id", "hardware_profile_id", "suite_id",
             "firmware_policy_digest", "lane_commitment", "hardware_epoch_id", "device_key_reference",
+            "app_policy_binding_digest",
         ):
             _digest(c[field], f"sender credential.{field}")
         _integer(c["version"], "sender credential.version", minimum=1, maximum=1)

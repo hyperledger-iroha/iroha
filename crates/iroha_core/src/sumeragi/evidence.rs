@@ -1353,18 +1353,8 @@ pub(crate) fn validate_v2_equivocation(
             {
                 return Err(EvidenceValidationError::V2ArtifactsDoNotConflict);
             }
-            verify_v2_individual_signature(
-                context,
-                first.signer,
-                &first.signature,
-                &first.signature_preimage(),
-            )?;
-            verify_v2_individual_signature(
-                context,
-                second.signer,
-                &second.signature,
-                &second.signature_preimage(),
-            )
+            verify_v2_phase_vote_signature(context, first)?;
+            verify_v2_phase_vote_signature(context, second)
         }
         wire_v2::SumeragiV2Equivocation::TimeoutVote { first, second } => {
             first
@@ -1448,6 +1438,17 @@ fn verify_v2_individual_signature(
     signature
         .verify(context.roster[index].validator.public_key(), preimage)
         .map_err(|_| EvidenceValidationError::V2SignatureInvalid)
+}
+fn verify_v2_phase_vote_signature(
+    context: &wire_v2::HeightContext,
+    vote: &wire_v2::Vote,
+) -> Result<(), EvidenceValidationError> {
+    super::v2::verify_completed_consensus_signature(
+        context,
+        &super::v2::SignRequest::Vote(vote.clone()),
+        &vote.signature,
+    )
+    .map_err(|_| EvidenceValidationError::V2SignatureInvalid)
 }
 fn verify_v2_proposal_justification(
     context: &wire_v2::HeightContext,
@@ -1807,6 +1808,67 @@ mod tests {
             vote.signature = self.sign(signer, &vote.signature_preimage());
             vote
         }
+        fn sealed_commit_vote(&self, subject: wire_v2::BlockSubject) -> wire_v2::Vote {
+            use iroha_data_model::isi::kagemusha_v1::{
+                KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalitySealShareV1, KagemushaTopUpLeafV1,
+                kagemusha_mint_finality_root_v1,
+            };
+            use norito::codec::Encode as _;
+
+            let signer = 1;
+            let mut vote = self.vote(signer, wire_v2::GlobalPhase::Commit, subject);
+            let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![
+                KagemushaTopUpLeafV1 {
+                    version: KAGEMUSHA_CHAIN_VERSION_V1,
+                    operation_id: [0x31; 32],
+                    reserve_receipt_digest: [0x32; 32],
+                    statement_digest: [0x33; 32],
+                    amount: 7,
+                },
+            ])
+            .expect("canonical top-up tree");
+            vote.execution_commitment.kagemusha_top_up_count = tree.leaf_count();
+            vote.execution_commitment.kagemusha_top_up_root =
+                Some(kagemusha_mint_finality_root_v1(tree.root()));
+            vote.execution_commitment.post_state_root =
+                wire_v2::ExecutionCommitment::kagemusha_post_state_root_v1(
+                    vote.execution_commitment.kagemusha_top_up_count,
+                    vote.execution_commitment.ordinary_writes_root,
+                    vote.execution_commitment
+                        .kagemusha_top_up_root
+                        .expect("non-empty top-up root"),
+                );
+            let message =
+                crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
+                    &self.context.kagemusha_mint_finality_authority,
+                    &self.context,
+                    &vote,
+                )
+                .expect("valid top-up Commit vote")
+                .expect("top-up Commit requires a seal");
+            let pasta_signer =
+                crate::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::from_seed(
+                    zeroize::Zeroizing::new(
+                        [0xA0 + u8::try_from(signer).expect("fixture signer"); 32],
+                    ),
+                    signer,
+                    &self.context.kagemusha_mint_finality_authority,
+                )
+                .expect("paired Pasta fixture signer");
+            let share = KagemushaMintFinalitySealShareV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                seal: pasta_signer.sign(&message).expect("paired Pasta signature"),
+                message,
+            };
+            let bls = self.sign(signer, &vote.signature_preimage());
+            vote.signature = wire_v2::encode_kagemusha_consensus_signature_envelope_v1(
+                wire_v2::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+                &bls,
+                &share.encode(),
+            )
+            .expect("canonical Commit vote envelope");
+            vote
+        }
         fn prepare_qc(&self, subject: wire_v2::BlockSubject) -> wire_v2::QuorumCertificate {
             let signers = vec![0, 1, 2];
             let unsigned = wire_v2::Vote {
@@ -2120,17 +2182,16 @@ mod tests {
             .checked_add(1)
             .expect("fixture admission follows evidence height");
         let key = v2_evidence_admission_key(&evidence);
-        let recorded_height = evidence.context.height + 1;
         let mut records = state.world.consensus_evidence.block();
         records.insert(
             key,
             EvidenceRecord {
                 evidence: canonical_v2_evidence(&evidence),
-                recorded_at_height: recorded_height,
+                recorded_at_height,
                 recorded_at_view: 0,
                 recorded_at_ms: 20,
                 penalty_status: EvidencePenaltyStatus::Applied {
-                    height: recorded_height,
+                    height: recorded_at_height,
                 },
             },
         );
@@ -2210,6 +2271,57 @@ mod tests {
             second: fixture.timeout_vote(2, Some(fixture.prepare_qc(subject_a))),
         });
         validate_v2_equivocation(&timeout).expect("valid double timeout vote");
+    }
+    #[test]
+    fn sumeragi_v2_equivocation_authenticates_sealed_commit_vote_pair() {
+        let fixture = V2EvidenceFixture::new();
+        let first = fixture.sealed_commit_vote(fixture.subject(0x63));
+        let second = fixture.sealed_commit_vote(fixture.subject(0x64));
+        let evidence = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: first.clone(),
+            second: second.clone(),
+        });
+        validate_v2_equivocation(&evidence)
+            .expect("distinct Commit votes with BLS and Pasta signatures prove equivocation");
+
+        let mut wrong_seal = first.clone();
+        let bls = wrong_seal
+            .bls_signature()
+            .expect("valid BLS envelope")
+            .to_vec();
+        let other_seal = second
+            .kagemusha_finality_seal_payload()
+            .expect("valid Commit vote envelope")
+            .expect("top-up seal")
+            .to_vec();
+        wrong_seal.signature = wire_v2::encode_kagemusha_consensus_signature_envelope_v1(
+            wire_v2::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+            &bls,
+            &other_seal,
+        )
+        .expect("canonical but misbound Pasta seal");
+        let evidence = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: wrong_seal,
+            second: second.clone(),
+        });
+        assert!(
+            validate_v2_equivocation(&evidence).is_err(),
+            "evidence must reject a valid BLS share paired with another vote's Pasta seal"
+        );
+
+        let mut missing_seal = first;
+        missing_seal.signature = missing_seal
+            .bls_signature()
+            .expect("valid BLS envelope")
+            .to_vec();
+        let evidence = fixture.payload(wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: missing_seal,
+            second,
+        });
+        assert!(
+            validate_v2_equivocation(&evidence).is_err(),
+            "a top-up Commit vote cannot prove equivocation without its required Pasta seal"
+        );
     }
     #[test]
     fn sumeragi_v2_equivocation_authenticates_vote_origin_and_execution() {

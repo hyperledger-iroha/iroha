@@ -91,12 +91,14 @@ public final class IrohaPeerNfcV1 {
       final IrohaPeerNfcProfilePolicyV1 profilePolicy,
       final IrohaPeerNfcLimitsV1 limits,
       final IrohaPeerNfcReaderTransceiverV1 transceiver,
-      final IrohaPeerNfcReaderExchangeV1.PreparePayment preparePayment) {
+      final IrohaPeerNfcReaderExchangeV1.PreparePayment preparePayment,
+      final IrohaPeerNfcReaderExchangeV1.PersistAcknowledgement persistAcknowledgement) {
     return IrohaPeerNfcReaderExchangeV1.run(
         Objects.requireNonNull(profilePolicy, "profilePolicy"),
         Objects.requireNonNull(limits, "limits"),
         Objects.requireNonNull(transceiver, "transceiver"),
-        Objects.requireNonNull(preparePayment, "preparePayment"));
+        Objects.requireNonNull(preparePayment, "preparePayment"),
+        Objects.requireNonNull(persistAcknowledgement, "persistAcknowledgement"));
   }
 
   static org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile sharedProfile(

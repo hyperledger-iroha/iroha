@@ -1833,6 +1833,12 @@ async fn signed_query_authorization_exact_account_grant_reads_only_its_restricte
     let requests = [
         request_for_test(
             &authority,
+            iroha_data_model::query::QueryRequest::Start(
+                build_account_bound_exact_transaction_query_for_test(target.clone()),
+            ),
+        ),
+        request_for_test(
+            &authority,
             iroha_data_model::query::QueryRequest::Singular(
                 iroha_data_model::query::account::prelude::FindAccountById::new(target.clone())
                     .into(),
@@ -2155,7 +2161,7 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
                 .expect("public visibility routes should resolve")
         }
         AccountRouteMatrixCase::AccountAssets => {
-            super::torii_account_assets_read_routes(app.as_ref(), &authority, None, false)
+            super::torii_account_assets_read_routes(app.as_ref(), &authority, None)
                 .expect("public account-assets routes should resolve")
         }
         AccountRouteMatrixCase::PermissionsSigned => super::torii_account_permissions_read_routes(
@@ -2318,15 +2324,9 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         &target,
         Some(&caller),
     ));
-    let routes =
-        super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller), false)
-            .expect("visible account routes");
-    assert!(
-        routes
-            .iter()
-            .all(|route| route.dataspace_id != restricted_dataspace),
-        "a valid foreign signature is not a restricted-dataspace grant"
-    );
+    let denied = super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller))
+        .expect_err("a foreign signed account-assets read must not report a false zero");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 
     grant_account_permission_for_test(
         &app,
@@ -2336,9 +2336,8 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         }
         .into(),
     );
-    let granted =
-        super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller), false)
-            .expect("granted visible routes");
+    let granted = super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller))
+        .expect("granted visible routes");
     assert!(
         granted
             .iter()
@@ -2354,6 +2353,194 @@ async fn signed_foreign_account_reads_do_not_gain_target_routes_without_a_grant(
         &target,
         Some(&caller),
     ));
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mismatch() {
+    let target = checked_torii_test_account_id(0xa1, "delegated assets target");
+    let sibling = checked_torii_test_account_id(0xa2, "delegated assets sibling");
+    let caller = checked_torii_test_account_id(0xa3, "delegated assets caller");
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-subject"));
+    let restricted_dataspace = DataSpaceId::new(10);
+    let domain =
+        Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&target);
+    let mut world = World::with(
+        [domain],
+        [
+            Account::new(target.clone())
+                .with_uaid(Some(uaid))
+                .build(&target),
+            Account::new(sibling.clone())
+                .with_uaid(Some(uaid))
+                .build(&sibling),
+            Account::new(caller.clone()).build(&caller),
+        ],
+        [],
+    );
+    bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, restricted_dataspace);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    configure_private_ingress_routes_for_test(&mut app);
+    assert_eq!(
+        super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller))
+            .expect_err("ungranted private target must fail")
+            .status(),
+        StatusCode::FORBIDDEN,
+    );
+    let permission: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
+        account: target.clone(),
+    }
+    .into();
+    grant_account_permission_for_test(&app, &caller, permission.clone());
+    let route = super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller))
+        .expect("exact grant opens target routes")
+        .into_iter()
+        .find(|route| route.dataspace_id == restricted_dataspace)
+        .expect("target has private route");
+    assert_eq!(
+        super::torii_account_assets_read_routes(app.as_ref(), &sibling, Some(&caller))
+            .expect_err("same-subject sibling requires its own grant")
+            .status(),
+        StatusCode::FORBIDDEN,
+    );
+    let scope = ToriiFanoutRouteScopeV1::TargetAccount {
+        account_id: target.to_string(),
+        caller_account_id: Some(caller.to_string()),
+    };
+    let visibility = super::torii_account_assets_route_visibility(
+        app.as_ref(),
+        &scope,
+        &target.to_string(),
+        route,
+    )
+    .expect("producer rechecks exact target grant");
+    let world = app.state.world_view();
+    assert!(visibility.allows_account(&world, &target));
+    assert!(!visibility.allows_account(&world, &sibling));
+    assert_eq!(
+        super::torii_account_assets_route_visibility(
+            app.as_ref(),
+            &scope,
+            &sibling.to_string(),
+            route,
+        )
+        .expect_err("proxy path must match authenticated target scope")
+        .status(),
+        StatusCode::BAD_REQUEST,
+    );
+    drop(world);
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    assert!(
+        tx.world_mut_for_testing()
+            .remove_account_permission(&caller, &permission)
+    );
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit revocation");
+    assert_eq!(
+        super::torii_account_assets_route_visibility(
+            app.as_ref(),
+            &scope,
+            &target.to_string(),
+            route,
+        )
+        .expect_err("retained routed request must fail after revocation")
+        .status(),
+        StatusCode::FORBIDDEN,
+    );
+}
+
+#[cfg(feature = "app_api")]
+#[test]
+fn delegated_account_assets_role_grant_is_rechecked_after_role_revocation() {
+    let target = checked_torii_test_account_id(0xa4, "role asset-read target");
+    let caller = checked_torii_test_account_id(0xa5, "role asset-read caller");
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"delegated-role-assets-subject"));
+    let restricted_dataspace = DataSpaceId::new(10);
+    let role_id: iroha_data_model::role::RoleId = "delegated_asset_reader".parse().expect("role");
+    let permission: Permission = iroha_executor_data_model::permission::query::CanReadAccountData {
+        account: target.clone(),
+    }
+    .into();
+    let role = iroha_data_model::role::Role::new(role_id.clone(), caller.clone())
+        .add_permission(permission)
+        .build(&caller);
+    let domain =
+        Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&target);
+    let mut world = World::with_assets_and_roles(
+        [domain],
+        [
+            Account::new(target.clone())
+                .with_uaid(Some(uaid))
+                .build(&target),
+            Account::new(caller.clone()).build(&caller),
+        ],
+        [],
+        [],
+        [],
+        [role],
+    );
+    bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, restricted_dataspace);
+    world.grant_role_for_tests(caller.clone(), role_id);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    configure_private_ingress_routes_for_test(&mut app);
+    let route = super::torii_account_assets_read_routes(app.as_ref(), &target, Some(&caller))
+        .expect("effective role permission opens the exact target")
+        .into_iter()
+        .find(|route| route.dataspace_id == restricted_dataspace)
+        .expect("private route");
+    let scope = ToriiFanoutRouteScopeV1::TargetAccount {
+        account_id: target.to_string(),
+        caller_account_id: Some(caller.clone().to_string()),
+    };
+    super::torii_account_assets_route_visibility(app.as_ref(), &scope, &target.to_string(), route)
+        .expect("producer accepts current role grant");
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let mut block = app.state.block(BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing().remove_account_roles(&caller);
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit role revocation");
+    assert_eq!(
+        super::torii_account_assets_route_visibility(
+            app.as_ref(),
+            &scope,
+            &target.to_string(),
+            route,
+        )
+        .expect_err("producer rejects revoked effective role permission")
+        .status(),
+        StatusCode::FORBIDDEN,
+    );
 }
 
 #[cfg(feature = "app_api")]
@@ -3404,4 +3591,88 @@ async fn anonymous_loopback_cannot_read_restricted_or_missing_explorer_accounts(
         .expect_err("anonymous loopback must not distinguish a restricted account from absence");
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
+}
+
+fn build_account_bound_exact_transaction_query_for_test(
+    target: AccountId,
+) -> iroha_data_model::query::QueryWithParams {
+    use iroha_data_model::query::{
+        CommittedTransaction, CommittedTxFilters, Query, QueryWithParams,
+        dsl::{CompoundPredicate, SelectorTuple},
+        parameters::QueryParams,
+        transaction::prelude::FindTransactions,
+    };
+    use norito::codec::Encode;
+    let query = FindTransactions::new();
+    QueryWithParams {
+        query: (),
+        query_payload: query.dyn_encode(),
+        item: query.query_item_kind(),
+        predicate_bytes: CompoundPredicate::from_filters(CommittedTxFilters {
+            authority_eq: Some(target),
+            entry_eq: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"scoped-recovery-fixture",
+            ))),
+            ..CommittedTxFilters::default()
+        })
+        .encode(),
+        selector_bytes: SelectorTuple::<CommittedTransaction>::default().encode(),
+        params: QueryParams::default(),
+    }
+}
+
+#[test]
+fn signed_query_scope_exact_transaction_recovery_is_shared_and_bounded() {
+    let target = checked_torii_test_account_id(0xa7, "exact transaction target");
+    let authority = checked_torii_test_account_id(0xa8, "exact transaction reader");
+    let query = build_account_bound_exact_transaction_query_for_test(target.clone());
+    let limits = super::QueryScopeMemoryLimits {
+        decode_allocated_bytes: 64 * 1024,
+        canonical_encoded_bytes: 64 * 1024,
+    };
+    assert_eq!(
+        super::target_account_iterable_query_bounded(&query, limits).unwrap(),
+        Some(target.clone())
+    );
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(query.clone())
+        )),
+        super::SignedQueryScope::TargetAccount(target)
+    );
+    let insufficient = super::QueryScopeMemoryLimits {
+        decode_allocated_bytes: 1,
+        canonical_encoded_bytes: 1,
+    };
+    assert_eq!(
+        super::target_account_iterable_query_bounded(&query, insufficient)
+            .expect_err("scope inspection must preserve admitted memory bounds")
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let mut malformed = query;
+    malformed.predicate_bytes.push(0);
+    assert_eq!(
+        super::target_account_iterable_query_bounded(&malformed, limits).unwrap(),
+        None
+    );
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(malformed)
+        )),
+        super::SignedQueryScope::AuthorityRouted
+    );
+    let continuation = iroha_data_model::query::QueryRequest::Continue(
+        iroha_data_model::query::parameters::ForwardCursor {
+            query: "a".repeat(64),
+            cursor: NonZeroU64::new(1).unwrap(),
+            gas_budget: None,
+        },
+    );
+    assert_eq!(
+        super::signed_query_scope(&request_for_test(&authority, continuation)),
+        super::SignedQueryScope::AuthorityRouted
+    );
 }

@@ -10487,7 +10487,8 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
-        let status = try await makeClient().getKagemushaOperation(operationID: operationID)
+        let observed = try await makeClient().getKagemushaOperation(operationID: operationID)
+        let status = try XCTUnwrap(observed)
         XCTAssertEqual(status.state, .applied)
         XCTAssertTrue(status.description.contains("[WITHHELD]"))
         XCTAssertFalse(status.description.contains("opaque"))
@@ -10496,6 +10497,53 @@ final class ToriiClientTests: XCTestCase {
             return try XCTUnwrap(String(data: data, encoding: .utf8))
         }
         XCTAssertTrue(released.contains("untrusted_finality"))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaOperationOnlyTreatsExactToriiResource404AsAbsence() async throws {
+        let operationID = Data(repeating: 0xd2, count: 32)
+        let code = "kagemusha_operation_not_found"
+        func installResponse(headerCode: String?, bodyCode: String,
+                             contentType: String = "application/json",
+                             rawBody: String? = nil) {
+            StubURLProtocol.handler = { request in
+                var headers = ["Content-Type": contentType]
+                if let headerCode { headers["X-Iroha-Reject-Code"] = headerCode }
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 404, httpVersion: nil,
+                    headerFields: headers
+                )!
+                let body = Data((rawBody ??
+                    "{\"code\":\"\(bodyCode)\",\"message\":\"Operation is unknown.\"}").utf8)
+                return (response, body)
+            }
+        }
+
+        installResponse(headerCode: code, bodyCode: code)
+        let absent = try await makeClient().getKagemushaOperation(operationID: operationID)
+        XCTAssertNil(absent)
+
+        let invalidResponses: [(String?, String, String, String?)] = [
+            (nil, code, "application/json", nil),
+            ("route_not_found", "route_not_found", "application/json", nil),
+            (code, "route_not_found", "application/json", nil),
+            (code, code, "text/plain", nil),
+            (code, code, "application/json",
+             "{\"code\":\"\(code)\",\"message\":\"unknown\",\"details\":null}"),
+            (code, code, "application/json",
+             String(repeating: " ", count: 2_049)
+                + "{\"code\":\"\(code)\",\"message\":\"unknown\"}"),
+        ]
+        for (header, body, mediaType, rawBody) in invalidResponses {
+            installResponse(headerCode: header, bodyCode: body,
+                contentType: mediaType, rawBody: rawBody)
+            do {
+                _ = try await makeClient().getKagemushaOperation(operationID: operationID)
+                XCTFail("A route/proxy 404 must not become operation absence")
+            } catch {
+                // Only the exact application-resource error permits signed replay.
+            }
+        }
     }
 
     private func kagemushaStatusJSON(
