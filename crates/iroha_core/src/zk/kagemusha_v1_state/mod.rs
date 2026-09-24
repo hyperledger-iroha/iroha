@@ -60,6 +60,11 @@ pub use recovery_metadata::{
     KagemushaRecoveryJournalPrefixV1, KagemushaRecoveryJournalsV1, KagemushaRecoveryMetadataV1,
 };
 mod sparse_merkle;
+mod state_proof_archive_export;
+pub use state_proof_archive_export::{
+    KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
+    KagemushaOutgoingStateProofArchivePairV1,
+};
 
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use candidate_lifecycle::terminal_journal_canonical_layout_v1;
@@ -2625,6 +2630,77 @@ where
             |normalized_digest| {
                 local_transition_transport_digest(
                     KagemushaTransitionKindV1::SendSplit,
+                    self.state.release_id,
+                    self.state.liability_pool_id,
+                    statement.prepared_transition_binding_digest,
+                    self.state.state_commitment,
+                    rebuilt.successor_state.state_commitment,
+                    normalized_digest,
+                )
+            },
+        )?;
+        if preview.proof_statement != *statement
+            || preview.hardware_statement.state_transition_digest != rebuilt.state_transition_digest
+            || preview.hardware_statement.normalized_guard_statement_digest
+                != rebuilt.normalized_guard_statement_digest
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(preview)
+    }
+
+    /// Reconstruct the exact Core redemption preview for the genuine-proof diagnostic corridor.
+    ///
+    /// This test-only projection checks the complete prepared candidate before exposing the
+    /// normalized Guard statement needed by the proof builder. It cannot refresh commit time.
+    #[cfg(all(test, feature = "zk-halo2-ipa"))]
+    pub(crate) fn diagnostic_redeem_split_preview(
+        &self,
+        candidate: &PreparedOutgoingCandidateV1,
+        trusted_commit_time_ms: u64,
+    ) -> Result<TransitionPreviewV1, KagemushaStateErrorV1> {
+        let PreparedOutgoingRecoveryViewV1::Redemption { statement, .. } =
+            candidate.recovery_view()
+        else {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        };
+        if candidate.predecessor_state != self.state || trusted_commit_time_ms == 0 {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let rebuilt = self.prepare_redeem_split(RedeemSplitPreparationV1 {
+            amount: statement.amount,
+            beneficiary: statement.beneficiary.clone(),
+            terminal_nullifier: statement.terminal_nullifier,
+            redemption_commitment: statement.redemption_commitment,
+            successor_state_nonce_commitment: candidate.successor_state.state_nonce_commitment,
+            commit_evidence: statement.commit_evidence,
+            commit_authorization_reference_ms: trusted_commit_time_ms,
+            outbox_reservation: candidate.outbox_reservation,
+            prepared_one_use_authorization_digest: candidate.prepared_one_use_authorization_digest,
+            sealed_transition_inputs: candidate.sealed_transition_inputs.clone(),
+            sealed_recovery_seeds: candidate.sealed_recovery_seeds.clone(),
+        })?;
+        if rebuilt != *candidate {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let statement = &rebuilt.proof_statement;
+        let preview = self.transition_preview(
+            KagemushaTransitionKindV1::RedeemSplit,
+            rebuilt.successor_state.clone(),
+            statement.effect_digest,
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            TransitionAuxiliaryBindingsV1 {
+                lifecycle_binding_digest: statement.lifecycle_binding_digest,
+                prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+                ..TransitionAuxiliaryBindingsV1::default()
+            },
+            trusted_commit_time_ms,
+            |normalized_digest| {
+                local_transition_transport_digest(
+                    KagemushaTransitionKindV1::RedeemSplit,
                     self.state.release_id,
                     self.state.liability_pool_id,
                     statement.prepared_transition_binding_digest,

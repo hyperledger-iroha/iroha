@@ -1,4 +1,4 @@
-//! Paired fixed-shape planning for the dormant complete send opening.
+//! Paired fixed-shape planning for the complete outgoing opening.
 
 use super::*;
 use crate::zk::kagemusha_v1_recursion::{
@@ -179,8 +179,13 @@ fn plan_case() -> (
 #[test]
 fn complete_send_sha_plan_preserves_parity_and_fixed_capacity() {
     let (semantic, eq, ep) = plan_case();
-    let plan = plan_terminal_prepared_send_sha_v1(&semantic, &eq, &ep)
-        .expect("complete paired send SHA plan");
+    let plan = plan_terminal_prepared_outgoing_sha_v1(
+        &semantic,
+        &eq,
+        &ep,
+        KagemushaOperationV1::SendSplit,
+    )
+    .expect("complete paired send SHA plan");
     assert_eq!(plan.eq_messages.len(), 32);
     assert_eq!(plan.ep_messages.len(), 32);
     assert_eq!(&plan.active_job_block_counts[..26], &[1; 26]);
@@ -196,10 +201,29 @@ fn complete_send_sha_plan_preserves_parity_and_fixed_capacity() {
 }
 
 #[test]
+fn send_opening_cannot_be_relabelled_as_redemption() {
+    let (semantic, eq, ep) = plan_case();
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &eq,
+            &ep,
+            KagemushaOperationV1::RedeemSplit,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn complete_send_active_messages_feed_the_existing_typed_claim_plan() {
     let (semantic, eq, ep) = plan_case();
-    let plan =
-        plan_terminal_prepared_send_sha_v1(&semantic, &eq, &ep).expect("paired prepared send plan");
+    let plan = plan_terminal_prepared_outgoing_sha_v1(
+        &semantic,
+        &eq,
+        &ep,
+        KagemushaOperationV1::SendSplit,
+    )
+    .expect("paired prepared send plan");
     let release = [0x5a; 32];
     let expected_stages: u64 = plan
         .active_job_block_counts
@@ -257,8 +281,13 @@ fn complete_send_sha_plan_accepts_active_block_growth_with_fixed_capacity() {
         Sha256::digest(message_mut(&mut eq[26]).as_slice()).into();
     semantic.prepared_candidate_bindings.preparation_id =
         Sha256::digest(message_mut(&mut eq[28]).as_slice()).into();
-    let plan = plan_terminal_prepared_send_sha_v1(&semantic, &eq, &ep)
-        .expect("active stream length may grow within its fixed capacity");
+    let plan = plan_terminal_prepared_outgoing_sha_v1(
+        &semantic,
+        &eq,
+        &ep,
+        KagemushaOperationV1::SendSplit,
+    )
+    .expect("active stream length may grow within its fixed capacity");
     assert_eq!(plan.active_job_block_counts[26], 3);
     assert_eq!(plan.capacity_job_block_counts[26], 33);
 }
@@ -273,27 +302,67 @@ fn complete_send_sha_plan_rejects_missing_or_altered_paired_jobs() {
         prepared_candidate_bindings: semantic.prepared_candidate_bindings,
     };
     changed_semantic.job_block_counts[0] += 1;
-    assert!(plan_terminal_prepared_send_sha_v1(&changed_semantic, &eq, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &changed_semantic,
+            &eq,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     changed.pop();
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     message_mut(&mut changed[0])[0] ^= 1;
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     if let PastaSha256PlanMessageV1::Bounded { selected_block, .. } = &mut changed[26] {
         *selected_block += 1;
     }
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     if let PastaSha256PlanMessageV1::Bounded { capacity, .. } = &mut changed[27] {
         *capacity -= 1;
     }
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     if let PastaSha256PlanMessageV1::Bounded {
@@ -304,21 +373,53 @@ fn complete_send_sha_plan_rejects_missing_or_altered_paired_jobs() {
     {
         logical_message.resize(*capacity + 1, 0);
     }
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     if let PastaSha256PlanMessageV1::Bounded { max_blocks, .. } = &mut changed[30] {
         *max_blocks -= 1;
     }
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = eq.clone();
     changed[28] = PastaSha256PlanMessageV1::Ordinary(vec![0; 475]);
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed, &ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed,
+            &ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = ep.clone();
     message_mut(&mut changed[31])[20] ^= 1;
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &eq, &changed).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &eq,
+            &changed,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 
     let mut changed = ep.clone();
     if let PastaSha256PlanMessageV1::Bounded {
@@ -332,7 +433,15 @@ fn complete_send_sha_plan_rejects_missing_or_altered_paired_jobs() {
         logical_message[content_start - 8..content_start].copy_from_slice(&100_u64.to_le_bytes());
         *selected_block = blocks(logical_message.len()) - 1;
     }
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &eq, &changed).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &eq,
+            &changed,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -351,7 +460,13 @@ fn complete_send_sha_plan_rejects_changed_state_candidate_carriers() {
             changed.prepared_candidate_bindings.sealed_stream_digests[role - 1][0] ^= 1;
         }
         assert!(
-            plan_terminal_prepared_send_sha_v1(&changed, &eq, &ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &changed,
+                &eq,
+                &ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted opening detached from State candidate carrier {role}"
         );
     }
@@ -401,6 +516,32 @@ fn prepared_candidate_bindings_decode_the_same_fixed_column_in_both_parities() {
 }
 
 #[test]
+fn prepared_candidate_bindings_require_identical_eq_ep_carriers() {
+    let eq = TerminalPreparedCandidateBindingsV1 {
+        preparation_id: [0x19; 32],
+        sealed_stream_digests: [[0x27; 32], [0x35; 32]],
+    };
+    assert_eq!(
+        require_paired_prepared_candidate_bindings_v1(eq, eq),
+        Ok(eq)
+    );
+
+    for role in 0..3 {
+        let mut ep = eq;
+        if role == 0 {
+            ep.preparation_id[0] ^= 1;
+        } else {
+            ep.sealed_stream_digests[role - 1][0] ^= 1;
+        }
+        assert_eq!(
+            require_paired_prepared_candidate_bindings_v1(eq, ep),
+            Err("terminal paired State candidates carry different prepared intents".to_owned()),
+            "accepted Eq/Ep prepared-intent mismatch at carrier {role}"
+        );
+    }
+}
+
+#[test]
 fn complete_send_sha_plan_rejects_changed_opening_preimages() {
     let (semantic, eq, ep) = plan_case();
     for (job, byte) in [(26, 0), (27, 0), (28, 0), (29, 8), (30, 8), (31, 0)] {
@@ -409,7 +550,13 @@ fn complete_send_sha_plan_rejects_changed_opening_preimages() {
         message_mut(&mut changed_eq[job])[byte] ^= 1;
         message_mut(&mut changed_ep[job])[byte] ^= 1;
         assert!(
-            plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &semantic,
+                &changed_eq,
+                &changed_ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted mutated opening job {job}"
         );
     }
@@ -428,7 +575,13 @@ fn complete_send_sha_plan_rejects_changed_opening_preimages() {
         message_mut(&mut changed_eq[job])[length_offset] ^= 1;
         message_mut(&mut changed_ep[job])[length_offset] ^= 1;
         assert!(
-            plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &semantic,
+                &changed_eq,
+                &changed_ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted mutated opening length in job {job}"
         );
     }
@@ -437,7 +590,15 @@ fn complete_send_sha_plan_rejects_changed_opening_preimages() {
     let version_offset = terminal_body_commitment::TERMINAL_BODY_DOMAIN_V1.len() + 1 + 8;
     message_mut(&mut changed_eq[31])[version_offset] ^= 1;
     message_mut(&mut changed_ep[31])[version_offset] ^= 1;
-    assert!(plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err());
+    assert!(
+        plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &changed_eq,
+            &changed_ep,
+            KagemushaOperationV1::SendSplit
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -450,7 +611,13 @@ fn complete_send_sha_plan_rejects_transcript_stream_length_mismatch() {
         message_mut(&mut changed_eq[28])[offset] ^= 1;
         message_mut(&mut changed_ep[28])[offset] ^= 1;
         assert!(
-            plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &semantic,
+                &changed_eq,
+                &changed_ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted preparation transcript length unrelated to its sealed stream"
         );
     }
@@ -466,7 +633,13 @@ fn complete_send_sha_plan_rejects_transcript_stream_digest_mismatch() {
         message_mut(&mut changed_eq[28])[offset] ^= 1;
         message_mut(&mut changed_ep[28])[offset] ^= 1;
         assert!(
-            plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &semantic,
+                &changed_eq,
+                &changed_ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted preparation transcript digest unrelated to its sealed stream"
         );
     }
@@ -487,7 +660,13 @@ fn complete_send_sha_plan_rejects_noncanonical_durable_frame_headers_in_both_par
         message_mut(&mut changed_eq[job])[frame_start] ^= 1;
         message_mut(&mut changed_ep[job])[frame_start] ^= 1;
         assert!(
-            plan_terminal_prepared_send_sha_v1(&semantic, &changed_eq, &changed_ep).is_err(),
+            plan_terminal_prepared_outgoing_sha_v1(
+                &semantic,
+                &changed_eq,
+                &changed_ep,
+                KagemushaOperationV1::SendSplit
+            )
+            .is_err(),
             "accepted altered canonical header in opening job {job}"
         );
     }

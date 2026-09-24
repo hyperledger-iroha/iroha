@@ -11,7 +11,7 @@ use crate::zk::kagemusha_v1_recursion::{
     real_handoff_qualification_tests::aggregate_state_with_balance,
     terminal_authorization::{
         canonical_commit_certificate_digest_v1, canonical_prepared_one_use_authorization_digest_v1,
-        canonical_terminal_send_output_binding_v1,
+        canonical_terminal_send_output_binding_v1, plan_terminal_semantic_sha_v1,
     },
 };
 use halo2_proofs::poly::commitment::ParamsProver as _;
@@ -456,7 +456,9 @@ fn assert_complete_semantic_queue_matches_original(
         one_use_hardware_authorization: openings.one_use_hardware_authorization,
         terminal_payload_digest: candidate.transport_semantic_digest,
         send,
-        send_sealed_streams: None,
+        // Prefix-only fixture: these bytes satisfy the mandatory producer shape. The full
+        // outgoing planner separately SHA-opens exact committed candidate bytes.
+        outgoing_sealed_streams: Some([vec![0x11], vec![0x22]]),
         journal_revision_before: 5,
         journal_revision_after: 6,
         authorization_counter_before: 0,

@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -13,6 +14,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
+/** Scripted enrollment phases require the ABI-23 host validator for the universal account ID. */
+@Tag("host-native")
 class KagemushaNativeEnrollmentPhasesV1Test {
     private val account = AccountAddress.fromAccount(
         hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),

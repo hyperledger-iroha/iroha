@@ -11,6 +11,8 @@
 mod app_attest_assertion_cbor;
 #[path = "app_attest_assertion_fold.rs"]
 mod app_attest_assertion_fold;
+#[path = "app_attest_state_guard_stage.rs"]
+mod app_attest_state_guard_stage;
 #[path = "apple_compact_credential_id.rs"]
 mod apple_compact_credential_id;
 
@@ -1067,13 +1069,6 @@ fn constrain_signed_subject_u64_v1<F: KagemushaPoseidonFieldV1>(
 /// Send and redeem require a nonzero commitment; every other operation requires
 /// zero. This is only the operation-shape constraint: the exact outgoing body
 /// still needs to be derived from authenticated terminal openings.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_signed_terminal_body_mode_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     operation: AssignedValue<F>,
@@ -1112,13 +1107,6 @@ fn constrain_apple_signed_terminal_body_mode_v1<F: KagemushaPoseidonFieldV1>(
 /// This authenticates which key may enter the staged P-256 assertion equation. The
 /// separate terminal credential opening must still prove that the claimed compact ID
 /// is the canonical issuer credential ID before this can authorize money.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_enrolled_credential_guard_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     credential_id: [u8; 32],
@@ -1168,13 +1156,6 @@ fn constrain_apple_enrolled_credential_guard_v1<F: KagemushaPoseidonFieldV1>(
 ///
 /// The statement/terminal digests, Apple RP policy, and ECDSA relation need their own complete
 /// links before this partial slice can authorize an app transition.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,

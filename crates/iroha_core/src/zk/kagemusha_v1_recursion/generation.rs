@@ -948,11 +948,11 @@ pub struct KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     pub terminal_payload_digest: [u8; 32],
     /// Exact request and output openings; present only for SendSplit.
     pub send: Option<KagemushaTerminalSendGenerationWitnessV1>,
-    /// Exact sealed bytes from the prepared SendSplit candidate, ordered as transition inputs
-    /// then recovery seeds. The terminal circuit must SHA-open both against its verified State
-    /// candidate before these host-supplied bytes gain proof authority.
-    /// TODO: consume this witness in the qualified terminal typed SHA claim.
-    pub send_sealed_streams: Option<[Vec<u8>; 2]>,
+    /// Exact sealed bytes from the prepared SendSplit or RedeemSplit candidate, ordered as
+    /// transition inputs then recovery seeds. The terminal circuit must SHA-open both against its
+    /// verified State candidate before these host-supplied bytes gain proof authority.
+    /// Both parities consume these bytes through the complete 32-job terminal typed SHA claim.
+    pub outgoing_sealed_streams: Option<[Vec<u8>; 2]>,
     /// Consumed rollback-resistant journal revision.
     pub journal_revision_before: u128,
     /// Exact-next rollback-resistant journal revision.
@@ -982,7 +982,7 @@ impl KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
             send: self
                 .send
                 .map(KagemushaTerminalSendGenerationWitnessV1::into_internal),
-            send_sealed_streams: self.send_sealed_streams,
+            outgoing_sealed_streams: self.outgoing_sealed_streams,
             journal_revision_before: self.journal_revision_before,
             journal_revision_after: self.journal_revision_after,
             authorization_counter_before: self.authorization_counter_before,
@@ -3402,7 +3402,7 @@ pub struct KagemushaTerminalAuthorizationHashClaimParityWitnessV1<'a, C: CurveAf
 /// Borrowed semantic input for Terminal's complete ordered SHA claim.
 ///
 /// This input deliberately precedes the Terminal claim, own audits, own protocol identities and
-/// successor history. None of those later values is an input to its 26 canonical SHA jobs.
+/// successor history. None of those later values is an input to its 32 canonical SHA jobs.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
 pub struct KagemushaTerminalAuthorizationHashClaimGenerationWitnessV1<'a> {
@@ -3439,7 +3439,7 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
     recovery_seed: &KagemushaRecoverySeedV1,
 ) -> Result<KagemushaGeneratedMintHashClaimV1, KagemushaArtifactGenerationErrorV1> {
     use super::terminal_authorization::{
-        TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_semantic_sha_v1,
+        TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_outgoing_sha_v1,
     };
     use crate::zk::kagemusha_v1_poseidon::encode;
 
@@ -3464,7 +3464,7 @@ pub fn prove_kagemusha_terminal_authorization_hash_claim_v1(
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     let private = witness.private_transition.clone().into_internal();
     let history = [0; super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1];
-    let plan = plan_terminal_semantic_sha_v1(TerminalSemanticPlanInputsV1 {
+    let plan = plan_terminal_outgoing_sha_v1(TerminalSemanticPlanInputsV1 {
         public: &public,
         private_transition: &private,
         terminal_guard_relation: witness.terminal_guard_relation,

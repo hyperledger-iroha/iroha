@@ -33,10 +33,6 @@ fn constants<F: KagemushaPoseidonFieldV1>(bytes: &[u8]) -> Vec<PastaSha256ByteV1
 /// every byte are equality-constrained to the original raw witness. The caller must pass
 /// `der` built from the very same assigned `r,s` used in the P-256 verifier.
 #[allow(clippy::too_many_lines)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 pub(super) fn constrain_original_apple_assertion_37_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     raw_assertion: &[u8],

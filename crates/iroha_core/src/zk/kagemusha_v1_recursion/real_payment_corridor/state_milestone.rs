@@ -29,16 +29,17 @@ use crate::zk::{
         verify_kagemusha_mint_finality_helper_v1,
     },
     kagemusha_v1_state::{
-        BootstrapAuthorizationV1, BootstrapStatementV1, CreditStageStatementV1,
+        BootstrapAuthorizationV1, BootstrapStatementV1, CreditIdV1, CreditStageStatementV1,
         DurabilityAnchorStatementV1, DurableOutgoingEnvelopeV1, HardwareTransitionCertificateV1,
         HardwareTransitionStatementV1, KagemushaDurableCapacityV1, KagemushaGuardBundleVerifierV1,
         KagemushaMemoryAuthenticatedHistoryStoreV1, KagemushaRecoveryCheckpointStatementV1,
         KagemushaRecoveryEnrollmentBindingV1, KagemushaRecoveryJournalsV1, KagemushaStateErrorV1,
-        KagemushaStateMachineV1, KagemushaStateProofReleaseV1, MintInboxReservationV1,
-        MintReservationCertificateV1, MintReservationStatementV1, MintStageCertificateV1,
-        MintStageStatementV1, PreparedOutgoingRecoveryViewV1, SendSplitPreparationV1,
-        TransitionAuthorizationV1, TransitionProofStatementV1, VerifiedMintStageV1,
-        canonical_empty_durable_effect_digest_v1, mint_envelope_digest_v1,
+        KagemushaStateMachineV1, KagemushaStateProofReleaseV1, MintCreditStageOutcomeV1,
+        MintInboxReservationV1, MintReservationCertificateV1, MintReservationStatementV1,
+        MintStageCertificateV1, MintStageStatementV1, PreparedOutgoingRecoveryViewV1,
+        RedeemSplitPreparationV1, SendSplitPreparationV1, TransitionAuthorizationV1,
+        TransitionProofStatementV1, VerifiedMintStageV1, canonical_empty_durable_effect_digest_v1,
+        mint_envelope_digest_v1,
     },
 };
 use halo2_proofs::halo2curves::ff::Field as _;
@@ -60,6 +61,7 @@ mod wrapper;
 enum DiagnosticMilestoneV1 {
     State,
     Terminal,
+    RedemptionTerminal,
     Wrapper,
     SenderClosure,
 }
@@ -857,8 +859,12 @@ struct DiagnosticSenderOpeningsV1 {
 
 impl DiagnosticSenderOpeningsV1 {
     fn prepared_authorization_digest(&self) -> DigestV1 {
+        self.prepared_authorization_digest_for(KagemushaOperationV1::SendSplit)
+    }
+
+    fn prepared_authorization_digest_for(&self, operation: KagemushaOperationV1) -> DigestV1 {
         canonical_prepared_one_use_authorization_digest_v1(
-            KagemushaOperationV1::SendSplit,
+            operation,
             self.one_use_hardware_authorization,
             &self.predecessor,
             self.journal_revision_before,
@@ -906,6 +912,82 @@ impl DiagnosticSenderOpeningsV1 {
             "diagnostic sender preparation substituted its original commit evidence",
         )
     }
+
+    fn validate_redemption_preparation(
+        &self,
+        preparation: &RedeemSplitPreparationV1,
+    ) -> Result<(), String> {
+        ensure(
+            self.one_use_hardware_authorization != [0; 32]
+                && self.journal_revision_before.checked_add(1) == Some(self.journal_revision_after)
+                && self.authorization_counter_before.checked_add(1)
+                    == Some(self.authorization_counter_after),
+            "diagnostic redemption has no exact-next private authorization",
+        )?;
+        let authorization =
+            self.prepared_authorization_digest_for(KagemushaOperationV1::RedeemSplit);
+        ensure(
+            preparation.prepared_one_use_authorization_digest == authorization
+                && preparation.terminal_nullifier
+                    == canonical_predecessor_conflict_nullifier_v1(authorization)
+                && preparation.commit_authorization_reference_ms
+                    == self.commit_evidence_opening.trusted_commit_time_ms
+                && preparation.commit_evidence == self.commit_evidence()?,
+            "diagnostic redemption substituted its one-use or commit evidence",
+        )
+    }
+}
+
+fn redemption_preparation(
+    material: &MintRecipientMaterial,
+    state: &KagemushaStateV1,
+    journal_revision_before: u128,
+) -> (RedeemSplitPreparationV1, DiagnosticSenderOpeningsV1) {
+    let openings = DiagnosticSenderOpeningsV1 {
+        predecessor: state.clone(),
+        journal_revision_before,
+        journal_revision_after: journal_revision_before
+            .checked_add(1)
+            .expect("diagnostic redemption journal has an exact successor"),
+        authorization_counter_before: 0,
+        authorization_counter_after: 1,
+        one_use_hardware_authorization: digest(b"diagnostic-redeem-one-use-opening", 1),
+        commit_evidence_opening: KagemushaCommitEvidenceOpeningV1 {
+            opening: digest(b"diagnostic-redeem-time-opening", 1),
+            trusted_commit_time_ms: SEND_TIME,
+            lease_id: [0; 32],
+            lease_valid_from_ms: 0,
+            lease_expires_at_ms: 0,
+        },
+    };
+    let authorization =
+        openings.prepared_authorization_digest_for(KagemushaOperationV1::RedeemSplit);
+    let preparation = RedeemSplitPreparationV1 {
+        amount: 400,
+        beneficiary: material.recipient.clone(),
+        terminal_nullifier: canonical_predecessor_conflict_nullifier_v1(authorization),
+        redemption_commitment: digest(b"diagnostic-redeem-commitment", 1),
+        successor_state_nonce_commitment: digest(b"diagnostic-redeem-successor-nonce", 1),
+        commit_evidence: openings
+            .commit_evidence()
+            .expect("canonical redemption evidence"),
+        commit_authorization_reference_ms: SEND_TIME,
+        outbox_reservation: KagemushaOutboxReservationV1 {
+            reservation_id: digest(b"diagnostic-redeem-outbox", 1),
+            operation_kind: KagemushaOperationKindV1::RedeemSplit,
+            reserved_outbox_bytes: u32::try_from(KagemushaDurableCapacityV1::MINIMUM_OUTBOX_BYTES)
+                .expect("diagnostic redemption outbox fits u32"),
+            issued_at_ms: 250,
+            expires_at_ms: 1_000,
+        },
+        prepared_one_use_authorization_digest: authorization,
+        sealed_transition_inputs: vec![0x61; 32],
+        sealed_recovery_seeds: vec![0x62; 32],
+    };
+    openings
+        .validate_redemption_preparation(&preparation)
+        .expect("redemption retains its exact private authorization");
+    (preparation, openings)
 }
 
 fn send_preparation(
@@ -1641,6 +1723,44 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         .expect("Core installs balance only through the genuine MintFold");
     assert_eq!(machine.state(), &expected_funded);
     assert_eq!(machine.state().balance, 1_000);
+    let consumed_inbox = machine.mint_inbox().clone();
+    let consumed_revision = machine.inbox_revision();
+    assert_eq!(
+        machine.stage_mint_credit(
+            &funded.authorization.authorization,
+            &funded.mint_credit,
+            None,
+            None,
+        ),
+        Ok(MintCreditStageOutcomeV1::DuplicateConsumed(
+            stage_certificate.clone(),
+        )),
+        "an exact consumed retry must return the original staging certificate",
+    );
+    assert_eq!(machine.inbox_revision(), consumed_revision);
+    assert_eq!(machine.mint_inbox(), &consumed_inbox);
+    let mut substituted_credit = funded.mint_credit.clone();
+    substituted_credit.proof.eq_proof[0] ^= 1;
+    assert!(
+        substituted_credit
+            .validate_shape_against_authorization(&funded.authorization.authorization)
+            .is_ok(),
+        "a shape-valid proof substitution must reach consumed receipt identity checks",
+    );
+    assert_eq!(
+        machine.stage_mint_credit(
+            &funded.authorization.authorization,
+            &substituted_credit,
+            None,
+            None,
+        ),
+        Err(KagemushaStateErrorV1::CreditConflict(CreditIdV1(
+            funded.mint_credit.statement.lifecycle.credit_id,
+        ))),
+        "a consumed credit ID cannot be replayed with substituted proof bytes",
+    );
+    assert_eq!(machine.inbox_revision(), consumed_revision);
+    assert_eq!(machine.mint_inbox(), &consumed_inbox);
     assert!(
         machine
             .preview_mint_fold(
@@ -1651,6 +1771,118 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             .is_err(),
         "the actual mint credit cannot increase balance twice"
     );
+
+    if milestone == DiagnosticMilestoneV1::RedemptionTerminal {
+        let (redemption_inputs, redemption_openings) = redemption_preparation(
+            &funded.material,
+            machine.state(),
+            machine.journal_revision(),
+        );
+        let candidate = machine
+            .prepare_redeem_split(redemption_inputs.clone())
+            .expect("Core prepares genuine funded RedeemSplit");
+        let preview = machine
+            .diagnostic_redeem_split_preview(&candidate, SEND_TIME)
+            .expect("Core reconstructs the original redemption Guard statement");
+        assert!(
+            machine
+                .diagnostic_redeem_split_preview(&candidate, SEND_TIME + 1)
+                .is_err()
+        );
+        assert_eq!(preview.successor.balance, 600);
+        assert_eq!(candidate.predecessor_state, redemption_openings.predecessor);
+        assert_eq!(candidate.proof_statement, preview.proof_statement);
+        assert_eq!(candidate.hardware_statement(), preview.hardware_statement);
+        let redemption_guard = Rc::new(prove_guard(
+            &funded.eq,
+            &funded.ep,
+            &funded.credential_keys,
+            &mut guard_keys,
+            guard_relation(&funded.material, preview.normalized_guard_statement),
+            &funded.credential,
+            &funded.credential,
+        ));
+        let guard_frame = guard_verifier.retain(redemption_guard.clone());
+        let mut relation = transition_relation_for_corridor(
+            machine.state().clone(),
+            &preview,
+            &redemption_guard,
+            RecursiveStateProtocolBindings::new(
+                state_keys.eq_protocol_digest,
+                state_keys.ep_protocol_digest,
+                guard_keys.as_ref().expect("same Guard keys"),
+                &funded,
+                &incoming,
+            ),
+            None,
+            None,
+            Some(candidate.prepared_intent_commitments()),
+        );
+        relation.transport_semantic_digest = candidate
+            .semantic_digest()
+            .expect("Core redemption body owns the State semantic digest");
+        let parent = parent_from_generated((*mint).clone());
+        let redemption = Rc::new(prove_recursive_state_step(
+            &funded,
+            &state_keys,
+            &redemption_guard,
+            guard_keys.as_ref().expect("same Guard keys"),
+            &parent,
+            &incoming,
+            relation,
+            None,
+        ));
+        recursive_verifier.retain_state(redemption.clone());
+        let public = candidate
+            .candidate_public_inputs(artifacts, &redemption.proof)
+            .expect("Core reconstructs the actual redemption candidate column");
+        crate::zk::kagemusha_v1_recursion::verify_kagemusha_state_proof_v1(
+            &recursive_verifier,
+            artifacts,
+            &public,
+            &redemption.proof,
+        )
+        .expect("genuine RedeemSplit State proof matches Core's candidate");
+        guard_verifier
+            .verify_transition(
+                &preview.hardware_statement,
+                &preview.proof_statement,
+                &preview.normalized_guard_statement,
+                &guard_frame,
+            )
+            .expect("genuine RedeemSplit Guard proof matches Core's candidate");
+        let terminal = terminal::prove_outgoing_terminal(
+            &funded,
+            &state_keys,
+            &mut guard_keys,
+            &recursive_verifier,
+            artifacts,
+            candidate,
+            &redemption,
+            &redemption_guard,
+            terminal::DiagnosticTerminalPreparationV1::Redemption(&redemption_inputs),
+            &redemption_openings,
+        );
+        assert_eq!(
+            terminal.public.lifecycle.operation_kind,
+            KagemushaOperationKindV1::RedeemSplit,
+        );
+        assert_eq!(
+            terminal.public.artifact_manifest_digest,
+            artifacts.artifact_manifest_digest,
+        );
+        assert_eq!(
+            terminal
+                .committed
+                .canonical_outgoing_opening_sha_messages_v1()
+                .expect("native committed redemption retains six SHA messages")
+                .len(),
+            6,
+        );
+        // TODO: add qualified physical assertion folding and release-key evidence before
+        // admitting this diagnostic as a production offline redemption.
+        return;
+    }
 
     let (send_inputs, sender_openings) = send_preparation(
         &funded.material,
@@ -1805,7 +2037,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
     );
     if milestone != DiagnosticMilestoneV1::State {
         let retained_candidate = candidate.clone();
-        let terminal = terminal::prove_sender_terminal(
+        let terminal = terminal::prove_outgoing_terminal(
             &funded,
             &state_keys,
             &mut guard_keys,
@@ -1814,7 +2046,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             candidate,
             &send,
             &send_guard,
-            &send_inputs,
+            terminal::DiagnosticTerminalPreparationV1::Send(&send_inputs),
             &sender_openings,
         );
         if matches!(
@@ -2105,7 +2337,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 }
                 assert_eq!(rebound_verifier.states.borrow().len(), 3);
 
-                let rebound_terminal = terminal::prove_sender_terminal(
+                let rebound_terminal = terminal::prove_outgoing_terminal(
                     &funded,
                     &rebound,
                     &mut guard_keys,
@@ -2114,7 +2346,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                     retained_candidate,
                     &rebound_send,
                     &send_guard,
-                    &send_inputs,
+                    terminal::DiagnosticTerminalPreparationV1::Send(&send_inputs),
                     &sender_openings,
                 );
                 let closed = wrapper::prove_sender_wrapper(
@@ -2214,6 +2446,21 @@ fn real_bootstrap_mint_fold_send_split_terminal_authorization_milestone() {
         .expect("start genuine terminal proof milestone")
         .join()
         .expect("genuine terminal proof milestone");
+}
+
+/// Prove a real Core RedeemSplit candidate through the full 32-job terminal claim in both fields.
+#[test]
+#[cfg(unix)]
+#[ignore = "expensive genuine redemption State/TerminalAuthorization diagnostic; physical assertion and settlement qualification remain"]
+fn real_bootstrap_mint_fold_redeem_split_terminal_authorization_milestone() {
+    let _exclusive_proof = exclusive_real_proof_test_lock();
+    std::thread::Builder::new()
+        .name("kagemusha-real-redemption-terminal".to_owned())
+        .stack_size(REAL_PROOF_TEST_STACK_BYTES)
+        .spawn(|| run_state_milestone(DiagnosticMilestoneV1::RedemptionTerminal))
+        .expect("start genuine redemption terminal proof")
+        .join()
+        .expect("genuine redemption terminal proof");
 }
 
 /// Measure a genuine CommitWrapper seed after the actual State and terminal proof pairs.

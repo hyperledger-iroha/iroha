@@ -38,7 +38,7 @@ use crate::zk::{
             TerminalSemanticPlanParityV1, canonical_outbox_reservation_commitment_v1,
             canonical_prepared_transition_binding_digest_v1,
             canonical_terminal_authorization_candidate_digest_v1,
-            canonical_terminal_commit_binding_digest_v1, plan_terminal_semantic_sha_v1,
+            canonical_terminal_commit_binding_digest_v1, plan_terminal_outgoing_sha_v1,
             public_instance,
         },
     },
@@ -102,7 +102,7 @@ fn generation_private(
                 output: send.output.clone(),
                 encrypted_credit_digest: send.encrypted_credit_digest,
             }),
-        send_sealed_streams: private.send_sealed_streams.clone(),
+        outgoing_sealed_streams: private.outgoing_sealed_streams.clone(),
         journal_revision_before: private.journal_revision_before,
         journal_revision_after: private.journal_revision_after,
         authorization_counter_before: private.authorization_counter_before,
@@ -309,7 +309,30 @@ pub(super) struct ProvenSenderTerminalV1 {
     pub(super) committed: CommittedOutgoingCandidateV1,
 }
 
-pub(super) fn prove_sender_terminal(
+#[derive(Clone, Copy)]
+pub(super) enum DiagnosticTerminalPreparationV1<'a> {
+    Send(&'a SendSplitPreparationV1),
+    Redemption(&'a RedeemSplitPreparationV1),
+}
+
+impl DiagnosticTerminalPreparationV1<'_> {
+    fn validate(self, openings: &DiagnosticSenderOpeningsV1) {
+        match self {
+            Self::Send(preparation) => openings.validate_preparation(preparation),
+            Self::Redemption(preparation) => openings.validate_redemption_preparation(preparation),
+        }
+        .expect("original one-use outgoing preparation");
+    }
+
+    fn operation(self) -> KagemushaOperationV1 {
+        match self {
+            Self::Send(_) => KagemushaOperationV1::SendSplit,
+            Self::Redemption(_) => KagemushaOperationV1::RedeemSplit,
+        }
+    }
+}
+
+pub(super) fn prove_outgoing_terminal(
     funded: &RealFundedPrerequisite,
     state_keys: &StateKeys,
     guard_keys: &mut Option<GuardKeys>,
@@ -318,13 +341,12 @@ pub(super) fn prove_sender_terminal(
     candidate: PreparedOutgoingCandidateV1,
     send: &KagemushaGeneratedRecursiveStateProofV1,
     send_guard: &GuardProof,
-    preparation: &SendSplitPreparationV1,
+    preparation: DiagnosticTerminalPreparationV1<'_>,
     openings: &DiagnosticSenderOpeningsV1,
 ) -> ProvenSenderTerminalV1 {
     let started = std::time::Instant::now();
-    openings
-        .validate_preparation(preparation)
-        .expect("original one-use sender preparation");
+    preparation.validate(openings);
+    let operation = preparation.operation();
     // The existing helper rechecks the INNER equations and both actual transport proofs. Also
     // decide the retained INNER claims directly and reproduce their original deterministic folds.
     terminally_verify_state_proof(state_keys, send);
@@ -431,13 +453,25 @@ pub(super) fn prove_sender_terminal(
         KagemushaPastaParityV1::Ep
     );
 
-    let persisted = PersistedOutgoingCandidateV1::verify_and_persist_send(
-        candidate.clone(),
-        send.proof.clone(),
-        artifacts,
-        verifier,
-    )
-    .expect("persist only the genuinely verified Core SendSplit candidate");
+    let persisted = match preparation {
+        DiagnosticTerminalPreparationV1::Send(_) => {
+            PersistedOutgoingCandidateV1::verify_and_persist_send(
+                candidate.clone(),
+                send.proof.clone(),
+                artifacts,
+                verifier,
+            )
+        }
+        DiagnosticTerminalPreparationV1::Redemption(_) => {
+            PersistedOutgoingCandidateV1::verify_and_persist_redemption(
+                candidate.clone(),
+                send.proof.clone(),
+                artifacts,
+                verifier,
+            )
+        }
+    }
+    .expect("persist only the genuinely verified Core outgoing candidate");
     let body = persisted
         .hardware_terminal_body()
         .expect("Core derives exact self-free terminal body");
@@ -479,12 +513,20 @@ pub(super) fn prove_sender_terminal(
         CommittedOutgoingCandidateV1::from_hardware_commit(persisted, certificate.clone())
             .expect("Core checks exact candidate/body/certificate correspondence");
     let opening_messages = committed
-        .canonical_send_opening_sha_messages_v1()
-        .expect("exact retained Core sender material produces six opening preimages");
+        .canonical_outgoing_opening_sha_messages_v1()
+        .expect("exact retained Core outgoing material produces six opening preimages");
     assert_eq!(opening_messages.len(), 6);
     assert!(opening_messages[0].starts_with(b"iroha:kagemusha:v1:sealed-transition-inputs\0"));
     assert!(opening_messages[1].starts_with(b"iroha:kagemusha:v1:sealed-recovery-seeds\0"));
     assert!(opening_messages[2].starts_with(b"iroha:kagemusha:v1:outgoing-preparation\0"));
+    assert_eq!(
+        opening_messages[2][b"iroha:kagemusha:v1:outgoing-preparation\0".len() + 2],
+        if operation == KagemushaOperationV1::SendSplit {
+            2
+        } else {
+            4
+        }
+    );
     let opening_blocks = opening_messages
         .iter()
         .map(|message| {
@@ -503,7 +545,7 @@ pub(super) fn prove_sender_terminal(
     changed_opening.candidate.prepared.sealed_transition_inputs[0] ^= 1;
     assert!(
         changed_opening
-            .canonical_send_opening_sha_messages_v1()
+            .canonical_outgoing_opening_sha_messages_v1()
             .is_err()
     );
     let mut changed_certificate = committed.clone();
@@ -512,7 +554,7 @@ pub(super) fn prove_sender_terminal(
         .hardware_terminal_commitment[0] ^= 1;
     assert!(
         changed_certificate
-            .canonical_send_opening_sha_messages_v1()
+            .canonical_outgoing_opening_sha_messages_v1()
             .is_err()
     );
     let output = committed
@@ -529,16 +571,38 @@ pub(super) fn prove_sender_terminal(
         ciphertext_commitment: output.ciphertext_commitment,
         amount: output.amount,
         terminal_output_binding: output.terminal_output_binding,
-        artifact_manifest_digest: [0; 32],
+        artifact_manifest_digest: if operation == KagemushaOperationV1::RedeemSplit {
+            artifacts.artifact_manifest_digest
+        } else {
+            [0; 32]
+        },
     };
-    let PreparedOutgoingRecoveryViewV1::Send {
-        request,
-        output,
-        encrypted_credit,
-        ..
-    } = candidate.recovery_view()
-    else {
-        panic!("retain exact Core SendSplit recovery projection");
+    let send_private = match candidate.recovery_view() {
+        PreparedOutgoingRecoveryViewV1::Send {
+            request,
+            output,
+            encrypted_credit,
+            ..
+        } => {
+            assert_eq!(operation, KagemushaOperationV1::SendSplit);
+            Some(KagemushaTerminalSendPrivateV1 {
+                request: request.clone(),
+                output: output.clone(),
+                encrypted_credit_digest: kagemusha_ciphertext_digest_v1(encrypted_credit),
+            })
+        }
+        PreparedOutgoingRecoveryViewV1::Redemption {
+            statement,
+            artifact_manifest_digest,
+        } => {
+            assert_eq!(operation, KagemushaOperationV1::RedeemSplit);
+            assert_eq!(statement.lifecycle, public.lifecycle);
+            assert_eq!(
+                *artifact_manifest_digest,
+                artifacts.artifact_manifest_digest
+            );
+            None
+        }
     };
     let private = KagemushaTerminalAuthorizationPrivateTransitionV1 {
         lifecycle: public.lifecycle.clone(),
@@ -549,12 +613,8 @@ pub(super) fn prove_sender_terminal(
         commit_evidence_opening: openings.commit_evidence_opening,
         one_use_hardware_authorization: openings.one_use_hardware_authorization,
         terminal_payload_digest: public.semantic_digest,
-        send: Some(KagemushaTerminalSendPrivateV1 {
-            request: request.clone(),
-            output: output.clone(),
-            encrypted_credit_digest: kagemusha_ciphertext_digest_v1(encrypted_credit),
-        }),
-        send_sealed_streams: Some([
+        send: send_private,
+        outgoing_sealed_streams: Some([
             candidate.sealed_transition_inputs.clone(),
             candidate.sealed_recovery_seeds.clone(),
         ]),
@@ -588,12 +648,18 @@ pub(super) fn prove_sender_terminal(
     changed_private.terminal_payload_digest[0] ^= 1;
     assert!(changed_private.validate_against(&setup_public).is_err());
 
-    let prepared_authorization = openings.prepared_authorization_digest();
+    let prepared_authorization = openings.prepared_authorization_digest_for(operation);
     let prepared_transition = canonical_prepared_transition_binding_digest_v1(
         setup_public.lifecycle_binding_digest,
         public.request_digest,
-        output.sender_before_commitment,
-        output.sender_after_commitment,
+        private
+            .send
+            .as_ref()
+            .map_or([0; 32], |send| send.output.sender_before_commitment),
+        private
+            .send
+            .as_ref()
+            .map_or([0; 32], |send| send.output.sender_after_commitment),
         public.amount,
         canonical_outbox_reservation_commitment_v1(private.outbox_reservation).unwrap(),
         prepared_authorization,
@@ -603,13 +669,18 @@ pub(super) fn prove_sender_terminal(
         relation.statement.prepared_transition_binding_digest,
         prepared_transition
     );
-    relation.statement.sender_one_time_authorization_digest = prepared_authorization;
+    let sender_authorization = if operation == KagemushaOperationV1::SendSplit {
+        prepared_authorization
+    } else {
+        [0; 32]
+    };
+    relation.statement.sender_one_time_authorization_digest = sender_authorization;
     relation.statement.terminal_commit_binding_digest =
         canonical_terminal_commit_binding_digest_v1(
             &setup_public,
             &private,
             prepared_transition,
-            prepared_authorization,
+            sender_authorization,
             relation.statement.transition_intent_digest,
             relation.statement.transition_effect_digest,
             relation.statement.recovery_record_digest,
@@ -777,7 +848,7 @@ pub(super) fn prove_sender_terminal(
     let ep_guards = [ep_guard_column];
     let mut enabled = [[0; 32]; TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1];
     enabled[0] = funded.material.hardware_profile.hardware_profile_id;
-    let semantic_plan = plan_terminal_semantic_sha_v1(TerminalSemanticPlanInputsV1 {
+    let semantic_plan = plan_terminal_outgoing_sha_v1(TerminalSemanticPlanInputsV1 {
         public: &setup_public,
         private_transition: &private,
         terminal_guard_relation: &terminal_guard.relation,
@@ -797,25 +868,31 @@ pub(super) fn prove_sender_terminal(
             successor_history: ep_merge.successor().as_bytes(),
         },
     })
-    .expect("capture complete original Terminal semantic SHA queues without proof verification");
-    assert_eq!(semantic_plan.eq_messages.len(), 26);
-    assert_eq!(semantic_plan.ep_messages.len(), 26);
-    assert_eq!(semantic_plan.job_block_counts.len(), 26);
+    .expect("capture complete outgoing Terminal SHA queues without proof verification");
+    assert_eq!(semantic_plan.eq_messages.len(), 32);
+    assert_eq!(semantic_plan.ep_messages.len(), 32);
+    assert_eq!(semantic_plan.active_job_block_counts.len(), 32);
     for messages in [&semantic_plan.eq_messages, &semantic_plan.ep_messages] {
         assert!(
             messages
-                .last()
-                .expect("candidate is the final Terminal hash")
+                .get(25)
+                .expect("candidate is the final original Terminal hash")
                 .starts_with(b"iroha:kagemusha:v1:terminal-authorization-candidate\0")
+        );
+        assert!(
+            messages
+                .last()
+                .expect("hardware body is the final outgoing SHA job")
+                .starts_with(b"iroha:kagemusha:v1:hardware-terminal-body\0")
         );
     }
     // Retain only ephemeral planning messages. The typed producer below proves this complete
     // queue, and Terminal verifies that claim against its original assigned semantic cells.
     eprintln!(
-        "KAGEMUSHA terminal diagnostic: complete paired SHA queue has {} jobs and {} compression blocks per parity",
-        semantic_plan.job_block_counts.len(),
+        "KAGEMUSHA terminal diagnostic: complete paired outgoing SHA queue has {} jobs and {} active compression blocks per parity",
+        semantic_plan.active_job_block_counts.len(),
         semantic_plan
-            .job_block_counts
+            .active_job_block_counts
             .iter()
             .map(|count| u64::from(*count))
             .sum::<u64>()
@@ -823,9 +900,9 @@ pub(super) fn prove_sender_terminal(
     drop(semantic_plan);
     let generation_private = generation_private(&private);
     let sealed = generation_private
-        .send_sealed_streams
+        .outgoing_sealed_streams
         .as_ref()
-        .expect("retain exact prepared send streams for terminal witness");
+        .expect("retain exact prepared outgoing streams for terminal witness");
     assert_eq!(sealed[0], candidate.sealed_transition_inputs);
     assert_eq!(sealed[1], candidate.sealed_recovery_seeds);
     let hash_claim = prove_kagemusha_terminal_authorization_hash_claim_v1(
@@ -967,6 +1044,7 @@ pub(super) fn prove_sender_terminal(
             for offset in [
                 public_instance::CANDIDATE_LO,
                 public_instance::COMMIT_CERTIFICATE_LO,
+                public_instance::ARTIFACT_MANIFEST_LO,
                 public_instance::AMOUNT,
                 public_instance::EQ_DEFERRED_AUDIT_LO,
                 public_instance::EP_DEFERRED_AUDIT_LO,
@@ -1001,9 +1079,7 @@ pub(super) fn prove_sender_terminal(
         proof.ep_current_accumulator,
         decide_ep
     );
-    openings
-        .validate_preparation(preparation)
-        .expect("original private sender opening remains unchanged");
+    preparation.validate(openings);
     eprintln!(
         "KAGEMUSHA diagnostic actual paired TerminalAuthorization verified and decided in {:?}; no CommitWrapper, Payment, hardware finality, or handoff qualification",
         started.elapsed()
