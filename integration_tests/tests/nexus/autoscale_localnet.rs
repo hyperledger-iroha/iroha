@@ -4905,32 +4905,26 @@ fn build_transaction_for_legacy_default_shard(
         desired_lane < lane_count,
         "desired legacy shard must fit lane count"
     );
-    (0_u64..4_096)
-        .find_map(|nonce| {
-            let transaction = {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
-            let hash = transaction.hash();
-            let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
-            shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
-            (u64::from_le_bytes(shard_bytes) % lane_count == desired_lane).then_some(transaction)
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "failed to build a transaction for legacy default shard {desired_lane}/{lane_count}"
-            )
-        })
+    for nonce in 0_u64..4_096 {
+        let account = client.account_client();
+        let payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ))?;
+        let transaction = account.sign_transaction(payload)?;
+        // The default router hashes the signed payload, not the signature-bearing
+        // transaction envelope. Match that exact input when choosing a lane.
+        let hash = HashOf::new(transaction.payload());
+        let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
+        shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+        if u64::from_le_bytes(shard_bytes) % lane_count == desired_lane {
+            return Ok(transaction);
+        }
+    }
+    Err(eyre!(
+        "failed to build a transaction for legacy default shard {desired_lane}/{lane_count}"
+    ))
 }
 fn validate_closed_lane_has_no_post_close_work(
     peer: &NetworkPeer,
@@ -4984,46 +4978,6 @@ fn merge_log_total_bytes(peer: &NetworkPeer) -> Result<u64> {
         }
     }
     Ok(total)
-}
-fn wait_for_certified_elastic_lane(
-    clients: &[Client],
-    lane_id: LaneId,
-    quorum_required: usize,
-    timeout: Duration,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = 0_usize;
-    let mut last_errors = Vec::new();
-    while started.elapsed() <= timeout {
-        last_observed = 0;
-        last_errors.clear();
-        for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_diagnostics() {
-                Ok(status)
-                    if status.committed_lane_blocks.iter().any(|block| {
-                        block.lane_id == lane_id
-                            && block.executable_payload_available
-                            && block.validator_count > 0
-                            && block.min_quorum > 0
-                            && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count == block.min_quorum
-                            && block.commit_qc_signer_count == block.min_quorum
-                    }) =>
-                {
-                    last_observed = last_observed.saturating_add(1);
-                }
-                Ok(_) => {}
-                Err(err) => last_errors.push((index, err.to_string())),
-            }
-        }
-        if last_observed >= quorum_required {
-            return Ok(());
-        }
-        thread::sleep(LANE_POLL_INTERVAL);
-    }
-    Err(eyre!(
-        "timed out waiting for independently certified executable lane {lane_id} evidence on quorum peers; observed={last_observed}/{quorum_required}; errors={last_errors:?}"
-    ))
 }
 fn query_committed_transaction(
     client: &Client,
@@ -5424,12 +5378,8 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         "two-phase-drain-scale-out-heartbeat",
         EXPANSION_PROBE_INTERVAL,
     )?;
-    wait_for_certified_elastic_lane(
-        &submitters,
-        TARGET_LANE,
-        quorum_required,
-        STRICT_SCALE_OUT_WAIT_TIMEOUT,
-    )?;
+    // The expanded lane may be empty. Its committed close and retirement must
+    // still progress without requiring an unrelated certified lane block.
     let post_expansion_transitions =
         autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
     let intent_log = wait_for_uncommitted_lane_drain_intent_on_all_peers(

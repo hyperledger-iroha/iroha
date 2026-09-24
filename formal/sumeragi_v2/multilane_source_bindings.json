@@ -6685,8 +6685,7 @@
             "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
             "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
             "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
-            "claim.global_admission_identity.is_none()",
-            "claim.routing_plan == *entry.value()",
+            "is_some_and(|claim| claim.global_admission_identity.is_some())",
             "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
             "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
           ]
@@ -13121,8 +13120,7 @@
             "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
             "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
             "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
-            "claim.global_admission_identity.is_none()",
-            "claim.routing_plan == *entry.value()",
+            "is_some_and(|claim| claim.global_admission_identity.is_some())",
             "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
             "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
           ]
@@ -28334,6 +28332,17 @@
           "kind": "method",
           "symbol": "V2CandidateAssembler::assemble",
           "required_tokens": [
+            "let state_generation = state.state_view_generation()",
+            "let result = self.assemble_at_generation(request, state_generation)",
+            "!output_guard.restart_required()",
+            "CandidateWorkDeferral::CommittedStateMoved"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+          "kind": "method",
+          "symbol": "V2CandidateAssembler::assemble_at_generation",
+          "required_tokens": [
             "let original_npos_effects = request.attachments.npos_consensus_effects.clone()",
             "request.attachments.npos_consensus_effects = original_npos_effects.clone()",
             "candidate_economic_work_first(request.context.height)",
@@ -28346,7 +28355,10 @@
             "reason: CandidateWorkDeferral::EvidenceEnvelope",
             "CandidateAssemblyOutcome::WorkDeferred",
             "begin_fail_stop_operation()",
-            "candidate_block_has_proposal_work(",
+            "deterministic_start_work_pending(&builder.carrier_context_header())",
+            "let _state_publication = request.state.consensus_publication_lease()",
+            "selection_lease.retain_only(&selected_hashes)",
+            "candidate_block_has_independent_proposal_work(",
             "if canonical_wire.len() != encoded_bytes"
           ]
         },

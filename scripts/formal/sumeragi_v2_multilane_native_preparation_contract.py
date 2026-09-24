@@ -734,8 +734,7 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
         "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
         "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
         "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
-        "claim.global_admission_identity.is_none()",
-        "claim.routing_plan == *entry.value()",
+        "is_some_and(|claim| claim.global_admission_identity.is_some())",
         "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
         "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id",
     )),
@@ -3590,7 +3589,7 @@ def validate_native_preparation_contract(
     ordered("Queue::lane_has_pending_route_work",
             "if reservation_owned_hashes.contains(entry.key())", "let Some(tx) = self.txs.get(entry.key())",
             "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
-            "claim.global_admission_identity.is_none()", "claim.routing_plan == *entry.value()",
+            "is_some_and(|claim| claim.global_admission_identity.is_some())",
             ".legs()", ".any(|leg|")
     ordered("QueueLaneRetirementObserver::try_into_cut",
             "let mutation = match self.queue.push_remove_lock.try_lock_or_wait()",

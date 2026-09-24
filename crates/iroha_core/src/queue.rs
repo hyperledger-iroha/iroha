@@ -4468,9 +4468,9 @@ impl Default for BackpressureState {
 pub struct GossipBatchEntry {
     /// Accepted transaction to gossip.
     pub tx: AcceptedTransaction<'static>,
-    /// Lane/dataspace routing decision cached at admission time.
+    /// Lane/dataspace routing decision resolved for this gossip sample.
     pub routing: RoutingDecision,
-    /// Full routing plan cached at admission time.
+    /// Full routing plan resolved for this gossip sample.
     pub routing_plan: RoutingPlan,
     /// Pre-serialized full-frame transaction payload for retransmit.
     pub payload: Arc<Vec<u8>>,
@@ -10439,10 +10439,10 @@ impl Queue {
     /// Return whether a lane incarnation still owns or may receive queued work.
     ///
     /// The snapshot is serialized with queue selection and reservation
-    /// publication. Ordinary queued/in-flight transactions block when any
-    /// coordinator or participant leg names the route. Exact live
-    /// reservations and post-commit tombstone barriers additionally bind the
-    /// incarnation so a recreated lane is never blocked by an older owner.
+    /// publication. A local, unselected Ordinary transaction does not own its
+    /// admission-time lane. Certified QueuePlan routes, exact live reservations,
+    /// and post-commit tombstone barriers retain their lane/incarnation fences
+    /// so a recreated lane is never blocked by an older owner.
     #[must_use]
     pub(crate) fn lane_has_pending_work(
         &self,
@@ -10578,21 +10578,14 @@ impl Queue {
             let Some(tx) = self.txs.get(entry.key()) else {
                 return false;
             };
-            // A local Ordinary queue is asynchronous input, not consensus custody of its
-            // admission-time lane. Its route is recomputed from committed State when selected.
+            // An Ordinary row is asynchronous local input. Its old route hint
+            // cannot bind this lane, even when the local claim index is absent.
+            // Reservations and globally admitted controls retain that authority.
             if Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)
-                && self.durable_plan_claims.get(entry.key()).map_or(
-                    !self.plan_journal_installed.load(Ordering::Acquire),
-                    |claim| {
-                        claim.global_admission_identity.is_none()
-                            && claim.entrypoint_hash == *entry.key()
-                            && claim.signed_transaction_hash
-                                == crate::tx::exact_signed_transaction_hash(
-                                    tx.as_accepted().entrypoint(),
-                                )
-                            && claim.routing_plan == *entry.value()
-                    },
-                )
+                && !self
+                    .durable_plan_claims
+                    .get(entry.key())
+                    .is_some_and(|claim| claim.global_admission_identity.is_some())
             {
                 return false;
             }
@@ -22730,6 +22723,7 @@ impl Queue {
         #[cfg(test)]
         self.wait_for_nexus_revalidation_snapshot_handoff_for_test();
         let mut invalid_lifecycle = Vec::new();
+        let mut terminal_closed_claims = Vec::new();
         let mut pending_status_fault = None;
         let mut corrupt_ownership = Vec::new();
         for hash in tracked {
@@ -22787,6 +22781,39 @@ impl Queue {
                 Ok((plan, _)) => plan,
                 Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => continue,
                 Err(err) => {
+                    // A committed autoscale close may overtake an uncarried local QueuePlan
+                    // claim. Its durable journal row is custody, not a global ordering promise.
+                    // Authenticate the close against State and retire that exact row through the
+                    // fsynced terminal path after releasing the per-hash queue locks below.
+                    if matches!(
+                        &err,
+                        RoutingResolveError::InactiveLane { .. }
+                            | RoutingResolveError::UnknownLane { .. }
+                    ) && let Some(claim) = self
+                        .durable_plan_claims
+                        .get(&hash)
+                        .map(|claim| claim.value().clone())
+                    {
+                        let ordinary_single = Self::ordinary_single_route_is_reassignable(
+                            tx.as_accepted().entrypoint(),
+                            &claim.routing_plan,
+                        );
+                        match Self::durable_claim_is_unadmitted_after_close_in_view(
+                            state_view,
+                            &claim,
+                            ordinary_single,
+                        ) {
+                            Ok(true) => {
+                                terminal_closed_claims.push(claim);
+                                continue;
+                            }
+                            Ok(false) => {}
+                            Err(reason) => {
+                                pending_status_fault.get_or_insert((hash, reason));
+                                continue;
+                            }
+                        }
+                    }
                     iroha_logger::warn!(
                         tx = %hash,
                         reason = %err,
@@ -22838,6 +22865,16 @@ impl Queue {
         let validation_telemetry = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let validation_telemetry = None;
+        for claim in terminal_closed_claims {
+            if let Err(error) = self.reject_unreserved_terminal_plan_claim(&claim) {
+                self.mark_accepted_work_validation_fault(
+                    claim.entrypoint_hash,
+                    "nexus_reconfiguration_closed_route_terminal",
+                    &error,
+                    validation_telemetry,
+                );
+            }
+        }
         if !invalid_lifecycle.is_empty() {
             self.remove_committed_hashes(invalid_lifecycle, validation_telemetry);
         }
@@ -24162,10 +24199,16 @@ pub mod tests {
                 .expect("inspect uncarried admission"),
             QueuePlanAdmissionRegistryMatch::Absent
         );
-        let mut expired = Vec::new();
-        assert!(queue.pop_from_queue(&state.view(), &mut expired).is_none());
-        assert!(expired.is_empty());
+        let committed_nexus = state.nexus_snapshot();
+        queue.install_test_router_metadata_for_nexus(&committed_nexus);
+        assert!(queue.nexus_routing_matches(&committed_nexus));
+        queue.reconfigure_nexus_with_state(&committed_nexus, &state, None);
+        assert!(
+            !queue.contains_entrypoint_hash(binding.entrypoint_hash),
+            "Nexus revalidation must durably terminalize the exact uncarried claim"
+        );
         assert!(!queue.accepted_work_validation_faulted());
+        assert!(!queue.transaction_selection_durability_faulted());
         assert_eq!(queue.active_len(), 1);
         assert_eq!(
             queue
@@ -24294,6 +24337,14 @@ pub mod tests {
                 &context,
             )
             .expect("persist exact signed Ordinary input");
+        let incarnation = state
+            .lane_incarnation(old_lane)
+            .expect("active elastic incarnation");
+        assert!(queue.durable_plan_claims.remove(&hash).is_some());
+        assert!(
+            !queue.lane_has_pending_work(old_lane, DataSpaceId::UNIVERSAL, incarnation),
+            "an asynchronous Ordinary journal row cannot veto lane retirement when its local claim index lags"
+        );
         drop(queue);
         install_autoscale_drain_close_for_queue_test(&state, old_lane, 2);
         seed_committed_height_for_queue_test(&state, 2);
@@ -24379,6 +24430,11 @@ pub mod tests {
         );
         assert_eq!(queue.active_len(), 1);
         assert!(queue.lane_has_pending_work(lane_id, DataSpaceId::UNIVERSAL, incarnation));
+        let committed_nexus = state.nexus_snapshot();
+        queue.reconfigure_nexus_with_state(&committed_nexus, &state, None);
+        assert_eq!(queue.active_len(), 1);
+        assert!(queue.contains_entrypoint_hash(binding.entrypoint_hash));
+        assert!(!queue.accepted_work_validation_faulted());
     }
     struct FutureCreatedNoStateRouter;
     impl LaneRouter for FutureCreatedNoStateRouter {

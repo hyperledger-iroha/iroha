@@ -265,7 +265,7 @@ impl CandidateWorkUnavailable {
 /// Why the complete snapshot cannot currently produce a useful carrier, independently of its row count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CandidateWorkDeferral {
-    /// Committed State published another generation during bounded assembly.
+    /// Committed State moved during assembly or differs from this parent height.
     CommittedStateMoved,
     /// The authenticated native source or its applying State is not available.
     NativeLaneSource,
@@ -694,7 +694,6 @@ impl V2CandidateAssembler {
         &self,
         request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
     ) -> Result<NativeCandidateAssembly, CandidateError> {
-        validate_request(&request)?;
         if !request.work_provider.belongs_to(request.state) {
             return Err(CandidateError::NativeLaneDecisionInvalid(
                 "Native handoff belongs to another State owner".into(),
@@ -707,10 +706,51 @@ impl V2CandidateAssembler {
                 "Native candidate cannot retain a retired certified merge attachment".into(),
             ));
         }
-        let source = request
-            .work_provider
-            .prepare_candidate()
-            .map_err(CandidateError::WorkPreparationFailed)?;
+        if request.queue.transaction_selection_durability_faulted()
+            || request.output_guard.restart_required()
+        {
+            return Err(CandidateError::RestartRequired);
+        }
+        let state_generation = request.state.state_view_generation();
+        let moved_source = || NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![crate::state::LaneDecisionGroupPreparationV1::ObservationChanged],
+        };
+        let moved_outcome = || CandidateAssemblyOutcome::WorkDeferred {
+            report: CandidateScanReport::default(),
+            reason: CandidateWorkDeferral::CommittedStateMoved,
+        };
+        // Native preparation reads original body and Decision sources. Check the
+        // global parent before that I/O so a locally lagging or superseded
+        // height does not turn an ordinary async State mismatch into a fatal
+        // source error. The handoff remains with the process-lived driver.
+        if !validate_request_at_generation(&request, state_generation)? {
+            if request.queue.transaction_selection_durability_faulted()
+                || request.output_guard.restart_required()
+            {
+                return Err(CandidateError::RestartRequired);
+            }
+            return Ok(NativeCandidateAssembly {
+                source: moved_source(),
+                outcome: Ok(moved_outcome()),
+            });
+        }
+        let source = match request.work_provider.prepare_candidate() {
+            Ok(source) => source,
+            Err(_)
+                if request.queue.transaction_selection_durability_faulted()
+                    || request.output_guard.restart_required() =>
+            {
+                return Err(CandidateError::RestartRequired);
+            }
+            Err(_) if !candidate_state_generation_is_current(request.state, state_generation) => {
+                return Ok(NativeCandidateAssembly {
+                    source: moved_source(),
+                    outcome: Ok(moved_outcome()),
+                });
+            }
+            Err(error) => return Err(CandidateError::WorkPreparationFailed(error)),
+        };
         let CandidateRequest {
             context,
             directive,
@@ -755,11 +795,36 @@ impl V2CandidateAssembler {
     /// or proposal framing which itself exceeds frozen body/chunk limits.
     pub(crate) fn assemble<Work: CandidateWorkProvider>(
         &self,
-        mut request: CandidateRequest<'_, Work>,
+        request: CandidateRequest<'_, Work>,
     ) -> Result<CandidateAssemblyOutcome, CandidateError> {
-        validate_request(&request)?;
-        let state_generation = request.state.state_view_generation();
-        if !candidate_state_generation_is_current(request.state, state_generation) {
+        let state = request.state;
+        let output_guard = request.output_guard;
+        let state_generation = state.state_view_generation();
+        let result = self.assemble_at_generation(request, state_generation);
+        // A State publication can race any bounded pre-sign preparation read,
+        // not just the explicit parent checks. Retry errors from that moving
+        // cut only while the fail-stop signing guard is still open. A genuine
+        // Queue durability fault and every armed signing failure remain fatal.
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| !matches!(error, CandidateError::RestartRequired))
+            && !output_guard.restart_required()
+            && !candidate_state_generation_is_current(state, state_generation)
+        {
+            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                report: CandidateScanReport::default(),
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+            });
+        }
+        result
+    }
+    fn assemble_at_generation<Work: CandidateWorkProvider>(
+        &self,
+        mut request: CandidateRequest<'_, Work>,
+        state_generation: u64,
+    ) -> Result<CandidateAssemblyOutcome, CandidateError> {
+        if !validate_request_at_generation(&request, state_generation)? {
             return Ok(CandidateAssemblyOutcome::WorkDeferred {
                 report: CandidateScanReport::default(),
                 reason: CandidateWorkDeferral::CommittedStateMoved,
@@ -895,7 +960,12 @@ impl V2CandidateAssembler {
                         if request.queue.transaction_selection_durability_faulted() {
                             return Err(CandidateError::RestartRequired);
                         }
-                        validate_request(&request)?;
+                        if !validate_request_at_generation(&request, state_generation)? {
+                            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                                report,
+                                reason: CandidateWorkDeferral::CommittedStateMoved,
+                            });
+                        }
                         return Ok(CandidateAssemblyOutcome::WorkDeferred { report, reason });
                     }
                     Err(CandidateWorkError::Failed(reason)) => {
@@ -942,14 +1012,24 @@ impl V2CandidateAssembler {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
-                validate_request(&request)?;
+                if !validate_request_at_generation(&request, state_generation)? {
+                    return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                        report,
+                        reason: CandidateWorkDeferral::CommittedStateMoved,
+                    });
+                }
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
             }
             if carrier_attachments.required_beacon_pulse_pending {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
-                validate_request(&request)?;
+                if !validate_request_at_generation(&request, state_generation)? {
+                    return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                        report,
+                        reason: CandidateWorkDeferral::CommittedStateMoved,
+                    });
+                }
                 return Ok(CandidateAssemblyOutcome::AwaitingRequiredBeacon(report));
             }
             let algorithm = request
@@ -1160,13 +1240,17 @@ impl V2CandidateAssembler {
                     .map_err(CandidateError::CanonicalEncoding)?;
                 chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
             }
-            if !candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work)
+            let independently_useful =
+                candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work);
+            // The start-of-block probe acquires State writers. It must finish
+            // before taking the publication lock used through signing.
+            let scheduled_start_work = !independently_useful
                 && request
                     .state
-                    .deterministic_start_work_pending(&candidate_header)
+                    .deterministic_start_work_pending(&builder.carrier_context_header())
                     .map_err(CandidateError::LocalStateAdmission)?
-                    != Some(true)
-            {
+                    == Some(true);
+            if !independently_useful && !scheduled_start_work {
                 // Optional evidence cannot manufacture an empty/pulse-only
                 // carrier or terminate the runner when no proof fits. Retain its
                 // original custody and the existing bounded snapshot recheck so
@@ -1177,7 +1261,12 @@ impl V2CandidateAssembler {
                     if request.queue.transaction_selection_durability_faulted() {
                         return Err(CandidateError::RestartRequired);
                     }
-                    validate_request(&request)?;
+                    if !validate_request_at_generation(&request, state_generation)? {
+                        return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                            report,
+                            reason: CandidateWorkDeferral::CommittedStateMoved,
+                        });
+                    }
                     return Ok(CandidateAssemblyOutcome::WorkDeferred {
                         report,
                         reason: CandidateWorkDeferral::EvidenceEnvelope,
@@ -1219,6 +1308,18 @@ impl V2CandidateAssembler {
                     reason: CandidateWorkDeferral::NativeLaneSource,
                 });
             }
+            report.selected = selected.len();
+            report.native_selected = prepared_work
+                .native_lane_decisions
+                .as_ref()
+                .map_or(0, |native| native.batch().groups.len());
+            let selected_hashes = selected
+                .iter()
+                .map(|record| record.transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>();
+            if !selection_lease.retain_only(&selected_hashes) {
+                return Err(CandidateError::RestartRequired);
+            }
             let candidate_creation_time = builder.creation_time();
             let signing = request
                 .output_guard
@@ -1240,12 +1341,10 @@ impl V2CandidateAssembler {
                         .to_owned(),
                 ));
             }
-            if !candidate_block_has_proposal_work(
+            if !candidate_block_has_independent_proposal_work(
                 &block,
-                request.state,
                 carrier_attachments.time_trigger_clock_progress_required,
-            )
-            .map_err(CandidateError::LocalStateAdmission)?
+            ) && !scheduled_start_work
             {
                 return Err(CandidateError::BuiltWithoutProposalWork);
             }
@@ -1265,18 +1364,6 @@ impl V2CandidateAssembler {
             // committed tip after all bounded external work so an accidental
             // concurrent block-sync commit cannot publish a stale candidate.
             validate_request(&request)?;
-            report.selected = selected.len();
-            report.native_selected = prepared_work
-                .native_lane_decisions
-                .as_ref()
-                .map_or(0, |native| native.batch().groups.len());
-            let selected_hashes = selected
-                .iter()
-                .map(|record| record.transaction.hash_as_entrypoint())
-                .collect::<Vec<_>>();
-            if !selection_lease.retain_only(&selected_hashes) {
-                return Err(CandidateError::RestartRequired);
-            }
             signing.complete();
             return Ok(CandidateAssemblyOutcome::Assembled(AssembledV2Candidate {
                 tag,
@@ -1812,15 +1899,26 @@ fn attachments_for_selected_lifecycle(
 ///
 /// Scheduled state transitions are independently derived from the exact parent
 /// and body header. They need no synthetic transaction or additional wire flag.
-/// This is the common fail-closed boundary used after fresh assembly, before
-/// validating an inbound body, and before re-proposing a recovered locked body.
+/// This is the fail-closed boundary before validating an inbound body or
+/// re-proposing a recovered locked body. Fresh assembly uses the same
+/// independent-work predicate with a start-work probe completed before its
+/// State publication lease.
 pub(crate) fn candidate_block_has_proposal_work(
     block: &SignedBlock,
     state: &State,
     time_trigger_clock_progress_required: bool,
 ) -> Result<bool, crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
 {
-    let independent = block.external_entrypoints_cloned().next().is_some()
+    if candidate_block_has_independent_proposal_work(block, time_trigger_clock_progress_required) {
+        return Ok(true);
+    }
+    Ok(state.deterministic_start_work_pending(&block.header())? == Some(true))
+}
+fn candidate_block_has_independent_proposal_work(
+    block: &SignedBlock,
+    time_trigger_clock_progress_required: bool,
+) -> bool {
+    block.external_entrypoints_cloned().next().is_some()
         || block.execution_context().is_some_and(|context| {
             !context.autonomous_lane_payloads.is_empty()
                 || context
@@ -1840,8 +1938,7 @@ pub(crate) fn candidate_block_has_proposal_work(
             .npos_consensus_effects()
             .is_some_and(npos_effects_have_independent_proposal_work)
         || block.header().sccp_commitment_root().is_some()
-        || time_trigger_clock_progress_required;
-    Ok(independent || state.deterministic_start_work_pending(&block.header())? == Some(true))
+        || time_trigger_clock_progress_required
 }
 // Headers carry proposal identity only; complete outputs belong to BlockResult.
 // A stripped context therefore removes only the Network input commitment.
@@ -1870,6 +1967,26 @@ fn record_ordinary_execution_carrier_exclusion(
 }
 fn candidate_state_generation_is_current(state: &State, expected: u64) -> bool {
     expected % 2 == 0 && state.state_view_generation() == expected
+}
+fn validate_request_at_generation<Work>(
+    request: &CandidateRequest<'_, Work>,
+    expected: u64,
+) -> Result<bool, CandidateError> {
+    let validation = validate_request(request);
+    if !candidate_state_generation_is_current(request.state, expected) {
+        return Ok(false);
+    }
+    // A local State at a different height may still be catching up to this
+    // parent, or may already have superseded it. Both are ordinary asynchronous
+    // progress; a conflicting hash at the same height or a network mismatch is not.
+    if matches!(&validation, Err(CandidateError::ParentStateMismatch))
+        && request.state.network_id_ref() == &request.context.network_id
+        && u64::try_from(request.state.committed_height())
+            .is_ok_and(|height| height != request.parent.height())
+    {
+        return Ok(false);
+    }
+    validation.map(|()| true)
 }
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
     request
@@ -3267,7 +3384,7 @@ pub(super) mod tests {
     }
     #[test]
     fn candidate_generation_gate_accepts_only_the_same_stable_state_cut() {
-        let (state, _context, _anchor, _) = snapshot_parent_fixture();
+        let (state, context, anchor, key) = snapshot_parent_fixture();
         let generation = state.state_view_generation();
         assert_eq!(generation % 2, 0);
         assert!(candidate_state_generation_is_current(&state, generation));
@@ -3279,6 +3396,105 @@ pub(super) mod tests {
             &state,
             generation.saturating_add(2),
         ));
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let request = CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: SingleRouteWorkProvider,
+        };
+        assert!(validate_request_at_generation(&request, generation).unwrap());
+        assert!(!validate_request_at_generation(&request, generation + 2).unwrap());
+    }
+    #[test]
+    fn state_publication_during_preparation_defers_a_pre_sign_failure() {
+        struct PublishThenFail<'state>(&'state State);
+        impl CandidateWorkProvider for PublishThenFail<'_> {
+            fn prepare(
+                &mut self,
+                context: &wire::HeightContext,
+                view: wire::View,
+                _candidates: &[CandidateDescriptor<'_>],
+            ) -> Result<PreparedCandidateWork, CandidateWorkError> {
+                let header = BlockHeader::new(
+                    NonZeroU64::new(context.height).unwrap(),
+                    self.0.latest_block_hash_fast(),
+                    None,
+                    1_000,
+                    view,
+                );
+                self.0
+                    .block(header)
+                    .commit_world_overlay_for_testing()
+                    .expect("publish the next committed State generation");
+                Err(CandidateWorkError::Failed(
+                    "preparation observed a superseded State cut".into(),
+                ))
+            }
+        }
+
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        let initial_generation = state.state_view_generation();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let outcome = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(1)).unwrap(),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(tag, local, None, None, None),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: PublishThenFail(&state),
+        })
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            CandidateAssemblyOutcome::WorkDeferred {
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+                ..
+            }
+        ));
+        assert_eq!(state.state_view_generation(), initial_generation + 2);
+        assert!(!guard.restart_required());
     }
     #[test]
     fn candidate_build_uses_the_exact_preflight_creation_time() {
@@ -5380,6 +5596,7 @@ pub(super) mod tests {
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {
         let (state, context, anchor, key) = snapshot_parent_fixture();
+        let state = Arc::new(state);
         assert_eq!(
             validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state)
                 .expect("exact authenticated snapshot parent"),
@@ -5445,6 +5662,77 @@ pub(super) mod tests {
             validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state),
             Err(CandidateError::ParentStateMismatch)
         ));
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(4));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let request = CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: SingleRouteWorkProvider,
+        };
+        assert!(!validate_request_at_generation(&request, state.state_view_generation()).unwrap());
+        let handoff = NativeLaneDecisionHandoff::empty_for_test(Arc::clone(&state));
+        let native = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(1)).unwrap(),
+            time_source,
+        )
+        .assemble_native(CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: &handoff,
+        })
+        .expect("Native source preparation must defer a superseded parent");
+        assert!(native.source.work.is_none());
+        assert!(matches!(
+            native.source.waits.as_slice(),
+            [crate::state::LaneDecisionGroupPreparationV1::ObservationChanged]
+        ));
+        assert!(matches!(
+            native.outcome,
+            Ok(CandidateAssemblyOutcome::WorkDeferred {
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+                ..
+            })
+        ));
+        assert!(!output_guard.restart_required());
     }
     #[test]
     fn limits_require_scan_to_cover_maximum_batch() {

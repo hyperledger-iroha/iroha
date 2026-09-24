@@ -40018,7 +40018,7 @@ async fn handler_identifier_resolve(
         &policy,
         &program_policy,
         &request,
-        app.signed_query_admission.network_id(),
+        &app.signed_query_admission.network_id(),
     )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -40099,7 +40099,7 @@ async fn handler_identifier_claim_receipt(
         &policy,
         &program_policy,
         &request,
-        app.signed_query_admission.network_id(),
+        &app.signed_query_admission.network_id(),
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
