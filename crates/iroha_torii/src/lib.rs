@@ -2410,8 +2410,11 @@ struct AppState {
     query_ingress_envelope: QueryIngressMemoryEnvelope,
     /// Complete bounded HTTP peer-proxy body/decode/forwarding accounting.
     torii_proxy_http_ingress_envelope: ToriiProxyHttpIngressEnvelope,
-    /// Serializes complete proxy working sets across local, P2P, and HTTP ingress.
+    /// One complete locally originated proxy request, including quorum collection.
     torii_proxy_memory_inflight: Arc<tokio::sync::Semaphore>,
+    /// One complete peer-originated proxy request. A local quorum collector must
+    /// not occupy the only slot needed to answer another peer's collector.
+    torii_proxy_receiver_memory_inflight: Arc<tokio::sync::Semaphore>,
     /// Limits concurrent signed-query body reads independently of fanout work.
     query_ingress_inflight: Arc<tokio::sync::Semaphore>,
     /// Byte-weighted capacity shared by complete fanout and ordinary-query work.
@@ -25093,47 +25096,53 @@ enum QueuePlanAdmissionPublicationIngestOutcome {
     },
 }
 #[cfg(feature = "connect")]
+#[derive(Debug, thiserror::Error)]
+enum QueuePlanAdmissionPublicationIngestError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("QueuePlan publication persistence failed: {0}")]
+    Persistence(#[from] iroha_core::state::MergeLedgerCommitError),
+}
+#[cfg(feature = "connect")]
 fn ingest_queue_plan_admission_publication(
     app: &SharedAppState,
     publication: &QueuePlanAdmissionPublicationV1,
-) -> Result<QueuePlanAdmissionPublicationIngestOutcome, String> {
+) -> Result<QueuePlanAdmissionPublicationIngestOutcome, QueuePlanAdmissionPublicationIngestError> {
     if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
-        return Err(format!(
+        return Err(QueuePlanAdmissionPublicationIngestError::Invalid(format!(
             "unsupported QueuePlan admission publication schema_version `{}`",
             publication.schema_version
-        ));
+        )));
     }
     let local_peer = app.local_peer_id.as_ref().ok_or_else(|| {
-        "QueuePlan admission publication receiver has no configured peer identity".to_owned()
+        QueuePlanAdmissionPublicationIngestError::Invalid(
+            "QueuePlan admission publication receiver has no configured peer identity".to_owned(),
+        )
     })?;
     // Authentication, receiver authorization and durable classification share one State-owned
     // graph. The bounded canonical complete input is decoded once by that owner.
-    let outcome = app
-        .state
-        .persist_classified_queue_plan_admission(
-            &publication.certificate,
-            iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(
-                local_peer,
-            ),
-        )
-        .map_err(|error| format!("QueuePlan publication persistence failed: {error}"))?;
+    let outcome = app.state.persist_classified_queue_plan_admission(
+        &publication.certificate,
+        iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(local_peer),
+    )?;
     let certificate_hash = match outcome {
         PendingQueuePlanAdmissionPersistenceOutcome::Applied { .. } => {
             return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Rejected { disposition, .. } => {
-            return Err(match disposition {
-                PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
-                    "canonical WSV raced this publication with another QueuePlan admission"
-                        .to_owned()
-                }
-                PendingQueuePlanAdmissionDisposition::Stale => {
-                    "QueuePlan admission became stale during publication ingestion".to_owned()
-                }
-                _ => {
-                    "QueuePlan admission persistence returned an invalid rejection state".to_owned()
-                }
-            });
+            return Err(QueuePlanAdmissionPublicationIngestError::Invalid(
+                match disposition {
+                    PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
+                        "canonical WSV raced this publication with another QueuePlan admission"
+                            .to_owned()
+                    }
+                    PendingQueuePlanAdmissionDisposition::Stale => {
+                        "QueuePlan admission became stale during publication ingestion".to_owned()
+                    }
+                    _ => "QueuePlan admission persistence returned an invalid rejection state"
+                        .to_owned(),
+                },
+            ));
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Durable {
             certificate_hash, ..
@@ -25439,7 +25448,7 @@ fn normalize_proxied_transaction_submission_response(
     response
 }
 #[cfg(feature = "connect")]
-mod threshold_key_lifecycle_ingress;
+mod ordinary_transaction_ingress;
 
 #[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
@@ -25458,7 +25467,7 @@ async fn execute_torii_transaction_via_proxy(
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
     if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return threshold_key_lifecycle_ingress::submit(
+        return ordinary_transaction_ingress::submit(
             app.clone(),
             accepted_transaction,
             routing_plan,
@@ -28601,12 +28610,41 @@ async fn process_incoming_torii_proxy_response(
     }
 }
 #[cfg(feature = "connect")]
-fn process_incoming_queue_plan_admission_publication(
+async fn process_incoming_queue_plan_admission_publication(
     app: &SharedAppState,
     sender_peer_id: &PeerId,
     publication: &QueuePlanAdmissionPublicationV1,
 ) {
-    match ingest_queue_plan_admission_publication(app, publication) {
+    let deadline = tokio::time::Instant::now() + TORII_PROXY_EXECUTION_BUDGET;
+    let outcome = loop {
+        let result = ingest_queue_plan_admission_publication(app, publication);
+        let Some(required_height) = result.as_ref().err().and_then(|error| match error {
+            QueuePlanAdmissionPublicationIngestError::Persistence(error) => {
+                queue_plan_publication_wait::publication_overlap_height(error)
+            }
+            QueuePlanAdmissionPublicationIngestError::Invalid(_) => None,
+        }) else {
+            break result;
+        };
+        // Kura may durably store a block before State publishes its view. The
+        // authenticated publication remains owned by this bounded worker while
+        // State catches up; a wakeup grants no authority without reclassification.
+        if tokio::time::timeout_at(
+            deadline,
+            app.state.wait_for_committed_height(required_height),
+        )
+        .await
+        .is_err()
+        {
+            iroha_logger::warn!(
+                peer_id = %sender_peer_id,
+                required_height,
+                "deferred QueuePlan publication after State did not catch up; sender and gossip retain the durable input"
+            );
+            return;
+        }
+    };
+    match outcome {
         Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted) => {
             iroha_logger::debug!(
                 peer_id = %sender_peer_id,
@@ -47960,7 +47998,12 @@ impl Torii {
                         "transaction content limit cannot admit internal proxy HTTP ingress",
                     )
                 })?;
+        // These are two distinct bounded working sets. If every validator
+        // originates an admission concurrently, each holds its local collector
+        // slot while waiting for peer receipts. Sharing a single slot with
+        // receivers makes all peers reject each other and prevents a quorum.
         let torii_proxy_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        let torii_proxy_receiver_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         let query_ingress_slots =
             validate_semaphore_permits("query.ingress_slots", query_memory.ingress_slots.get())?;
         let query_ingress_inflight = Arc::new(tokio::sync::Semaphore::new(query_ingress_slots));
@@ -48099,6 +48142,7 @@ impl Torii {
             query_ingress_envelope: query_memory.ingress,
             torii_proxy_http_ingress_envelope,
             torii_proxy_memory_inflight,
+            torii_proxy_receiver_memory_inflight,
             query_ingress_inflight,
             query_fanout_inflight,
             #[cfg(feature = "app_api")]

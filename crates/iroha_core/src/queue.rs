@@ -10571,11 +10571,35 @@ impl Queue {
         dataspace_id: DataSpaceId,
     ) -> bool {
         self.routing_plans.iter().any(|entry| {
-            !reservation_owned_hashes.contains(entry.key())
-                && self.txs.contains_key(entry.key())
-                && entry.value().legs().into_iter().any(|leg| {
-                    leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id
-                })
+            if reservation_owned_hashes.contains(entry.key()) {
+                return false;
+            }
+            let Some(tx) = self.txs.get(entry.key()) else {
+                return false;
+            };
+            // A local Ordinary queue is asynchronous input, not consensus custody of its
+            // admission-time lane. Its route is recomputed from committed State when selected.
+            if Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)
+                && self.durable_plan_claims.get(entry.key()).map_or(
+                    !self.plan_journal_installed.load(Ordering::Acquire),
+                    |claim| {
+                        claim.global_admission_identity.is_none()
+                            && claim.entrypoint_hash == *entry.key()
+                            && claim.signed_transaction_hash
+                                == crate::tx::exact_signed_transaction_hash(
+                                    tx.as_accepted().entrypoint(),
+                                )
+                            && claim.routing_plan == *entry.value()
+                    },
+                )
+            {
+                return false;
+            }
+            entry
+                .value()
+                .legs()
+                .into_iter()
+                .any(|leg| leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id)
         })
     }
     /// Register before checking while the caller retains mutation and reservation guards.
@@ -15755,7 +15779,7 @@ impl Queue {
             "durable queue-plan claim index must remain bounded by queue capacity"
         );
     }
-    fn durable_plan_claim_context_revalidates_in_view(
+    fn durable_plan_claim_original_context_authenticates_in_view(
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
         admission_context: &QueuePlanAdmissionContextV1,
@@ -15783,6 +15807,21 @@ impl Queue {
         if exact_predecessor != admission_context.predecessor_block_hash {
             return false;
         }
+        true
+    }
+    fn durable_plan_claim_context_revalidates_in_view(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV1,
+    ) -> bool {
+        if !Self::durable_plan_claim_original_context_authenticates_in_view(
+            state_view,
+            routing_plan,
+            admission_context,
+        ) {
+            return false;
+        }
+        let current_authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
         let Some(current_proposal_height) = current_authority_height.checked_add(1) else {
             return false;
         };
@@ -15918,7 +15957,7 @@ impl Queue {
         &self,
         hash: EntrypointHash,
         tx: &CheckedTransaction<'static>,
-        state_view: &impl StateReadOnlyWithTransactions,
+        state_view: &StateView<'_>,
         nexus: &Nexus,
         committed_height: u64,
     ) -> Result<(RoutingPlan, QueuePlanPendingRouteAuthority), RoutingResolveError> {
@@ -15944,6 +15983,8 @@ impl Queue {
         else {
             return Err(RoutingResolveError::StaleRoutingPlan);
         };
+        let ordinary_single =
+            Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &plan);
         let authority = if let Some(claim) = self.durable_plan_claims.get(&hash) {
             let exact_claim = claim.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()
                 && claim.signed_transaction_hash
@@ -15952,20 +15993,60 @@ impl Queue {
             if !exact_claim {
                 return Err(RoutingResolveError::StaleRoutingPlan);
             }
-            Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?
+            if ordinary_single && claim.global_admission_identity.is_none() {
+                if !Self::durable_plan_claim_original_context_authenticates_in_view(
+                    state_view,
+                    &plan,
+                    &claim.admission_context,
+                ) {
+                    return Err(RoutingResolveError::StaleRoutingPlan);
+                }
+                QueuePlanPendingRouteAuthority::Active
+            } else {
+                Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?
+            }
         } else if self.plan_journal_installed.load(Ordering::Acquire) {
             // A production queue with an installed journal must never select ownership that lacks
             // the exact durable claim rebuilt or inserted alongside its immutable routing plan.
             return Err(RoutingResolveError::StaleRoutingPlan);
         } else {
-            let resolved =
-                resolve_routing_plan_for_queue_admission(plan.clone(), nexus, committed_height)?;
-            if resolved != plan {
-                return Err(RoutingResolveError::StaleRoutingPlan);
+            if !ordinary_single {
+                let resolved = resolve_routing_plan_for_queue_admission(
+                    plan.clone(),
+                    nexus,
+                    committed_height,
+                )?;
+                if resolved != plan {
+                    return Err(RoutingResolveError::StaleRoutingPlan);
+                }
             }
             QueuePlanPendingRouteAuthority::Active
         };
+        if ordinary_single && authority == QueuePlanPendingRouteAuthority::Active {
+            let fresh = self
+                .router
+                .read()
+                .try_route_plan_with_view(tx.as_accepted(), state_view)
+                .and_then(|plan| {
+                    resolve_routing_plan_for_queue_admission(plan, nexus, committed_height)
+                })?;
+            if !matches!(fresh, RoutingPlan::Single(_)) {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+            return Ok((fresh, authority));
+        }
         Ok((plan, authority))
+    }
+    fn ordinary_single_route_is_reassignable(
+        entrypoint: &TransactionEntrypoint,
+        plan: &RoutingPlan,
+    ) -> bool {
+        matches!(plan, RoutingPlan::Single(_))
+            && matches!(
+                entrypoint,
+                TransactionEntrypoint::External(signed)
+                    if signed.admission_intent() == TransactionAdmissionIntent::Ordinary
+            )
     }
     /// Resolve immutable ownership only while its exact durable state is stable.
     ///
@@ -15976,7 +16057,7 @@ impl Queue {
         &self,
         hash: EntrypointHash,
         tx: &CheckedTransaction<'static>,
-        state_view: &impl StateReadOnlyWithTransactions,
+        state_view: &StateView<'_>,
         nexus: &Nexus,
         committed_height: u64,
     ) -> Result<Option<(RoutingPlan, QueuePlanPendingRouteAuthority)>, RoutingResolveError> {

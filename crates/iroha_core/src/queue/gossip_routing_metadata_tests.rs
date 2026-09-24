@@ -21,7 +21,7 @@ fn gossip_batch_returns_routing_metadata() {
     assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);
 }
 #[test]
-fn gossip_batch_preserves_admitted_routing_across_policy_change() {
+fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change() {
     let query_handle = LiveQueryStore::start_test();
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
@@ -36,6 +36,10 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     let mut state =
         State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
     let queue = Queue::test(config_factory(), &time_source);
+    let journal_dir = tempfile::tempdir().expect("Ordinary queue journal directory");
+    queue
+        .install_plan_journal(&journal_dir.path().join("ordinary.norito"), 1024 * 1024, true)
+        .expect("install durable Ordinary queue journal");
     let (account_id, key_pair) = gen_account_in("wonderland");
     register_test_authority(&state, &account_id);
     let tx = accepted_tx_with(
@@ -50,6 +54,7 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     );
     let hash = tx.as_ref().hash_as_entrypoint();
     queue.push(tx.clone(), state.view()).expect("push tx");
+    assert!(queue.durable_plan_claims.contains_key(&hash));
     assert_eq!(
         queue
             .routing_plans
@@ -61,14 +66,19 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     nexus.routing_policy.default_lane = refreshed.lane_id;
     nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
     state.set_nexus(nexus).expect("apply fresh Nexus state");
-    let immutable_route = queue
+    let current_route = queue
         .route_plan_with_state(&tx, &state)
         .map(|plan| plan.coordinator_route())
-        .expect("admitted route should remain active");
-    assert_eq!(immutable_route, RoutingDecision::default());
+        .expect("Ordinary routing should follow committed state");
+    assert_eq!(current_route, refreshed);
     let batch = queue.gossip_batch_with_state(1, &state);
     assert_eq!(batch.len(), 1);
-    assert_eq!(batch[0].routing, RoutingDecision::default());
+    assert_eq!(batch[0].routing, refreshed);
+    assert!(!queue.lane_has_pending_work_under_retirement_observer(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        Hash::new(b"ordinary-route-reassignment"),
+    ));
     assert_eq!(
         queue
             .routing_plans

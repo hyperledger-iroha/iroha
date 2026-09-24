@@ -478,6 +478,8 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
 #[cfg(feature = "connect")]
 #[tokio::test]
 async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
+    use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+
     let app = mk_app_state_for_tests();
     let key = checked_torii_test_ed25519_keypair(0xce, "ordinary batch signer");
     let tx = signed_log_transaction_for_test(
@@ -486,7 +488,7 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
         "ordinary bypass",
         &key,
     );
-    let error = super::handler_post_transactions_batch(
+    let response = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
         transaction_batch_body_for_test(vec![
@@ -494,9 +496,16 @@ async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
         ]),
     )
     .await
-    .err()
-    .expect("ordinary application input has no certified admission");
-    assert_eq!(error.into_response().status(), StatusCode::FORBIDDEN);
+    .expect("ordinary batch returns one classified economic outcome");
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-transactions-accepted"),
+        Some("0")
+    );
+    let outcomes: Vec<TransactionBatchEntryOutcome> =
+        norito::json::from_slice(&torii_body_bytes(response, "batch outcomes").await).unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].signed_transaction_hash, tx.hash());
+    assert_ne!(outcomes[0].status, 202);
     assert_eq!(app.queue.active_len(), 0);
 }
 #[tokio::test]

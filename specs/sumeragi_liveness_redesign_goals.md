@@ -113,6 +113,38 @@ Remove independent decisions around them; do not add a third scheduling authorit
 | Runtime ingress and worker adapters | Authenticated messages, opaque jobs, physical queues and results | Authenticate and execute; derive eligibility from authoritative state instead of maintaining competing scheduling state. |
 | Kura, body store and safety WAL | Canonical durable artifacts and validated persistence receipts | Reconstruct work from those artifacts; simplify duplicate journals only after preserving all crash boundaries and bounded recovery. |
 
+The leader samples the finite set of eligible inputs already available at a
+proposal boundary, orders that sample deterministically, and proposes. Async
+arrivals after the sample remain for a later proposal. A local admission
+collector may wait for peer receipts, but it must never reserve the only
+receiver capacity needed for those peers to serve one another; admission
+backpressure must not create a network-wide resource cycle before the leader
+can take its sample. Peers in an asynchronous network need not have identical
+queues at that instant; they agree on the signed proposal's ordered contents
+and validate and execute those contents deterministically.
+Kura can store the next block before State publishes its corresponding view.
+Authenticated peer publications that arrive in this overlap wait for the State
+height notification, then reclassify the same bytes against the new frontier;
+the fixed synchronous reconciliation probe is not a validity verdict. The
+bounded publication worker retains the input while waiting, and its sender's
+durable copy remains available if the worker deadline expires.
+
+The first direct-input cut changes `AccountTransactionDraft::new` to sign an
+`Ordinary` intent. Torii durably queues signed single-route application work
+without preproposal QueuePlan quorum collection. The leader's bounded sampler
+selects an ordered local snapshot without waiting for matching peer queues or
+lane Decisions; the signed global proposal fixes the order. Peers validate the
+signed inputs and route contexts from that proposal and execute them through
+the common State path without lane payload ownership. A ready Native batch and
+ordinary work receive alternating height opportunities, while an exact-height
+lifecycle control takes its height immediately and retains its own quorum check.
+Explicit multi-route and special private-settlement carriers retain
+`QueuePlanSynced` custody. The failed four-validator autoscale replay before
+this cut admitted 0/96 load submissions under 429/503 QueuePlan pressure.
+Focused Core/Torii checks, the four-peer direct-input replay, and the same-source
+daemon build are required before claiming this cut works; the full unchanged
+four/seven-validator campaign and L1–L6 remain open.
+
 The runner's former independently transitioned
 `LifecycleProducerClaimDispositionV1` in
 `crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs` now comes

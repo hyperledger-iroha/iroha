@@ -171,26 +171,62 @@ async fn lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_iden
 }
 
 #[tokio::test]
-async fn lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions() {
+async fn ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected() {
     let (app, key, _, certificate, journal) = lifecycle_ordinary_fixture(true);
     let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
-    for instructions in [
-        vec![Log::new(Level::INFO, "ordinary application".to_owned()).into()],
-        vec![
-            ApplyThresholdKeyLifecycleCertificateV1 {
-                certificate: certificate.clone(),
-            }
-            .into(),
-            Log::new(Level::INFO, "mixed application".to_owned()).into(),
-        ],
-    ] {
-        let response = lifecycle_submit(
+    let response = lifecycle_submit(
+        &app,
+        lifecycle_ordinary_transaction(
             &app,
-            lifecycle_ordinary_transaction(&app, &key, instructions),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-    }
+            &key,
+            vec![Log::new(Level::INFO, "ordinary application".to_owned()).into()],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(app.queue.active_len(), 1);
+    assert_ne!(
+        std::fs::read(journal.path().join("queue.norito")).unwrap(),
+        before
+    );
+    let response = lifecycle_submit(
+        &app,
+        lifecycle_ordinary_transaction(
+            &app,
+            &key,
+            vec![
+                ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into(),
+                Log::new(Level::INFO, "mixed application".to_owned()).into(),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(app.queue.active_len(), 1);
+}
+
+#[tokio::test]
+async fn ordinary_multi_route_application_requires_certified_intent() {
+    let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
+    let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
+    let transaction = lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![Log::new(Level::INFO, "multi-route application".to_owned()).into()],
+    );
+    let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let participant = iroha_core::queue::RouteLeg::new(
+        RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9)),
+        iroha_core::queue::RouteLegRole::Participant,
+    );
+    let routing_plan = RoutingPlan::native_amx(coordinator, vec![participant]);
+    let error = super::ordinary_transaction_ingress::authenticate(
+        &app,
+        &TransactionEntrypoint::External(transaction),
+        &routing_plan,
+    )
+    .expect_err("multi-route ordinary ingress must refuse before durable custody");
+    assert!(error.contains("QueuePlanSynced"));
     assert_eq!(app.queue.active_len(), 0);
     assert_eq!(
         std::fs::read(journal.path().join("queue.norito")).unwrap(),

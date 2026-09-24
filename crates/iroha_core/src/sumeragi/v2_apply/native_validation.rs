@@ -437,9 +437,8 @@ impl V2ApplyService {
 }
 
 impl OwnedNativeCarrierValidator {
-    /// A lifecycle certificate is the sole external control allowed to execute
-    /// directly at its quorum-certified next global height. Reauthenticate it
-    /// here: a Torii admission decision is never voting authority for peers.
+    /// A lifecycle certificate is a special exact-height direct input.
+    /// Reauthenticate it here: a Torii decision is never voting authority.
     fn authenticate_lifecycle_control(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
         let invalid = |reason: &str| V2ApplyError::Validation(reason.to_owned());
         let [entrypoint] = body.external_entrypoints_slice() else {
@@ -546,6 +545,56 @@ impl OwnedNativeCarrierValidator {
         Ok(())
     }
 
+    /// A peer validates the leader's signed ordinary input and route from the
+    /// proposal itself; its local queue may contain a different async snapshot.
+    fn authenticate_direct_external(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
+        let bundle = body.execution_context().ok_or_else(|| {
+            V2ApplyError::Validation("direct external carrier lacks execution context".into())
+        })?;
+        if bundle.external.len() != body.external_entrypoint_count() {
+            return Err(V2ApplyError::Validation(
+                "direct external route count differs from its inputs".into(),
+            ));
+        }
+        let mut lifecycle = false;
+        for (entrypoint, context) in body
+            .external_entrypoints_slice()
+            .iter()
+            .zip(&bundle.external)
+        {
+            let TransactionEntrypoint::External(signed) = entrypoint else {
+                return Err(V2ApplyError::Validation(
+                    "direct external input must be a signed transaction".into(),
+                ));
+            };
+            if signed.admission_intent() != TransactionAdmissionIntent::Ordinary
+                || context.entrypoint_hash != entrypoint.hash()
+                || context.native_amx_receipt.is_some()
+                || !matches!(
+                    crate::queue::routing_plan_from_execution_context(context),
+                    Ok(crate::queue::RoutingPlan::Single(_))
+                )
+            {
+                return Err(V2ApplyError::Validation(
+                    "direct external input must bind one ordinary route".into(),
+                ));
+            }
+            lifecycle |= signed
+                .instructions()
+                .explicit_instructions()
+                .any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+                        .is_some()
+                });
+        }
+        if lifecycle {
+            self.authenticate_lifecycle_control(body)?;
+        }
+        Ok(())
+    }
+
     // These are disjoint first-release producers. Failed Native authentication
     // never enters the genesis/control producer or a second execution attempt.
     fn classify_source(
@@ -585,7 +634,7 @@ impl OwnedNativeCarrierValidator {
                         .into(),
                 ));
             }
-            self.authenticate_lifecycle_control(body)?;
+            self.authenticate_direct_external(body)?;
             return Ok(CurrentCarrierSourceClass::Control);
         }
         Ok(if native {

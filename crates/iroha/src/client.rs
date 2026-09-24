@@ -16207,7 +16207,10 @@ pub struct AccountTransactionDraft {
 }
 
 impl AccountTransactionDraft {
-    /// Create a queue-plan-synchronized transaction draft.
+    /// Create an ordinary transaction draft for direct leader selection.
+    ///
+    /// Multi-route transactions must select `QueuePlanSynced` explicitly before
+    /// signing, because their participant custody needs a certified admission.
     pub fn new(
         executable: impl Into<Executable>,
         fee_payment: FeePaymentIntent,
@@ -16217,7 +16220,7 @@ impl AccountTransactionDraft {
             executable: executable.into(),
             fee_payment,
             metadata,
-            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+            admission_intent: TransactionAdmissionIntent::Ordinary,
             attachments: None,
             time_to_live: None,
         }
@@ -25844,6 +25847,10 @@ mod tests {
 
         assert_eq!(first.authority(), &first_client.account);
         assert_eq!(first.network_id(), Some(&first_client.network_id));
+        assert_eq!(
+            first.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
         assert_eq!(second.authority(), &second_client.account);
         assert_eq!(second.network_id(), Some(&second_client.network_id));
         assert_ne!(first.authority(), second.authority());

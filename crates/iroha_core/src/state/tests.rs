@@ -13586,6 +13586,7 @@ state_test! { sync autoscale_scale_out_committee_uses_same_dataspace_manifest_po
     let topology_keypairs = seed_autoscale_transport_peers_for_test(&state, 4);
     let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &manifest_keypairs);
+    seed_committee_keys_with_pops(&state, &manifest_keypairs);
     install_lane_manifest_registry(
         &state,
         &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, manifest_validators)],
@@ -13641,6 +13642,7 @@ state_test! { sync autoscale_scale_out_committee_uses_same_dataspace_stake_pool
     let topology_keypairs = seed_autoscale_transport_peers_for_test(&state, 4);
     let (stake_validators, stake_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &stake_keypairs);
+    seed_committee_keys_with_pops(&state, &stake_keypairs);
     for (validator, keypair) in stake_validators.iter().zip(&stake_keypairs) {
         insert_active_public_lane_validator_for_test(
             &state,
@@ -26169,6 +26171,12 @@ fn peer_id_for_account(account: &AccountId) -> PeerId {
     )
 }
 fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
+    seed_consensus_keys_with_role(state, keypairs, ConsensusKeyRole::Validator);
+}
+fn seed_committee_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
+    seed_consensus_keys_with_role(state, keypairs, ConsensusKeyRole::Committee);
+}
+fn seed_consensus_keys_with_role(state: &State, keypairs: &[KeyPair], role: ConsensusKeyRole) {
     let mut world_block = state.world.block();
     {
         let mut peers = world_block.peers_mut_for_testing().transaction();
@@ -26182,7 +26190,13 @@ fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
     }
     for keypair in keypairs {
         let_row! { pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key()) .expect("generate pop for consensus key") };
-        let id = derive_validator_key_id(keypair.public_key());
+        let id = match role {
+            ConsensusKeyRole::Validator => derive_validator_key_id(keypair.public_key()),
+            ConsensusKeyRole::Committee => derive_committee_key_id(keypair.public_key()),
+            ConsensusKeyRole::Endorsement => {
+                panic!("lane consensus fixture does not use endorsement keys")
+            }
+        };
         let_row! { record = ConsensusKeyRecord { id: id.clone(), public_key: keypair.public_key().clone(), pop: Some(pop), activation_height: 0, expiry_height: None, replaces: None, status: ConsensusKeyStatus::Active, } };
         world_block
             .consensus_keys

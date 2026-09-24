@@ -203,7 +203,6 @@ pub(crate) struct PreparedCandidateWork {
 impl PreparedCandidateWork {
     /// Construct work for a batch containing only available single-route entries.
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
         Self {
             native_lane_decisions: None,
@@ -445,7 +444,8 @@ pub(crate) struct NativeCandidateAssembly {
 
 /// Borrowed readiness of one authenticated preparation. An exact-height
 /// threshold-key lifecycle certificate takes the current carrier even when a
-/// Native group is ready; all application work remains lane-owned.
+/// Native group is ready. Ordinary single-route work uses the leader's bounded
+/// queue snapshot directly; Native groups retain their original decision owner.
 struct NativeCandidateWork<'source>(&'source NativeLaneCandidatePreparation);
 
 fn lifecycle_certificate<'a>(
@@ -471,6 +471,21 @@ fn lifecycle_certificate<'a>(
         .as_any()
         .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
         .map(|instruction| &instruction.certificate)
+}
+
+fn contains_lifecycle_instruction(accepted: &AcceptedTransaction<'_>) -> bool {
+    let TransactionEntrypoint::External(transaction) = accepted.entrypoint() else {
+        return false;
+    };
+    transaction
+        .instructions()
+        .explicit_instructions()
+        .any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+                .is_some()
+        })
 }
 
 fn exact_height_lifecycle_transaction(
@@ -528,6 +543,41 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
                 ..PreparedCandidateWork::default()
             });
         }
+        if !candidates.is_empty() {
+            let unavailable = candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    let single_coordinator = matches!(
+                        candidate.routing_plan(),
+                        RoutingPlan::Single(leg) if leg.role == RouteLegRole::Coordinator
+                    );
+                    (!single_coordinator
+                        || candidate.transaction().entrypoint().admission_intent()
+                            != TransactionAdmissionIntent::Ordinary
+                        || contains_lifecycle_instruction(candidate.transaction()))
+                    .then_some(index)
+                })
+                .collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "multi-route application work requires its certified Native source",
+                )
+                .into());
+            }
+            // A ready Native batch receives every even-height opportunity;
+            // ordinary work receives the odd-height opportunity. This bounded
+            // choice is local to the leader and never depends on peer queues.
+            if self.0.work.is_some() && context.height.is_multiple_of(2) {
+                return Err(CandidateWorkUnavailable::new(
+                    (0..candidates.len()).collect(),
+                    "ready Native batch has this height's proposal opportunity",
+                )
+                .into());
+            }
+            return Ok(PreparedCandidateWork::single_route_batch(candidates.len()));
+        }
         if self.0.waits.iter().any(|wait| {
             matches!(
                 wait,
@@ -540,13 +590,6 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
         }
         if let Some(mut ready) = self.0.work.as_ref() {
             return ready.prepare(context, view, candidates);
-        }
-        if !candidates.is_empty() {
-            return Err(CandidateWorkUnavailable::new(
-                (0..candidates.len()).collect(),
-                "Native candidate input cannot execute ordinary application queue entries",
-            )
-            .into());
         }
         // Admission certificates and other independently useful controls can
         // advance while exact source waits remain with NativeCandidateAssembly.
@@ -2756,7 +2799,7 @@ pub(super) mod tests {
         (state, context, anchor, key)
     }
     #[test]
-    fn native_source_wait_never_selects_ordinary_fallback() {
+    fn native_source_wait_allows_independent_ordinary_snapshot() {
         let (_, context, _, _) = snapshot_parent_fixture();
         let pending = NativeLaneCandidatePreparation {
             work: None,
@@ -2767,12 +2810,13 @@ pub(super) mod tests {
             ],
         };
         let original = pending.waits.as_ptr();
-        let ordinary = record(71, "ordinary fallback forbidden", 0);
-        let error = NativeCandidateWork(&pending)
+        let ordinary = record(71, "ordinary leader snapshot", 0);
+        let prepared = NativeCandidateWork(&pending)
             .prepare(&context, 0, &[ordinary.descriptor()])
-            .unwrap_err();
-        assert!(matches!(error, CandidateWorkError::Unavailable(unavailable)
-            if unavailable.indices() == &BTreeSet::from([0])));
+            .expect("ordinary input does not wait for an unrelated Native source");
+        assert_eq!(prepared.native_amx_receipts, vec![None]);
+        assert!(prepared.native_lane_decisions.is_none());
+        assert!(prepared.lane_payload_ownerships.is_empty());
         assert_eq!(pending.waits.as_ptr(), original);
         assert_eq!(pending.waits.len(), 1);
         assert!(

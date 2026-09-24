@@ -402,8 +402,9 @@ backend or stock provider factory is supplied. See [the source contract](../spec
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
 instruction in a transaction, and sign it with `TransactionBuilder`.
-`TransactionBuilder` always signature-binds `QueuePlanSynced` for public
-submission. Send the resulting `SignedTransaction` and the request's exact
+Set the payload's `admissionIntent` to `QUEUE_PLAN_SYNCED` before using
+`TransactionBuilder` for this specialized top-up; generic single-route
+transactions keep the ordinary default. Send the resulting `SignedTransaction` and the request's exact
 nonzero 32-byte `operationId` through
 `KagemushaToriiClientV1.submitTopUp(...)`. The client posts the canonical
 versioned signed-transaction bytes unchanged to `/v1/kagemusha/top-up` and

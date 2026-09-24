@@ -712,7 +712,7 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
 
 #[cfg(feature = "bls")]
 #[test]
-fn current_carrier_rejects_unrelated_ordinary_external_transaction() {
+fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let mut store = fixture.reopen_body_store();
     fixture
@@ -730,16 +730,30 @@ fn current_carrier_rejects_unrelated_ordinary_external_transaction() {
     )
     .sign(key.private_key());
     let mut body = successor.body;
+    let entrypoint = TransactionEntrypoint::External(transaction);
     body.set_execution_context(None);
-    body.set_external_entrypoints(vec![TransactionEntrypoint::External(transaction)]);
+    body.set_external_entrypoints(vec![entrypoint.clone()]);
+    let service = Arc::new(fixture.service);
     let error = super::native_validation::classify_current_carrier_for_test(
-        Arc::new(fixture.service),
-        verified,
+        Arc::clone(&service),
+        verified.clone(),
         &body,
     )
-    .expect_err("ordinary application inputs remain lane-owned");
+    .expect_err("direct ordinary input needs a signed route context");
     assert!(matches!(error, V2ApplyError::Validation(message)
-        if message.contains("lifecycle control must contain one certificate instruction")));
+        if message.contains("lacks execution context")));
+    body.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                entrypoint.hash(),
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ]),
+    ));
+    super::native_validation::classify_current_carrier_for_test(service, verified, &body).expect(
+        "a peer can validate the leader's signed ordinary route without matching local queues",
+    );
 }
 
 #[cfg(feature = "bls")]

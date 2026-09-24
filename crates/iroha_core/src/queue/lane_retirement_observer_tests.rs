@@ -310,7 +310,10 @@ mod lane_retirement_observer {
             .expect("retry outer")
             .try_into_cut()
             .expect("retry owners");
-        assert!(retry.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation));
+        assert!(
+            !retry.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation),
+            "a locally queued Ordinary transaction has no consensus claim on its old lane"
+        );
         assert!(queue.contains_entrypoint_hash(hash));
         assert_eq!(queue.active_len(), 1);
     }

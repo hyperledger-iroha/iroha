@@ -2431,7 +2431,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
   'execute_torii_transaction_via_proxy',
   ("accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>",
    'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
-   '        return threshold_key_lifecycle_ingress::submit(\n'
+   '        return ordinary_transaction_ingress::submit(\n'
    '            app.clone(),\n'
    '            accepted_transaction,\n'
    '            routing_plan,\n'
@@ -2528,7 +2528,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));\n'
    '            }\n'
    '            // Keep route/policy preflight before the first durable write. Ordinary\n'
-   '            // inputs have exactly the same authenticated lifecycle exception.\n'
+   '            // inputs must be single-route; lifecycle controls need their own QC.\n'
    '            prepared\n'
    '                .into_iter()\n'
    '                .map(|(hash, prepared)| {',
@@ -2539,7 +2539,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'if prepared.transaction.entrypoint().admission_intent()\n'
    '                                != TransactionAdmissionIntent::QueuePlanSynced\n'
    '                            {\n'
-   '                                threshold_key_lifecycle_ingress::authenticate(\n'
+   '                                ordinary_transaction_ingress::authenticate(\n'
    '                                    &worker_app,\n'
    '                                    prepared.transaction.entrypoint(),\n'
    '                                    &prepared.routing_plan,\n'
@@ -2830,7 +2830,7 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "if response.status() == StatusCode::ACCEPTED",
             "reservation.commit();", "Ok(response)")
     ordered("execute_torii_transaction_via_proxy",
-            "threshold_key_lifecycle_ingress::submit(",
+            "ordinary_transaction_ingress::submit(",
             "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())",
             "let already_durably_admitted = durable_retry_claim.is_some();",
             "AuthenticatedQueuePlanRetry::from_accepted(",
@@ -2850,7 +2850,7 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "AuthenticatedQueuePlanRetry::from_signed(", "canonical_queue_plan_submission_response(",
             "accept_decoded_signed_transaction_for_ingress_with_precheck(",
             "prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));",
-            "prepare_fresh_transaction_ingress(", "threshold_key_lifecycle_ingress::authenticate(",
+            "prepare_fresh_transaction_ingress(", "ordinary_transaction_ingress::authenticate(",
             ".collect::<Result<Vec<_>, Error>>()", "drop(permit);",
             "for (hash, entry) in prepared", "submit_prepared_transaction_ingress(",
             "outcomes.push(TransactionBatchEntryOutcome", "let accepted = outcomes.iter()",
