@@ -68,6 +68,7 @@ pub use iroha_data_model::governance::types::MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_
 use iroha_data_model::query::error::QueryExecutionFail;
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
+    account::AccountAddress,
     alias::AliasIndex,
     alias_setup::{
         AccountAliasName, AliasAssetTotalV1, AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1,
@@ -15241,7 +15242,12 @@ mod evidence_http_tests {
         .expect("account payload");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
             let client = client
                 .clone()
@@ -15257,7 +15263,15 @@ mod evidence_http_tests {
             .first()
             .cloned()
             .expect("account snapshot");
-        let expected_url = join_torii_url(&client.torii_url, &format!("v1/accounts/{account_id}"));
+        let account_address = AccountAddress::from_account_id(&account_id)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
+        let expected_url = join_torii_url_with_path_segments(
+            &client.torii_url,
+            "v1/accounts",
+            &[&account_address],
+        );
         assert_eq!(snapshot.url.path(), expected_url.path());
         assert!(
             snapshot.headers.iter().any(|(name, value)| {
@@ -15285,7 +15299,12 @@ mod evidence_http_tests {
         .expect("account payload");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, &body);
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
             let client = client
                 .clone()
@@ -15302,6 +15321,16 @@ mod evidence_http_tests {
             .first()
             .cloned()
             .expect("account snapshot");
+        let account_address = AccountAddress::from_account_id(&account_id)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
+        let expected_url = join_torii_url_with_path_segments(
+            &client.torii_url,
+            "v1/accounts",
+            &[&account_address],
+        );
+        assert_eq!(snapshot.url.path(), expected_url.path());
         for header in [
             HEADER_ACCOUNT,
             HEADER_SIGNATURE,
@@ -19206,8 +19235,13 @@ impl Client {
         limit: u64,
         offset: u64,
     ) -> Result<Response<Vec<u8>>> {
-        let path = format!("v1/accounts/{account_id}/permissions");
-        let mut url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/accounts",
+            &[&account_address, "permissions"],
+        );
         let limit = limit.to_string();
         let offset = offset.to_string();
         url.query_pairs_mut()
@@ -23250,8 +23284,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
     /// typed JSON, or JSON deserialization fails.
     pub fn get_account_read(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
-        let path = format!("v1/accounts/{account_id}");
-        let url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let url =
+            join_torii_url_with_path_segments(&self.torii_url, "v1/accounts", &[&account_address]);
         let resp = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
@@ -23267,8 +23303,10 @@ impl Client {
     /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
     /// typed JSON, or JSON deserialization fails.
     pub fn get_account_read_unsigned(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
-        let path = format!("v1/accounts/{account_id}");
-        let url = join_torii_url(&self.torii_url, &path);
+        let account_address = AccountAddress::from_account_id(account_id)?
+            .to_i105_for_discriminant(self.account_chain_discriminant)?;
+        let url =
+            join_torii_url_with_path_segments(&self.torii_url, "v1/accounts", &[&account_address]);
         let resp = self.send_builder(
             self.request_without_canonical_account_auth(HttpMethod::GET, url)
                 .header("Accept", APPLICATION_JSON),
@@ -29740,7 +29778,12 @@ mod tests {
     }
     #[test]
     fn account_permissions_page_is_exact_and_canonically_signed() {
-        let client = client_with_base_url(base_url());
+        let mut client = client_with_base_url(base_url());
+        client.account_chain_discriminant = iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1;
+        let _wrong_thread_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            );
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
         with_mock_http(respond_with(&store, response), |mock_transport| {
@@ -29755,7 +29798,10 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        let account_id = client.account.to_string();
+        let account_id = AccountAddress::from_account_id(&client.account)
+            .expect("account address")
+            .to_i105_for_discriminant(client.account_chain_discriminant)
+            .expect("configured chain address");
         let expected_url = join_torii_url_with_path_segments(
             &base_url(),
             "v1/accounts",
