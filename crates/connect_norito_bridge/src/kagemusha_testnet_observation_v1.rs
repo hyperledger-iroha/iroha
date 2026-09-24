@@ -7,6 +7,7 @@
 //! production monetary coordinator.
 
 use std::{
+    mem::{align_of, size_of},
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr, slice,
@@ -171,8 +172,10 @@ pub fn load_and_install_kagemusha_testnet_state_observation_owner_v1(
 /// A missing Rust-installed owner returns device-unavailable. Any malformed,
 /// substituted, forked, or invalid proof returns the KAGEMUSHA rejection code and
 /// leaves the trial head unchanged. The caller must provide the full documented
-/// maximum output capacity before verification can advance the trial. `output_len`
-/// is zero on failure and the actual canonical archive length on success.
+/// maximum output capacity before verification can advance the trial. For valid,
+/// disjoint buffers, `output_len` is zero on failure and the actual canonical
+/// archive length on success. An aliased or misaligned `output_len` is rejected
+/// without writing through it, so it cannot corrupt an input or successful archive.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1(
     public_inputs_archive_ptr: *const c_uchar,
@@ -185,6 +188,29 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1
 ) -> c_int {
     if output_len.is_null() {
         return ERR_NULL_PTR;
+    }
+    let length_start = output_len as usize;
+    let Some(length_end) = length_start.checked_add(size_of::<usize>()) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    if !length_start.is_multiple_of(align_of::<usize>())
+        || [
+            (
+                public_inputs_archive_ptr as usize,
+                public_inputs_archive_len,
+            ),
+            (paired_proof_archive_ptr as usize, paired_proof_archive_len),
+            (output_ptr as usize, output_capacity),
+        ]
+        .into_iter()
+        .any(|(start, length)| {
+            start != 0
+                && start
+                    .checked_add(length)
+                    .is_none_or(|end| start < length_end && length_start < end)
+        })
+    {
+        return ERR_KAGEMUSHA_V1;
     }
     unsafe { *output_len = 0 };
     if public_inputs_archive_ptr.is_null()
@@ -314,6 +340,69 @@ mod tests {
             [0x5a; KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1]
         );
         assert_eq!(output_len, 0);
+    }
+
+    #[test]
+    fn diagnostic_entry_rejects_aliased_or_misaligned_length_before_writing() {
+        let input = [1_u8];
+        let mut output = [usize::MAX; KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1];
+        let output_ptr = output.as_mut_ptr().cast::<u8>();
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_testnet_state_proof_observe_v1(
+                    input.as_ptr(),
+                    input.len(),
+                    input.as_ptr(),
+                    input.len(),
+                    output_ptr,
+                    KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+                    output.as_mut_ptr(),
+                )
+            },
+            ERR_KAGEMUSHA_V1
+        );
+        assert!(output.iter().all(|word| *word == usize::MAX));
+
+        let mut input_word = usize::MAX;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_testnet_state_proof_observe_v1(
+                    (&raw const input_word).cast::<u8>(),
+                    size_of::<usize>(),
+                    input.as_ptr(),
+                    input.len(),
+                    output_ptr,
+                    KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+                    &raw mut input_word,
+                )
+            },
+            ERR_KAGEMUSHA_V1
+        );
+        assert_eq!(input_word, usize::MAX);
+
+        let mut length_words = [usize::MAX; 2];
+        let misaligned = unsafe {
+            length_words
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(1)
+                .cast::<usize>()
+        };
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_testnet_state_proof_observe_v1(
+                    input.as_ptr(),
+                    input.len(),
+                    input.as_ptr(),
+                    input.len(),
+                    output_ptr,
+                    KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+                    misaligned,
+                )
+            },
+            ERR_KAGEMUSHA_V1
+        );
+        assert!(length_words.iter().all(|word| *word == usize::MAX));
     }
 
     #[test]

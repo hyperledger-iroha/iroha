@@ -534,7 +534,7 @@ impl VerifiedMintStageV1 {
 /// This proves exact issuance/authorization/opening commitments. The caller must additionally
 /// match `reservation` to its hardware-anchored local journal; neither a host-supplied key-handle
 /// digest nor this capability by itself proves that the current device owns the private key.
-pub fn verify_mint_stage_v1(
+fn verify_mint_stage_v1(
     verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
     artifacts: KagemushaRecursionArtifactsV1,
     reservation: &MintInboxReservationV1,
@@ -570,7 +570,7 @@ pub(super) fn require_exact_top_up_reservation_v1(
     Ok(())
 }
 
-fn applied_top_up_result_v1(
+pub(super) fn applied_top_up_result_v1(
     status: &KagemushaOperationStatusV1,
     reserved_operation_id: DigestV1,
 ) -> Result<&KagemushaTopUpResultV1, KagemushaStateErrorV1> {

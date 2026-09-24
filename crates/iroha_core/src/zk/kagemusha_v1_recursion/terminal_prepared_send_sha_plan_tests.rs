@@ -36,10 +36,14 @@ fn plan_case() -> (
     Vec<PastaSha256PlanMessageV1>,
     Vec<PastaSha256PlanMessageV1>,
 ) {
-    let semantic = TerminalSemanticShaPlanV1 {
+    let mut semantic = TerminalSemanticShaPlanV1 {
         eq_messages: (0_u8..26).map(|index| vec![index]).collect(),
         ep_messages: (0_u8..26).map(|index| vec![index + 26]).collect(),
         job_block_counts: vec![1; 26],
+        prepared_candidate_bindings: TerminalPreparedCandidateBindingsV1 {
+            preparation_id: [0; 32],
+            sealed_stream_digests: [[0; 32]; 2],
+        },
     };
     let transition = [
         durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1,
@@ -70,6 +74,13 @@ fn plan_case() -> (
         .copy_from_slice(&2_u64.to_le_bytes());
     transcript[transcript_lengths_start + 8 + 32 + 8..transcript_lengths_start + 8 + 32 + 8 + 32]
         .copy_from_slice(&Sha256::digest(&seeds));
+    semantic.prepared_candidate_bindings = TerminalPreparedCandidateBindingsV1 {
+        preparation_id: Sha256::digest(&transcript).into(),
+        sealed_stream_digests: [
+            Sha256::digest(&transition).into(),
+            Sha256::digest(&seeds).into(),
+        ],
+    };
     let journal_frame = crate::zk::kagemusha_v1_state::terminal_journal_canonical_layout_v1()
         .expect("canonical journal frame")
         .0
@@ -222,7 +233,7 @@ fn complete_send_active_messages_feed_the_existing_typed_claim_plan() {
 
 #[test]
 fn complete_send_sha_plan_accepts_active_block_growth_with_fixed_capacity() {
-    let (semantic, mut eq, mut ep) = plan_case();
+    let (mut semantic, mut eq, mut ep) = plan_case();
     let content_start = durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1.len() + 1 + 8;
     for jobs in [&mut eq, &mut ep] {
         let PastaSha256PlanMessageV1::Bounded {
@@ -242,6 +253,10 @@ fn complete_send_sha_plan_accepts_active_block_growth_with_fixed_capacity() {
         transcript[lengths_start..lengths_start + 8].copy_from_slice(&100_u64.to_le_bytes());
         transcript[lengths_start + 8..lengths_start + 8 + 32].copy_from_slice(&digest);
     }
+    semantic.prepared_candidate_bindings.sealed_stream_digests[0] =
+        Sha256::digest(message_mut(&mut eq[26]).as_slice()).into();
+    semantic.prepared_candidate_bindings.preparation_id =
+        Sha256::digest(message_mut(&mut eq[28]).as_slice()).into();
     let plan = plan_terminal_prepared_send_sha_v1(&semantic, &eq, &ep)
         .expect("active stream length may grow within its fixed capacity");
     assert_eq!(plan.active_job_block_counts[26], 3);
@@ -255,6 +270,7 @@ fn complete_send_sha_plan_rejects_missing_or_altered_paired_jobs() {
         eq_messages: semantic.eq_messages.clone(),
         ep_messages: semantic.ep_messages.clone(),
         job_block_counts: semantic.job_block_counts.clone(),
+        prepared_candidate_bindings: semantic.prepared_candidate_bindings,
     };
     changed_semantic.job_block_counts[0] += 1;
     assert!(plan_terminal_prepared_send_sha_v1(&changed_semantic, &eq, &ep).is_err());
@@ -317,6 +333,71 @@ fn complete_send_sha_plan_rejects_missing_or_altered_paired_jobs() {
         *selected_block = blocks(logical_message.len()) - 1;
     }
     assert!(plan_terminal_prepared_send_sha_v1(&semantic, &eq, &changed).is_err());
+}
+
+#[test]
+fn complete_send_sha_plan_rejects_changed_state_candidate_carriers() {
+    let (semantic, eq, ep) = plan_case();
+    for role in 0..3 {
+        let mut changed = TerminalSemanticShaPlanV1 {
+            eq_messages: semantic.eq_messages.clone(),
+            ep_messages: semantic.ep_messages.clone(),
+            job_block_counts: semantic.job_block_counts.clone(),
+            prepared_candidate_bindings: semantic.prepared_candidate_bindings,
+        };
+        if role == 0 {
+            changed.prepared_candidate_bindings.preparation_id[0] ^= 1;
+        } else {
+            changed.prepared_candidate_bindings.sealed_stream_digests[role - 1][0] ^= 1;
+        }
+        assert!(
+            plan_terminal_prepared_send_sha_v1(&changed, &eq, &ep).is_err(),
+            "accepted opening detached from State candidate carrier {role}"
+        );
+    }
+}
+
+#[test]
+fn prepared_candidate_bindings_decode_the_same_fixed_column_in_both_parities() {
+    fn check<F: KagemushaPoseidonFieldV1>() {
+        let mut column = vec![
+            F::from(0);
+            state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+                + accumulator_limb_count()
+        ];
+        let expected = TerminalPreparedCandidateBindingsV1 {
+            preparation_id: [0x19; 32],
+            sealed_stream_digests: [[0x27; 32], [0x35; 32]],
+        };
+        for (offset, digest) in [
+            (
+                state_relation::public_instance::PREPARATION_ID_LO,
+                expected.preparation_id,
+            ),
+            (
+                state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO,
+                expected.sealed_stream_digests[0],
+            ),
+            (
+                state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO,
+                expected.sealed_stream_digests[1],
+            ),
+        ] {
+            column[offset..offset + 2]
+                .copy_from_slice(&crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(digest));
+        }
+        assert_eq!(
+            terminal_prepared_candidate_bindings_v1(&column).unwrap(),
+            expected
+        );
+        column[state_relation::public_instance::PREPARATION_ID_LO] =
+            crate::zk::kagemusha_v1_poseidon::from_u128::<F>(u128::MAX) + F::from(1);
+        assert!(terminal_prepared_candidate_bindings_v1(&column).is_err());
+        column.pop();
+        assert!(terminal_prepared_candidate_bindings_v1(&column).is_err());
+    }
+    check::<Fp>();
+    check::<Fq>();
 }
 
 #[test]

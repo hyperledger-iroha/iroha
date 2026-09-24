@@ -448,12 +448,64 @@ pub(crate) struct TerminalSemanticPlanInputsV1<'a> {
     pub(crate) ep: TerminalSemanticPlanParityV1<'a, EpAffine>,
 }
 
-/// Ephemeral complete canonical queues; these messages have no proof or wallet authority.
+/// Ephemeral complete canonical queues and paired candidate carriers.
+/// These values have no proof or wallet authority.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TerminalSemanticShaPlanV1 {
     pub(crate) eq_messages: Vec<Vec<u8>>,
     pub(crate) ep_messages: Vec<Vec<u8>>,
     pub(crate) job_block_counts: Vec<u32>,
+    /// Same candidate carriers in both parity columns; the planner has not verified either proof.
+    pub(crate) prepared_candidate_bindings: TerminalPreparedCandidateBindingsV1,
+}
+
+/// Prepared-send commitments carried by each recursive State candidate column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalPreparedCandidateBindingsV1 {
+    pub(crate) preparation_id: DigestV1,
+    pub(crate) sealed_stream_digests: [DigestV1; 2],
+}
+
+/// Read only canonical 128-bit limbs from the candidate's fixed public column.
+fn terminal_prepared_candidate_bindings_v1<F: KagemushaPoseidonFieldV1>(
+    candidate: &[F],
+) -> Result<TerminalPreparedCandidateBindingsV1, String> {
+    if candidate.len()
+        != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
+    {
+        return Err("prepared send candidate has wrong fixed public shape".to_owned());
+    }
+    let digest = |offset: usize| -> Result<DigestV1, String> {
+        let mut bytes = [0_u8; 32];
+        let limbs = candidate
+            .get(offset..offset + 2)
+            .ok_or_else(|| "prepared send candidate digest offset is absent".to_owned())?;
+        for (index, limb) in limbs.iter().enumerate() {
+            let encoded = fe_to_biguint(limb).to_bytes_le();
+            if encoded.len() > 16 {
+                return Err("prepared send candidate digest limb exceeds u128".to_owned());
+            }
+            bytes[index * 16..index * 16 + encoded.len()].copy_from_slice(&encoded);
+        }
+        Ok(bytes)
+    };
+    Ok(TerminalPreparedCandidateBindingsV1 {
+        preparation_id: digest(state_relation::public_instance::PREPARATION_ID_LO)?,
+        sealed_stream_digests: [
+            digest(state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO)?,
+            digest(state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO)?,
+        ],
+    })
+}
+
+fn require_paired_prepared_candidate_bindings_v1(
+    eq: TerminalPreparedCandidateBindingsV1,
+    ep: TerminalPreparedCandidateBindingsV1,
+) -> Result<TerminalPreparedCandidateBindingsV1, String> {
+    if eq != ep {
+        return Err("terminal paired State candidates carry different prepared intents".to_owned());
+    }
+    Ok(eq)
 }
 
 /// Non-authorizing paired plan for the original Terminal queue plus all six send openings.
@@ -476,8 +528,9 @@ pub(crate) struct TerminalPreparedSendShaPlanV1 {
 /// Capture both complete production semantic queues, dropping each graph before the next.
 ///
 /// The caller cannot choose role digests: they are derived from the actual compiled protocols.
-/// This produces only the typed claim's preimages; the Terminal consumer must authenticate the
-/// generated proof, both complete histories and the reciprocal carrier tail against its own queue.
+/// This produces the typed claim's preimages and prepared-intent carriers from both candidate
+/// columns. The Terminal consumer must authenticate the generated proof, both complete histories
+/// and the reciprocal carrier tail against its own queue.
 pub(crate) fn plan_terminal_semantic_sha_v1(
     inputs: TerminalSemanticPlanInputsV1<'_>,
 ) -> Result<TerminalSemanticShaPlanV1, String> {
@@ -526,7 +579,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         parity_inputs: &TerminalSemanticPlanParityV1<'_, C>,
         parity: KagemushaPastaParityV1,
         guard_protocols: [DigestV1; 2],
-    ) -> Result<(Vec<Vec<u8>>, Vec<u32>), String>
+    ) -> Result<(Vec<Vec<u8>>, Vec<u32>, TerminalPreparedCandidateBindingsV1), String>
     where
         C: CurveAffineExt,
         C::Base: BigPrimeField,
@@ -535,6 +588,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         let candidate_protocol_digest =
             native_parent_protocol_digest_v1(parity_inputs.candidate_protocol, parity)?;
         let candidate = &parity_inputs.candidate_instances[0];
+        let prepared_candidate_bindings = terminal_prepared_candidate_bindings_v1(candidate)?;
         let candidate_digest = canonical_terminal_authorization_candidate_digest_v1(&[candidate
             [..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
             .to_vec()])?;
@@ -619,20 +673,22 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
                 "terminal SHA compression inventory differs from its assigned queue".to_owned(),
             );
         }
-        Ok((messages, blocks))
+        Ok((messages, blocks, prepared_candidate_bindings))
     }
-    let (eq_messages, eq_blocks) = half(
+    let (eq_messages, eq_blocks, eq_prepared) = half(
         &inputs,
         &inputs.eq,
         KagemushaPastaParityV1::Eq,
         guard_protocols,
     )?;
-    let (ep_messages, ep_blocks) = half(
+    let (ep_messages, ep_blocks, ep_prepared) = half(
         &inputs,
         &inputs.ep,
         KagemushaPastaParityV1::Ep,
         guard_protocols,
     )?;
+    let prepared_candidate_bindings =
+        require_paired_prepared_candidate_bindings_v1(eq_prepared, ep_prepared)?;
     if eq_messages.len() != ep_messages.len()
         || eq_blocks != ep_blocks
         || eq_messages
@@ -648,6 +704,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         eq_messages,
         ep_messages,
         job_block_counts: eq_blocks,
+        prepared_candidate_bindings,
     })
 }
 
@@ -655,8 +712,9 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
 ///
 /// `eq_jobs` and `ep_jobs` must be exported from the respective assigned queues with
 /// `PastaSha256JobsV1::canonical_plan_messages`. This host plan checks ordering, active lengths,
-/// fixed capacities, selected final blocks, and parity. It exports only active logical messages
-/// for the existing typed shard generator. It does not authenticate an assigned queue or enable
+/// fixed capacities, selected final blocks, parity, and the three prepared-intent digests carried
+/// by the paired State candidates. It exports only active logical messages for the existing typed
+/// shard generator. It does not authenticate an assigned queue or enable
 /// the live 26-job consumer; that requires the same bounded cells to be constrained against the
 /// recursive claim after candidate and Guard verification. TODO: qualify that complete k=16
 /// relation and its release keys before any production use.
@@ -836,6 +894,12 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         );
                     }
                     let digest: [u8; 32] = Sha256::digest(eq_message).into();
+                    if digest != semantic.prepared_candidate_bindings.sealed_stream_digests[role] {
+                        return Err(
+                            "prepared send sealed stream differs from State candidate carrier"
+                                .to_owned(),
+                        );
+                    }
                     sealed_stream_claims[role] = Some((count, digest));
                 }
                 2 => {
@@ -866,13 +930,21 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                                 .expect("fixed preparation transcript length field"),
                         );
                         if length != expected_length
-                            || eq_message[offset + 8..offset + 8 + 32] != expected_digest
+                            || &eq_message[offset + 8..offset + 8 + 32]
+                                != expected_digest.as_slice()
                         {
                             return Err(
                                 "prepared send preparation transcript sealed claim differs from stream"
                                     .to_owned(),
                             );
                         }
+                    }
+                    let preparation_id: DigestV1 = Sha256::digest(eq_message).into();
+                    if preparation_id != semantic.prepared_candidate_bindings.preparation_id {
+                        return Err(
+                            "prepared send transcript differs from State candidate preparation ID"
+                                .to_owned(),
+                        );
                     }
                 }
                 3 | 4 => {

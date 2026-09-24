@@ -1,6 +1,8 @@
 //! Hardware-certified mint reservation, durable staging, and mixed-credit fold scheduling.
 
 use super::*;
+use super::mint_inbox::{applied_top_up_result_v1, require_exact_top_up_reservation_v1};
+use crate::zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_data_model::kagemusha::KagemushaMintAuthorizationV1;
 
 const MINT_CAPACITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-inbox-capacity";
@@ -173,6 +175,92 @@ pub enum MintCreditStageOutcomeV1 {
     DuplicatePending(MintStageCertificateV1),
     /// Identical mint already incorporated in the aggregate balance.
     DuplicateConsumed(MintStageCertificateV1),
+}
+
+/// Require an exact retry to carry the certificate retained by the native inbox.
+///
+/// A detached certificate cannot replace the original Guard evidence or advance its revision.
+fn require_original_mint_stage_certificate_v1(
+    inbox: &KagemushaMintInboxV1,
+    credit_id: CreditIdV1,
+    certificate: &MintStageCertificateV1,
+) -> Result<bool, KagemushaStateErrorV1> {
+    let original = inbox
+        .pending_credit(credit_id)
+        .map(StagedMintCreditV1::stage_certificate)
+        .or_else(|| {
+            inbox
+                .accepted_receipt(credit_id)
+                .map(AcceptedMintReceiptV1::stage_certificate)
+        });
+    match original {
+        Some(original) if original == certificate => Ok(true),
+        Some(_) => Err(KagemushaStateErrorV1::HardwareCertificateMismatch),
+        None => Ok(false),
+    }
+}
+
+impl<G, H> KagemushaStateMachineV1<KagemushaAuthenticatedRecursiveVerifierV1, G, H>
+where
+    G: KagemushaGuardBundleVerifierV1,
+    H: KagemushaAuthenticatedHistoryStoreV1,
+{
+    /// Authenticate one applied chain top-up and stage it under the original hardware Guard.
+    ///
+    /// The caller pins `trust_anchor` independently of `status` and selects the already reserved
+    /// `operation_id`. A new delivery must match that installed private reservation, pass both
+    /// release-authenticated mint proofs, and present the qualified staging certificate. An exact
+    /// retry returns the retained certificate without changing the inbox revision. The stock
+    /// bridge has no qualified hardware backend, so this operation cannot make it available.
+    pub fn stage_applied_top_up_mint_credit(
+        &mut self,
+        operation_id: DigestV1,
+        status: &KagemushaOperationStatusV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
+        certificate: &MintStageCertificateV1,
+    ) -> Result<MintCreditStageOutcomeV1, KagemushaStateErrorV1> {
+        let result = applied_top_up_result_v1(status, operation_id)?;
+        if result.request.operation_id != operation_id {
+            return Err(KagemushaStateErrorV1::MintFinalityMismatch);
+        }
+        let authorization = result
+            .request
+            .mint_authorization
+            .as_ref()
+            .ok_or(KagemushaStateErrorV1::MintFinalityMismatch)?;
+        let credit = &result.mint_credit;
+        let credit_id = CreditIdV1(credit.statement.lifecycle.credit_id);
+        if let Some(reservation) = self.mint_inbox.reservation(credit_id) {
+            require_exact_top_up_reservation_v1(reservation, operation_id, Some(authorization))?;
+            let verified = verify_applied_top_up_mint_stage_v1(
+                &self.recursive_verifier,
+                self.proof_release.artifacts,
+                reservation,
+                status,
+                trust_anchor,
+            )?;
+            return self.stage_mint_credit(
+                authorization,
+                credit,
+                Some(&verified),
+                Some(certificate),
+            );
+        }
+
+        // Duplicate delivery still needs independently pinned chain finality and the exact
+        // previously retained hardware evidence. No new proof or journal transaction is made.
+        status
+            .validate_against(trust_anchor)
+            .map_err(|_| KagemushaStateErrorV1::MintFinalityMismatch)?;
+        if !require_original_mint_stage_certificate_v1(
+            &self.mint_inbox,
+            credit_id,
+            certificate,
+        )? {
+            return Err(KagemushaStateErrorV1::CreditNotStaged(credit_id));
+        }
+        self.stage_mint_credit(authorization, credit, None, None)
+    }
 }
 
 impl<R, G, H> KagemushaStateMachineV1<R, G, H>
@@ -438,7 +526,7 @@ where
     /// A first delivery requires both the concrete native proof-verification capability and a
     /// qualified staging certificate. A duplicate needs neither: its exact canonical identities
     /// already belong to the sealed inbox. Different bytes under one ID always conflict.
-    pub fn stage_mint_credit(
+    pub(crate) fn stage_mint_credit(
         &mut self,
         authorization: &KagemushaMintAuthorizationV1,
         credit: &KagemushaMintCreditV1,

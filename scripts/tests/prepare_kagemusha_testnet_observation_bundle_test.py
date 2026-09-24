@@ -69,6 +69,10 @@ class TestnetBundleTests(unittest.TestCase):
             ("native_artifact_hash_verified", False),
             ("authority_review_projection_sha256", "5" * 64),
             ("native_artifact_manifest_sha256", "6" * 64),
+            ("native_sdk", "java"),
+            ("native_bridge_abi_version", 22),
+            ("native_artifact_sha256", "0" * 64),
+            ("native_artifact_size", True),
         ):
             with self.subTest(field=field), self.assertRaises(BUNDLE.BundleError):
                 BUNDLE.verify_report(dict(report, **{field: value}), args)
@@ -150,6 +154,19 @@ class TestnetBundleTests(unittest.TestCase):
             self.assertEqual(pins["attestation_digest"], args.attestation_digest)
             self.assertEqual(pins["authority_policy_sha256"], args.authority_policy_sha256)
             self.assertEqual(pins["authority_policy_digest"], report["authority_policy_digest"])
+            self.assertEqual(
+                pins["authority_review_projection_sha256"],
+                digest((args.output / "proof/native/authority-review-projection.json").read_bytes()),
+            )
+            self.assertEqual(
+                pins["native_artifact_manifest_sha256"],
+                digest((args.output / "proof/native/native-artifact-manifest.json").read_bytes()),
+            )
+            self.assertEqual(
+                pins["native_artifact_sha256"],
+                digest((args.output / "proof/native/native-artifact.bin").read_bytes()),
+            )
+            self.assertEqual(pins["native_artifact_size"], args.native_artifact.stat().st_size)
             self.assertEqual(pins["artifact_count"], 50)
             self.assertEqual(pins["review_status"], "candidate_only")
             self.assertFalse(pins["monetary_admission"])
@@ -158,6 +175,59 @@ class TestnetBundleTests(unittest.TestCase):
                 (args.output / "operator/authority-policy.norito").read_bytes(),
                 args.authority_policy.read_bytes(),
             )
+
+    def test_copied_release_replay_uses_only_copied_projection_and_native_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact_root = root / "source-artifacts"
+            artifact_root.mkdir()
+            args = self.args(root, artifact_root)
+            report = self.report(args)
+            for index, row in enumerate(report["artifacts"]):
+                (artifact_root / row["sha256"]).write_bytes(bytes([index + 1]))
+            with mock.patch.object(BUNDLE, "run_kagami", return_value=report):
+                BUNDLE.prepare(args)
+            for source in (
+                args.authority_review_projection,
+                args.native_artifact_manifest,
+                args.native_artifact,
+            ):
+                source.unlink()
+
+            def check_copied_paths(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                expected = {
+                    "--authority-review-projection": "authority-review-projection.json",
+                    "--native-artifact-manifest": "native-artifact-manifest.json",
+                    "--native-artifact": "native-artifact.bin",
+                }
+                for option, name in expected.items():
+                    self.assertEqual(
+                        Path(argv[argv.index(option) + 1]),
+                        args.output / "proof/native" / name,
+                    )
+                self.assertEqual(
+                    Path(argv[argv.index("--authority-policy") + 1]),
+                    args.output / "operator/authority-policy.norito",
+                )
+                return subprocess.CompletedProcess(argv, 0, json.dumps(report), "")
+
+            with mock.patch.object(BUNDLE.subprocess, "run", side_effect=check_copied_paths):
+                self.assertEqual(BUNDLE.run_kagami(args, args.output), report)
+
+    def test_prepare_rejects_native_artifact_substitution_before_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact_root = root / "source-artifacts"
+            artifact_root.mkdir()
+            args = self.args(root, artifact_root)
+            report = self.report(args)
+            for index, row in enumerate(report["artifacts"]):
+                (artifact_root / row["sha256"]).write_bytes(bytes([index + 1]))
+            args.native_artifact.write_bytes(b"native_artifacX")
+            with mock.patch.object(BUNDLE, "run_kagami", return_value=report):
+                with self.assertRaisesRegex(BUNDLE.BundleError, "signed binding"):
+                    BUNDLE.prepare(args)
+            self.assertFalse(args.output.exists())
 
     def test_prepare_removes_partial_bundle_on_artifact_substitution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -218,6 +288,10 @@ class TestnetBundleTests(unittest.TestCase):
             "native_artifact_hash_verified": True,
             "authority_review_projection_sha256": args.authority_review_projection_sha256,
             "native_artifact_manifest_sha256": args.native_artifact_manifest_sha256,
+            "native_artifact_sha256": digest(b"native_artifact"),
+            "native_artifact_size": len(b"native_artifact"),
+            "native_sdk": "c-jni",
+            "native_bridge_abi_version": 23,
             "release_id": args.release_id,
             "attestation_digest": args.attestation_digest,
             "authority_policy_digest": "d" * 64,

@@ -587,6 +587,8 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 // data and never grants hardware qualification or monetary authority. Supply
 // the full maximum output capacity before calling; shorter buffers are rejected
 // without consuming a proof, and output_length receives the actual byte count.
+// output_length must be naturally aligned and disjoint from both input archives
+// and output_observation; an invalid pointer layout is rejected before writing.
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1 4096
 #define CONNECT_NORITO_KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1 256
 int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
