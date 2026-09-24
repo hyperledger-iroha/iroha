@@ -768,7 +768,7 @@ TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact rece
     "tests_runtime_handlers::incoming_queue_plan_handoff_expiry_never_creates_journal_claim",
     "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_certificate_and_times_out_indeterminate",
     "tests_runtime_handlers::incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty",
-    "tests_runtime_handlers::queue_plan_handoff_after_quorum_resumes_exact_certificate_publication",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_exact_input_until_canonical_carrier",
     "tests_runtime_handlers::queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_uncertainty",
     "tests_runtime_handlers::incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty",
     "tests_runtime_handlers::incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim",
