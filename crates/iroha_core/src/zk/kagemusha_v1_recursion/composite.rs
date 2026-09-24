@@ -4754,7 +4754,7 @@ mod tests {
         }
         assert_eq!(
             jobs.compression_blocks().expect("credential hash geometry"),
-            7
+            8
         );
         builder.assigned_instances = vec![cells];
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -5273,7 +5273,7 @@ mod tests {
         assert_eq!(
             jobs.compression_blocks()
                 .expect("mint opening SHA inventory"),
-            17
+            18
         );
         builder.assigned_instances = vec![cells];
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -5795,8 +5795,13 @@ mod tests {
     #[test]
     fn terminal_receiver_credential_constraint_has_fixed_padding_and_rejects_wrong_widths() {
         assert_receiver_lane_constraint::<Fp>(None, [0; 32], [0; 32], true);
-        assert!(receiver_lane_test_circuit::<Fp>(Some(&[0; 375]), [0; 32], [0; 32]).is_err());
-        assert!(receiver_lane_test_circuit::<Fp>(Some(&[0; 377]), [0; 32], [0; 32]).is_err());
+        let width = iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1;
+        assert!(
+            receiver_lane_test_circuit::<Fp>(Some(&vec![0; width - 1]), [0; 32], [0; 32]).is_err()
+        );
+        assert!(
+            receiver_lane_test_circuit::<Fp>(Some(&vec![0; width + 1]), [0; 32], [0; 32]).is_err()
+        );
     }
 
     #[test]

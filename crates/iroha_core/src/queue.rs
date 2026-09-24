@@ -23233,8 +23233,31 @@ pub mod tests {
                 .expect("deterministic queue manifest validator PoP");
             state.world.register_validator_pop_for_testing(
                 validator_key.public_key().clone(),
-                validator_pop,
+                validator_pop.clone(),
             );
+            let id = crate::state::derive_committee_key_id(validator_key.public_key());
+            let record = iroha_data_model::consensus::ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: validator_key.public_key().clone(),
+                pop: Some(validator_pop),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
+            };
+            let mut world = state.world.block();
+            world.consensus_keys.insert(id.clone(), record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&id) {
+                by_pk.push(id);
+                world.consensus_keys_by_pk.insert(pk, by_pk);
+            }
+            world.commit();
         }
         {
             let mut topology = state.commit_topology.block();

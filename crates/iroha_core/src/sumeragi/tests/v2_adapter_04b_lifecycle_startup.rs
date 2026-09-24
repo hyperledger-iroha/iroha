@@ -3471,6 +3471,13 @@ fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign_body() {
 
 #[test]
 fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot",
+        recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot_body,
+    );
+}
+
+fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot_body() {
     let directory = TempDir::new().expect("temporary stale Prepare recovery directory");
     let (startup, _expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD3);
@@ -3511,6 +3518,13 @@ fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
 
 #[test]
 fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation",
+        recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation_body,
+    );
+}
+
+fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation_body() {
     let directory = TempDir::new().expect("temporary wrong-store Prepare recovery directory");
     let (startup, _expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD4);
@@ -3710,6 +3724,13 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store_body() {
 
 #[test]
 fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_opens_exact_coordinator_before_status_publication",
+        recovered_prepare_opens_exact_coordinator_before_status_publication_body,
+    );
+}
+
+fn recovered_prepare_opens_exact_coordinator_before_status_publication_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("temporary published Prepare recovery directory");

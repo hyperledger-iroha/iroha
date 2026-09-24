@@ -8842,6 +8842,7 @@ mod tests {
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::NumericSpec;
+    use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     use std::collections::{BTreeMap, BTreeSet};
@@ -9178,14 +9179,15 @@ mod tests {
         metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
         let network_id = super::super::queue_test_network_id();
-        let tx = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::new(
             network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
-        .with_metadata(metadata)
-        .sign(signer);
+        .with_metadata(metadata);
+        builder.set_creation_time(core::time::Duration::from_millis(1));
+        let tx = builder.sign(signer);
         let default_limits = TransactionParameters::default();
         let params = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -9196,12 +9198,14 @@ mod tests {
             default_limits.max_metadata_depth(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        AcceptedTransaction::accept(
+        let (_, time_source) = TimeSource::new_mock(core::time::Duration::from_millis(2));
+        AcceptedTransaction::accept_with_time_source(
             tx,
             &network_id,
             core::time::Duration::from_secs(30),
             params,
             &crypto_cfg,
+            &time_source,
         )
         .expect("tx should be accepted")
     }
@@ -9224,7 +9228,7 @@ mod tests {
         metadata: Metadata,
     ) -> AcceptedTransaction<'static> {
         let network_id = super::super::queue_test_network_id();
-        let tx = TransactionBuilder::new(
+        let mut builder = TransactionBuilder::new(
             network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -9233,8 +9237,9 @@ mod tests {
             ),
         )
         .with_executable(executable)
-        .with_metadata(metadata)
-        .sign(signer);
+        .with_metadata(metadata);
+        builder.set_creation_time(core::time::Duration::from_millis(1));
+        let tx = builder.sign(signer);
         let default_limits = TransactionParameters::default();
         let params = TransactionParameters::with_max_signatures(
             nonzero!(16_u64),
@@ -9245,12 +9250,14 @@ mod tests {
             default_limits.max_metadata_depth(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        AcceptedTransaction::accept(
+        let (_, time_source) = TimeSource::new_mock(core::time::Duration::from_millis(2));
+        AcceptedTransaction::accept_with_time_source(
             tx,
             &network_id,
             core::time::Duration::from_secs(30),
             params,
             &crypto_cfg,
+            &time_source,
         )
         .expect("tx should be accepted")
     }

@@ -112,6 +112,36 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
     let (validator, keypair) = bls_account_in("snapshot-owner");
+    let custody_asset = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("snapshotowner", "universal").expect("custody domain"),
+            "stake".parse().expect("custody asset name"),
+        ),
+        validator.clone(),
+    );
+    {
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(Account::new(validator.clone()))
+            .execute(&validator, &mut transaction)
+            .expect("register staking validator account");
+        Register::asset_definition(AssetDefinition::numeric(
+            custody_asset.definition().clone(),
+            "Snapshot staking reserve",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&validator, &mut transaction)
+        .expect("register staking custody definition");
+        Mint::asset_quantity(Quantity::from(1_000_000_u64), custody_asset.clone())
+            .execute(&validator, &mut transaction)
+            .expect("fund staking custody");
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("publish staking custody backing");
+    }
     insert_active_public_lane_validator_for_test(
         &state,
         LaneId::new(3),
@@ -123,11 +153,21 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         let mut world = state.world.block();
         world
             .public_lane_validators
-            .get_mut(&(LaneId::new(3), validator))
+            .get_mut(&(LaneId::new(3), validator.clone()))
             .expect("fixture validator exists")
             .activation_height = 1;
+        world.public_lane_stake_custody.insert(
+            (LaneId::new(3), validator.clone()),
+            (custody_asset.clone(), Quantity::from(1_000_000_u64)),
+        );
+        world.public_lane_stake_reserves.insert(
+            custody_asset,
+            Quantity::from(1_000_000_u64),
+        );
         world.commit();
     }
+    // The fixture models a committed staking owner at both snapshot cuts.
+    state.world.block().commit();
     if store_history {
         // Replacement rebuilds DA indexes from the exact canonical Kura prefix.
         // Store checked empty, result-bearing bodies for this structural history;

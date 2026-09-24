@@ -368,6 +368,17 @@ fn operation_store_validates_nested_send_request_before_reserving_capacity() {
 fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
     use norito::codec::Encode as _;
 
+    let shared: norito::json::Value = norito::json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/offline/kagemusha_v1.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let canonical_request =
+        hex::decode(shared["payment_request"]["norito_hex"].as_str().unwrap()).unwrap();
+
     let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../fixtures/offline/kagemusha_sender_reservation_v1.json"
@@ -375,6 +386,7 @@ fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
     .unwrap();
     let string = |name: &str| fixture.get(name).unwrap().as_str().unwrap();
     let bytes = |name: &str| hex::decode(string(name)).unwrap();
+    assert_eq!(bytes("send_request_hex"), canonical_request);
     let send_binding = bytes("send_binding_hex");
     let redeem_binding = bytes("redeem_binding_hex");
     let send: KagemushaOutgoingPublicInputsV1 = norito::decode_canonical(&send_binding).unwrap();
@@ -409,8 +421,7 @@ fn operation_store_cross_sdk_sender_reservations_match_canonical_core_types() {
     }
     assert_eq!(norito::encode_canonical(&redeem).unwrap(), redeem_binding);
 
-    // The cross-SDK fixture owns a different genesis/asset scope from the recursive test
-    // fixture. Build the actual test Core wallet and credential in that exact public scope.
+    // Build the test Core wallet and credential in the shared request's exact public scope.
     let (machine, _, _) = machine_for_payment_scope(Some(send.decode_send_parts().unwrap()));
     let (_root, path) = location();
     let mut store = machine

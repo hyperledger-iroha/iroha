@@ -64,7 +64,7 @@ recursive proof depth.
 
 | Value | Canonical binary maximum | `kgm1:` text maximum |
 | --- | ---: | ---: |
-| `KagemushaPaymentRequestV1` | 928 bytes | 1,243 bytes |
+| `KagemushaPaymentRequestV1` | 960 bytes | 1,285 bytes |
 | `KagemushaPaymentV1` | 7,552 bytes | 10,075 bytes |
 | `KagemushaAcknowledgementV1` | 256 bytes | 347 bytes |
 | Complete exchange hard gate | 9,211 bytes | 12,288 bytes |

@@ -6162,7 +6162,7 @@ mod detached_transaction_scaffold_tests {
         }
         let wrong_kind = InstructionBox::from(iroha_data_model::isi::Log::new(
             iroha_data_model::Level::INFO,
-            "not a transfer",
+            "not a transfer".to_owned(),
         ));
         let invalid = scaffold_transaction(
             &keypair,
@@ -8511,7 +8511,7 @@ mod accel_tests {
             let Executable::Instructions(instructions) = signed.instructions() else {
                 panic!("permission transaction must be a native instruction");
             };
-            assert_eq!(instructions, &[expected]);
+            assert_eq!(instructions.as_ref(), &[expected]);
             let expected_wire = bytes.to_vec();
             let mut payload_hash = [0_u8; 32];
             let prepared = unsafe {

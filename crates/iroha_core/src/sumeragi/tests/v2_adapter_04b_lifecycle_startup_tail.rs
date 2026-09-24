@@ -182,6 +182,13 @@ fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
 
 #[test]
 fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert",
+        recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert_body,
+    );
+}
+
+fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert_body() {
     let directory = TempDir::new().expect("temporary recovery seal directory");
     let (startup, _expected_vote, _proposal, _manifest, _validated) =
         reopen_with_prepare_intent(&directory, 0xD3);

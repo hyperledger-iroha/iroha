@@ -155,6 +155,7 @@ pub(crate) fn constrain_p256_canonical_der_v1<F: BigPrimeField>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::P256_CRT_LIMB_BITS_V1;
     use super::*;
     use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::modulus};
     use halo2_ecc::bigint::FixedCRTInteger;
@@ -212,10 +213,18 @@ mod tests {
             .use_lookup_bits(15)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_CRT_LIMB_BITS_V1, 3);
         let ctx = builder.main(0);
-        let r = FixedCRTInteger::from_native(value(r_mode), 3, 86).assign(ctx, 86, &modulus::<F>());
-        let s = FixedCRTInteger::from_native(value(s_mode), 3, 86).assign(ctx, 86, &modulus::<F>());
+        let r = FixedCRTInteger::from_native(value(r_mode), 3, P256_CRT_LIMB_BITS_V1).assign(
+            ctx,
+            P256_CRT_LIMB_BITS_V1,
+            &modulus::<F>(),
+        );
+        let s = FixedCRTInteger::from_native(value(s_mode), 3, P256_CRT_LIMB_BITS_V1).assign(
+            ctx,
+            P256_CRT_LIMB_BITS_V1,
+            &modulus::<F>(),
+        );
         let der = constrain_p256_canonical_der_v1(&chip, ctx, &r, &s);
         chip.gate()
             .assert_is_const(ctx, &der.len, &F::from(expected.len() as u64));

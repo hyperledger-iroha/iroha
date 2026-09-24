@@ -148,6 +148,11 @@ in [`peer_transport_v1.md`](peer_transport_v1.md).
 3. `KagemushaAcknowledgementV1` binds the request, payment, credit ID, and
    rollback-resistant inbox receipt after irreversible secure staging.
 
+The canonical receiver request is bounded to 960 bytes in Rust, Kotlin, and
+Swift. Its `kgm1:` text form is bounded to 1,285 bytes, including the prefix.
+These limits admit the complete first-release hardware credential and are
+enforced before decoding.
+
 Any number of requests may be active simultaneously. Distinct valid payments
 against the same request are all accepted; invoice satisfaction and overpayment
 are application concerns. Exact duplicate delivery returns the byte-identical
@@ -181,6 +186,12 @@ normalized `GuardBundle`; a host-side signature or certificate alone grants no
 monetary authority. Stock KeyMint, StrongBox, Secure Enclave, App Attest, or an
 equivalent signing service remains online-only unless its complete
 journal/counter/inbox/outbox contract is implemented and physically qualified.
+
+The staged P-256 circuit helper uses three 88-bit CRT limbs over each Pasta
+field so a full-width product remains inside Halo2's carry bounds. Curve
+equations reduce their products before equality checking, while SEC1 key and
+low-S signature constraints remain explicit. This helper alone does not grant
+monetary authority.
 
 The normalized contract is defined in
 [`kagemusha_guard_bundle_v1.md`](kagemusha_guard_bundle_v1.md). The optional

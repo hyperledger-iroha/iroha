@@ -15,7 +15,8 @@ use halo2_proofs::halo2curves::secp256r1::Fp as P256Base;
 
 use crate::zk::{
     kagemusha_p256_curve_gadget::{
-        app_attest_der_gadget::constrain_p256_canonical_der_v1, assert_apple_assertion_ecdsa,
+        P256_CRT_LIMB_BITS_V1, app_attest_der_gadget::constrain_p256_canonical_der_v1,
+        assert_apple_assertion_ecdsa,
     },
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     pasta_sha256::PastaSha256JobsV1,
@@ -52,7 +53,7 @@ pub(super) fn constrain_original_apple_assertion_ecdsa_37_v1<
     digest_reduction_quotient: AssignedValue<F>,
 ) -> Result<(), String> {
     let range = builder.range_chip();
-    let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+    let chip = FpChip::<F, P256Base>::new(&range, P256_CRT_LIMB_BITS_V1, 3);
     let der = constrain_p256_canonical_der_v1(&chip, builder.main(0), r, s);
     constrain_original_apple_assertion_37_v1(
         builder,

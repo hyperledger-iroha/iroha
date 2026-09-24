@@ -3961,8 +3961,8 @@ mod tests {
                 .map(|message| (message.len() + 9).div_ceil(64))
                 .sum::<usize>()
         };
-        assert_eq!((eq.len(), blocks(&eq)), (20, 49));
-        assert_eq!((ep.len(), blocks(&ep)), (20, 49));
+        assert_eq!((eq.len(), blocks(&eq)), (20, 50));
+        assert_eq!((ep.len(), blocks(&ep)), (20, 50));
     }
 
     #[cfg(feature = "zk-halo2-ipa")]
