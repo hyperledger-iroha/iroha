@@ -161,8 +161,9 @@ class ShippingArtifactTests(unittest.TestCase):
     def network(self, root, fixture, env, lock_fds, *, harness, stages):
         self.network_calls += 1
         for row in self.observations[-1]:
-            self.assertEqual(Path(row["path"]).exists(), row["selection"] == "network")
-        self.assertEqual({row["selection"] for row in self.checkpoint["artifacts"]}, {"cli", "kagami"})
+            self.assertEqual(Path(row["path"]).exists(),
+                             row["selection"] in {"network", "cli", "kagami"})
+        self.assertIsNone(self.checkpoint)
         self.assertEqual(stages, gate.NETWORK_STAGES)
         gate.run_stages(harness, fixture, env, stages, lock_fds)
         if self.network_failure:
@@ -179,7 +180,9 @@ class ShippingArtifactTests(unittest.TestCase):
     def test_shipping_compile_only_artifacts_are_required_released_and_never_counted_as_tests(self):
         self.run_gate()
         self.compiler.assert_called_once()
-        self.assertEqual(self.executed.read_text().splitlines(), list(self.names.values()))
+        self.assertEqual({row["selection"] for row in self.checkpoint["artifacts"]}, {"cli", "kagami"})
+        self.assertEqual(self.executed.read_text().splitlines(),
+                         [self.names[name] for name in ("cli", "network", "kagami")])
         self.assertTrue(all(not Path(row["path"]).exists() for row in self.observations[-1]))
 
     def test_missing_shipping_artifacts_or_wrong_manifest_stop_before_any_test(self):
@@ -196,10 +199,12 @@ class ShippingArtifactTests(unittest.TestCase):
         self.network_failure = True
         with self.assertRaisesRegex(gate.CheckError, "fixture network failure"):
             self.run_gate()
+        self.assertIsNone(self.checkpoint)
         self.network_failure = False
         self.run_gate()
         self.assertEqual(self.compiler.call_count, 2)
-        self.assertEqual(self.executed.read_text().splitlines(), list(self.names.values()) + [self.names["network"]])
+        self.assertEqual(self.executed.read_text().splitlines(),
+                         [self.names[name] for name in ("cli", "network", "cli", "network", "kagami")])
         self.missing = "sorafs-bin"
         with self.assertRaises(gate.CheckError):
             self.run_gate()
@@ -220,12 +225,14 @@ class NativeShippingGraphTests(unittest.TestCase):
             _, _, event = self.artifact(selection)
             event["profile"]["test"] = False
             self.events.append(event)
+        self.library_events = existing.production_library_events()
         shipping = patch.object(gate, "shipping_harnesses", wraps=ACTUAL_SHIPPING_AUDIT)
         shipping.start()
         self.addCleanup(shipping.stop)
 
     def test_one_normal_build_matches_shipping_packages_and_keeps_fixture_launcher(self):
-        with patch.object(gate.subprocess, "Popen", return_value=self.process(self.events)) as cargo:
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(
+                [*self.library_events, *self.events])) as cargo:
             copies = gate.compile_network_binaries(self.source, self.env, (77,))
         self.assertEqual(set(copies), set(self.selections))
         self.assertTrue(all(Path(path).exists() for path in copies.values()))
@@ -250,7 +257,8 @@ class NativeShippingGraphTests(unittest.TestCase):
                 else:
                     del events[missing]
                 with self.subTest(missing=missing, test_only=test_only), \
-                     patch.object(gate.subprocess, "Popen", return_value=self.process(events)):
+                     patch.object(gate.subprocess, "Popen", return_value=self.process(
+                         [*self.library_events, *events])):
                     with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
                         gate.compile_network_binaries(self.source, self.env, (77,))
         self.assertEqual(list(self.target.glob("taira-native-artifacts-*")), [])

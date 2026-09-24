@@ -19,11 +19,11 @@ use super::{PastaSha256ByteV1, p256_uint_bits_le};
 
 /// The only positive, minimally encoded DER sequence for one assigned `(r,s)` pair.
 #[derive(Clone)]
-pub(crate) struct P256CanonicalDerV1<F: BigPrimeField> {
+pub(in crate::zk) struct P256CanonicalDerV1<F: BigPrimeField> {
     /// Complete fixed-capacity DER buffer; every byte after `len` is zero by construction.
-    pub(crate) bytes: [PastaSha256ByteV1<F>; 72],
+    pub(in crate::zk) bytes: [PastaSha256ByteV1<F>; 72],
     /// Exact active byte count, in `8..=72` for nonzero scalars.
-    pub(crate) len: AssignedValue<F>,
+    pub(in crate::zk) len: AssignedValue<F>,
 }
 
 struct CanonicalIntegerV1<F: BigPrimeField> {
@@ -109,7 +109,7 @@ fn canonical_positive_integer_v1<F: BigPrimeField>(
 /// The `ProperCrtUint` limbs are decomposed into 256 constrained bits. One-hot first-nonzero
 /// selectors and the selected high bit determine both integer lengths and mandatory sign
 /// padding. Every dynamic shift is expressed by fixed-topology selector gates.
-pub(crate) fn constrain_p256_canonical_der_v1<F: BigPrimeField>(
+pub(in crate::zk) fn constrain_p256_canonical_der_v1<F: BigPrimeField>(
     chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
     r: &ProperCrtUint<F>,
@@ -155,7 +155,7 @@ pub(crate) fn constrain_p256_canonical_der_v1<F: BigPrimeField>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::P256_CRT_LIMB_BITS_V1;
+    use super::super::{P256_LIMB_BITS, P256_NUM_LIMBS};
     use super::*;
     use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::modulus};
     use halo2_ecc::bigint::FixedCRTInteger;
@@ -213,16 +213,16 @@ mod tests {
             .use_lookup_bits(15)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, P256_CRT_LIMB_BITS_V1, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
-        let r = FixedCRTInteger::from_native(value(r_mode), 3, P256_CRT_LIMB_BITS_V1).assign(
+        let r = FixedCRTInteger::from_native(value(r_mode), P256_NUM_LIMBS, P256_LIMB_BITS).assign(
             ctx,
-            P256_CRT_LIMB_BITS_V1,
+            P256_LIMB_BITS,
             &modulus::<F>(),
         );
-        let s = FixedCRTInteger::from_native(value(s_mode), 3, P256_CRT_LIMB_BITS_V1).assign(
+        let s = FixedCRTInteger::from_native(value(s_mode), P256_NUM_LIMBS, P256_LIMB_BITS).assign(
             ctx,
-            P256_CRT_LIMB_BITS_V1,
+            P256_LIMB_BITS,
             &modulus::<F>(),
         );
         let der = constrain_p256_canonical_der_v1(&chip, ctx, &r, &s);

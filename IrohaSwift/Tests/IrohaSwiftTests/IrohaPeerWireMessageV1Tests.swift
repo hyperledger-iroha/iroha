@@ -19,7 +19,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         )
         XCTAssertEqual(
             IrohaPeerWireKindV1.allCases.map(\.maximumKagemushaCanonicalBytes),
-            [960, 7_552, 256]
+            [1_024, 7_552, 256]
         )
     }
 

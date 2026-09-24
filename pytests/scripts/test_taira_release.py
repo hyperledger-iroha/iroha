@@ -81,7 +81,7 @@ class TairaPrepareTests(unittest.TestCase):
             path.chmod(0o755)
 
     def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88,
-                isolate=None, native_paths=None):
+                isolate=None, native_paths=None, package_names=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -97,7 +97,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "isolated_cargo_environment", side_effect=isolate or (lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), []))), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "captured_gate", return_value=development_gate), \
-             patch.object(release, "local_package_names", return_value=set()), \
+             patch.object(release, "local_package_names", side_effect=package_names or (lambda *_: set())), \
              patch.object(release, "admit_source_fingerprints", side_effect=cache_admission or (lambda *_a, **_k: [])), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
              patch.object(development_gate, "run_checks", side_effect=check) as gate, \
@@ -107,6 +107,15 @@ class TairaPrepareTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             result = release.prepare(self.args)
         return result, gate, compile
+
+    def test_offline_package_failure_precedes_attempt_native_gate_and_build(self):
+        def must_not_run(*_args, **_kwargs):
+            self.fail("missing offline package reached the native gate or build")
+        with self.assertRaisesRegex(ValueError, "missing-crate"):
+            self.prepare(check=must_not_run, build=must_not_run,
+                         package_names=ValueError("offline Cargo package preflight failed: missing-crate"))
+        self.assertEqual(list((self.out / "attempts").iterdir()), [])
+        self.assertFalse((self.out / "checks.json").exists())
 
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []

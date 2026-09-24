@@ -70,13 +70,13 @@ public enum KagemushaWireV1 {
   public static let requestMaximumTTLMS: UInt64 = 5 * 60 * 1_000
 
   public static let maximumAggregateStateBytes = 768
-  public static let maximumPaymentRequestBytes = 960
+  public static let maximumPaymentRequestBytes = 1_024
   public static let maximumPaymentBytes = 7_552
   public static let maximumAcknowledgementBytes = 256
   public static let maximumMintAuthorizationBytes = 7_936
   public static let maximumMintCreditBytes = 7_936
   public static let maximumRedemptionVoucherBytes = 7_936
-  public static let maximumPaymentRequestTextBytes = 1_285
+  public static let maximumPaymentRequestTextBytes = 1_371
   public static let maximumPaymentTextBytes = 10_075
   public static let maximumAcknowledgementTextBytes = 347
   public static let maximumMintAuthorizationTextBytes = 10_587

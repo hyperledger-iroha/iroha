@@ -212,6 +212,7 @@ mod tests {
                 Signature::try_from_bytes(signature.payload())
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
+            phone_retail_canonicality: None,
         }
     }
     #[test]

@@ -18,6 +18,15 @@ const devicePublicKey = Uint8Array.from(Buffer.from(
   "hex",
 ));
 
+test("payment request text admits the full first-release wire budget", () => {
+  const request = octets(0x5a, 1024);
+  const text = Kagemusha.encodeText("paymentRequest", request);
+  assert.equal(text.length, 1371);
+  assert.deepEqual(Kagemusha.decodeText("paymentRequest", text), request);
+  assert.throws(() => Kagemusha.encodeText("paymentRequest", octets(0x5a, 1025)));
+  assert.throws(() => Kagemusha.decodeText("paymentRequest", `${text}AA`));
+});
+
 function baseContext() {
   const networkId = NetworkId.fromBytes(Uint8Array.from([
     ...Array.from({ length: 31 }, (_, index) => index + 1), 1,

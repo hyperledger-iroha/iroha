@@ -17,8 +17,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
     @Test
     fun `coordinator methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..13).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(20, cases.size)
+        assertEquals((1..14).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(21, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
@@ -87,12 +87,35 @@ class KagemushaCoreCoordinatorFrameV1Test {
     fun `response identity or envelope substitution fails for every correlated method`() {
         val indexes = mapOf("reserve" to 0, "begin-send" to 0, "begin-redeem" to 0,
             "installed-terminal" to 0, "recover-sender" to 0, "recover-terminal" to 1,
-            "release-send" to 3, "release-redeem" to 3, "app-attest-ack" to 0)
+            "release-send" to 3, "release-redeem" to 3, "app-attest-ack" to 0,
+            "outgoing-state-proof-export" to 0)
         fixtures().filter { it.name in indexes }.forEach { case ->
             val fields = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
             fields[indexes.getValue(case.name)][0] = 0x7f
             assertFailsWith<IllegalArgumentException>(case.name) {
                 KagemushaCoreCoordinatorFrameV1.encodeResponse(case.method, case.request, fields)
+            }
+        }
+    }
+
+    @Test
+    fun `outgoing State archive export requires an original operation and bounded pair`() {
+        val method = KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF
+        val operation = ByteArray(32) { 0x66 }
+        val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, listOf(operation))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, listOf(ByteArray(32)))
+        }
+        val pair = listOf(operation, byteArrayOf(1), byteArrayOf(2))
+        KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, pair)
+        for (invalid in listOf(
+            listOf(ByteArray(32) { 0x67 }, pair[1], pair[2]),
+            listOf(operation, ByteArray(4 * 1024 + 1), pair[2]),
+            listOf(operation, pair[1], ByteArray(6_529)),
+            listOf(operation, byteArrayOf(), pair[2]),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, invalid)
             }
         }
     }

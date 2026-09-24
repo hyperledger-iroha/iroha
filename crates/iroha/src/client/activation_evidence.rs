@@ -382,8 +382,9 @@ impl Client {
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
     /// block hash match, its proposal inputs and execution context match the header commitments, its full typed output
-    /// cache is consistent, and the supplied successful transaction verifies through its exact
-    /// Network input-index join and separate input/output proofs.
+    /// cache is consistent, and the supplied successful, signed transaction belongs to this
+    /// client's NetworkId and verifies through its exact Network input-index join and separate
+    /// input/output proofs.
     ///
     /// The required commitment must come from an independently verified, externally anchored
     /// native finality proof for this carrier. Its exact wire hash and length authenticate results
@@ -458,6 +459,15 @@ impl Client {
         if !committed.verify_inclusion_in_authenticated_execution(&block, execution_commitment) {
             return Err(eyre!(
                 "committed transaction does not verify against the authenticated execution commitment"
+            ));
+        }
+        if !committed.verify_selective_in_authenticated_execution(
+            &self.network_id,
+            &block.header(),
+            execution_commitment,
+        ) {
+            return Err(eyre!(
+                "committed transaction does not match the authenticated client network and execution"
             ));
         }
         self.ensure_activation_evidence_deadline()?;

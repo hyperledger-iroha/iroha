@@ -151,8 +151,8 @@ use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, 
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
 pub use merkle_map::{
     MerkleMap, MerkleMapEdit, MerkleMapError, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore,
-    MerkleMapReadError, MerkleMapRoot, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
-    MerkleMapValueRef,
+    MerkleMapProof, MerkleMapProofStep, MerkleMapReadError, MerkleMapRoot, MerkleMapUpdateError,
+    MerkleMapUpdateWorkspace, MerkleMapValueRef,
 };
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,

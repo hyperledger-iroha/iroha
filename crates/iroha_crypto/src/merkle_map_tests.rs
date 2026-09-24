@@ -237,3 +237,37 @@ fn fixed_blake2b_vectors_bind_empty_leaf_and_root_branch() {
         "130c60ac5becbc55b3a871805f9cf4f621ad984440ef83fe025f68aadc4b4ee5"
     );
 }
+
+#[test]
+fn exact_membership_proof_binds_key_value_count_and_canonical_path() {
+    let mut map = MerkleMap::new();
+    for n in 0..9 {
+        map.replace(hash(n), None, Some(hash(n + 100))).unwrap();
+    }
+    assert!(map.proof(&hash(99)).is_none());
+    for n in 0..9 {
+        let proof = map.proof(&hash(n)).expect("present key has proof");
+        assert!(proof.verify(map.root()));
+        let encoded = norito::codec::Encode::encode(&proof);
+        let decoded = norito::codec::Decode::decode_all(&mut encoded.as_slice())
+            .expect("membership proof decodes");
+        assert_eq!(proof, decoded);
+        let mut changed = proof.clone();
+        changed.value = hash(999);
+        assert!(!changed.verify(map.root()));
+        let mut changed = proof.clone();
+        changed.key = hash(999);
+        assert!(!changed.verify(map.root()));
+        let mut changed = proof.clone();
+        changed.len += 1;
+        assert!(!changed.verify(map.root()));
+        let mut changed = proof;
+        changed.steps[0].bit = 256;
+        assert!(!changed.verify(map.root()));
+    }
+    let snapshot = map.clone();
+    map.replace(hash(0), Some(hash(100)), Some(hash(200)))
+        .unwrap();
+    assert!(snapshot.proof(&hash(0)).unwrap().verify(snapshot.root()));
+    assert!(!snapshot.proof(&hash(0)).unwrap().verify(map.root()));
+}

@@ -148,8 +148,8 @@ in [`peer_transport_v1.md`](peer_transport_v1.md).
 3. `KagemushaAcknowledgementV1` binds the request, payment, credit ID, and
    rollback-resistant inbox receipt after irreversible secure staging.
 
-The canonical receiver request is bounded to 960 bytes in Rust, Kotlin, and
-Swift. Its `kgm1:` text form is bounded to 1,285 bytes, including the prefix.
+The canonical receiver request is bounded to 1,024 bytes in Rust, Kotlin, and
+Swift. Its `kgm1:` text form is bounded to 1,371 bytes, including the prefix.
 These limits admit the complete first-release hardware credential and are
 enforced before decoding.
 

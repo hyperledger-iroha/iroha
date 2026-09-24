@@ -183,7 +183,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var loseProof = false
         var wrongProofChallenge = false
         private var challengeId = ByteArray(32) { 7 }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13)
+        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14)
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long) = 0
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {

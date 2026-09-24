@@ -8,8 +8,20 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 
 class KagemushaThreeMessageV1Test {
+    @Test
+    fun `payment request text accepts the new bounded canonical size`() {
+        val request = ByteArray(1_024) { it.toByte() }
+        val text = KagemushaWireV1.encodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, request)
+        assertEquals(1_371, text.length)
+        assertContentEquals(request, KagemushaWireV1.decodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, text))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaWireV1.encodeText(KagemushaWirePayloadKindV1.PAYMENT_REQUEST, ByteArray(1_025))
+        }
+    }
+
     @Test
     fun `peer message inventory is exactly request payment acknowledgement`() {
         assertEquals(listOf(1, 2, 3), IrohaPeerPayloadKind.values().map { it.code })

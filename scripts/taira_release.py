@@ -1583,6 +1583,10 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                 return result
         capacity_preflight([(target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
                             (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
+        # Resolve the complete signed package graph before allocating an attempt
+        # or running any native checks or release build.
+        print("[taira-release] verify offline Cargo package closure", flush=True)
+        packages = local_package_names(source, env)
         attempt_number = 1 if not names else int(names[-1]) + 1
         require(attempt_number <= 999999, "preparation attempt namespace exhausted")
         attempt = create_fresh_directory(attempts / f"{attempt_number:06d}", mode=0o700)
@@ -1599,7 +1603,6 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
 
         checks = output / "checks.json"
         independent_checks = output / "independent-checks.json"
-        packages = local_package_names(source, env)
         if checks.exists():
             require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
 

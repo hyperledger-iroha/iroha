@@ -133,7 +133,7 @@ public final class KagemushaWireV1Tests {
     assertEquals(1, IrohaPeerPayloadKind.REQUEST.code());
     assertEquals(2, IrohaPeerPayloadKind.PAYMENT.code());
     assertEquals(3, IrohaPeerPayloadKind.ACKNOWLEDGEMENT.code());
-    assertEquals(960, KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES);
+    assertEquals(1_024, KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES);
     assertEquals(7_552, KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
     assertEquals(256, KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES);
     assertEquals(9_211, KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES);
