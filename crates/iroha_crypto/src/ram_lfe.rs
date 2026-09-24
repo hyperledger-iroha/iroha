@@ -526,6 +526,7 @@ pub fn derive_phone_retail_nullifier_from_ciphertext_v1(
 #[cfg(test)]
 mod phone_retail_nullifier_tests {
     use super::*;
+    use crate::{encrypt_identifier_from_seed, ram_lfe_bfv_parameters_v1};
 
     #[test]
     fn canonical_phone_nullifier_is_stable_and_network_scoped() {
