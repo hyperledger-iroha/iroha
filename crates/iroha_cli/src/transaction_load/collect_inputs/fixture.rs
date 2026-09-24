@@ -164,14 +164,53 @@ fn signed_proof(
     block: &SignedBlock,
     ordinary_writes_root: Hash,
 ) -> BridgeFinalityProof {
+    let execution = fixture_execution_commitment(block, ordinary_writes_root)
+        .with_transaction_commitments_from_block(block)
+        .expect("fixture execution commitment binds exact transaction trees");
+    sign_proof_for_execution(keys, context, block, execution)
+}
+
+fn fixture_execution_commitment(
+    block: &SignedBlock,
+    ordinary_writes_root: Hash,
+) -> ExecutionCommitment {
     let wire = block.encode_wire().unwrap();
-    let execution = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+    ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         h("pre state"),
         h("post state"),
         ordinary_writes_root,
         wire.len() as u64,
         Hash::new(&wire),
+    )
+}
+
+// Test-only: authenticate the exact bytes of a deliberately malformed native carrier,
+// leaving source-shape rejection to the collector under test.
+fn signed_malformed_native_proof(
+    keys: &[KeyPair],
+    context: HeightContext,
+    block: &SignedBlock,
+    ordinary_writes_root: Hash,
+) -> BridgeFinalityProof {
+    assert!(
+        block.validate_output_merkle_cache().is_err(),
+        "only malformed native-source controls use the test-only signer"
     );
+    let mut execution = fixture_execution_commitment(block, ordinary_writes_root);
+    execution.transaction_input_commitment = block.network_input_merkle_commitment();
+    execution.transaction_output_commitment = block.output_merkle_commitment();
+    execution
+        .validate()
+        .expect("malformed-source fixture still has canonical commitment shape");
+    sign_proof_for_execution(keys, context, block, execution)
+}
+
+fn sign_proof_for_execution(
+    keys: &[KeyPair],
+    context: HeightContext,
+    block: &SignedBlock,
+    execution: ExecutionCommitment,
+) -> BridgeFinalityProof {
     let subject = BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash: block.hash(),
@@ -305,7 +344,7 @@ impl Height {
             })
             .collect()
     }
-    pub fn resign(&mut self, keys: &[KeyPair]) {
+    pub fn resign_rewritten_for_test(&mut self, keys: &[KeyPair], malformed_source: bool) {
         let (evidence, root) = native_context_evidence_for_testing(
             self.proof.finality_artifact.height_context.network_id,
             self.proof.block_header.height().get(),
@@ -313,7 +352,13 @@ impl Height {
         )
         .unwrap();
         self.evidence = evidence;
-        self.proof = signed_proof(
+        let sign: fn(&[KeyPair], HeightContext, &SignedBlock, Hash) -> BridgeFinalityProof =
+            if malformed_source {
+                signed_malformed_native_proof
+            } else {
+                signed_proof
+            };
+        self.proof = sign(
             keys,
             self.proof.finality_artifact.height_context.clone(),
             &self.block,
@@ -866,7 +911,7 @@ impl Fixture {
                 .height_context
                 .parent_commit_qc =
                 Some(heights[index - 1].proof.finality_artifact.commit_qc.clone());
-            heights[index].resign(&self.keys);
+            heights[index].resign_rewritten_for_test(&self.keys, index == height_index);
         }
         let archive = write_archive(&heights)?;
         self.heights = heights;
