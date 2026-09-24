@@ -109,6 +109,41 @@ pub(in super::super) struct PreparedBeaconInputsV1 {
     final_units: Vec<PreparedBeaconUnitV1>,
 }
 
+/// Validate the exact native seat map before rendering immutable FD200 units.
+pub(in super::super) fn validated_unit_credential_paths(
+    inputs: &PreparedBeaconInputsV1,
+) -> Result<[Option<String>; 4]> {
+    if inputs.schema != "iroha.taira.public-reset.beacon-inputs.v1" || inputs.final_units.len() != 4
+    {
+        return Err(eyre!(
+            "native beacon inputs have a different schema or unit count"
+        ));
+    }
+    reset::validate_nonce(&inputs.authorization_nonce)?;
+    let mut seen_seats = BTreeSet::new();
+    let mut paths = std::array::from_fn(|_| None);
+    for (index, unit) in inputs.final_units.iter().enumerate() {
+        let slug = reset::VALIDATOR_SLUGS[index];
+        let seat = unit.signer_index;
+        let expected = format!(
+            "/var/lib/taira/.public-reset-control-v1/beacon/{}/ceremony/seat-{seat}/{CREDENTIAL_FILE}",
+            inputs.authorization_nonce
+        );
+        if unit.validator != slug
+            || unit.config_file != "beacon.toml"
+            || !(1..=4).contains(&seat)
+            || !seen_seats.insert(seat)
+            || unit.credential_path != expected
+        {
+            return Err(eyre!(
+                "native beacon validator and credential seat map differ"
+            ));
+        }
+        paths[index] = Some(expected);
+    }
+    Ok(paths)
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PreparedBeaconUnitV1 {
@@ -2310,6 +2345,42 @@ pub(in super::super) fn derive_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_unit_paths_bind_four_distinct_beacon_seats() {
+        let inventory = reset::sample_inventory_fixture();
+        let nonce = inventory.authorization_nonce.clone();
+        let mut inputs = PreparedBeaconInputsV1 {
+            schema: "iroha.taira.public-reset.beacon-inputs.v1".into(),
+            authorization_nonce: nonce.clone(),
+            request: inventory.beacon_bootstrap.request.clone(),
+            final_units: reset::VALIDATOR_SLUGS
+                .iter()
+                .enumerate()
+                .map(|(index, slug)| {
+                    let seat = index + 1;
+                    PreparedBeaconUnitV1 {
+                        validator: (*slug).into(),
+                        signer_index: seat as u16,
+                        credential_path: format!(
+                            "/var/lib/taira/.public-reset-control-v1/beacon/{nonce}/ceremony/seat-{seat}/{CREDENTIAL_FILE}"
+                        ),
+                        config_file: "beacon.toml".into(),
+                    }
+                })
+                .collect(),
+        };
+        let paths = validated_unit_credential_paths(&inputs).unwrap();
+        assert_eq!(
+            paths[0].as_deref(),
+            Some(inputs.final_units[0].credential_path.as_str())
+        );
+        inputs.final_units[1].signer_index = 1;
+        assert!(validated_unit_credential_paths(&inputs).is_err());
+        inputs.final_units[1].signer_index = 2;
+        inputs.final_units[1].validator = reset::VALIDATOR_SLUGS[0].into();
+        assert!(validated_unit_credential_paths(&inputs).is_err());
+    }
 
     #[test]
     fn beacon_install_envelope_requires_ordinary_exact_certificate() {

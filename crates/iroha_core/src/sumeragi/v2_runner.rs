@@ -1707,7 +1707,20 @@ fn schedule_local_proposal(
         };
         let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;
         native.retain_candidate_source(source);
-        let assembly = outcome?;
+        let assembly = match outcome {
+            Ok(assembly) => assembly,
+            Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))
+                if !output_guard.restart_required()
+                    && proposal_state.defer_history_admission(
+                        owner,
+                        &error,
+                        &queue.sumeragi_waker(),
+                    ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {

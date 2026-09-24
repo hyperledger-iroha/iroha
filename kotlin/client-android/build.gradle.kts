@@ -1675,6 +1675,11 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.bcprov)
+    // This library's self-targeted instrumentation APK needs its compiled Android
+    // classes at runtime; the AGP test classpath alone does not package them.
+    androidTestRuntimeOnly(files(layout.buildDirectory.file(
+        "intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar",
+    )).builtBy("bundleLibCompileToJarDebug"))
 }
 
 tasks.withType<Test>().configureEach {
@@ -2111,6 +2116,18 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     // packaging operation performs a final live source-seal check, even when
     // the expensive per-ABI Cargo output is safely reusable.
     outputs.upToDateWhen { false }
+}
+
+// This library's instrumentation APK targets itself. Its compiled Kotlin classes are
+// supplied above, but AGP does not copy the library variant's JNI payload into that
+// self-targeted APK. Physical native probes must carry the same generated bridge.
+if (includeDebugNativeBridge) {
+    android.sourceSets.getByName("androidTest").jniLibs.srcDir(
+        layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode"),
+    )
+    tasks.matching { it.name == "mergeDebugAndroidTestJniLibFolders" }.configureEach {
+        dependsOn(stripNativeLibs)
+    }
 }
 
 // Release always consumes the shipping bridge. Debug device integration can

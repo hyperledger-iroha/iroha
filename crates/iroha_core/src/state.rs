@@ -21840,6 +21840,23 @@ impl World {
                         "Phone retail claim {opaque_id} has untrusted policy metadata"
                     ));
                 }
+                let program = self
+                    .ram_lfe_program_policies
+                    .view()
+                    .get(&policy.program_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned program")
+                    })?;
+                if program.owner != policy.owner
+                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1
+                    || program.commitment.backend != program.backend
+                    || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted program metadata"
+                    ));
+                }
                 let program_id_bytes = norito::encode_canonical(&policy.program_id)
                     .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
                 let (expected_id, expected_receipt_hash) =

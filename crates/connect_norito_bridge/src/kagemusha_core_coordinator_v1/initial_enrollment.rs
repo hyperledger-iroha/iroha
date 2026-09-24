@@ -29,6 +29,7 @@ use iroha_data_model::kagemusha::{
 use rand::{TryRngCore as _, rngs::OsRng};
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
 use super::native_deadline::NativeDeadlineV1;
 use super::{
     enrollment_attempt_journal::{
@@ -40,6 +41,10 @@ use crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_ke
 
 #[cfg(test)]
 const LIFETIME: std::time::Duration = std::time::Duration::from_secs(120);
+
+// Raw Android attestation envelopes may be 128 KiB under the verifier's bounded wire contract.
+// They stay in the Rust-only context provider and are never a coordinator frame field.
+const PLATFORM_EVIDENCE_MAX_BYTES_V1: usize = 128 * 1024;
 
 /// Closed initial-ceremony failures; no rejected result exposes a partial admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +150,7 @@ impl PendingIssuerEnrollmentV1 {
         )
         .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
         if raw_platform_evidence.is_empty()
-            || raw_platform_evidence.len() > 96 * 1024
+            || raw_platform_evidence.len() > PLATFORM_EVIDENCE_MAX_BYTES_V1
             || canonical_app_certificate.is_empty()
             || canonical_app_certificate.len() > 96 * 1024
         {
@@ -329,22 +334,15 @@ impl PendingIssuerEnrollmentV1 {
         Ok(&self.canonical_qualification)
     }
 
+    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.require_unexpired()?;
         if let Some(live) = &self.live_selection {
             return live.deadline().map_err(map_journal_error);
         }
-        #[cfg(test)]
-        {
-            return self
-                .deadline
-                .clone()
-                .ok_or(InitialEnrollmentErrorV1::Binding);
-        }
-        #[cfg(not(test))]
-        {
-            Err(InitialEnrollmentErrorV1::Binding)
-        }
+        self.deadline
+            .clone()
+            .ok_or(InitialEnrollmentErrorV1::Binding)
     }
 
     fn require_unexpired(&self) -> Result<()> {
@@ -402,6 +400,40 @@ impl PendingIssuerEnrollmentV1 {
             canonical_device_command,
             verified_app,
         })
+    }
+
+    /// Authenticate the exact signed app certificate carried by phase 2 before accepting the
+    /// issuer challenge. The original selected credential and client nonce, rather than app
+    /// projections, determine the certificate's expected scope. Production attempts created by
+    /// `begin_selected` additionally pin this certificate's digest to the raw evidence checked
+    /// at selection time.
+    pub fn accept_challenge_with_certificate(
+        self,
+        canonical_challenge: &[u8],
+        projection: IssuerChallengeProjectionV1<'_>,
+        canonical_app_certificate: &[u8],
+        trusted_now_ms: u64,
+    ) -> Result<AcceptedIssuerChallengeV1> {
+        self.require_unexpired()?;
+        if canonical_app_certificate.is_empty() || canonical_app_certificate.len() > 96 * 1024 {
+            return Err(InitialEnrollmentErrorV1::Encoding);
+        }
+        let challenge =
+            KagemushaRetailEnrollmentChallengeV1::decode_canonical_exact(canonical_challenge)
+                .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
+        let certificate: KagemushaAppEnrollmentCertificateV1 =
+            norito::decode_canonical(canonical_app_certificate)
+                .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
+        let expected = KagemushaAppEnrollmentSelectionV1::for_credential(
+            self.client_nonce,
+            challenge.server_nonce,
+            self.qualification.release_id,
+            &self.qualification.credential,
+        );
+        let verified_app = certificate
+            .authenticate(&self.app_policy, expected, trusted_now_ms)
+            .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        self.accept_challenge(canonical_challenge, projection, verified_app)
     }
 
     fn require_challenge_binding(
@@ -546,6 +578,25 @@ pub struct AcceptedIssuerChallengeV1 {
 }
 
 impl AcceptedIssuerChallengeV1 {
+    /// Require phase 3 to use the exact process-local journal owner that created this challenge.
+    pub(super) fn require_same_live_selection(
+        &self,
+        live_selection: &KagemushaEnrollmentLiveSelectionV1,
+    ) -> Result<()> {
+        let original = self
+            .pending
+            .live_selection
+            .as_ref()
+            .ok_or(InitialEnrollmentErrorV1::Binding)?;
+        if !original
+            .same_attempt(live_selection)
+            .map_err(map_journal_error)?
+        {
+            return Err(InitialEnrollmentErrorV1::Binding);
+        }
+        Ok(())
+    }
+
     pub fn account_signing_message(&self) -> Result<[u8; 32]> {
         self.pending.require_unexpired()?;
         Ok(self.account_signing_message)
@@ -675,6 +726,7 @@ pub struct FreshIssuerAdmissionV1 {
 
 impl FreshIssuerAdmissionV1 {
     /// Recheck the original live ticket and deadline before this admission is used.
+    #[cfg(test)]
     pub(super) fn require_live(&self) -> Result<()> {
         self.pending.require_unexpired()
     }
@@ -700,10 +752,11 @@ impl FreshIssuerAdmissionV1 {
     pub fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
         &self.pending.enrollment
     }
+    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.pending.deadline()
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

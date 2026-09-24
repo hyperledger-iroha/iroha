@@ -26,6 +26,10 @@ object ClaimIdentifierWirePayloadEncoder {
         val normalizedAccountId = requireExactNonBlank(accountId, "accountId")
         val receiptAccountId = requireExactNonBlank(receipt.accountId, "receipt.accountId")
         require(normalizedAccountId == receiptAccountId) { "ClaimIdentifier accountId must match receipt.accountId" }
+        // TODO: Encode the signed phone canonicality option when the Kotlin receipt model carries it.
+        require(receipt.policyId != "phone#retail") {
+            "phone#retail ClaimIdentifier requires a canonicality attestation encoder"
+        }
         val accountPayload = TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId)
         val receiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
         val attestationPayload = IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation)
@@ -106,13 +110,29 @@ object ClaimIdentifierWirePayloadEncoder {
         override fun encode(encoder: NoritoEncoder, value: ReceiptPayload) {
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.payloadBytes)
             encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.attestationBytes)
+            encodeSizedField(encoder, ABSENT_CANONICALITY_ADAPTER, Unit)
         }
         override fun decode(decoder: NoritoDecoder): ReceiptPayload {
             val payloadBytes = decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.payload")
             val attestationBytes = decodeSizedField(decoder, PASSTHROUGH_ADAPTER, "IdentifierReceipt.attestation")
+            decodeSizedField(decoder, ABSENT_CANONICALITY_ADAPTER, "IdentifierReceipt.phone_retail_canonicality")
             return ReceiptPayload(payloadBytes, attestationBytes)
         }
-        companion object { private val PASSTHROUGH_ADAPTER = PassthroughBytesAdapter() }
+        companion object {
+            private val PASSTHROUGH_ADAPTER = PassthroughBytesAdapter()
+            private val ABSENT_CANONICALITY_ADAPTER = AbsentCanonicalityAdapter()
+        }
+    }
+
+    private class AbsentCanonicalityAdapter : TypeAdapter<Unit> {
+        override fun encode(encoder: NoritoEncoder, value: Unit) {
+            encoder.writeByte(0)
+        }
+        override fun decode(decoder: NoritoDecoder) {
+            require(decoder.readByte() == 0) {
+                "phone#retail canonicality evidence cannot be decoded by this encoder"
+            }
+        }
     }
 
     private class PassthroughBytesAdapter : TypeAdapter<ByteArray> {

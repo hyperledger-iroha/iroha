@@ -126,13 +126,35 @@ release ID as an independent binary measurement. Apple's iOS 27 extension
 format adds release signals; it is a distinct current platform format to
 qualify on a physical device. The parser must not reject the observed `0x40`
 flag or require absent extensions.
+On 2026-09-24, a development-signed ordinary app on a physical iPhone 17 Pro
+Max (iOS 26.7) enrolled a dedicated key, produced two exact-`S` assertions
+for 0→1→2, and passed a separate consumed-but-lost-result journal test.
+The signed app had no HCE entitlement; App Attest operated through the
+ordinary development app path.
+A separate physical test signed two distinct selections that both claimed
+the same 0→1 predecessor on one enrolled key. Their independently verified
+assertions carried counters 1 and 2, so only the first met the exact-next
+counter relation. This tests competing selections in one process; it does not
+establish rollback resistance after device restore or qualify monetary admission.
+Independent verification of exported raw evidence passed the pinned App
+Attestation certificate chain, the Apple Root CA G3 fraud receipt, the exact
+challenge and both signatures/counters. The physical nonce certificate
+extension used DER `SEQUENCE { [1] EXPLICIT OCTET STRING(32) }`; an untagged
+octet string is not this observed format. Development category 3 and the
+signed app's CFBundleVersion `1` were governed app-policy expectations; Apple
+did not sign that version in the observed assertion. The iOS native archive
+and app build used an explicitly unsealed, one-slice diagnostic package after
+source changed during compilation. These tests establish device API behavior,
+not a source-sealed release, monetary checkpoint or hardware no-fork proof.
 For that profile, `app_release_digest` is SHA-256 of the domain
 `iroha:kagemusha:v1:app-attest-release\0`, the validation category as u32-LE,
 the UTF-8 bundle-version byte length as u16-LE, and those exact version bytes.
 A direct hardware ECDSA service may instead sign the subject under its exact
 governed hash profile. These are different signature equations over the same
 selected transition and require exact cross-language vectors. The Swift
-App Attest candidate now hashes the Core canonical selection frame;
+App Attest candidate checks the fixed V1 selection shape and signed
+predecessor index against Core's trusted counter before reserving an assertion,
+then hashes the exact Core canonical selection frame;
 Core also checks its assertion signature, signed release extensions, and
 exact-next counter against the persisted candidate before proof construction.
 The Core verifier now requires the original two-field CBOR assertion rather
@@ -158,7 +180,10 @@ monetary fold; complete Core subject, credential, issuer-policy, release and
 terminal links remain required before ordinary-app admission can open.
 A separate staged composition now feeds the same assigned signing subject and
 authenticator bytes through the available State, Guard, governed Apple policy,
-original assertion and P-256 relations. It is compile-checked as a helper,
+compact credential-ID SHA opening and original assertion/P-256 relations. The
+credential issuance and expiry must fit the SHA-bound governed profile
+window in both Pasta fields; a focused Eq/Ep mutation test covers this bound.
+The composition is compile-checked as a helper,
 not yet proof-tested as one combined circuit; a coherent non-Bootstrap Apple
 State/Guard fixture and the missing issuer/terminal bindings are still needed.
 The source-staged paired outgoing terminal relation now derives journal and
@@ -354,6 +379,15 @@ index is invalid because an unseen payment at that index may exist.
    that profile. The ratchet profile instead requires attested unique
    exact-next use, non-resettable enforcement and fail-closed loss behavior.
    A capability frame is a claim to authenticate and test, not authority.
+
+The native initial-enrollment adapter now journals one selection, challenge,
+proof and issuer completion through six bounded phases. Its accepted challenge,
+prepared proof and completed admission are consuming Rust types tied to the
+original revocable selection; a restart cannot recreate them from app frames.
+The app-side phase owner correlates those six frames to one selected account and
+signed release; a lost cancellation reply permits only an exact retry of the
+same revocation ticket. No qualified issuer/app-evidence delegate or installed
+monetary backend is present, so these phase mechanics do not yet admit a wallet.
 
 ## Payment and recovery algorithm
 

@@ -206,6 +206,110 @@ async fn ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rej
 }
 
 #[tokio::test]
+async fn ordinary_sealed_commitment_is_durable_and_requires_one_route() {
+    use iroha_data_model::transaction::signed::{
+        SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+    };
+
+    let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
+    let network_id = *app.state.network_id_ref();
+    let signed = lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![Log::new(Level::INFO, "sealed application".to_owned()).into()],
+    );
+    let commitment_hash =
+        compute_sealed_transaction_commitment(&network_id, &signed, [0x51; 32], 9);
+    let entrypoint =
+        TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+            SealedTransactionCommitmentPayload::new(
+                network_id,
+                AccountId::new(key.public_key().clone()),
+                commitment_hash,
+                3,
+                9,
+                None,
+            ),
+            key.private_key(),
+        ));
+    let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let participant = iroha_core::queue::RouteLeg::new(
+        RoutingDecision::new(LaneId::new(9), DataSpaceId::new(9)),
+        iroha_core::queue::RouteLegRole::Participant,
+    );
+    let multi_route = RoutingPlan::native_amx(coordinator, vec![participant]);
+    assert!(
+        super::ordinary_transaction_ingress::authenticate(&app, &entrypoint, &multi_route)
+            .expect_err("sealed commitment must not bypass the single-route guard")
+            .contains("QueuePlanSynced")
+    );
+    let before = std::fs::read(journal.path().join("queue.norito")).unwrap();
+    let response = super::handler_post_transaction_entrypoint(
+        State(app.clone()),
+        HeaderMap::new(),
+        None,
+        versioned_entrypoint_for_test(entrypoint.clone()),
+    )
+    .await
+    .expect("ordinary sealed commitment returns a classified response")
+    .into_response();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(app.queue.active_len(), 1);
+    let state = app.state.view();
+    let queued = app.queue.all_transactions(&state).collect::<Vec<_>>();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].entrypoint(), &entrypoint);
+    assert_ne!(
+        std::fs::read(journal.path().join("queue.norito")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn ordinary_sealed_reveal_authenticates_exact_lifecycle_certificate() {
+    let (app, key, _, certificate, _) = lifecycle_ordinary_fixture(true);
+    let network_id = *app.state.network_id_ref();
+    let route = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let reveal = |signed: SignedTransaction| {
+        let salt = [0x52; 32];
+        let commitment = compute_sealed_transaction_commitment(&network_id, &signed, salt, 9);
+        TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(commitment, signed, salt))
+    };
+    let ordinary = reveal(lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![Log::new(Level::INFO, "revealed application".to_owned()).into()],
+    ));
+    super::ordinary_transaction_ingress::authenticate(&app, &ordinary, &route)
+        .expect("ordinary sealed reveal accepts its single route");
+    let exact = reveal(lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![
+            ApplyThresholdKeyLifecycleCertificateV1 {
+                certificate: certificate.clone(),
+            }
+            .into(),
+        ],
+    ));
+    super::ordinary_transaction_ingress::authenticate(&app, &exact, &route)
+        .expect("exact certified lifecycle reveal authenticates its frozen roster");
+    let mixed = reveal(lifecycle_ordinary_transaction(
+        &app,
+        &key,
+        vec![
+            ApplyThresholdKeyLifecycleCertificateV1 { certificate }.into(),
+            Log::new(Level::INFO, "mixed revealed application".to_owned()).into(),
+        ],
+    ));
+    assert!(
+        super::ordinary_transaction_ingress::authenticate(&app, &mixed, &route)
+            .expect_err("mixed lifecycle reveal must be rejected")
+            .contains("one exact certificate")
+    );
+}
+
+#[tokio::test]
 async fn ordinary_multi_route_application_requires_certified_intent() {
     let (app, key, _, _, journal) = lifecycle_ordinary_fixture(true);
     let before = std::fs::read(journal.path().join("queue.norito")).unwrap();

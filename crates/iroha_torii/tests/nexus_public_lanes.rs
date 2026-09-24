@@ -73,7 +73,7 @@ async fn nexus_public_lane_endpoints_exist() {
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
-    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator, &escrow);
+    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let resp = fixtures::request(
@@ -101,7 +101,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
     configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
-    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator, &escrow);
+    seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
     let resp = fixtures::request(
@@ -207,7 +207,6 @@ fn seed_public_lane_state(
     validator_keypair: &KeyPair,
     validator: &AccountId,
     delegator: &AccountId,
-    escrow: &AccountId,
 ) {
     let nexus = state.nexus_snapshot();
     let definition: AssetDefinitionId = nexus
@@ -251,8 +250,7 @@ fn seed_public_lane_state(
         Name::from_str("alias").expect("alias key"),
         Json::from("validator-01"),
     );
-    let stake_definition = stake_asset_definition_id();
-    let escrow_asset = AssetId::new(stake_definition.clone(), escrow.clone());
+    let escrow_asset = AssetId::new(definition.clone(), escrow);
     let network_scope = PublicLaneMonetaryScopeV1::Network(*state.network_id_ref());
     RegisterPublicLaneValidator {
         lane_id: LaneId::SINGLE,
@@ -264,7 +262,7 @@ fn seed_public_lane_state(
         monetary_plan: PublicLaneMonetaryPlanV1 {
             network_scope: network_scope.clone(),
             valid_until_height: 1,
-            source_asset: AssetId::new(stake_definition.clone(), validator.clone()),
+            source_asset: AssetId::new(definition.clone(), validator.clone()),
             destination_asset: escrow_asset.clone(),
             amount: Quantity::from(1000_u32),
             precondition: PublicLaneMonetaryPreconditionV1::Registration(
@@ -285,7 +283,7 @@ fn seed_public_lane_state(
         monetary_plan: PublicLaneMonetaryPlanV1 {
             network_scope,
             valid_until_height: 1,
-            source_asset: AssetId::new(stake_definition, delegator.clone()),
+            source_asset: AssetId::new(definition, delegator.clone()),
             destination_asset: escrow_asset,
             amount: Quantity::from(250_u32),
             precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {

@@ -160,10 +160,9 @@ fn snapshot_owner_policy_fixture_with_stored_history(
             (LaneId::new(3), validator.clone()),
             (custody_asset.clone(), Quantity::from(1_000_000_u64)),
         );
-        world.public_lane_stake_reserves.insert(
-            custody_asset,
-            Quantity::from(1_000_000_u64),
-        );
+        world
+            .public_lane_stake_reserves
+            .insert(custody_asset, Quantity::from(1_000_000_u64));
         world.commit();
     }
     // The fixture models a committed staking owner at both snapshot cuts.
@@ -289,7 +288,7 @@ state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configure
         NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, dataspace_catalog_hash,
     };
 
-    let (_directory, mut state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
+    let (_directory, state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
     let baseline = configured.configured_dataspace_catalog.clone();
     assert!(baseline.entries().iter().any(|entry| entry.description.is_some()));
     let manifest_hash = [0x63; 32];

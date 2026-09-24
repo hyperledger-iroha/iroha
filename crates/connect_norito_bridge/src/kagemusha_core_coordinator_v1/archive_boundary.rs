@@ -208,7 +208,7 @@ pub(crate) fn validate_request(
         }
         KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
             match require_u32_field(fields.first())? {
-                INITIAL_ENROLLMENT_BEGIN_V1 => {
+                INITIAL_ENROLLMENT_BEGIN_V1 | INITIAL_ENROLLMENT_READ_SELECTION_V1 => {
                     let account_i105 = std::str::from_utf8(&fields[1]).map_err(field_error)?;
                     let account = AccountId::parse_encoded(account_i105).map_err(field_error)?;
                     require_binding(

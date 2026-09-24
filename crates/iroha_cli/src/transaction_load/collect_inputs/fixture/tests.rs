@@ -63,6 +63,14 @@ fn real_global_finality_covers_exact_canonical_wire_and_native_contexts() {
             let execution = &proof.finality_artifact.commit_qc.execution_commitment;
             assert_eq!(execution.executed_block_wire_hash, Hash::new(&wire));
             assert_eq!(execution.executed_block_wire_len, wire.len() as u64);
+            assert_eq!(
+                execution.transaction_input_commitment,
+                block.network_input_merkle_commitment()
+            );
+            assert_eq!(
+                execution.transaction_output_commitment,
+                block.output_merkle_commitment()
+            );
             assert!(execution.merge_carrier.is_none());
             assert_eq!(proof.finality_artifact.height_context.roster.len(), 4);
             assert_eq!(proof.finality_artifact.commit_qc.signers, vec![0, 1, 2]);
@@ -411,6 +419,16 @@ fn rewritten_native_order_remains_publicly_stored_and_globally_signed() {
         .as_ref()
         .unwrap();
     assert_eq!(batch.groups.last().unwrap(), &original_first);
+    let carrier = &fixture.heights[2];
+    let execution = &carrier.proof.finality_artifact.commit_qc.execution_commitment;
+    assert_eq!(
+        execution.transaction_input_commitment,
+        carrier.block.network_input_merkle_commitment()
+    );
+    assert_eq!(
+        execution.transaction_output_commitment,
+        carrier.block.output_merkle_commitment()
+    );
     let mut verifier = BridgeFinalityVerifier::with_context(
         fixture.network_id,
         fixture.heights[0].proof.finality_artifact.context_id(),
@@ -439,6 +457,16 @@ fn offline_archive_permits_signed_duplicate_for_collector_negative_controls() {
         .as_ref()
         .unwrap();
     assert_eq!(batch.groups[0].payload, batch.groups[1].payload);
+    let carrier = &fixture.heights[2];
+    let execution = &carrier.proof.finality_artifact.commit_qc.execution_commitment;
+    assert_eq!(
+        execution.transaction_input_commitment,
+        carrier.block.network_input_merkle_commitment()
+    );
+    assert_eq!(
+        execution.transaction_output_commitment,
+        carrier.block.output_merkle_commitment()
+    );
     let mut verifier = BridgeFinalityVerifier::with_context(
         fixture.network_id,
         fixture.heights[0].proof.finality_artifact.context_id(),

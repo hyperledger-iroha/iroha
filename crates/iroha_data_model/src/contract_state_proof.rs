@@ -257,6 +257,18 @@ mod tests {
         map.replace(&b, None, Some(b"two")).unwrap();
         let current_root = map.root();
         let proof = map.proof(&a, b"one").unwrap();
+        // Independent Python Blake2b-256 vector shared by the JS, Kotlin,
+        // and Swift verifier tests; Iroha's low-bit marker is applied per hash.
+        assert_eq!(
+            current_root.to_string(),
+            "194a8961806570284bf970836427142baa1ddcab853f1ee2c3ae672e1da8acb3"
+        );
+        assert_eq!(proof.steps.len(), 1);
+        assert_eq!(proof.steps[0].bit, 0);
+        assert_eq!(
+            proof.steps[0].sibling.to_string(),
+            "482931df820458f6bf299fa0e88e37f2378b3e8558c2c254ad03755ed8790947"
+        );
         assert!(proof.verify(&a, current_root));
         assert!(!proof.verify(&a, first_root));
         assert!(!proof.verify(&b, current_root));

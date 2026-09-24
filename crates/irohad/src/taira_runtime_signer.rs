@@ -782,10 +782,10 @@ pub fn main_entry() {
     }
 }
 
-// This branch exists only in the existing feature-isolated native test daemon.
+// This branch exists only in the feature-isolated native beacon test daemon.
 // It reuses the production registry, private codecs and authenticated mint factory;
 // it does not attest Linux/Inrou hosting or alter the shipping launcher's guard.
-#[cfg(any(test, feature = "test-network-message-control"))]
+#[cfg(any(test, feature = "test-network-production-beacon-custody"))]
 fn validate_production_beacon_fixture_profile(config: &Config) -> Result<(), String> {
     let peers = config.common.trusted_peers.value();
     if config.common.chain.as_ref() != TAIRA_CHAIN_ID_V1
@@ -808,7 +808,7 @@ fn validate_production_beacon_fixture_profile(config: &Config) -> Result<(), Str
     }
     Ok(())
 }
-#[cfg(feature = "test-network-message-control")]
+#[cfg(feature = "test-network-production-beacon-custody")]
 pub(crate) fn dispatch_production_beacon_fixture_if_requested() -> bool {
     if !std::env::args_os().any(|arg| arg == "--test-network-production-beacon-custody") {
         return false;

@@ -171,6 +171,24 @@ pub(crate) fn quote_and_sign_transaction(
     )
 }
 
+/// Select the signature-bound admission protocol before quoting the exact payload.
+pub(crate) fn quote_and_sign_transaction_with_admission(
+    client: &BlockingClient,
+    executable: Executable,
+    requested_fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    admission_intent: iroha::data_model::transaction::TransactionAdmissionIntent,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    quote_and_sign_transaction_inner(
+        client,
+        executable,
+        requested_fee_payment,
+        metadata,
+        None,
+        Some(admission_intent),
+    )
+}
+
 /// Bound the exact unsigned payload to its authorization before fee quoting.
 /// Quoting and signing retain that payload's original timestamp and bounded TTL.
 pub(crate) fn quote_and_sign_transaction_with_expiry(

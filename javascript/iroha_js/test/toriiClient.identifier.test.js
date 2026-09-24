@@ -38,7 +38,7 @@ const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(
 const APPLICATION_AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: Buffer.alloc(32, 0x5a) });
 const RESOLVER_PUBLIC_KEY =
   "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
-const POLICY_ID = "phone#retail";
+const POLICY_ID = "email#retail";
 const PROGRAM_ID = "identifier_lookup_retail";
 const OUTPUT_OPENING_PUBLIC_KEY = "ed25519:output-opening-key";
 const OPAQUE_ID = `opaque:${"11".repeat(32)}`;
@@ -526,7 +526,7 @@ function identifierPolicyFixture(overrides = {}) {
     program_id: PROGRAM_ID,
     owner: ACCOUNT_ID,
     active: true,
-    normalization: "phone_e164",
+    normalization: "email_address",
     resolver_public_key: "ed25519:resolver-key",
     output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     backend: "bfv-affine-sha3-256-v1",
@@ -560,7 +560,7 @@ function identifierPolicyFixture(overrides = {}) {
       encrypted_input_mode: "encrypted_envelope_v1",
       min_ciphertext_modulus: 1099511627776,
     },
-    note: "retail phone policy",
+    note: "retail email policy",
     ...overrides,
   };
 }
@@ -733,7 +733,7 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
       policy_id: POLICY_ID,
       owner: ACCOUNT_ID,
       active: true,
-      normalization: "phone_e164",
+      normalization: "email_address",
       resolver_public_key: signedReceipt.resolver_public_key,
       backend: "bfv-programmed-sha3-256-v1",
     }),
@@ -791,13 +791,44 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
   );
 });
 
+test("identifier request builders fail closed for phone without canonicality support", async () => {
+  let dispatched = false;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      dispatched = true;
+      return jsonResponse(200, {});
+    },
+  });
+  await assert.rejects(
+    () => client.resolveIdentifier({
+      policyId: "phone#retail",
+      encryptedInput: "ABCD",
+      outputOpening: sampleOutputOpening(),
+      canonicalAuth: APPLICATION_AUTH,
+    }),
+    /signed canonicality attestation support/u,
+  );
+  assert.throws(
+    () => buildIdentifierRequestForPolicy(
+      identifierPolicyFixture({
+        policy_id: "phone#retail",
+        program_id: "phone_retail",
+        normalization: "phone_e164",
+      }),
+      { encryptedInput: "ABCD", outputOpening: sampleOutputOpening() },
+    ),
+    /signed canonicality attestation support/u,
+  );
+  assert.equal(dispatched, false);
+});
+
 test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", () => {
   const signedReceipt = signedReceiptFixture();
   const policy = {
     policy_id: POLICY_ID,
     owner: ACCOUNT_ID,
     active: true,
-    normalization: "phone_e164",
+    normalization: "email_address",
     resolver_public_key: signedReceipt.resolver_public_key,
     backend: "bfv-programmed-sha3-256-v1",
   };
@@ -1700,7 +1731,7 @@ test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {
     policy_id: POLICY_ID,
     owner: ACCOUNT_ID,
     active: true,
-    normalization: "phone_e164",
+    normalization: "email_address",
     resolver_public_key: RESOLVER_PUBLIC_KEY,
     backend: "bfv-programmed-sha3-256-v1",
     input_encryption: "bfv-v1",

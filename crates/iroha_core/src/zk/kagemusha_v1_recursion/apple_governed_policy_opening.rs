@@ -33,6 +33,7 @@ use crate::zk::{
 use super::super::{guard_bundle, state_relation};
 
 const PROFILE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-profile";
+const SUITE_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:suite-commitment";
 const AUTHORITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-attestation-authority-policy\0";
 const STATIC_BINDING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-device-static-binding\0";
 
@@ -42,6 +43,7 @@ pub(super) struct AppleGovernedPolicyCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) protocol_version: AssignedValue<F>,
     pub(super) profile_id: [AssignedValue<F>; 2],
     pub(super) guard_profile_id: [AssignedValue<F>; 2],
+    pub(super) suite_id: [AssignedValue<F>; 2],
     pub(super) policy_epoch: AssignedValue<F>,
     pub(super) release_id: [AssignedValue<F>; 2],
     pub(super) key_reference: [AssignedValue<F>; 2],
@@ -59,6 +61,7 @@ pub(super) fn apple_policy_cells_from_state_guard_v1<F: KagemushaPoseidonFieldV1
         protocol_version: state.predecessor.protocol_version,
         profile_id: state.predecessor.hardware_profile_id,
         guard_profile_id: guard.hardware_profile_id,
+        suite_id: state.predecessor.suite_id,
         policy_epoch: state.predecessor.policy_epoch,
         release_id: state.predecessor.release_id,
         key_reference: state.predecessor.key_reference,
@@ -71,6 +74,10 @@ pub(super) fn apple_policy_cells_from_state_guard_v1<F: KagemushaPoseidonFieldV1
 /// Authenticated RP/App ID bytes passed unchanged to assertion SHA.
 pub(super) struct AppleGovernedAppBytesV1<F: KagemushaPoseidonFieldV1> {
     pub(super) rp_id_hash: [AssignedValue<F>; 32],
+    /// Firmware policy and issuance window opened by the authenticated profile ID.
+    pub(super) firmware_policy_digest: [PastaSha256ByteV1<F>; 32],
+    pub(super) valid_from_ms: AssignedValue<F>,
+    pub(super) expires_at_ms: AssignedValue<F>,
 }
 
 fn uint_le<F: KagemushaPoseidonFieldV1>(
@@ -172,6 +179,20 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
     let field = |index: usize| {
         &profile_bytes[KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1[index].clone()]
     };
+    let profile_time = |ctx: &mut Context<F>, bytes: &[PastaSha256ByteV1<F>]| {
+        gate.inner_product(
+            ctx,
+            bytes.iter().copied().map(PastaSha256ByteV1::quantum_cell),
+            (0..8).map(|index| halo2_base::QuantumCell::Constant(F::from(1_u64 << (8 * index)))),
+        )
+    };
+    let valid_from_ms = profile_time(ctx, field(13));
+    let expires_at_ms = profile_time(ctx, field(14));
+    let valid_window = range.is_less_than(ctx, valid_from_ms, expires_at_ms, 64);
+    gate.assert_is_const(ctx, &valid_window, &F::ONE);
+    let firmware_policy_digest = field(5)
+        .try_into()
+        .expect("fixed profile firmware digest width");
     for (actual, expected) in [
         (
             field(0),
@@ -210,6 +231,23 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
     let profile_digest = guard_bundle::hash(ctx, jobs, profile_message)?;
     bind_digest_to_limbs(ctx, &profile_digest, authenticated.profile_id);
     bind_digest_to_limbs(ctx, &profile_digest, authenticated.guard_profile_id);
+    // The profile ID commits to a suite commitment, but a separate relation
+    // must prove that it names the suite in the recursively authenticated State.
+    let mut suite_message = guard_bundle::constant_bytes(SUITE_COMMITMENT_DOMAIN);
+    suite_message.push(PastaSha256ByteV1::constant(0));
+    suite_message.extend(guard_bundle::constant_bytes(&32_u64.to_le_bytes()));
+    suite_message.extend(digest_le(ctx, &range, authenticated.suite_id));
+    let suite_commitment = guard_bundle::hash(ctx, jobs, suite_message)?;
+    for (actual, expected) in suite_commitment.iter().zip(field(8)) {
+        ctx.constrain_equal(
+            &actual
+                .assigned()
+                .expect("suite commitment SHA byte assigned"),
+            &expected
+                .assigned()
+                .expect("governed profile suite byte assigned"),
+        );
+    }
 
     let policy_bytes = guard_bundle::assign_bytes(ctx, &range, &policy_opening.bytes);
     for (actual, expected) in policy_bytes[..AUTHORITY_DOMAIN.len()]
@@ -297,6 +335,9 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
             .collect::<Vec<_>>()
             .try_into()
             .expect("RP width"),
+        firmware_policy_digest,
+        valid_from_ms,
+        expires_at_ms,
     })
 }
 
@@ -467,6 +508,8 @@ mod tests {
         SignedAppBinding,
         SignedCredentialId,
         GuardCredentialId,
+        StateSuite,
+        ProfileSuite,
     }
 
     fn assigned_digest<F: KagemushaPoseidonFieldV1>(
@@ -560,6 +603,7 @@ mod tests {
                 profile.platform_class = KagemushaHardwarePlatformClassV1::AndroidKeyMint;
             }
             Mutation::ProfileMask => profile.capability_mask ^= 1,
+            Mutation::ProfileSuite => profile.allowed_suite_commitment[0] ^= 1,
             Mutation::GuardAppBinding => app_binding[0] ^= 1,
             _ => {}
         }
@@ -602,6 +646,14 @@ mod tests {
             protocol_version: ctx.load_witness(F::from(1_u64)),
             profile_id: assigned_digest(ctx, authenticated_profile),
             guard_profile_id: assigned_digest(ctx, authenticated_profile),
+            suite_id: assigned_digest(
+                ctx,
+                if matches!(mutation, Mutation::StateSuite) {
+                    [7; 32]
+                } else {
+                    [6; 32]
+                },
+            ),
             policy_epoch: ctx.load_witness(F::from(if matches!(mutation, Mutation::PolicyEpoch) {
                 8_u64
             } else {
@@ -669,6 +721,8 @@ mod tests {
             Mutation::SignedAppBinding,
             Mutation::SignedCredentialId,
             Mutation::GuardCredentialId,
+            Mutation::StateSuite,
+            Mutation::ProfileSuite,
         ] {
             assert!(!check::<Fp>(mutation));
             assert!(!check::<Fq>(mutation));

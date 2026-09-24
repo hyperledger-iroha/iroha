@@ -73,7 +73,7 @@ use iroha_data_model::{
             RelayEpochMetricsV1, RelayRewardInstructionV1,
         },
     },
-    transaction::{FeePaymentIntent, SignedTransaction},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
@@ -8819,6 +8819,7 @@ fn build_moderation_transaction(
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
     )?;
     Ok(account.sign_transaction(payload)?)
@@ -10258,11 +10259,14 @@ fn build_repair_action_transaction(
     {
         let account = client.account_client()?;
         account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [instruction],
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
+            .prepare_transaction(
+                AccountTransactionDraft::new(
+                    [instruction],
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                )
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+            )
             .and_then(|payload| account.sign_transaction(payload))
     }
     .wrap_err("failed to build caller-signed native SoraFS repair transaction")
@@ -19143,6 +19147,10 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 format: "json".to_string(),
             };
             args.run_with(&mut ctx, |_client, transaction| {
+                assert_eq!(
+                    transaction.admission_intent(),
+                    TransactionAdmissionIntent::QueuePlanSynced
+                );
                 assert_eq!(moderation_commit_from_transaction(transaction), commit);
                 Ok(transaction.hash())
             })
@@ -21270,6 +21278,10 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             };
             let mut ctx = TestContext::new();
             args.run_with(&mut ctx, |_client, transaction| {
+                assert_eq!(
+                    transaction.admission_intent(),
+                    TransactionAdmissionIntent::QueuePlanSynced
+                );
                 let apply = single_repair_action(transaction);
                 assert_eq!(apply.ticket_id, "REP-501");
                 assert_eq!(apply.expected_revision, 2);

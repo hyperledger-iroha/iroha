@@ -72,6 +72,31 @@ export * from "./dist/toriiBrowserExplorerTypes.js";
 export type * from "./dist/subscriptionTypes.js";
 export * from "./dist/sorafsOrderbookSubmission.js";
 
+/** One raw contract-state value under a separately trusted accumulated root. */
+export interface ContractStateValueInclusionProofV1 {
+  readonly version: 1;
+  readonly path: string;
+  readonly value: ReadonlyArray<number> | Uint8Array;
+  readonly leaf_count: number | string;
+  readonly steps: ReadonlyArray<{
+    readonly bit: number;
+    readonly prefix: ReadonlyArray<number> | Uint8Array;
+    readonly sibling: string | Uint8Array;
+  }>;
+}
+/** Verify exact key/value membership; the caller authenticates trustedRoot through v2 finality. */
+export function verifyContractStateValueInclusionV1(
+  proof: ContractStateValueInclusionProofV1,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+/** Decode duplicate-key-free Torii JSON and verify against an authenticated root. */
+export function verifyContractStateValueInclusionJsonV1(
+  payload: string | Uint8Array,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+
 export type JsonValue =
   | null
   | boolean
@@ -2109,6 +2134,7 @@ export interface IdentifierPolicySummary {
   normalization: string;
   resolver_public_key: string;
   output_opening_public_key: string;
+  phone_retail_attestor_public_key?: string;
   backend: string;
   input_encryption?: string;
   input_encryption_public_parameters?: string;

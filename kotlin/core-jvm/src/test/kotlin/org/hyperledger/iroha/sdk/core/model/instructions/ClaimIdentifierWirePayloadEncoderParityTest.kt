@@ -38,7 +38,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         val fixtureHash = lines[3]
 
         val payload = IdentifierResolutionPayload(
-            policyId = "phone#e164",
+            policyId = "email#retail",
             execution = IdentifierResolutionExecutionPayload(
                 programId = "parity_test",
                 programDigest = fixtureHash,
@@ -192,6 +192,25 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
             paddedErr.message?.contains("accountId must not contain surrounding whitespace") == true,
             "padded ClaimIdentifier account must fail before encoding",
         )
+    }
+
+    @Test
+    fun `claim identifier refuses phone receipt without canonicality encoding`() {
+        val accountId = sampleAuthority(0x41)
+        val receipt = IdentifierResolutionReceipt(
+            payload = samplePayload(accountId = accountId),
+            attestation = IdentifierReceiptAttestation(
+                kind = "signed",
+                signature = "A1B2C3D4",
+                proofBackend = null,
+                proofB64 = null,
+            ),
+        )
+
+        val err = assertFailsWith<IllegalArgumentException> {
+            ClaimIdentifierWirePayloadEncoder.encode(accountId, receipt)
+        }
+        assertTrue(err.message?.contains("canonicality attestation encoder") == true)
     }
 
     @Test

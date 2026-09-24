@@ -2,9 +2,10 @@
 //!
 //! The 409-byte Norito frame is assembled from assigned Guard/profile cells, including
 //! its constrained CRC64-XZ, then SHA-bound to the provider-authenticated Guard ID.
-//! This does not verify issuer signature, app enrollment, profile lifetime or assertion.
-// TODO: Wire the authenticated firmware/profile lifetime and exact issuer credential
-// signature into both recursive parities before monetary admission.
+//! This constrains the profile lifetime but does not verify the issuer signature,
+//! app enrollment, or assertion.
+// TODO: Wire the exact issuer credential signature and enrollment evidence into
+// both live recursive parities before monetary admission.
 
 use halo2_base::{
     AssignedValue, Context,
@@ -33,9 +34,9 @@ const CREDENTIAL_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-credential-id"
 
 /// Assigned semantic fields of the provider-authenticated predecessor credential.
 ///
-/// `firmware_policy_digest` must come from the governed profile opening. The two
-/// lifetime cells must be range/validity checked against that same profile before
-/// this ID opening can authorize a monetary transition.
+/// `firmware_policy_digest` and the profile lifetime must come from the same
+/// governed profile opening. This relation constrains the credential's entire
+/// validity window to lie within that profile window.
 pub(super) struct AppleCompactCredentialIdCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) network_id: [AssignedValue<F>; 2],
     pub(super) hardware_profile_id: [AssignedValue<F>; 2],
@@ -47,6 +48,9 @@ pub(super) struct AppleCompactCredentialIdCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) epoch_generation: AssignedValue<F>,
     pub(super) device_public_key: Vec<PastaSha256ByteV1<F>>,
     pub(super) key_reference: [AssignedValue<F>; 2],
+    /// Issuance window opened by the same governed profile ID.
+    pub(super) profile_valid_from_ms: AssignedValue<F>,
+    pub(super) profile_expires_at_ms: AssignedValue<F>,
     pub(super) issued_at_ms: AssignedValue<F>,
     pub(super) expires_at_ms: AssignedValue<F>,
     pub(super) app_policy_binding_digest: [PastaSha256ByteV1<F>; 32],
@@ -58,13 +62,6 @@ pub(super) struct AppleCompactCredentialIdCellsV1<F: KagemushaPoseidonFieldV1> {
 /// All fourteen semantic fields use already assigned cells; only fixed codec
 /// framing comes from the model layout. The resulting digest is copy-equal to
 /// the provider-authenticated predecessor issuance field in both Pasta parities.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 pub(super) fn constrain_apple_compact_credential_id_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -84,8 +81,18 @@ pub(super) fn constrain_apple_compact_credential_id_v1<F: KagemushaPoseidonField
     );
     range.range_check(ctx, fields.issued_at_ms, 64);
     range.range_check(ctx, fields.expires_at_ms, 64);
+    range.range_check(ctx, fields.profile_valid_from_ms, 64);
+    range.range_check(ctx, fields.profile_expires_at_ms, 64);
     let valid_window = range.is_less_than(ctx, fields.issued_at_ms, fields.expires_at_ms, 64);
     gate.assert_is_const(ctx, &valid_window, &F::ONE);
+    // The credential's entire issuance window must fit the profile window
+    // whose SHA-256 digest is already bound to the authenticated release.
+    let issued_before_profile =
+        range.is_less_than(ctx, fields.issued_at_ms, fields.profile_valid_from_ms, 64);
+    gate.assert_is_const(ctx, &issued_before_profile, &F::ZERO);
+    let expires_after_profile =
+        range.is_less_than(ctx, fields.profile_expires_at_ms, fields.expires_at_ms, 64);
+    gate.assert_is_const(ctx, &expires_after_profile, &F::ZERO);
     let values: [Vec<PastaSha256ByteV1<F>>; 14] = [
         constant_bytes(&KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes()),
         assigned_digest_bytes_v1(ctx, gate, fields.network_id),
@@ -296,6 +303,8 @@ mod tests {
             epoch_generation: ctx.load_witness(F::from(credential.hardware_epoch_generation)),
             device_public_key: assign_bytes(ctx, &range, &key),
             key_reference: assign_digest(ctx, credential.device_key_reference),
+            profile_valid_from_ms: ctx.load_witness(F::from(if mutation == 4 { 101 } else { 100 })),
+            profile_expires_at_ms: ctx.load_witness(F::from(if mutation == 5 { 899 } else { 900 })),
             issued_at_ms: ctx.load_witness(F::from(credential.issued_at_ms)),
             expires_at_ms: ctx.load_witness(F::from(credential.expires_at_ms)),
             app_policy_binding_digest: assign_bytes(
@@ -321,8 +330,9 @@ mod tests {
     }
 
     #[test]
-    fn canonical_credential_id_opening_rejects_mutated_guard_id_network_and_key_in_both_fields() {
-        for mutation in 0..=3 {
+    fn canonical_credential_id_opening_rejects_mutated_identity_and_profile_window_in_both_fields()
+    {
+        for mutation in 0..=5 {
             assert_eq!(check::<Fp>(mutation), mutation == 0);
             assert_eq!(check::<Fq>(mutation), mutation == 0);
         }

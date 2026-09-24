@@ -8,10 +8,7 @@ use iroha_data_model::isi::consensus_keys::{
     ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleCertificateV1,
 };
 
-fn certificate(transaction: &TransactionEntrypoint) -> Option<&ThresholdKeyLifecycleCertificateV1> {
-    let TransactionEntrypoint::External(transaction) = transaction else {
-        return None;
-    };
+fn certificate(transaction: &SignedTransaction) -> Option<&ThresholdKeyLifecycleCertificateV1> {
     if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary
         || transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
@@ -38,10 +35,7 @@ pub(super) fn authenticate(
     transaction: &TransactionEntrypoint,
     routing_plan: &RoutingPlan,
 ) -> Result<(), String> {
-    let TransactionEntrypoint::External(signed) = transaction else {
-        return Err("ordinary ingress requires one external signed transaction".to_owned());
-    };
-    if signed.admission_intent() != TransactionAdmissionIntent::Ordinary {
+    if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary {
         return Err("ordinary ingress requires a signature-bound ordinary intent".to_owned());
     }
     if !matches!(routing_plan, RoutingPlan::Single(_)) {
@@ -49,6 +43,11 @@ pub(super) fn authenticate(
             "multi-route transactions require signature-bound QueuePlanSynced admission".to_owned(),
         );
     }
+    let signed = match transaction {
+        TransactionEntrypoint::External(signed) => signed,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+        TransactionEntrypoint::SealedCommitment(_) => return Ok(()),
+    };
     if !signed
         .instructions()
         .explicit_instructions()
@@ -61,7 +60,7 @@ pub(super) fn authenticate(
     {
         return Ok(());
     }
-    let certificate = certificate(transaction)
+    let certificate = certificate(signed)
         .ok_or_else(|| "lifecycle instruction must be one exact certificate".to_owned())?;
     let global_route = resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
         .map_err(|error| format!("lifecycle global route is unavailable: {error}"))?;

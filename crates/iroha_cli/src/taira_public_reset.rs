@@ -95,6 +95,10 @@ mod deployment_profile;
 mod inputs;
 #[path = "taira_public_reset_public_inputs.rs"]
 mod public_inputs;
+#[path = "taira_public_reset_runtime_clients.rs"]
+mod runtime_clients;
+#[path = "taira_public_reset_validator_units.rs"]
+mod validator_units;
 
 #[cfg(test)]
 pub(crate) fn deployment_genesis_fixture()
@@ -136,6 +140,8 @@ enum PublicResetCommand {
     ),
     /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
     PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
+    /// Derive one fresh typed topology intent from an applied transition and new public inputs.
+    PrepareTopologyIntent(host::dispatcher_transition::prepare::topology::PrepareTopologyIntent),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
@@ -148,8 +154,12 @@ enum PublicResetCommand {
     OperatorKeygen(config::OperatorKeygen),
     /// Derive and validate the complete public genesis and canary bundle without private keys.
     PreparePublicInputs(public_inputs::PreparePublicInputs),
+    /// Prepare exact private client configs and public validator/faucet identities from native inputs.
+    PrepareRuntimeClients(runtime_clients::PrepareRuntimeClients),
     /// Derive the nonce-bound public beacon request and exact renderer seat paths.
     PrepareBeaconInputs(inputs::PrepareBeaconInputs),
+    /// Render four public validator units from the embedded signed custody renderer.
+    PrepareValidatorUnits(validator_units::PrepareValidatorUnits),
     /// Export a public deployment target profile from assembled inventory and native inputs.
     ExportDeploymentProfile(deployment_profile::ExportDeploymentProfile),
     /// Assemble exact release inputs locally from an explicit inventory draft.
@@ -349,6 +359,7 @@ impl PublicReset {
                 return args.run(&mut output);
             }
             PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::PrepareTopologyIntent(args) => return args.run(&mut output),
             PublicResetCommand::SourceManifest(args) => {
                 source::export_manifest(&args.source_root, &mut output)?;
                 return Ok(());
@@ -373,8 +384,16 @@ impl PublicReset {
                 public_inputs::prepare(args, &mut output)?;
                 return Ok(());
             }
+            PublicResetCommand::PrepareRuntimeClients(args) => {
+                runtime_clients::prepare(args, &mut output)?;
+                return Ok(());
+            }
             PublicResetCommand::PrepareBeaconInputs(args) => {
                 inputs::prepare_beacon_inputs(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::PrepareValidatorUnits(args) => {
+                validator_units::prepare(args, &mut output)?;
                 return Ok(());
             }
             PublicResetCommand::ExportDeploymentProfile(args) => {

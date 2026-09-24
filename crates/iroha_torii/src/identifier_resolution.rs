@@ -280,6 +280,10 @@ impl IdentifierResolutionService {
             || policy.normalization != IdentifierNormalization::PhoneE164
             || policy.program_id.to_string() != "phone_retail"
             || policy.program_id != program_policy.program_id
+            || policy.owner != program_policy.owner
+            || program_policy.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program_policy.commitment.backend != program_policy.backend
+            || program_policy.verification_mode != RamLfeVerificationMode::Signed
         {
             return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
                 "policy or program is not the pinned phone#retail contract".to_owned(),
@@ -883,23 +887,6 @@ mod tests {
             other => panic!("unsupported fixture attestation kind `{other}`"),
         }
     }
-    fn shared_fixture_program_policy(
-        payload: &IdentifierResolutionReceiptPayload,
-        signer: &KeyPair,
-    ) -> RamLfeProgramPolicy {
-        RamLfeProgramPolicy::new(
-            payload.execution.program_id.clone(),
-            payload.account_id.clone(),
-            payload.execution.backend,
-            payload.execution.verification_mode,
-            PolicyCommitment {
-                backend: payload.execution.backend,
-                policy_hash: Hash::new(b"shared-identifier-receipt-fixture-policy"),
-                public_parameters: Vec::new(),
-            },
-            signer.public_key().clone(),
-        )
-    }
     fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
         match raw {
             "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
@@ -944,65 +931,29 @@ mod tests {
         );
     }
     #[test]
-    fn torii_issue_claim_receipt_matches_shared_identifier_fixture() {
+    fn shared_identifier_receipt_signature_matches_fixture() {
+        // This vector fixes Norito payload and signature bytes. Its synthetic program
+        // and hashes do not satisfy phone#retail admission rules.
         let fixture = shared_identifier_receipt_fixture();
         assert_eq!(
             fixture_str(&fixture, "vector_set"),
             "identifier-receipt-attestation-v1"
         );
-        let fixture_receipt = receipt_from_fixture(fixture_object(&fixture, "receipt"));
-        let fixture_payload = &fixture_receipt.payload;
-        let policy = IdentifierPolicy::new(
-            fixture_payload.policy_id.clone(),
-            fixture_payload.account_id.clone(),
-            IdentifierNormalization::PhoneE164,
-            fixture_payload.execution.program_id.clone(),
-        );
+        let receipt = receipt_from_fixture(fixture_object(&fixture, "receipt"));
         let signing_seed = hex::decode(fixture_str(&fixture, "signing_seed_hex"))
             .expect("fixture signing seed must be hex");
         let signer = checked_fixture_keypair(signing_seed, Algorithm::Ed25519);
-        let mut program_policy = shared_fixture_program_policy(&fixture_payload, &signer);
-        let service = IdentifierResolutionService::new();
-        service.register_program_runtime(
-            program_policy.program_id.clone(),
-            RamLfeSecret::try_from(b"shared-identifier-receipt-fixture".to_vec())
-                .expect("valid RAM-LFE test secret"),
-            default_bfv_programmed_hidden_program(),
-            signer.clone(),
-            None,
-        );
-        let draft = IdentifierResolutionDraft {
-            opaque_id: fixture_payload.opaque_id,
-            receipt_hash: fixture_payload.receipt_hash,
-            resolved_at_ms: fixture_payload.execution.executed_at_ms,
-            expires_at_ms: fixture_payload.execution.expires_at_ms,
-            backend: fixture_payload.execution.backend,
-            output_hash: fixture_payload.execution.output_hash,
-            input_ciphertext_hash: fixture_payload.execution.input_ciphertext_hash,
-            output_ciphertext_hash: fixture_payload.execution.output_ciphertext_hash,
-            program_digest: fixture_payload.execution.program_digest,
-            parameter_digest: fixture_payload.execution.parameter_digest,
-            evaluation_key_digest: fixture_payload.execution.evaluation_key_digest,
-            verification_mode: fixture_payload.execution.verification_mode,
-            opening: fixture_payload.opening.clone(),
+        let signature: Signature = SignatureOf::try_new(signer.private_key(), &receipt.payload)
+            .expect("sign shared identifier payload")
+            .into();
+        let RamLfeReceiptAttestation::Signed(recorded_signature) = &receipt.attestation else {
+            panic!("shared fixture receipt must be signed");
         };
-        let issued = service
-            .issue_claim_receipt(
-                &policy,
-                &program_policy,
-                &draft,
-                fixture_payload.uaid,
-                fixture_payload.account_id.clone(),
-            )
-            .expect("Torii must issue fixture receipt");
-        assert_eq!(fixture_payload, &issued.payload);
+        assert_eq!(recorded_signature.payload(), signature.payload());
         assert_eq!(
             fixture_str(&fixture, "canonical_payload_sha256"),
-            sha256_hex(&issued.payload.encode())
+            sha256_hex(&receipt.payload.encode())
         );
-        let RamLfeReceiptAttestation::Signed(signature) = &issued.attestation else {
-            panic!("issued fixture receipt must be signed");
-        };
         assert_eq!(
             fixture_str(
                 fixture_object(fixture_object(&fixture, "receipt"), "attestation"),
@@ -1016,45 +967,19 @@ mod tests {
             .expect("fixture signed attestation vector");
         assert_eq!(
             fixture_str(signed_attestation_vector, "expected_attestation_sha256"),
-            sha256_hex(&issued.attestation.encode()),
+            sha256_hex(&receipt.attestation.encode()),
         );
-        issued
-            .verify(&program_policy.resolver_public_key)
-            .expect("issued fixture signature must verify");
-        let mut wrong_resolver_policy = program_policy.clone();
-        wrong_resolver_policy.resolver_public_key = public_key_literal(fixture_str(
+        receipt
+            .verify(signer.public_key())
+            .expect("shared fixture signature must verify");
+        let wrong_key = public_key_literal(fixture_str(
             fixture_array(&fixture, "negative_cases")
                 .iter()
                 .find(|case| fixture_str(case, "name") == "wrong-resolver-key")
                 .expect("fixture wrong-resolver-key case"),
             "value",
         ));
-        let err = service
-            .issue_claim_receipt(
-                &policy,
-                &wrong_resolver_policy,
-                &draft,
-                fixture_payload.uaid,
-                fixture_payload.account_id.clone(),
-            )
-            .expect_err("mismatched fixture resolver key must reject at Torii signing");
-        assert!(matches!(err, IdentifierResolutionError::SignerMismatch));
-        let mut proof_draft = draft;
-        proof_draft.verification_mode = RamLfeVerificationMode::Proof;
-        program_policy.verification_mode = RamLfeVerificationMode::Proof;
-        let err = service
-            .issue_claim_receipt(
-                &policy,
-                &program_policy,
-                &proof_draft,
-                fixture_payload.uaid,
-                fixture_payload.account_id.clone(),
-            )
-            .expect_err("Torii cannot issue proof-mode receipts without prover support");
-        assert!(matches!(
-            err,
-            IdentifierResolutionError::ProofModeUnsupported
-        ));
+        assert!(receipt.verify(&wrong_key).is_err());
     }
     #[test]
     fn runtime_lookup_shares_allocation_and_debug_redacts_runtime_material() {

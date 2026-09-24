@@ -4,9 +4,9 @@ use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
     beacon,
-    kura::{BlockIndex, BlockStore},
+    kura::{BlockIndex, BlockStore, Kura},
 };
-use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
     consensus::GlobalThresholdBeaconChainAnchorV1,
@@ -268,17 +268,16 @@ async fn status_height(clients: &[iroha::client::Client], deadline: Instant) -> 
                     .map(|client| validator_status_until(client, deadline)),
             )
             .await?;
-            if statuses
-                .iter()
-                .all(|s| s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0)
-            {
+            if statuses.iter().all(|s| {
+                s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0 && s.peers == 3
+            }) {
                 return Ok(statuses[0].blocks);
             }
             sleep(Duration::from_millis(200)).await;
         }
     })
     .await
-    .wrap_err("four validators did not reach the same drained committed height")?
+    .wrap_err("four validators did not reach the same drained committed height and full mesh")?
 }
 fn exact_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
@@ -985,10 +984,8 @@ fn verify_pulse(
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
         epoch_length == epoch_retention::EPOCH_LENGTH,
-        "fixture must exercise the real catalog merge at mandatory height 10"
+        "fixture must exercise the native catalog decision at mandatory height 10"
     );
-    let catalog_tree: MerkleTree<TransactionEntrypoint> =
-        [catalog_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -1008,31 +1005,39 @@ fn verify_pulse(
         // All fixture children have stopped. This is a strict read-only native
         // journal reader, so validation cannot repair or rewrite the evidence.
         let native = config(config_path)?;
-        let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+        let mut store = BlockStore::open_read_only(
+            Kura::canonical_storage_paths(native.kura.store_dir.value()).0,
+        )?;
         ensure!(
             store.read_index_count()? >= epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact native catalog
-        // transaction as Applied on all four peers. Bind it to the sole leaf of
-        // the execution-bearing merge at the mandatory pulse height, excluding
-        // unrelated transactions, QueuePlan admissions and anchor padding.
+        // Native completion has already authenticated this exact catalog
+        // transaction as Applied on all four peers. The first-release carrier
+        // executes it through a native lane decision, not a merge entry. Bind
+        // the sole native decision to this pulse and exclude unrelated work.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("catalog transaction did not execute on the mandatory pulse carrier")
+        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
+            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
         })?;
+        decisions
+            .validate_structure()
+            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
         ensure!(
-            reference.execution_batch_hash.is_some()
-                && reference.entrypoint_count == Some(1)
-                && reference.entrypoint_merkle_root == catalog_tree.root()
+            decisions.base_state_height == anchor_height
+                && decisions.groups.len() == 1
+                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
+                && decisions.groups[0].payload.descriptor.slots.len() == 1
+                && context.merge_entry.is_none()
                 && block.external_entrypoint_count() == 0
                 && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native catalog merge"
+                && context.autonomous_lane_payloads.is_empty()
+                && context.lane_payload_ownerships.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
         );
         // Canonical QueuePlan admissions and autonomous anchors are genuine
         // protocol content even when they contain no external transaction row.
@@ -1129,6 +1134,7 @@ impl Runtime<'_> {
         for index in 0..4 {
             ready(self.api + index, 200, deadline).await?;
         }
+        status_height(self.clients, deadline).await?;
         Ok(())
     }
     async fn signed_snapshot_restart(&mut self, applied_height: u64) -> Result<()> {
