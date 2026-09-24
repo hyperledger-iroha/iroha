@@ -225,10 +225,12 @@ async fn solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429() {
     let waiting_app = Arc::clone(&app);
     let waiter =
         tokio::spawn(async move { acquire_query_admission(waiting_app.as_ref(), true).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // A healthy solo burst must not receive 429 merely because one occupied
+    // heavy-query wave takes longer than the former one-second deadline.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert!(
         !waiter.is_finished(),
-        "the 33rd heavy read must wait for a permit"
+        "the next heavy read must wait for a permit"
     );
     drop(active.pop());
     let admitted = tokio::time::timeout(Duration::from_secs(2), waiter)

@@ -221,9 +221,9 @@ pub(crate) use terminal_authorization::{
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use testnet_observation::{
-    KagemushaTestnetLineageTrialV1, KagemushaTestnetProofObservationOwnerV1,
-    KagemushaTestnetStateObservationScopeV1, KagemushaTestnetStateProofObservationV1,
-    observe_kagemusha_testnet_state_proof_v1,
+    KagemushaTestnetFinalizedMintObservationV1, KagemushaTestnetLineageTrialV1,
+    KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
+    KagemushaTestnetStateProofObservationV1, observe_kagemusha_testnet_state_proof_v1,
 };
 
 use iroha_data_model::isi::KagemushaRedemptionRequestV1;

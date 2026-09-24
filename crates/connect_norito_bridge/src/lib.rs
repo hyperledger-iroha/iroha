@@ -171,9 +171,9 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaEnrollmentJournalResultV1, KagemushaEnrollmentJournalSelectionV1,
     KagemushaEnrollmentJournalStoreV1, KagemushaEnrollmentLiveSelectionV1,
     KagemushaEnrollmentPhaseOneBackendV1, KagemushaEnrollmentProvisionedContextV1,
-    KagemushaExclusiveCoordinatorBackendV1, KagemushaKernelEnrollmentDelegateV1,
-    KagemushaQualifiedEnrollmentDelegateV1, PendingIssuerEnrollmentV1, PreparedIssuerProofV1,
-    SignedAppPreparationErrorV1, SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
+    KagemushaKernelEnrollmentDelegateV1, KagemushaQualifiedEnrollmentDelegateV1,
+    PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
+    SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
     install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
     kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
     kagemusha_core_coordinator_encode_response_v1,
@@ -1467,8 +1467,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_open_v1(
 ///
 /// The bridge strictly validates the closed method and request frame before
 /// dispatch to the process's install-once backend. It then bounds and validates
-/// the complete response frame before exposure. A monetary result is never
-/// synthesized from host input, and no installed backend means unavailable.
+/// the complete response frame and publishes it while the sole owner lock is held.
+/// A delegated error, invalid response or failed output allocation revokes this
+/// process's handle so recovery starts from authenticated durable state in a new
+/// process. A monetary result is never synthesized from host input, and no
+/// installed backend means unavailable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     handle: u64,
@@ -1511,52 +1514,26 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
-    let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
-            backend.invoke_initial_enrollment(handle, &request_frame)
-        } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
-            backend.acknowledge_committed_app_attest(handle, &request_frame)
-        } else if method == KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof {
-            let fields = kagemusha_core_coordinator_decode_request_v1(&request_frame)
-                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
-            let operation_id: [u8; 32] = fields[0]
-                .as_slice()
-                .try_into()
-                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
-            let pair = backend.export_outgoing_state_proof(handle, operation_id)?;
-            if pair.operation_id != operation_id {
-                return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
-            }
-            kagemusha_core_coordinator_encode_response_v1(&[
-                pair.operation_id.to_vec(),
-                pair.public_inputs_archive,
-                pair.paired_proof_archive,
-            ])
-            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
-        } else {
-            backend.invoke(handle, method, &request_frame)
-        }
-    })) {
-        Ok(Ok(response_frame)) => response_frame,
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
-            return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
-        }
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => {
-            return ERR_KAGEMUSHA_V1;
-        }
-    };
-    if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-        || kagemusha_core_coordinator_v1::archive_boundary::validate_response(
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(
+            handle,
             method,
             &request_frame,
-            &response_frame,
+            |response_frame| unsafe { write_bytes_usize(output_ptr, output_len, response_frame) },
         )
-        .is_err()
-    {
-        return ERR_KAGEMUSHA_V1;
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Unavailable,
+        ))) => ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+        )))
+        | Err(_) => ERR_KAGEMUSHA_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Output(
+            error,
+        ))) => error,
     }
-    unsafe { write_bytes_usize(output_ptr, output_len, &response_frame) }
-        .map_or_else(|error| error, |()| 0)
 }
 
 /// Revoke an opened coordinator handle before delegating hardware-session teardown.
@@ -11015,12 +10992,12 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     method: jni::sys::jint,
     fields: jni::objects::JObjectArray<'_>,
 ) -> jni::sys::jobjectArray {
-    let Ok(method) = u8::try_from(method) else {
+    let Ok(method_code) = u8::try_from(method) else {
         return ptr::null_mut();
     };
-    if KagemushaCoreCoordinatorMethodV1::from_code(method).is_none() {
+    let Some(method) = KagemushaCoreCoordinatorMethodV1::from_code(method_code) else {
         return ptr::null_mut();
-    }
+    };
     let Ok(field_count) = env.get_array_length(&fields) else {
         return ptr::null_mut();
     };
@@ -11061,57 +11038,37 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     };
 
     let handle = u64::from_ne_bytes(handle.to_ne_bytes());
-    let mut output_ptr = ptr::null_mut();
-    let mut output_len = 0_usize;
-    let status = unsafe {
-        connect_norito_kagemusha_core_coordinator_invoke_v1(
-            handle,
-            method,
-            request_frame.as_ptr(),
-            request_frame.len(),
-            &mut output_ptr,
-            &mut output_len,
-        )
-    };
-    if status != 0 {
-        connect_norito_free(output_ptr);
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
         return ptr::null_mut();
+    };
+    // JNI publication is part of the same exclusive hardware operation. A Java allocation
+    // failure after dispatch has an uncertain monetary effect: the checked owner revokes the
+    // handle before another invocation can select a successor.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(handle, method, &request_frame, |response_frame| {
+            let response_fields =
+                kagemusha_core_coordinator_decode_response_v1(response_frame).map_err(|_| ())?;
+            let byte_array_class = env.find_class("[B").map_err(|_| ())?;
+            let output = env
+                .new_object_array(
+                    response_fields.len() as jni::sys::jsize,
+                    byte_array_class,
+                    jni::objects::JObject::null(),
+                )
+                .map_err(|_| ())?;
+            for (index, field) in response_fields.iter().enumerate() {
+                let field = env.byte_array_from_slice(field).map_err(|_| ())?;
+                env.set_object_array_element(&output, index as jni::sys::jsize, &field)
+                    .map_err(|_| ())?;
+            }
+            Ok::<_, ()>(output.into_raw())
+        })
+    })) {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) | Err(_) => ptr::null_mut(),
     }
-    if output_ptr.is_null()
-        || output_len == 0
-        || output_len > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-    {
-        connect_norito_free(output_ptr);
-        return ptr::null_mut();
-    }
-    let response_frame = unsafe { slice::from_raw_parts(output_ptr, output_len) }.to_vec();
-    connect_norito_free(output_ptr);
-    let Ok(response_fields) = kagemusha_core_coordinator_decode_response_v1(&response_frame) else {
-        return ptr::null_mut();
-    };
-
-    let Ok(byte_array_class) = env.find_class("[B") else {
-        return ptr::null_mut();
-    };
-    let Ok(output) = env.new_object_array(
-        response_fields.len() as jni::sys::jsize,
-        byte_array_class,
-        jni::objects::JObject::null(),
-    ) else {
-        return ptr::null_mut();
-    };
-    for (index, field) in response_fields.iter().enumerate() {
-        let Ok(field) = env.byte_array_from_slice(field) else {
-            return ptr::null_mut();
-        };
-        if env
-            .set_object_array_element(&output, index as jni::sys::jsize, &field)
-            .is_err()
-        {
-            return ptr::null_mut();
-        }
-    }
-    output.into_raw()
 }
 
 #[cfg(any(

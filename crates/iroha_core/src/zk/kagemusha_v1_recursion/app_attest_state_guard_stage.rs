@@ -1,9 +1,11 @@
 //! Staged composition of the Apple assertion with authenticated State and Guard cells.
 //!
-//! The signed terminal-body commitment and issuer enrollment authority still lack
-//! complete circuit-derived links. This stage is deliberately not a monetary gate.
-// TODO: Bind the exact terminal body and issuer enrollment proof before invoking
-// this stage from both live recursive parities.
+//! The terminal circuit copy-binds the SHA-derived body and the signed release, profile,
+//! candidate, credential and app-policy fields to authenticated sources. This assertion stage
+//! and issuer enrollment still must use those same assigned subject cells inside both live
+//! recursive parities. It is deliberately not a monetary gate.
+// TODO: Fold this assertion and issuer enrollment into the terminal relation using the exact
+// assigned signed subject returned by the terminal-body link.
 
 use halo2_base::{AssignedValue, gates::circuit::builder::BaseCircuitBuilder};
 use halo2_ecc::{bigint::ProperCrtUint, ecc::EcPoint};

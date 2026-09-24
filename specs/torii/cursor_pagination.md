@@ -91,7 +91,10 @@ starts also consume `torii.query_heavy_max_inflight`. The owned permits live in
 the blocking worker rather than the HTTP future, so disconnecting or cancelling
 a request cannot release capacity while executor validation or snapshot work is
 still running. Saturated workers wait only for
-`torii.query_queue_timeout_ms`; after that Torii returns `CapacityLimit`.
+`torii.query_queue_timeout_ms`; after that Torii returns `CapacityLimit`. The
+first-release defaults admit 256 total workers, at most 64 heavy workers, and
+let a saturated request wait up to 30 seconds. These finite bounds allow a
+single operator's proof-read burst to drain in waves without immediate 429s.
 
 ## Lifetime and reuse
 

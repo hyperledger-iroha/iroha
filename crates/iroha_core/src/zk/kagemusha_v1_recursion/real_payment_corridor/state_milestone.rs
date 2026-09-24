@@ -5,8 +5,10 @@
 //! proves internal TerminalAuthorization, and its separate wrapper diagnostic measures the
 //! genuine CommitWrapper protocol seed. The sender-closure diagnostic re-proves this chain under
 //! the actual wrapper identity. The funded sender fixture also opens its request-bound encrypted
-//! peer credit with a receiver-owned key. All entry points stop before payment finalization,
-//! receiver staging, and ReceiveFold; the 1024-handoff gate remains closed.
+//! peer credit with a receiver-owned key. The sender-closure entry point now finalizes the exact
+//! generated payment envelope in a private test verifier, but does not install a hardware-backed
+//! state-machine commit, stage the receiver, or prove ReceiveFold; the 1024-handoff gate remains
+//! closed.
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -17,6 +19,7 @@ use crate::zk::{
         KagemushaStateProofVerificationRequestV1, VerifiedKagemushaMintFinalityHelperV1,
         deferred_parent::kagemusha_protocol_structure_digest_v1,
         mint_authorization::mint_authorization_public_instances_v1,
+        native_backend::payment_terminal_public_inputs_v1,
         state_relation::PUBLIC_INSTANCE_COUNT,
         terminal_authorization::{
             KagemushaCommitEvidenceOpeningV1, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
@@ -245,13 +248,14 @@ impl DiagnosticMintStageProofV1 {
     }
 }
 
-/// Concrete test verifier pinned to generated protocols and retained private State proofs.
+/// Concrete test verifier pinned to generated protocols and retained private proof material.
 #[derive(Clone)]
 struct DiagnosticVerifier<'a> {
     funded: &'a RealFundedPrerequisite,
     keys: &'a StateKeys,
     artifacts: KagemushaRecursionArtifactsV1,
     states: Rc<RefCell<BTreeMap<DigestV1, Rc<KagemushaGeneratedRecursiveStateProofV1>>>>,
+    payments: Rc<RefCell<BTreeMap<DigestV1, Rc<wrapper::ProvenSenderWrapperV1>>>>,
 }
 
 impl DiagnosticVerifier<'_> {
@@ -354,6 +358,121 @@ impl DiagnosticVerifier<'_> {
                 .insert(proof.proof.semantic_digest, proof)
                 .is_none()
         );
+    }
+
+    /// Retain only an exact generated payment whose native Core projection and paired proof decide.
+    fn retain_payment(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
+        wrapper: Rc<wrapper::ProvenSenderWrapperV1>,
+    ) -> Result<(), String> {
+        ensure(
+            !self
+                .payments
+                .borrow()
+                .contains_key(&payment.proof.semantic_digest),
+            "diagnostic payment proof was already retained",
+        )?;
+        self.verify_retained_payment(request, payment, &wrapper)?;
+        let mut payments = self.payments.borrow_mut();
+        payments.insert(payment.proof.semantic_digest, wrapper);
+        Ok(())
+    }
+
+    /// Recompute the production payment column and decide both genuine wrapper equations.
+    fn verify_retained_payment(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
+        retained: &wrapper::ProvenSenderWrapperV1,
+    ) -> Result<(), String> {
+        payment
+            .validate_shape_against(request)
+            .map_err(|error| error.to_string())?;
+        let view = retained
+            .committed
+            .candidate
+            .recovery_view()
+            .map_err(|error| error.to_string())?;
+        let PreparedOutgoingRecoveryViewV1::Send {
+            request: original_request,
+            output,
+            encrypted_credit,
+            ..
+        } = view.prepared
+        else {
+            return Err("retained diagnostic wrapper is not a SendSplit".to_owned());
+        };
+        ensure(
+            request == original_request
+                && payment.output == *output
+                && payment.encrypted_credit.as_slice() == encrypted_credit
+                && payment.commit_certificate == retained.committed.commit_certificate
+                && payment.proof == retained.payment.proof
+                && request.release_id == self.artifacts.release_id
+                && payment.proof.eq_protocol_digest
+                    == self.artifacts.commit_wrapper_eq_protocol_digest
+                && payment.proof.ep_protocol_digest
+                    == self.artifacts.commit_wrapper_ep_protocol_digest,
+            "payment differs from the exact retained Core sender and wrapper",
+        )?;
+        let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&payment.proof.eq_history)
+            .map_err(|error| error.to_string())?;
+        let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&payment.proof.ep_history)
+            .map_err(|error| error.to_string())?;
+        let public = payment_terminal_public_inputs_v1(
+            request,
+            payment,
+            self.funded
+                .material
+                .authorization_relation
+                .statement
+                .context
+                .vk_digest,
+        )?;
+        let mut eq_instances = public.public_prefix::<Fp>()?;
+        eq_instances.extend(history_values::<Fp>(eq_history.as_bytes()));
+        let mut ep_instances = public.public_prefix::<Fq>()?;
+        ep_instances.extend(history_values::<Fq>(ep_history.as_bytes()));
+        ensure(
+            eq_instances == retained.payment.eq_public_instances
+                && ep_instances == retained.payment.ep_public_instances
+                && retained.incoming.eq_instances.len() == 1
+                && retained.incoming.eq_instances[0].as_slice() == eq_instances.as_slice()
+                && retained.incoming.ep_instances.len() == 1
+                && retained.incoming.ep_instances[0].as_slice() == ep_instances.as_slice()
+                && eq_history == retained.incoming.eq_history
+                && ep_history == retained.incoming.ep_history
+                && native_parent_protocol_digest_v1(
+                    &retained.eq_protocol,
+                    KagemushaPastaParityV1::Eq,
+                )? == payment.proof.eq_protocol_digest
+                && native_parent_protocol_digest_v1(
+                    &retained.ep_protocol,
+                    KagemushaPastaParityV1::Ep,
+                )? == payment.proof.ep_protocol_digest,
+            "Core payment public projection differs from the genuine wrapper",
+        )?;
+        let eq_current = decide_eq(
+            &self.funded.eq,
+            &retained.eq_protocol,
+            &payment.proof.eq_proof,
+            &eq_instances,
+            &eq_history,
+        )?;
+        let ep_current = decide_ep(
+            &self.funded.ep,
+            &retained.ep_protocol,
+            &payment.proof.ep_proof,
+            &ep_instances,
+            &ep_history,
+        )?;
+        ensure(
+            eq_current == retained.payment.eq_current_accumulator
+                && ep_current == retained.payment.ep_current_accumulator,
+            "diagnostic payment current accumulator differs from the generated proof",
+        )
     }
 }
 
@@ -517,10 +636,16 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
 
     fn verify_payment_and_decide(
         &self,
-        _: &KagemushaPaymentRequestV1,
-        _: &KagemushaPaymentV1,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
-        Err("diagnostic milestone stops before Payment".to_owned())
+        let retained = self
+            .payments
+            .borrow()
+            .get(&payment.proof.semantic_digest)
+            .cloned()
+            .ok_or_else(|| "no genuine diagnostic payment proof retained".to_owned())?;
+        self.verify_retained_payment(request, payment, &retained)
     }
 
     fn verify_terminal_authorization_and_decide(
@@ -1566,6 +1691,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         keys: &state_keys,
         artifacts,
         states: Rc::new(RefCell::new(BTreeMap::new())),
+        payments: Rc::new(RefCell::new(BTreeMap::new())),
     };
     recursive_verifier.retain_state(bootstrap.clone());
     assert_state_mutations_rejected(&state_keys, &bootstrap);
@@ -2338,6 +2464,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                     keys: &rebound,
                     artifacts: rebound_artifacts,
                     states: Rc::new(RefCell::new(BTreeMap::new())),
+                    payments: Rc::new(RefCell::new(BTreeMap::new())),
                 };
                 let rebound_protocols = || {
                     RecursiveStateProtocolBindings::new(
@@ -2506,22 +2633,79 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 payment
                     .validate_shape_against(request)
                     .expect("closed sender proof has canonical payment shape");
-                // A structurally sealed fixture certificate is not an authenticated physical
-                // commit. Core's diagnostic verifier must therefore refuse finalization even
-                // after the paired wrapper and full sender proof lineage are decided.
+                let request = request.clone();
+                let closed = Rc::new(closed);
                 assert!(matches!(
                     DurableOutgoingEnvelopeV1::finalize_payment(
                         closed.committed.clone(),
-                        payment,
+                        payment.clone(),
                         Vec::new(),
                         rebound_artifacts,
                         &rebound_verifier,
                     ),
                     Err(KagemushaStateErrorV1::ProofRejected(reason))
-                        if reason == "diagnostic milestone stops before Payment"
+                        if reason == "no genuine diagnostic payment proof retained"
                 ));
+                rebound_verifier
+                    .retain_payment(&request, &payment, Rc::clone(&closed))
+                    .expect("Core's exact payment projection decides the generated wrapper");
+                assert!(
+                    rebound_verifier
+                        .retain_payment(&request, &payment, Rc::clone(&closed))
+                        .is_err(),
+                    "the diagnostic verifier cannot replace retained proof provenance",
+                );
+                let mut changed = payment.clone();
+                changed.proof.eq_proof[0] ^= 1;
+                assert!(matches!(
+                    DurableOutgoingEnvelopeV1::finalize_payment(
+                        closed.committed.clone(),
+                        changed,
+                        Vec::new(),
+                        rebound_artifacts,
+                        &rebound_verifier,
+                    ),
+                    Err(KagemushaStateErrorV1::ProofRejected(_))
+                ));
+                let mut changed = payment.clone();
+                changed.proof.ep_proof[0] ^= 1;
+                assert!(matches!(
+                    DurableOutgoingEnvelopeV1::finalize_payment(
+                        closed.committed.clone(),
+                        changed,
+                        Vec::new(),
+                        rebound_artifacts,
+                        &rebound_verifier,
+                    ),
+                    Err(KagemushaStateErrorV1::ProofRejected(_))
+                ));
+                let mut changed_request = request.clone();
+                changed_request.amount += 1;
+                assert!(
+                    rebound_verifier
+                        .verify_payment_and_decide(&changed_request, &payment)
+                        .is_err()
+                );
+                let finalized = DurableOutgoingEnvelopeV1::finalize_payment(
+                    closed.committed.clone(),
+                    payment.clone(),
+                    Vec::new(),
+                    rebound_artifacts,
+                    &rebound_verifier,
+                )
+                .expect("Core finalizes exact generated payment in this diagnostic fixture");
+                assert_eq!(
+                    finalized.envelope,
+                    crate::zk::kagemusha_v1_state::KagemushaOutgoingEnvelopeV1::Payment(
+                        payment.clone()
+                    )
+                );
+                assert_eq!(
+                    finalized.canonical_envelope_bytes,
+                    norito::encode_canonical(&payment).expect("canonical exact payment bytes"),
+                );
                 eprintln!(
-                    "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; Core rejects fixture payment finalization and receiver handoff remains unqualified",
+                    "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; exact generated Payment verified and finalized only against a structural test certificate; physical commit and receiver handoff remain unqualified",
                 );
             }
         }
@@ -2589,10 +2773,10 @@ fn real_bootstrap_mint_fold_send_split_commit_wrapper_milestone() {
         .expect("genuine wrapper seed milestone");
 }
 
-/// Re-prove the funded sender chain and terminal pair under its actual wrapper identity.
+/// Re-prove the funded sender chain under its actual wrapper identity and decide Core PaymentV1.
 #[test]
 #[cfg(unix)]
-#[ignore = "expensive genuine sender graph closure; Core payment and receiver remain unqualified"]
+#[ignore = "expensive genuine sender closure and diagnostic PaymentV1; hardware and receiver remain unqualified"]
 fn real_bootstrap_mint_fold_send_split_sender_closure_milestone() {
     let _exclusive_proof = exclusive_real_proof_test_lock();
     std::thread::Builder::new()

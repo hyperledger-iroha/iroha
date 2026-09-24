@@ -2973,6 +2973,22 @@ pub mod asset_definition {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
+        if isi.key().as_ref()
+            == iroha_smart_contract::data_model::asset::ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+        {
+            match is_asset_definition_owner(
+                asset_definition_id,
+                &executor.context().authority,
+                executor.host(),
+            ) {
+                Err(err) => deny!(executor, err),
+                Ok(true) => execute!(executor, isi),
+                Ok(false) => deny!(
+                    executor,
+                    "issuer usage policy requires asset-definition owner"
+                ),
+            }
+        }
         match is_asset_definition_owner(
             asset_definition_id,
             &executor.context().authority,
@@ -3003,6 +3019,22 @@ pub mod asset_definition {
         let asset_definition_id = isi.object();
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
+        }
+        if isi.key().as_ref()
+            == iroha_smart_contract::data_model::asset::ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+        {
+            match is_asset_definition_owner(
+                asset_definition_id,
+                &executor.context().authority,
+                executor.host(),
+            ) {
+                Err(err) => deny!(executor, err),
+                Ok(true) => execute!(executor, isi),
+                Ok(false) => deny!(
+                    executor,
+                    "issuer usage policy requires asset-definition owner"
+                ),
+            }
         }
         match is_asset_definition_owner(
             asset_definition_id,

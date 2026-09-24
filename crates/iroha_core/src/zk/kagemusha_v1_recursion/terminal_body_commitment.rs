@@ -172,14 +172,8 @@ pub(super) fn constrain_terminal_body_commitment_from_sources_v1<F: KagemushaPos
 ///
 /// `derived_body` must be the result of the authenticated source relation above;
 /// a fresh digest witness would leave the signed selection detached from the
-/// terminal certificate. This staged link does not admit an app transition.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple monetary assertion fold remains closed"
-    )
-)]
+/// terminal certificate. The live terminal circuit now invokes this equality, while app
+/// transition admission remains closed until the assertion and issuer folds are complete.
 pub(super) fn constrain_apple_signed_terminal_body_commitment_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

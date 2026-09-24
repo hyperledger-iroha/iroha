@@ -896,7 +896,7 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
 mod tests {
     use super::*;
     use crate::zk::kagemusha_v1_recursion::guard_bundle::assign_bytes;
-    use crate::zk::kagemusha_v1_recursion::terminal_body_commitment::constrain_apple_signed_terminal_body_commitment_v1;
+    use crate::zk::kagemusha_v1_recursion::terminal_authorization::constrain_terminal_apple_signed_body_v1;
     use crate::zk::{
         kagemusha_v1_poseidon::digest_limbs,
         kagemusha_v1_state::{terminal_journal_commitment_v1, terminal_recovery_commitment_v1},
@@ -1459,8 +1459,9 @@ mod tests {
         mutation: CompleteOutgoingMutation,
     ) -> Result<TestCircuit<F>, String> {
         use iroha_data_model::kagemusha::{
-            KagemushaCommitEvidenceV1, KagemushaHardwareSelectionSigningLayoutV1,
-            KagemushaHardwareTerminalBodyV1, KagemushaTrustedCommitTimeV1,
+            KagemushaCommitEvidenceV1, KagemushaHardwarePlatformClassV1,
+            KagemushaHardwareSelectionSigningLayoutV1, KagemushaHardwareTerminalBodyV1,
+            KagemushaTrustedCommitTimeV1,
         };
         use sha2::{Digest as _, Sha256};
 
@@ -1661,14 +1662,17 @@ mod tests {
                 [KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT.start + 15] ^=
                 1;
         }
-        let signed_subject = std::array::from_fn(|index| {
-            ctx.load_witness(F::from(u64::from(signed_subject[index])))
-        });
-        constrain_apple_signed_terminal_body_commitment_v1(
+        let assigned_subject = constrain_terminal_apple_signed_body_v1(
             ctx,
             &range,
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            Some(&signed_subject),
             &signed_subject,
             &derived_body,
+        )?;
+        assert_eq!(
+            assigned_subject.len(),
+            KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES
         );
         assert_eq!(jobs.typed_claim_jobs()?.len(), 6);
         builder.calculate_params(Some(UNUSABLE_ROWS));

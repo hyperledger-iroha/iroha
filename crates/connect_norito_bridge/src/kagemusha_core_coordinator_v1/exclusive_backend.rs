@@ -8,8 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use super::{
-    KagemushaCoreCoordinatorBackendErrorV1, KagemushaCoreCoordinatorBackendV1,
-    KagemushaCoreCoordinatorMethodV1,
+    KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1, KagemushaCoreCoordinatorBackendErrorV1,
+    KagemushaCoreCoordinatorBackendV1, KagemushaCoreCoordinatorMethodV1, archive_boundary,
+    kagemusha_core_coordinator_decode_request_v1, kagemusha_core_coordinator_encode_response_v1,
 };
 
 #[derive(Default)]
@@ -18,13 +19,22 @@ struct ExclusiveState {
     selected_handle: Option<u64>,
 }
 
+/// Backend dispatch and caller-visible publication have separate failure codes.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum KagemushaCheckedCoordinatorErrorV1<E> {
+    Backend(KagemushaCoreCoordinatorBackendErrorV1),
+    Output(E),
+}
+
 /// One process-lifetime native owner over a prequalified platform backend.
 ///
 /// Close revokes the current handle but cannot reopen this process: a new wallet or account
 /// selection requires a fresh process and a fresh hardware-backed open. The delegate's handle is
 /// checked on every invocation, and one mutex serializes all hardware calls for this owner. The delegate
 /// remains responsible for crash-safe idempotency, response authentication and exact recovery.
-pub struct KagemushaExclusiveCoordinatorBackendV1 {
+/// This wrapper stays crate-private so external Rust callers cannot bypass the checked C/JNI
+/// publication path through its lower-level trait methods.
+pub(crate) struct KagemushaExclusiveCoordinatorBackendV1 {
     inner: Arc<dyn KagemushaCoreCoordinatorBackendV1>,
     state: Mutex<ExclusiveState>,
 }
@@ -32,11 +42,108 @@ pub struct KagemushaExclusiveCoordinatorBackendV1 {
 impl KagemushaExclusiveCoordinatorBackendV1 {
     /// Construct without installing; the caller must supply an independently qualified backend.
     #[must_use]
-    pub fn new(inner: Arc<dyn KagemushaCoreCoordinatorBackendV1>) -> Self {
+    pub(crate) fn new(inner: Arc<dyn KagemushaCoreCoordinatorBackendV1>) -> Self {
         Self {
             inner,
             state: Mutex::new(ExclusiveState::default()),
         }
+    }
+
+    #[cfg(test)]
+    fn invoke_checked(
+        &self,
+        handle: u64,
+        method: KagemushaCoreCoordinatorMethodV1,
+        request_frame: &[u8],
+    ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+        self.invoke_checked_with_output(handle, method, request_frame, |response| {
+            Ok::<_, std::convert::Infallible>(response.to_vec())
+        })
+        .map_err(|error| match error {
+            KagemushaCheckedCoordinatorErrorV1::Backend(error) => error,
+            KagemushaCheckedCoordinatorErrorV1::Output(never) => match never {},
+        })
+    }
+
+    /// Keep the native owner locked until the validated result reaches the caller's output.
+    /// A backend error, malformed result or failed publication may follow an uncertain hardware
+    /// effect; revoke the process handle before any queued invocation can dispatch. The
+    /// qualified backend remains responsible for durable recovery on the next process open.
+    pub(crate) fn invoke_checked_with_output<R, E>(
+        &self,
+        handle: u64,
+        method: KagemushaCoreCoordinatorMethodV1,
+        request_frame: &[u8],
+        output: impl FnOnce(&[u8]) -> Result<R, E>,
+    ) -> Result<R, KagemushaCheckedCoordinatorErrorV1<E>> {
+        archive_boundary::validate_request(method, request_frame).map_err(|_| {
+            KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+            )
+        })?;
+        let mut state = self.state.lock().map_err(|_| {
+            KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+            )
+        })?;
+        if handle == 0 || state.selected_handle != Some(handle) {
+            return Err(KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+            ));
+        }
+        let response = match method {
+            KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
+                self.inner.invoke_initial_enrollment(handle, request_frame)
+            }
+            KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest => self
+                .inner
+                .acknowledge_committed_app_attest(handle, request_frame),
+            KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => (|| {
+                let fields = kagemusha_core_coordinator_decode_request_v1(request_frame)
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+                let operation_id: [u8; 32] = fields[0]
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+                let pair = self
+                    .inner
+                    .export_outgoing_state_proof(handle, operation_id)?;
+                kagemusha_core_coordinator_encode_response_v1(&[
+                    pair.operation_id.to_vec(),
+                    pair.public_inputs_archive,
+                    pair.paired_proof_archive,
+                ])
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+            })(),
+            _ => self.inner.invoke(handle, method, request_frame),
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                self.revoke_after_dispatch(&mut state, handle);
+                return Err(KagemushaCheckedCoordinatorErrorV1::Backend(error));
+            }
+        };
+        if response.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
+            || archive_boundary::validate_response(method, request_frame, &response).is_err()
+        {
+            self.revoke_after_dispatch(&mut state, handle);
+            return Err(KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+            ));
+        }
+        match output(&response) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.revoke_after_dispatch(&mut state, handle);
+                Err(KagemushaCheckedCoordinatorErrorV1::Output(error))
+            }
+        }
+    }
+
+    fn revoke_after_dispatch(&self, state: &mut ExclusiveState, handle: u64) {
+        state.selected_handle = None;
+        let _ = self.inner.close(handle);
     }
 }
 
@@ -171,6 +278,366 @@ mod tests {
     };
 
     use super::*;
+
+    struct CheckedBackend {
+        response: Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1>,
+        invoke_calls: AtomicUsize,
+        close_calls: AtomicUsize,
+    }
+
+    impl KagemushaCoreCoordinatorBackendV1 for CheckedBackend {
+        fn open(&self, _: &str) -> Result<u64, KagemushaCoreCoordinatorBackendErrorV1> {
+            Ok(7)
+        }
+
+        fn invoke(
+            &self,
+            _: u64,
+            _: KagemushaCoreCoordinatorMethodV1,
+            _: &[u8],
+        ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+            self.invoke_calls.fetch_add(1, Ordering::SeqCst);
+            self.response.clone()
+        }
+
+        fn close(&self, _: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
+            self.close_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn checked_observation_request() -> Vec<u8> {
+        let command = crate::kagemusha_device_bridge_v1::canonical_stock_command_for_tests(
+            crate::KagemushaDeviceLifecycleOperationV1::from_code(1).unwrap(),
+        )
+        .unwrap();
+        let request = super::super::kagemusha_core_coordinator_encode_request_v1(&[
+            1_u32.to_le_bytes().to_vec(),
+            command[crate::kagemusha_device_bridge_v1::COMMAND_HEADER_BYTES_V1..].to_vec(),
+        ])
+        .unwrap();
+        assert_eq!(
+            archive_boundary::validate_request(
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+            ),
+            Ok(())
+        );
+        request
+    }
+
+    #[test]
+    fn checked_dispatch_revokes_before_another_call_after_invalid_backend_output() {
+        let request = checked_observation_request();
+        let valid = kagemusha_core_coordinator_encode_response_v1(&[vec![7; 32]]).unwrap();
+        for response in [
+            b"not-a-frame".to_vec(),
+            vec![0; KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1 + 1],
+            kagemusha_core_coordinator_encode_response_v1(&[vec![0; 1]]).unwrap(),
+        ] {
+            let backend = Arc::new(CheckedBackend {
+                response: Ok(response),
+                invoke_calls: AtomicUsize::new(0),
+                close_calls: AtomicUsize::new(0),
+            });
+            let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+            assert_eq!(owner.open("/private/wallet"), Ok(7));
+            assert_eq!(
+                owner.invoke_checked(
+                    7,
+                    KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                    &request,
+                ),
+                Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+            );
+            assert_eq!(backend.close_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                owner.invoke_checked(
+                    7,
+                    KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                    &request,
+                ),
+                Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+            );
+            assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                owner.close(7),
+                Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+            );
+        }
+
+        let backend = Arc::new(CheckedBackend {
+            response: Ok(valid.clone()),
+            invoke_calls: AtomicUsize::new(0),
+            close_calls: AtomicUsize::new(0),
+        });
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let mut malformed_request = request.clone();
+        malformed_request[0] ^= 1;
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &malformed_request,
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.close_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+            ),
+            Ok(valid)
+        );
+        assert_eq!(backend.close_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(owner.close(7), Ok(()));
+
+        let backend = Arc::new(CheckedBackend {
+            response: Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable),
+            invoke_calls: AtomicUsize::new(0),
+            close_calls: AtomicUsize::new(0),
+        });
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.close_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn checked_proof_export_unavailable_revokes_without_generic_fallback() {
+        let backend = Arc::new(Backend::new(false));
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let request =
+            super::super::kagemusha_core_coordinator_encode_request_v1(&[vec![8; 32]]).unwrap();
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
+                &request,
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.close_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
+                &request,
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+    }
+
+    #[test]
+    fn checked_output_publication_failure_revokes_the_native_owner() {
+        let response = kagemusha_core_coordinator_encode_response_v1(&[vec![7; 32]]).unwrap();
+        let backend = Arc::new(CheckedBackend {
+            response: Ok(response),
+            invoke_calls: AtomicUsize::new(0),
+            close_calls: AtomicUsize::new(0),
+        });
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let request = checked_observation_request();
+        assert_eq!(
+            owner.invoke_checked_with_output(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+                |_| Err::<(), u8>(9),
+            ),
+            Err(KagemushaCheckedCoordinatorErrorV1::Output(9))
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.close_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            owner.invoke_checked_with_output(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+                |_| -> Result<(), u8> { panic!("revoked owner must not publish") },
+            ),
+            Err(KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected
+            ))
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn queued_checked_invocation_cannot_pass_a_malformed_first_result() {
+        struct BlockingBackend {
+            entered: Barrier,
+            release: Barrier,
+            invokes: AtomicUsize,
+            closes: AtomicUsize,
+        }
+
+        impl KagemushaCoreCoordinatorBackendV1 for BlockingBackend {
+            fn open(&self, _: &str) -> Result<u64, KagemushaCoreCoordinatorBackendErrorV1> {
+                Ok(7)
+            }
+
+            fn invoke(
+                &self,
+                _: u64,
+                _: KagemushaCoreCoordinatorMethodV1,
+                _: &[u8],
+            ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+                if self.invokes.fetch_add(1, Ordering::SeqCst) == 0 {
+                    self.entered.wait();
+                    self.release.wait();
+                }
+                Ok(b"malformed".to_vec())
+            }
+
+            fn close(&self, _: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
+                self.closes.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let backend = Arc::new(BlockingBackend {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+            invokes: AtomicUsize::new(0),
+            closes: AtomicUsize::new(0),
+        });
+        let owner = Arc::new(KagemushaExclusiveCoordinatorBackendV1::new(backend.clone()));
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let request = checked_observation_request();
+        let first_owner = owner.clone();
+        let first_request = request.clone();
+        let first = thread::spawn(move || {
+            first_owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &first_request,
+            )
+        });
+        backend.entered.wait();
+        let second_owner = owner.clone();
+        let second = thread::spawn(move || {
+            second_owner.invoke_checked(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+            )
+        });
+        backend.release.wait();
+        assert_eq!(
+            first.join().unwrap(),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(
+            second.join().unwrap(),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(backend.invokes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn panicking_backend_poisons_owner_before_a_queued_call_can_dispatch() {
+        struct PanickingBackend {
+            entered: Barrier,
+            release: Barrier,
+            invokes: AtomicUsize,
+        }
+
+        impl KagemushaCoreCoordinatorBackendV1 for PanickingBackend {
+            fn open(&self, _: &str) -> Result<u64, KagemushaCoreCoordinatorBackendErrorV1> {
+                Ok(7)
+            }
+
+            fn invoke(
+                &self,
+                _: u64,
+                _: KagemushaCoreCoordinatorMethodV1,
+                _: &[u8],
+            ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+                self.invokes.fetch_add(1, Ordering::SeqCst);
+                self.entered.wait();
+                self.release.wait();
+                panic!("uncertain hardware result")
+            }
+
+            fn close(&self, _: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
+                panic!("poisoned owner must never delegate close")
+            }
+        }
+
+        let backend = Arc::new(PanickingBackend {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+            invokes: AtomicUsize::new(0),
+        });
+        let owner = Arc::new(KagemushaExclusiveCoordinatorBackendV1::new(backend.clone()));
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let request = checked_observation_request();
+        let first_owner = owner.clone();
+        let first_request = request.clone();
+        let first = thread::spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                first_owner.invoke_checked_with_output(
+                    7,
+                    KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                    &first_request,
+                    |_| Ok::<(), u8>(()),
+                )
+            }))
+        });
+        backend.entered.wait();
+        let queued_owner = owner.clone();
+        let queued = thread::spawn(move || {
+            queued_owner.invoke_checked_with_output(
+                7,
+                KagemushaCoreCoordinatorMethodV1::BeginObservation,
+                &request,
+                |_| Ok::<(), u8>(()),
+            )
+        });
+        backend.release.wait();
+        assert!(first.join().unwrap().is_err());
+        assert_eq!(
+            queued.join().unwrap(),
+            Err(KagemushaCheckedCoordinatorErrorV1::Backend(
+                KagemushaCoreCoordinatorBackendErrorV1::Rejected
+            ))
+        );
+        assert_eq!(backend.invokes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            owner.open("/private/wallet"),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(
+            owner.close(7),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+    }
 
     #[test]
     fn outgoing_proof_export_cannot_fall_back_to_generic_dispatch() {

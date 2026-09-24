@@ -170,6 +170,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaSignedApp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         NetworkId, asset::AssetDefinitionId, kagemusha::KagemushaRetailEnrollmentRuntimeV1,
@@ -180,6 +181,87 @@ mod tests {
     #[test]
     fn exact_preparation_contract_is_bounded() {
         assert_eq!(CONTRACT, [1, 273, 8192, 512]);
+    }
+
+    #[test]
+    fn independently_issued_android_preparation_cross_sdk_vector() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../../fixtures/offline/kagemusha_signed_app_preparation_android_v1.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["schema"].as_str(),
+            Some("iroha.kagemusha.app-preparation.android.v1")
+        );
+        let string = |key: &str| -> &str { fixture[key].as_str().expect("fixture string") };
+        let hex32 = |key| -> [u8; 32] {
+            hex::decode(string(key))
+                .expect("fixture hex")
+                .try_into()
+                .expect("fixture digest")
+        };
+        let policy = STANDARD
+            .decode(string("canonicalPolicyBase64"))
+            .expect("canonical issuer policy");
+        let pinned_policy_sha256 = hex32("policySha256Hex");
+        assert_eq!(
+            Sha256::digest(&policy).as_slice(),
+            pinned_policy_sha256.as_slice()
+        );
+        let token = STANDARD
+            .decode(string("signedPreparationBase64"))
+            .expect("issuer-signed preparation");
+        let client_nonce = hex32("clientNonceHex");
+        let release_id = hex32("releaseIdHex");
+        let profile_id = hex32("profileIdHex");
+        let lane_id = hex32("laneIdHex");
+        let trusted_now_ms = fixture["trustedNowMs"].as_u64().unwrap();
+        let verify = |candidate: &[u8], pin, time| {
+            verified_android_server_nonce(
+                candidate,
+                &policy,
+                pin,
+                string("accountI105").as_bytes(),
+                client_nonce,
+                release_id,
+                profile_id,
+                lane_id,
+                time,
+            )
+        };
+        assert_eq!(
+            verify(&token, pinned_policy_sha256, trusted_now_ms),
+            Some(hex32("serverNonceHex"))
+        );
+        let mut changed = token.clone();
+        changed[81] ^= 1;
+        assert_eq!(verify(&changed, pinned_policy_sha256, trusted_now_ms), None);
+        changed.copy_from_slice(&token);
+        changed[209] ^= 1;
+        assert_eq!(verify(&changed, pinned_policy_sha256, trusted_now_ms), None);
+        let other_account = AccountId::new(
+            KeyPair::from_seed(vec![13; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .unwrap();
+        assert_eq!(
+            verified_android_server_nonce(
+                &token,
+                &policy,
+                pinned_policy_sha256,
+                other_account.as_bytes(),
+                client_nonce,
+                release_id,
+                profile_id,
+                lane_id,
+                trusted_now_ms,
+            ),
+            None
+        );
+        assert_eq!(verify(&token, [0; 32], trusted_now_ms), None);
+        assert_eq!(verify(&token, pinned_policy_sha256, 121_000), None);
     }
 
     #[test]

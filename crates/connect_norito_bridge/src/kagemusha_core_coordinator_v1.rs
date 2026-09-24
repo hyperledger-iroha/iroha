@@ -26,7 +26,9 @@ pub use enrollment_attempt_journal::{
 pub use enrollment_phase_one_backend::{
     KagemushaEnrollmentPhaseOneBackendV1, KagemushaQualifiedEnrollmentDelegateV1,
 };
-pub use exclusive_backend::KagemushaExclusiveCoordinatorBackendV1;
+pub(crate) use exclusive_backend::{
+    KagemushaCheckedCoordinatorErrorV1, KagemushaExclusiveCoordinatorBackendV1,
+};
 pub use initial_enrollment::{
     AcceptedIssuerChallengeV1, FreshIssuerAdmissionV1, InitialEnrollmentErrorV1,
     IssuerChallengeProjectionV1, PendingIssuerEnrollmentV1, PreparedIssuerProofV1,
@@ -313,8 +315,9 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
     fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1>;
 }
 
-static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<Arc<dyn KagemushaCoreCoordinatorBackendV1>> =
-    OnceLock::new();
+static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<
+    Arc<KagemushaExclusiveCoordinatorBackendV1>,
+> = OnceLock::new();
 
 /// Install the qualified coordinator backend exactly once for this process.
 ///
@@ -325,15 +328,14 @@ static KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1: OnceLock<Arc<dyn KagemushaCoreCoor
 pub fn install_kagemusha_core_coordinator_backend_v1(
     backend: Arc<dyn KagemushaCoreCoordinatorBackendV1>,
 ) -> Result<(), KagemushaCoreCoordinatorInstallErrorV1> {
-    let exclusive: Arc<dyn KagemushaCoreCoordinatorBackendV1> =
-        Arc::new(KagemushaExclusiveCoordinatorBackendV1::new(backend));
+    let exclusive = Arc::new(KagemushaExclusiveCoordinatorBackendV1::new(backend));
     KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1
         .set(exclusive)
         .map_err(|_| KagemushaCoreCoordinatorInstallErrorV1::AlreadyInstalled)
 }
 
 pub(crate) fn installed_kagemusha_core_coordinator_backend_v1()
--> Option<&'static dyn KagemushaCoreCoordinatorBackendV1> {
+-> Option<&'static KagemushaExclusiveCoordinatorBackendV1> {
     KAGEMUSHA_CORE_COORDINATOR_BACKEND_V1.get().map(Arc::as_ref)
 }
 
@@ -1043,9 +1045,6 @@ mod tests {
         ReserveValid,
         ReleaseValid,
         ReleaseSubstituted,
-        InvalidSchema,
-        Malformed,
-        Oversized,
     }
 
     fn u32_field(value: u32) -> Vec<u8> {
@@ -1508,28 +1507,6 @@ mod tests {
                     kagemusha_core_coordinator_encode_response_v1(&fields)
                         .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
                 }
-                TestResponse::InvalidSchema => {
-                    let invalid = match method {
-                        KagemushaCoreCoordinatorMethodV1::ReserveOperationId => {
-                            vec![b"not-a-digest".to_vec()]
-                        }
-                        KagemushaCoreCoordinatorMethodV1::ReleaseOutbox => vec![
-                            digest(0x63),
-                            b"canonical-preparation".to_vec(),
-                            digest(0x64),
-                            b"terminal-envelope".to_vec(),
-                        ],
-                        _ => panic!("unexpected test method"),
-                    };
-                    kagemusha_core_coordinator_encode_response_v1(&invalid)
-                        .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
-                }
-                TestResponse::Malformed => Ok(b"not-a-frame".to_vec()),
-                TestResponse::Oversized => Ok(vec![
-                    0;
-                    KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-                        + 1
-                ]),
             }
         }
 
@@ -2572,35 +2549,6 @@ mod tests {
         );
         assert_eq!(handle, 7);
 
-        let acknowledgment_request = kagemusha_core_coordinator_encode_request_v1(&[
-            digest(0x11),
-            b"app-attest-key".to_vec(),
-            app_attest_selection_for_tests(),
-            vec![0xa2, 0x01, 0x02],
-            4_u32.to_le_bytes().to_vec(),
-            digest(0x33),
-            digest(0x44),
-        ])
-        .expect("canonical acknowledgment request");
-        let mut acknowledgment_output = core::ptr::null_mut();
-        let mut acknowledgment_output_len = usize::MAX;
-        assert_eq!(
-            unsafe {
-                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                    handle,
-                    KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest.code(),
-                    acknowledgment_request.as_ptr(),
-                    acknowledgment_request.len(),
-                    &mut acknowledgment_output,
-                    &mut acknowledgment_output_len,
-                )
-            },
-            crate::ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
-        );
-        assert!(acknowledgment_output.is_null());
-        assert_eq!(acknowledgment_output_len, 0);
-        assert_eq!(backend.invokes.load(Ordering::SeqCst), 0);
-
         let request = kagemusha_core_coordinator_encode_request_v1(&[
             u32_field(5),
             digest(0x51),
@@ -2650,57 +2598,6 @@ mod tests {
         );
         assert_eq!(backend.invokes.load(Ordering::SeqCst), 1);
 
-        *backend.response.lock().expect("response mode") = TestResponse::Malformed;
-        assert_eq!(
-            unsafe {
-                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                    handle,
-                    KagemushaCoreCoordinatorMethodV1::ReserveOperationId.code(),
-                    request.as_ptr(),
-                    request.len(),
-                    &mut output_ptr,
-                    &mut output_len,
-                )
-            },
-            crate::ERR_KAGEMUSHA_V1
-        );
-        assert!(output_ptr.is_null());
-        assert_eq!(output_len, 0);
-
-        *backend.response.lock().expect("response mode") = TestResponse::Oversized;
-        assert_eq!(
-            unsafe {
-                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                    handle,
-                    KagemushaCoreCoordinatorMethodV1::ReserveOperationId.code(),
-                    request.as_ptr(),
-                    request.len(),
-                    &mut output_ptr,
-                    &mut output_len,
-                )
-            },
-            crate::ERR_KAGEMUSHA_V1
-        );
-        assert!(output_ptr.is_null());
-        assert_eq!(output_len, 0);
-
-        *backend.response.lock().expect("response mode") = TestResponse::InvalidSchema;
-        assert_eq!(
-            unsafe {
-                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                    handle,
-                    KagemushaCoreCoordinatorMethodV1::ReserveOperationId.code(),
-                    request.as_ptr(),
-                    request.len(),
-                    &mut output_ptr,
-                    &mut output_len,
-                )
-            },
-            crate::ERR_KAGEMUSHA_V1
-        );
-        assert!(output_ptr.is_null());
-        assert_eq!(output_len, 0);
-
         let (release_fields, release_response) = archive_boundary::tests::release_fields();
         let release = kagemusha_core_coordinator_encode_request_v1(&release_fields)
             .expect("canonical release request");
@@ -2725,32 +2622,54 @@ mod tests {
             Ok(release_response)
         );
 
-        for mode in [
-            TestResponse::InvalidSchema,
-            TestResponse::ReleaseSubstituted,
-        ] {
-            *backend.response.lock().expect("response mode") = mode;
-            assert_eq!(
-                unsafe {
-                    crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
-                        handle,
-                        KagemushaCoreCoordinatorMethodV1::ReleaseOutbox.code(),
-                        release.as_ptr(),
-                        release.len(),
-                        &mut output_ptr,
-                        &mut output_len,
-                    )
-                },
-                crate::ERR_KAGEMUSHA_V1
-            );
-            assert!(output_ptr.is_null());
-            assert_eq!(output_len, 0);
-        }
+        *backend.response.lock().expect("response mode") = TestResponse::ReleaseSubstituted;
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                    handle,
+                    KagemushaCoreCoordinatorMethodV1::ReleaseOutbox.code(),
+                    release.as_ptr(),
+                    release.len(),
+                    &mut output_ptr,
+                    &mut output_len,
+                )
+            },
+            crate::ERR_KAGEMUSHA_V1
+        );
+        assert!(output_ptr.is_null());
+        assert_eq!(output_len, 0);
 
         let invokes_before_revocation = backend.invokes.load(Ordering::SeqCst);
+        let acknowledgment_request = kagemusha_core_coordinator_encode_request_v1(&[
+            digest(0x11),
+            b"app-attest-key".to_vec(),
+            app_attest_selection_for_tests(),
+            vec![0xa2, 0x01, 0x02],
+            4_u32.to_le_bytes().to_vec(),
+            digest(0x33),
+            digest(0x44),
+        ])
+        .expect("canonical acknowledgment request");
+        let mut acknowledgment_output = core::ptr::null_mut();
+        let mut acknowledgment_output_len = usize::MAX;
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                    handle,
+                    KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest.code(),
+                    acknowledgment_request.as_ptr(),
+                    acknowledgment_request.len(),
+                    &mut acknowledgment_output,
+                    &mut acknowledgment_output_len,
+                )
+            },
+            crate::ERR_KAGEMUSHA_V1
+        );
+        assert!(acknowledgment_output.is_null());
+        assert_eq!(acknowledgment_output_len, 0);
         assert_eq!(
             crate::connect_norito_kagemusha_core_coordinator_close_v1(handle),
-            0
+            crate::ERR_KAGEMUSHA_V1
         );
         assert_eq!(backend.closes.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -2821,8 +2740,10 @@ mod tests {
             assert!(header.contains(symbol));
         }
         let source = crate::bridge_source();
+        assert!(source.contains("backend.invoke_checked_with_output("));
         assert!(
-            source.contains("method == KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof")
+            include_str!("kagemusha_core_coordinator_v1/exclusive_backend.rs")
+                .contains("KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof =>")
         );
         for symbol in [
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",

@@ -22,6 +22,8 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         endpoint.mutateRequest = true
         assertFailsWith<IllegalArgumentException> { bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, fields) }
         assertContentEquals(ByteArray(32) { 7 }, id)
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> { bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, fields) }
     }
 
     @Test
@@ -56,9 +58,13 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         assertContentEquals(byteArrayOf(0x42), pair.observeWith(observer))
         endpoint.substituteExportOperation = true
         assertFailsWith<IllegalArgumentException> { core.exportOutgoingStateProof(operation) }
-        endpoint.substituteExportOperation = false
-        endpoint.oversizeExportProof = true
-        assertFailsWith<IllegalArgumentException> { core.exportOutgoingStateProof(operation) }
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> { core.exportOutgoingStateProof(operation) }
+        val oversizeEndpoint = Endpoint().apply { oversizeExportProof = true }
+        val oversizeCore = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/store", oversizeEndpoint)
+        assertFailsWith<IllegalArgumentException> { oversizeCore.exportOutgoingStateProof(operation) }
+        assertEquals(1, oversizeEndpoint.closeCalls)
+        oversizeCore.close()
         core.close()
         assertFailsWith<IllegalStateException> { core.exportOutgoingStateProof(operation) }
     }
@@ -87,6 +93,27 @@ class KagemushaCoreCoordinatorBridgeV1Test {
             bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
                 listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1)))
         }
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> {
+            bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,
+                listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1)))
+        }
+        assertEquals(1, endpoint.invokeCalls)
+    }
+
+    @Test
+    fun `native linkage failure revokes the local handle even when teardown fails`() {
+        val endpoint = Endpoint().apply { throwLinkageOnInvoke = true; closeStatus = -312 }
+        val bridge = KagemushaCoreCoordinatorBridgeV1.openEndpoint("/durable/store", endpoint)
+        val fields = listOf(KagemushaCoreCoordinatorFrameV1.u32(22), ByteArray(32) { 7 }, byteArrayOf(1))
+        assertFailsWith<IllegalStateException> {
+            bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, fields)
+        }
+        assertEquals(1, endpoint.closeCalls)
+        assertFailsWith<IllegalStateException> {
+            bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID, fields)
+        }
+        assertEquals(1, endpoint.invokeCalls)
     }
 
     @Test
@@ -125,6 +152,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         var returnedHandle = -1L // An opaque u64 handle retains every bit across JNI's signed long.
         var mutateRequest = false
         var missingResponse = false
+        var throwLinkageOnInvoke = false
         var substituteExportOperation = false
         var oversizeExportProof = false
         override fun contract() = contractWords.copyOf()
@@ -133,6 +161,7 @@ class KagemushaCoreCoordinatorBridgeV1Test {
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {
             invokeCalls++
             assertEquals(returnedHandle, handle)
+            if (throwLinkageOnInvoke) throw UnsatisfiedLinkError("missing native invoke")
             if (method == KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF.code) {
                 if (missingResponse) return null
                 return arrayOf(

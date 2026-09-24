@@ -3,9 +3,11 @@
 
 package org.hyperledger.iroha.sdk.offline.probe
 
-import android.os.Build
-import android.util.Log
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.UserManager
+import android.util.Log
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -180,6 +182,10 @@ class AndroidKeyMintSingleUseDeviceTest {
     @Test
     fun pixel6RestartStage3RejectSecondUseAfterReboot() {
         requirePixel6RestartProbe()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
+        assertTrue("unlock the Pixel 6 with its PIN after reboot before testing one-use persistence",
+            userManager.isUserUnlocked)
         val marker = File(InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir,
             restartMarker)
         val recorded = marker.readLines(Charsets.US_ASCII)

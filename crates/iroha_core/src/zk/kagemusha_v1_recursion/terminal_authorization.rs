@@ -12,11 +12,12 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_CREDIT_ID_DOMAIN_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
     KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
     KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-    KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
-    KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaPaymentOutputV1,
-    KagemushaPaymentRequestV1, kagemusha_asset_identity_digest_v1,
-    kagemusha_payment_body_digest_from_digests_v1, kagemusha_prepared_transfer_digest_v1,
+    KagemushaAppAttestHardwareTransitionSelectionV1, KagemushaCommitCertificateV1,
+    KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
+    KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+    KagemushaOutboxReservationV1, KagemushaPaymentOutputV1, KagemushaPaymentRequestV1,
+    kagemusha_asset_identity_digest_v1, kagemusha_payment_body_digest_from_digests_v1,
+    kagemusha_prepared_transfer_digest_v1,
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use sha2::{Digest as _, Sha256};
@@ -70,6 +71,7 @@ use super::{
         constant_bytes, constrain_guard_bundle_semantics_v1, digest_limbs_assigned, hash,
     },
     mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+    terminal_body_commitment::constrain_apple_signed_terminal_body_commitment_v1,
     terminal_durable_commitments::{
         KagemushaAuthenticatedTerminalRecoveryOpeningV1,
         constrain_outgoing_terminal_recovery_opening_v1,
@@ -97,7 +99,7 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaHardwareSelectionSigningLayoutV1,
     kagemusha_hardware_credential_id_preimage_layout_v1,
     kagemusha_hardware_profile_id_preimage_layout_v1,
 };
@@ -125,6 +127,19 @@ fn require_terminal_assertion_fold_v1(
         Err("Kagemusha ordinary-app terminal assertion fold is unavailable".to_owned())
     } else {
         Ok(())
+    }
+}
+
+fn require_terminal_apple_selection_shape_v1(
+    platform_class: KagemushaHardwarePlatformClassV1,
+    has_apple_selection: bool,
+) -> Result<(), String> {
+    match (platform_class, has_apple_selection) {
+        (KagemushaHardwarePlatformClassV1::AppleAppAttest, false) => {
+            Err("terminal Apple assertion selection is missing".to_owned())
+        }
+        (KagemushaHardwarePlatformClassV1::AppleAppAttest, true) | (_, false) => Ok(()),
+        (_, true) => Err("non-Apple terminal cannot carry an App Attest selection".to_owned()),
     }
 }
 
@@ -464,6 +479,10 @@ pub(crate) struct KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) authorization_counter_after: u128,
     pub(crate) hardware_profile: KagemushaHardwareProfileV1,
     pub(crate) hardware_credential: KagemushaHardwareCredentialV1,
+    /// Original Apple assertion and its canonical signed selection. The body field is bound
+    /// to the SHA-derived terminal body inside both terminal parities. The complete assertion
+    /// and issuer fold remains fail-closed until it is part of this same relation.
+    pub(crate) apple_selection: Option<KagemushaAppAttestHardwareTransitionSelectionV1>,
 }
 
 /// Exact private receiver context authenticated by a postcommit send.
@@ -501,6 +520,85 @@ fn validate_outgoing_sealed_stream_witness_shape_v1(
     Ok(())
 }
 
+/// Copy-bind the original App Attest subject's terminal-body field to the body derived from
+/// the recursively verified candidate, terminal Guard, and complete outgoing SHA opening.
+/// Returning the same assigned subject cells keeps the future assertion equation from using
+/// a detached second copy. Ordinary-app monetary admission remains closed until that equation
+/// and issuer enrollment are folded into both terminal parities. Every platform uses the same
+/// fixed-width assignment and equality gates so one authenticated terminal key has one shape.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) fn constrain_terminal_apple_signed_body_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    platform_class: KagemushaHardwarePlatformClassV1,
+    canonical_s: Option<&[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES]>,
+    non_apple_subject: &[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    derived_body: &[PastaSha256ByteV1<F>; 32],
+) -> Result<[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES], String> {
+    require_terminal_apple_selection_shape_v1(platform_class, canonical_s.is_some())?;
+    let subject = canonical_s.unwrap_or(non_apple_subject);
+    let assigned =
+        std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(subject[index]))));
+    constrain_apple_signed_terminal_body_commitment_v1(ctx, range, &assigned, derived_body);
+    Ok(assigned)
+}
+
+/// Bind the signed Apple subject to the release and credential already proved by this terminal
+/// relation. OEM profiles supply a synthetic subject with the same source values, so these exact
+/// equalities have one fixed circuit shape and no witness-controlled enable bit.
+#[cfg(feature = "zk-halo2-ipa")]
+struct TerminalAppleSignedContextV1<F: KagemushaPoseidonFieldV1> {
+    release: [AssignedValue<F>; 2],
+    profile: [AssignedValue<F>; 2],
+    candidate: [AssignedValue<F>; 2],
+    credential_id: [PastaSha256ByteV1<F>; 32],
+    app_policy: [PastaSha256ByteV1<F>; 32],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn constrain_terminal_apple_signed_context_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    signed_subject: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    sources: TerminalAppleSignedContextV1<F>,
+) {
+    use KagemushaHardwareSelectionSigningLayoutV1 as Layout;
+
+    let fields = [
+        (
+            Layout::RELEASE_ID,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.release),
+        ),
+        (
+            Layout::HARDWARE_PROFILE_ID,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.profile),
+        ),
+        (
+            Layout::CANDIDATE_ENVELOPE_DIGEST,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.candidate),
+        ),
+        (Layout::CREDENTIAL_ID, sources.credential_id.to_vec()),
+        (Layout::APP_POLICY_DIGEST, sources.app_policy.to_vec()),
+    ];
+    for (field, expected) in fields {
+        assert_eq!(
+            field.len(),
+            expected.len(),
+            "signed terminal context field width changed"
+        );
+        for (signed, expected) in signed_subject[field].iter().zip(expected) {
+            // Every expected byte carries a Range8 or bit-decomposition provenance. Equality
+            // therefore also range-constrains this exact signed-subject byte without a second
+            // lookup, preserving the terminal key's row budget.
+            let difference =
+                range
+                    .gate()
+                    .sub(ctx, QuantumCell::Existing(*signed), expected.quantum_cell());
+            range.gate().assert_is_const(ctx, &difference, &F::ZERO);
+        }
+    }
+}
+
 impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) fn validate_against(
         &self,
@@ -525,6 +623,10 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
             .map_err(|error| {
                 format!("invalid terminal-authorization hardware credential: {error}")
             })?;
+        require_terminal_apple_selection_shape_v1(
+            self.hardware_profile.platform_class,
+            self.apple_selection.is_some(),
+        )?;
         require_terminal_assertion_fold_v1(self.hardware_profile.platform_class)?;
         let lifecycle_digest = self
             .lifecycle
@@ -2908,12 +3010,92 @@ where
             &assigned_terminal_guard,
             witness.private_transition.outgoing_sealed_streams.as_ref(),
         )?;
-    constrain_outgoing_terminal_recovery_opening_v1(
+    let derived_body = constrain_outgoing_terminal_recovery_opening_v1(
         loader.ctx_mut().main(),
         &range,
         &mut sha_jobs,
         Some(&outgoing_opening),
     )?;
+    let apple_signed_s: Option<[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES]> =
+        witness
+            .private_transition
+            .apple_selection
+            .as_ref()
+            .map(|selection| {
+                selection
+                    .subject
+                    .canonical_signing_bytes()
+                    .map_err(|error| format!("invalid terminal Apple selection subject: {error}"))?
+                    .try_into()
+                    .map_err(|_| "terminal Apple selection has wrong signed width".to_owned())
+            })
+            .transpose()?;
+    let mut non_apple_subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+    for (field, digest) in [
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::RELEASE_ID,
+            &public.release_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::HARDWARE_PROFILE_ID,
+            &public.hardware_profile_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::CANDIDATE_ENVELOPE_DIGEST,
+            &public.candidate_envelope_digest,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::CREDENTIAL_ID,
+            &witness.private_transition.hardware_credential.credential_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::APP_POLICY_DIGEST,
+            &witness
+                .private_transition
+                .hardware_credential
+                .app_policy_binding_digest,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT,
+            &witness
+                .private_transition
+                .commit_certificate
+                .hardware_terminal_commitment,
+        ),
+    ] {
+        non_apple_subject[field].copy_from_slice(digest);
+    }
+    let apple_signed_subject = constrain_terminal_apple_signed_body_v1(
+        loader.ctx_mut().main(),
+        &range,
+        witness.private_transition.hardware_profile.platform_class,
+        apple_signed_s.as_ref(),
+        &non_apple_subject,
+        &derived_body,
+    )?;
+    constrain_terminal_apple_signed_context_v1(
+        loader.ctx_mut().main(),
+        &range,
+        &apple_signed_subject,
+        TerminalAppleSignedContextV1 {
+            release: [
+                public_cells[public_instance::RELEASE_LO],
+                public_cells[public_instance::RELEASE_LO + 1],
+            ],
+            profile: [
+                public_cells[public_instance::HARDWARE_PROFILE_LO],
+                public_cells[public_instance::HARDWARE_PROFILE_LO + 1],
+            ],
+            candidate: [
+                public_cells[public_instance::CANDIDATE_LO],
+                public_cells[public_instance::CANDIDATE_LO + 1],
+            ],
+            credential_id: assigned_terminal_guard.credential_issuance_digests[0],
+            app_policy: assigned_terminal_guard.credential_app_policy_binding_digests[0],
+        },
+    );
+    // TODO: Fold the original assertion equation and issuer enrollment using these exact
+    // assigned subject cells and bind its remaining fields before opening ordinary-app admission.
     if sha_jobs.typed_claim_jobs()?.len() != 32 {
         return Err("terminal authorization requires the complete 32-job SHA queue".to_owned());
     }
@@ -4989,6 +5171,233 @@ mod tests {
             super::validate_outgoing_sealed_stream_witness_shape_v1(Bootstrap, Some(&valid)),
             Err("terminal sealed-byte witness requires an outgoing operation".to_owned())
         );
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_selection_class_is_checked_before_the_closed_assertion_gate() {
+        use iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1;
+
+        assert!(
+            super::require_terminal_apple_selection_shape_v1(
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                false,
+            )
+            .unwrap_err()
+            .contains("missing")
+        );
+        assert!(
+            super::require_terminal_apple_selection_shape_v1(
+                KagemushaHardwarePlatformClassV1::AndroidOemService,
+                true,
+            )
+            .unwrap_err()
+            .contains("non-Apple")
+        );
+        super::require_terminal_apple_selection_shape_v1(
+            KagemushaHardwarePlatformClassV1::AndroidOemService,
+            false,
+        )
+        .expect("OEM terminal carries no Apple selection");
+        super::require_terminal_apple_selection_shape_v1(
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            true,
+        )
+        .expect("Apple terminal carries an original assertion selection");
+        assert!(
+            super::require_terminal_assertion_fold_v1(
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            )
+            .unwrap_err()
+            .contains("unavailable")
+        );
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_signed_release_and_credential_sources_bind_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+        use iroha_data_model::kagemusha::KagemushaHardwareSelectionSigningLayoutV1 as Layout;
+
+        fn check<F: super::KagemushaPoseidonFieldV1>(changed_offset: Option<usize>) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(13)
+                .use_lookup_bits(12)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let release = [0x11; 32];
+            let profile = [0x22; 32];
+            let candidate = [0x33; 32];
+            let credential_id = [0x44; 32];
+            let app_policy = [0x55; 32];
+            let mut subject = [0_u8; Layout::TOTAL_BYTES];
+            for (field, digest) in [
+                (Layout::RELEASE_ID, release),
+                (Layout::HARDWARE_PROFILE_ID, profile),
+                (Layout::CANDIDATE_ENVELOPE_DIGEST, candidate),
+                (Layout::CREDENTIAL_ID, credential_id),
+                (Layout::APP_POLICY_DIGEST, app_policy),
+            ] {
+                subject[field].copy_from_slice(&digest);
+            }
+            if let Some(offset) = changed_offset {
+                subject[offset] ^= 1;
+            }
+            let signed_subject =
+                std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(subject[index]))));
+            let sources = super::TerminalAppleSignedContextV1 {
+                release: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(release)
+                    .map(|limb| ctx.load_witness(limb)),
+                profile: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(profile)
+                    .map(|limb| ctx.load_witness(limb)),
+                candidate: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(candidate)
+                    .map(|limb| ctx.load_witness(limb)),
+                credential_id: super::constant_bytes(&credential_id)
+                    .try_into()
+                    .expect("fixed credential ID width"),
+                app_policy: super::constant_bytes(&app_policy)
+                    .try_into()
+                    .expect("fixed app policy width"),
+            };
+            super::constrain_terminal_apple_signed_context_v1(
+                ctx,
+                &range,
+                &signed_subject,
+                sources,
+            );
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(13, &builder, vec![Vec::new()])
+                .expect("signed context circuit")
+                .verify()
+                .is_ok()
+        }
+
+        for check_field in [
+            Layout::RELEASE_ID,
+            Layout::HARDWARE_PROFILE_ID,
+            Layout::CANDIDATE_ENVELOPE_DIGEST,
+            Layout::CREDENTIAL_ID,
+            Layout::APP_POLICY_DIGEST,
+        ] {
+            assert!(!check::<Fp>(Some(check_field.start)));
+            assert!(!check::<Fq>(Some(check_field.start)));
+        }
+        assert!(check::<Fp>(None));
+        assert!(check::<Fq>(None));
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_body_requires_an_exclusive_signed_subject_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+        use iroha_data_model::kagemusha::{
+            KagemushaHardwarePlatformClassV1, KagemushaHardwareSelectionSigningLayoutV1,
+        };
+
+        fn check<F: super::KagemushaPoseidonFieldV1>() {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(11)
+                .use_lookup_bits(10)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let derived = std::array::from_fn(|_| {
+                let byte = ctx.load_witness(F::from(0x5a));
+                super::PastaSha256ByteV1::range_checked(ctx, &range, byte)
+            });
+            let mut subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+            subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT].fill(0x5a);
+            let non_apple_subject = subject;
+            assert!(
+                super::constrain_terminal_apple_signed_body_v1(
+                    ctx,
+                    &range,
+                    KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                    None,
+                    &non_apple_subject,
+                    &derived,
+                )
+                .unwrap_err()
+                .contains("missing")
+            );
+            assert!(
+                super::constrain_terminal_apple_signed_body_v1(
+                    ctx,
+                    &range,
+                    KagemushaHardwarePlatformClassV1::AndroidOemService,
+                    Some(&subject),
+                    &non_apple_subject,
+                    &derived,
+                )
+                .unwrap_err()
+                .contains("non-Apple")
+            );
+            super::constrain_terminal_apple_signed_body_v1(
+                ctx,
+                &range,
+                KagemushaHardwarePlatformClassV1::AndroidOemService,
+                None,
+                &non_apple_subject,
+                &derived,
+            )
+            .expect("non-Apple fixed-width subject placeholder");
+            super::constrain_terminal_apple_signed_body_v1(
+                ctx,
+                &range,
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                Some(&subject),
+                &non_apple_subject,
+                &derived,
+            )
+            .expect("Apple signed subject body");
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(11, &builder, vec![Vec::new()])
+                .expect("terminal Apple body binding circuit")
+                .assert_satisfied();
+
+            let mut changed_builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(11)
+                .use_lookup_bits(10)
+                .use_instance_columns(1);
+            let changed_range = changed_builder.range_chip();
+            let changed_ctx = changed_builder.main(0);
+            let changed_derived = std::array::from_fn(|_| {
+                let byte = changed_ctx.load_witness(F::from(0x5a));
+                super::PastaSha256ByteV1::range_checked(changed_ctx, &changed_range, byte)
+            });
+            subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT.start] ^= 1;
+            super::constrain_terminal_apple_signed_body_v1(
+                changed_ctx,
+                &changed_range,
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                Some(&subject),
+                &non_apple_subject,
+                &changed_derived,
+            )
+            .expect("mutated subject retains canonical field width");
+            changed_builder.assigned_instances = vec![Vec::new()];
+            changed_builder.calculate_params(Some(9));
+            assert!(
+                MockProver::run(11, &changed_builder, vec![Vec::new()])
+                    .expect("mutated terminal Apple body binding circuit")
+                    .verify()
+                    .is_err()
+            );
+        }
+
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[cfg(feature = "zk-halo2-ipa")]

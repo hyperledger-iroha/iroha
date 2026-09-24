@@ -8,13 +8,22 @@ use reset::{
     RevisionV1, SourceManifestV1, ValidatorClientV1, ValidatorInitialStateV1,
 };
 
-/// All live predecessor identity comes from the sealed plan and stopped capture.
+/// Live predecessor identity comes from the sealed plan, stopped capture and selected inventory.
 #[derive(clap::Args, Debug)]
 pub(in super::super::super::super) struct PrepareTopologyIntent {
+    /// Inventory of the terminal predecessor bound to the transition lease.
     #[arg(long)]
     retained_inventory: PathBuf,
     #[arg(long)]
     expected_retained_inventory_sha256: String,
+    /// Inventory of the release actually selected after the transition.
+    #[arg(long)]
+    selected_inventory: PathBuf,
+    #[arg(long)]
+    expected_selected_inventory_sha256: String,
+    /// Prior authorization signed by the transition plan's trusted public key.
+    #[arg(long)]
+    selected_authorization: PathBuf,
     #[arg(long)]
     current_runtime: PathBuf,
     #[arg(long)]
@@ -115,6 +124,17 @@ fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) ->
                 "sealed validator configuration or genesis differs from selected runtime",
             )?;
         }
+        let genesis_hash = current.artifact("genesis_hash")?;
+        let selected_hash = occupied
+            .files
+            .iter()
+            .find(|pin| pin.path == genesis_hash.path)
+            .ok_or_else(|| eyre!("selected genesis-hash artifact is absent"))?;
+        need(
+            admission::read(selected_hash)?.as_slice()
+                == format!("{}\n", old.next_genesis_hash).as_bytes(),
+            "selected genesis-hash artifact differs from restored network identity",
+        )?;
     }
     let edge = &plan.predecessor.occupied[4];
     need(
@@ -131,6 +151,65 @@ fn bind_predecessor(old: &InventoryV1, runtime: &CurrentRuntime, plan: &Plan) ->
             }),
         "stopped edge differs from selected predecessor",
     )
+}
+
+/// A failed reset remains the transition predecessor, while its admitted prior
+/// release is again the selected network after a complete rollback. Do not use
+/// the failed reset's candidate revision, genesis or client identities as the
+/// source of the successor topology.
+fn bind_selected_inventory(
+    selected: &InventoryV1,
+    selected_sha256: &str,
+    predecessor: &InventoryV1,
+    runtime: &CurrentRuntime,
+    plan: &Plan,
+) -> Result<()> {
+    bind_inventory_lineage(
+        selected,
+        selected_sha256,
+        predecessor,
+        runtime,
+        &plan.predecessor.inventory_sha256,
+        plan.predecessor.rolled_back,
+    )?;
+    bind_predecessor(selected, runtime, plan)
+}
+
+fn bind_inventory_lineage(
+    selected: &InventoryV1,
+    selected_sha256: &str,
+    predecessor: &InventoryV1,
+    runtime: &CurrentRuntime,
+    predecessor_sha256: &str,
+    rolled_back: bool,
+) -> Result<()> {
+    if rolled_back {
+        need(
+            selected_sha256 != predecessor_sha256
+                && selected.revision.commit != predecessor.revision.commit
+                && selected.next_genesis_hash == predecessor.previous_genesis_hash
+                && predecessor.validators.len() == 4
+                && runtime.validators.len() == 4,
+            "restored inventory does not precede the rolled-back reset",
+        )?;
+        for (index, attempted) in predecessor.validators.iter().enumerate() {
+            need(
+                json::to_vec(attempted.admitted_release()?)?
+                    == json::to_vec(&runtime.validators[index])?,
+                "rolled-back validator does not bind the restored release",
+            )?;
+        }
+        need(
+            json::to_vec(predecessor.edge.admitted_release()?)? == json::to_vec(&runtime.edge)?,
+            "rolled-back edge does not bind the restored release",
+        )?;
+    } else {
+        need(
+            selected_sha256 == predecessor_sha256,
+            "selected inventory differs from completed predecessor",
+        )?;
+    }
+    Ok(())
 }
 
 fn distinct_new_clients(
@@ -174,6 +253,235 @@ fn distinct_new_clients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lineage_fixture() -> (InventoryV1, InventoryV1, CurrentRuntime) {
+        let mut selected = reset::sample_inventory_fixture();
+        selected.revision.commit = "4".repeat(40);
+        selected.revision.build_id = selected.revision.commit.clone();
+        let mut predecessor = selected.clone();
+        predecessor.revision.commit = "a".repeat(40);
+        predecessor.revision.build_id = predecessor.revision.commit.clone();
+        predecessor.previous_genesis_hash = selected.next_genesis_hash.clone();
+        predecessor.next_genesis_hash = "b".repeat(64);
+        let runtime = CurrentRuntime {
+            schema: "iroha.taira.dispatcher-current-runtime.v1".into(),
+            host_identity_sha256: selected.validators[0].endpoint.host_identity_sha256.clone(),
+            validators: predecessor
+                .validators
+                .iter()
+                .map(|v| v.admitted_release().unwrap().clone())
+                .collect(),
+            edge: predecessor.edge.admitted_release().unwrap().clone(),
+        };
+        (selected, predecessor, runtime)
+    }
+
+    #[test]
+    fn completed_transition_requires_its_selected_inventory() {
+        let (selected, predecessor, runtime) = lineage_fixture();
+        bind_inventory_lineage(&selected, "a", &predecessor, &runtime, "a", false).unwrap();
+        assert!(
+            bind_inventory_lineage(&selected, "different", &predecessor, &runtime, "a", false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rolled_back_transition_requires_restored_genesis_and_exact_admitted_releases() {
+        let (selected, predecessor, runtime) = lineage_fixture();
+        bind_inventory_lineage(
+            &selected,
+            "selected",
+            &predecessor,
+            &runtime,
+            "failed",
+            true,
+        )
+        .unwrap();
+        assert!(
+            bind_inventory_lineage(&selected, "failed", &predecessor, &runtime, "failed", true)
+                .is_err()
+        );
+        let mut wrong = predecessor.clone();
+        wrong.previous_genesis_hash = "c".repeat(64);
+        assert!(
+            bind_inventory_lineage(&selected, "selected", &wrong, &runtime, "failed", true)
+                .is_err()
+        );
+        let mut wrong = predecessor.clone();
+        wrong.revision.commit = selected.revision.commit.clone();
+        assert!(
+            bind_inventory_lineage(&selected, "selected", &wrong, &runtime, "failed", true)
+                .is_err()
+        );
+        let mut wrong_runtime = runtime.clone();
+        wrong_runtime.validators[0].artifacts[0].sha256 = "d".repeat(64);
+        assert!(
+            bind_inventory_lineage(
+                &selected,
+                "selected",
+                &predecessor,
+                &wrong_runtime,
+                "failed",
+                true,
+            )
+            .is_err()
+        );
+        wrong_runtime = runtime.clone();
+        wrong_runtime.edge.config_sha256 = "e".repeat(64);
+        assert!(
+            bind_inventory_lineage(
+                &selected,
+                "selected",
+                &predecessor,
+                &wrong_runtime,
+                "failed",
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn topology_producer_requires_both_inventory_digests() {
+        use clap::Parser as _;
+
+        let args = vec![
+            "iroha",
+            "taira",
+            "public-reset",
+            "prepare-topology-intent",
+            "--retained-inventory",
+            "/failed.json",
+            "--expected-retained-inventory-sha256",
+            "a",
+            "--selected-inventory",
+            "/restored.json",
+            "--expected-selected-inventory-sha256",
+            "b",
+            "--selected-authorization",
+            "/selected-authorization.json",
+            "--current-runtime",
+            "/runtime.json",
+            "--expected-current-runtime-sha256",
+            "c",
+            "--transition-plan",
+            "/plan.json",
+            "--expected-plan-sha256",
+            "d",
+            "--import-root",
+            "/import",
+            "--public-inputs",
+            "/public",
+            "--source-manifest",
+            "/source.json",
+            "--known-hosts",
+            "/known_hosts",
+            "--validator-client-config",
+            "/client1",
+            "/client2",
+            "/client3",
+            "/client4",
+            "--validator-config",
+            "/config1",
+            "/config2",
+            "/config3",
+            "/config4",
+            "--initial-unit",
+            "/unit1",
+            "/unit2",
+            "/unit3",
+            "/unit4",
+            "--edge-config",
+            "/edge.conf",
+            "--output",
+            "/intent.json",
+        ];
+        assert!(crate::Args::try_parse_from(args.clone()).is_ok());
+        let mut missing_selected = args.clone();
+        missing_selected.drain(8..10);
+        assert!(crate::Args::try_parse_from(missing_selected).is_err());
+        let mut missing_digest = args.clone();
+        missing_digest.drain(10..12);
+        assert!(crate::Args::try_parse_from(missing_digest).is_err());
+        let mut missing_authorization = args;
+        missing_authorization.drain(12..14);
+        assert!(crate::Args::try_parse_from(missing_authorization).is_err());
+    }
+
+    #[test]
+    fn selected_inventory_requires_its_signed_prior_authorization() {
+        use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+        let selected = reset::sample_inventory_fixture();
+        let inventory_sha256 = sha256_hex(&reset::canonical_inventory_bytes(&selected).unwrap());
+        let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).unwrap();
+        let issued_at_unix_ms = 990_000;
+        let claims = reset::AuthorizationClaimsV1 {
+            action: "reset_and_deploy".into(),
+            qualification_scope: selected.qualification_scope,
+            deployment_id: selected.deployment_id.clone(),
+            inventory_sha256: inventory_sha256.clone(),
+            artifact_closure_sha256: selected.artifact_closure_sha256.clone(),
+            runtime_client_config_sha256: selected.runtime_client_config_sha256.clone(),
+            onboarding_token_sha256: selected.onboarding_token_sha256.clone(),
+            validator_client_configs_sha256: selected.validator_client_configs_sha256.clone(),
+            inrou_stage_tree_sha256: selected.inrou_stage_tree_sha256.clone(),
+            faucet_policy: selected.faucet_policy.clone(),
+            fee_intent: selected.fee_intent.clone(),
+            authorization_nonce: selected.authorization_nonce.clone(),
+            issued_at_unix_ms,
+            not_before_unix_ms: issued_at_unix_ms,
+            expires_at_unix_ms: issued_at_unix_ms + reset::MAX_AUTHORIZATION_LIFETIME_MS,
+            execution_expires_at_unix_ms: issued_at_unix_ms
+                + reset::execution_lifetime_ms(&selected).unwrap(),
+        };
+        let signature = Signature::try_new(
+            key.private_key(),
+            &reset::authorization_message(&claims).unwrap(),
+        )
+        .unwrap();
+        let authorization = reset::AuthorizationEnvelopeV1 {
+            schema: reset::AUTHORIZATION_SCHEMA_V1.into(),
+            claims,
+            signature_hex: hex::encode(signature.payload()),
+        };
+        let trusted = reset::TrustedKeyV1 {
+            schema: reset::TRUSTED_KEY_SCHEMA_V1.into(),
+            algorithm: "ed25519".into(),
+            public_key: key.public_key().to_string(),
+        };
+        reset::verify_authorization_at_signed_instant(
+            &selected,
+            &inventory_sha256,
+            &authorization,
+            &trusted,
+        )
+        .unwrap();
+        assert!(
+            reset::verify_authorization_at_signed_instant(
+                &selected,
+                &"0".repeat(64),
+                &authorization,
+                &trusted,
+            )
+            .is_err()
+        );
+        let wrong = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).unwrap();
+        let untrusted = reset::TrustedKeyV1 {
+            public_key: wrong.public_key().to_string(),
+            ..trusted
+        };
+        assert!(
+            reset::verify_authorization_at_signed_instant(
+                &selected,
+                &inventory_sha256,
+                &authorization,
+                &untrusted,
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn topology_candidate_rejects_reused_or_duplicate_account_peer_and_faucet_identities() {
@@ -315,6 +623,7 @@ impl PrepareTopologyIntent {
             need(!self.output.exists(), "topology output already exists")?;
             for hash in [
                 &self.expected_retained_inventory_sha256,
+                &self.expected_selected_inventory_sha256,
                 &self.expected_current_runtime_sha256,
                 &self.expected_plan_sha256,
             ] {
@@ -363,12 +672,36 @@ impl PrepareTopologyIntent {
                 "retained inventory digest differs from transition plan",
             )?;
             let inventory_bytes = admission::read(&inventory_pin)?;
-            let (old, _chain_guard) =
+            let (predecessor, _chain_guard) =
                 reset::decode_inventory(&inventory_bytes, "retained inventory")?;
+            reset::validate_inventory_for_controller(
+                &predecessor,
+                reset::ControllerAdmission::AbandonOriginalTarget,
+            )?;
+            let selected_pin = observed.pin(&self.selected_inventory, None, MAX_PROOF)?;
+            need(
+                selected_pin.sha256 == self.expected_selected_inventory_sha256,
+                "selected inventory digest differs",
+            )?;
+            let (old, _selected_chain_guard) =
+                reset::decode_inventory(&admission::read(&selected_pin)?, "selected inventory")?;
             reset::validate_inventory_for_controller(
                 &old,
                 reset::ControllerAdmission::AbandonOriginalTarget,
             )?;
+            let selected_authorization_pin =
+                observed.pin(&self.selected_authorization, Some(0o600), MAX_PROOF)?;
+            let selected_authorization: reset::AuthorizationEnvelopeV1 =
+                json::from_slice(&admission::read(&selected_authorization_pin)?)?;
+            let trusted: reset::TrustedKeyV1 =
+                json::from_slice(&admission::read(&plan.trusted_public_key)?)?;
+            reset::verify_authorization_at_signed_instant(
+                &old,
+                &selected_pin.sha256,
+                &selected_authorization,
+                &trusted,
+            )
+            .wrap_err("selected inventory lacks a signed prior authorization")?;
             let runtime_pin = observed.pin(&self.current_runtime, Some(0o600), MAX_PROOF)?;
             need(
                 runtime_pin.sha256 == self.expected_current_runtime_sha256,
@@ -376,7 +709,7 @@ impl PrepareTopologyIntent {
             )?;
             let runtime: CurrentRuntime = json::from_slice(&admission::read(&runtime_pin)?)?;
             validate_runtime(&runtime)?;
-            bind_predecessor(&old, &runtime, &plan)?;
+            bind_selected_inventory(&old, &selected_pin.sha256, &predecessor, &runtime, &plan)?;
             let held = admission::admit(&plan)?;
             let operation = operation_root(&plan);
             let guards = admission::new_guards(&plan, &operation)?;
@@ -531,6 +864,14 @@ impl PrepareTopologyIntent {
                 &policy,
                 &public.canary_onboarding_request.account_id,
             )?;
+            if plan.predecessor.rolled_back {
+                distinct_new_clients(
+                    &predecessor,
+                    &clients,
+                    &policy,
+                    &public.canary_onboarding_request.account_id,
+                )?;
+            }
             intent.validator_clients = clients;
             intent.faucet_policy = policy;
             observed.pin(&self.edge_config, Some(0o640), MAX_PROOF)?;
@@ -583,6 +924,10 @@ impl PrepareTopologyIntent {
                     "path": (absolute(&self.output, "topology output")?),
                     "sha256": (sha256_hex(&bytes)),
                     "deployment_id": (intent.deployment_id),
+                    "retained_inventory_sha256": (inventory_pin.sha256),
+                    "selected_inventory_sha256": (selected_pin.sha256),
+                    "selected_authorization_sha256": (selected_authorization_pin.sha256),
+                    "rolled_back_predecessor": (plan.predecessor.rolled_back),
                     "previous_genesis_hash": (intent.previous_genesis_hash),
                     "next_genesis_hash": (public.genesis_hash),
                     "ledger_mutated": false,

@@ -1631,6 +1631,9 @@ android {
         // Reuse the exact Java assertions against the Android consumer classpath.
         getByName("test").java.srcDir(project(":core-jvm").file("src/sccpJavaTest/java"))
         getByName("test").java.srcDir(project(":core-jvm").file("src/sorafsJavaTest/java"))
+        // Android instrumentation reads the same captured issuer vector as Rust
+        // and the bank issuer tests; these assets are never packaged in the SDK.
+        getByName("androidTest").assets.srcDir(rootProject.projectDir.parentFile.resolve("fixtures/offline"))
     }
 
     packaging {

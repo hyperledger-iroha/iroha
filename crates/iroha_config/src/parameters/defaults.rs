@@ -2236,9 +2236,9 @@ pub mod torii {
     /// Per-authority allocation within the query result cache.
     pub const QUERY_STORE_CAPACITY_PER_USER: NonZeroUsize = nonzero!(128usize);
     /// Maximum concurrent query executions admitted by Torii.
-    pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(128usize);
+    pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(256usize);
     /// Maximum concurrent heavy query executions admitted by Torii.
-    pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Aggregate bytes split between bounded signed-query ingress and fanout working sets.
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(64_000_000);
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
@@ -2256,8 +2256,9 @@ pub mod torii {
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
     /// Maximum time a query waits for execution capacity before Torii rejects it.
-    /// A bounded solo proof burst may briefly occupy all heavy-query permits.
-    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 1_000;
+    /// A solo proof burst can occupy all heavy-query permits for more than one
+    /// second; keep a finite queue deadline below the outer HTTP route timeout.
+    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
     /// Derive the V1 routed-read route-body phase during configuration parsing.

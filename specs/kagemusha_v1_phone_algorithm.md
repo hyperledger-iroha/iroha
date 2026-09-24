@@ -174,10 +174,17 @@ canonical DER, the signed `S` and authenticator bytes, the SHA-derived P-256
 equation, and copy constraints from both signed secure indices and the Apple
 counter to passed state cells. The five-case original-assertion selection
 passes in both Pasta fields, including signed-index and DER mutations; the
-dedicated P-256 carry geometry now uses three 87-bit limbs. This helper is not
-yet called by the live
-monetary fold; complete Core subject, credential, issuer-policy, release and
-terminal links remain required before ordinary-app admission can open.
+dedicated P-256 carry geometry now uses three 87-bit limbs. The live Terminal
+now binds its derived body hash to the original signed `S` and binds the
+release, profile, candidate, credential ID and app-policy digest to the same
+source cells. Its focused two-parity tests cover those links. The staged
+original assertion and issuer-enrollment equations are still absent from the
+live monetary fold. They cannot simply be inserted into its fixed k16,
+32-job geometry: even a reduced-window staged P-256 test uses k18, while a
+real assertion needs the full 256-bit equation and additional SHA work. An
+independently verifiable, release-keyed assertion relation must bind the
+original evidence, credential and exact Terminal source and be recursively
+folded in both parities before ordinary-app admission can open.
 A separate staged composition now feeds the same assigned signing subject and
 authenticator bytes through the available State, Guard, governed Apple policy,
 compact credential-ID SHA opening and original assertion/P-256 relations. The
@@ -357,7 +364,19 @@ index is invalid because an unseen payment at that index may exist.
    supplied process-owned selection, and returns only the verified server
    nonce for KeyMint's challenge. The native enrollment owner still rechecks
    the complete authority. Without those independently supplied inputs, app
-   enrollment remains unavailable.
+   enrollment remains unavailable. A checked-in cross-SDK vector now fixes
+   the independent issuer's canonical policy, signature and 273-byte Android
+   preparation exactly. The Core issuer generator and Rust JNI verifier both
+   pass it; an unsealed Pixel 6 Android instrumentation run passes the same
+   positive vector and rejects changed release, signature, service time and
+   policy pin. The Swift issuer-preparation verifier accepts the same Android
+   vector only under the governed zero-key-ID binding; Apple selection requires
+   the generated nonzero App Attest key ID. This qualifies only the preparation
+   preflight, not a device counter or monetary enrollment. Before a new
+   attestation, verify the signed fields against the pinned issuer policy and
+   current trusted issuer time. Exact recovery of an already-requested,
+   durably retained certificate may reauthenticate those signed fields after
+   expiry, but may not start another attestation or native qualification.
 2. Verify the app attestation using its platform trust chain and approved app
    identity. The independent verifier signs both the actual SHA-256 key ID and
    the derived device-key reference from the same raw attested point, together
@@ -546,9 +565,13 @@ The native testnet State observer now requires operator-pinned network, asset
 identity, asset incarnation, scale, reserve liability pool, and authenticated
 release; it verifies the actual paired State proof and returns only an
 unqualified observation. A Rust-only owner retains that concrete
-verifier and one process-local lane lineage. No app-facing native installation
-or durable monetary capability exists yet; the terminal hardware fold and
-monetary admission remain separate.
+verifier and one process-local lane lineage. Its MintFold entry now also
+requires the pre-debit reservation, an Applied chain top-up under an independent
+finality anchor, both release-authenticated mint proofs, exact linkage to the
+paired State proof and unique credit ID; a byte-identical process-local retry
+returns the original unqualified observation. No app-facing native
+installation or durable monetary capability exists yet; the terminal hardware
+fold and monetary admission remain separate.
 The signed release manifest includes the exact genesis-derived network ID.
 Node startup, native proof verification, enrollment and testnet observation
 reject a release signed for another network before admitting its artifacts or
