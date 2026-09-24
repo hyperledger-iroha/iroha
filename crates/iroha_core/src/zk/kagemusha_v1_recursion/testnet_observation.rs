@@ -1189,24 +1189,9 @@ mod tests {
         );
         changed_statement = statement.clone();
         changed_statement.lifecycle.liability_pool_id[0] ^= 1;
-        changed_statement.lifecycle.credit_id = changed_statement
-            .expected_credit_id()
-            .expect("altered reserve credit ID");
-        let changed_semantic = changed_statement
-            .canonical_digest()
-            .expect("canonical altered reserve statement");
-        changed_public = public.clone();
-        changed_public.mint_finality_semantic_digest = changed_semantic;
-        assert!(
-            check(
-                &changed_statement,
-                &changed_public,
-                changed_statement.lifecycle.credit_id,
-                changed_semantic,
-                binding
-            )
-            .is_err()
-        );
+        // The pool is derived from the network, asset and incarnation, so a different
+        // pool cannot form a canonical statement to reach the later scope check.
+        assert!(changed_statement.canonical_digest().is_err());
     }
 
     #[test]
