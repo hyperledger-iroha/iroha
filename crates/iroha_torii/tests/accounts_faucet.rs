@@ -459,6 +459,7 @@ fn faucet_post_request(path: &str, body: String) -> Request<axum::body::Body> {
         .method("POST")
         .uri(path)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .header(axum::http::header::ACCEPT, "application/json")
         .extension(axum::extract::connect_info::ConnectInfo(
             std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
         ))
@@ -534,6 +535,13 @@ async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Re
 
 async fn expect_faucet_submit_without_quorum(resp: Response) {
     let resp = expect_status(resp, StatusCode::SERVICE_UNAVAILABLE).await;
+    assert!(
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|content_type| content_type.split(';').next() == Some("application/json")),
+        "strict faucet response must be JSON"
+    );
     let body = to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("strict faucet response body");

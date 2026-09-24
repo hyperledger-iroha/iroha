@@ -117,6 +117,8 @@ fn synthetic_executed_commitment(
         Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
         Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
     )
+    .with_transaction_commitments_from_block(block)
+    .expect("fixture exact input/output commitments")
 }
 
 #[test]
