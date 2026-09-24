@@ -112,11 +112,14 @@ fn runtime_workspace() -> Result<tempfile::TempDir> {
         .or_else(|| std::env::var_os("IROHA_RELEASE_ARTIFACT_ROOT"))
         .ok_or_else(|| eyre!("an explicit owner-only external beacon fixture root is required"))?;
     let root = validate_runtime_root(Path::new(&root))?;
-    Ok(tempfile::Builder::new()
+    let workspace = tempfile::Builder::new()
         .prefix("beacon-production-")
-        .tempdir_in(root)?)
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)?;
+    validate_runtime_root(workspace.path())?;
+    Ok(workspace)
 }
-fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
+fn binary(variable: &str, kind: Option<ReleasePrebuiltBinary>) -> Result<PathBuf> {
     let path = std::env::var_os(variable)
         .map(PathBuf::from)
         .ok_or_else(|| eyre!("{variable} must name the exact prebuilt binary"))?;
@@ -124,7 +127,16 @@ fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
         path.is_absolute() && path.is_file(),
         "prebuilt executable is absent"
     );
-    revalidate_release_prebuilt_binary(kind, &path)?;
+    if let Some(kind) = kind {
+        revalidate_release_prebuilt_binary(kind, &path)?;
+    } else {
+        // The Taira gate publishes this feature-isolated executable as its own
+        // native artifact. It has no slot in the separate Sumeragi v2 bundle.
+        ensure!(
+            std::env::var_os("IROHA_RELEASE_PREBUILT_MANIFEST_SHA256").is_none(),
+            "beacon custody fixture cannot use a Sumeragi prebuilt contract"
+        );
+    }
     Ok(path)
 }
 
@@ -1493,16 +1505,13 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let daemon = binary(
-        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL",
-        ReleasePrebuiltBinary::IrohadMessageControl,
-    )?;
+    let daemon = binary("TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY", None)?;
     let launcher = binary(
         "TEST_NETWORK_BIN_IROHAD_TAIRA",
-        ReleasePrebuiltBinary::IrohadTaira,
+        Some(ReleasePrebuiltBinary::IrohadTaira),
     )?;
-    let cli = binary("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha)?;
-    let kagami = binary("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami)?;
+    let cli = binary("TEST_NETWORK_BIN_IROHA", Some(ReleasePrebuiltBinary::Iroha))?;
+    let kagami = binary("KAGAMI_BIN", Some(ReleasePrebuiltBinary::Kagami))?;
     let workspace = runtime_workspace()?;
     let (api, p2p, reservations) = reserve_ports()?;
     let preparation_started = Instant::now();
@@ -1540,23 +1549,40 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     // core-testnet config before any peer starts: its deployment profile guard
     // must accept the same four-node inputs the reset will materialize.
     let launcher_check_deadline = Instant::now() + PHASE_BUDGET;
-    for peer in 0..4 {
-        let mut check = command(&launcher, directory);
-        check
-            .args(["--sora", "--config"])
-            .arg(directory.join(format!("peer{peer}.toml")))
-            .args(["--genesis-manifest-json"])
-            .arg(prepared.genesis_directory.join("genesis.json"))
-            .arg("--check-config");
-        let output = run(check, launcher_check_deadline)
-            .await
-            .wrap_err_with(|| {
-                format!("shipping Taira launcher rejected generated peer{peer} config")
-            })?;
-        ensure!(
-            output == b"Ready: configuration and available genesis are valid\n",
-            "shipping Taira launcher did not complete offline genesis validation for peer{peer}"
+    let launcher_check = async {
+        for peer in 0..4 {
+            let mut check = command(&launcher, directory);
+            check
+                .args(["--sora", "--config"])
+                .arg(directory.join(format!("peer{peer}.toml")))
+                .args(["--genesis-manifest-json"])
+                .arg(prepared.genesis_directory.join("genesis.json"))
+                .arg("--check-config");
+            let output = run(check, launcher_check_deadline)
+                .await
+                .wrap_err_with(|| {
+                    format!("shipping Taira launcher rejected generated peer{peer} config")
+                })?;
+            if output != b"Ready: configuration and available genesis are valid\n" {
+                let diagnostic = workspace
+                    .path()
+                    .join(format!("launcher-check-peer{peer}.stdout"));
+                private_file(&diagnostic, &output)?;
+                return Err(eyre!(
+                    "shipping Taira launcher did not complete offline genesis validation for peer{peer}; private stdout: {}",
+                    diagnostic.display()
+                ));
+            }
+        }
+        Ok::<(), color_eyre::Report>(())
+    }
+    .await;
+    if let Err(error) = launcher_check {
+        eprintln!(
+            "beacon fixture launcher precheck retained at {}",
+            workspace.keep().display()
         );
+        return Err(error);
     }
     let fresh = fresh_client(directory, &prepared.network_id)?;
     let clients = (0..4)

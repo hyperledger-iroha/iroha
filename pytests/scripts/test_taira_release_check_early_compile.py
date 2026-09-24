@@ -1,4 +1,4 @@
-"""The network fixture metadata gate rejects Rust errors before full codegen.
+"""The complete selected test metadata gate rejects Rust errors before codegen.
 
 These tests use mocked Cargo and never access a validator or deployment input.
 """
@@ -18,16 +18,16 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 
-class EarlyNetworkCompileGateTests(unittest.TestCase):
+class EarlyCompileGateTests(unittest.TestCase):
     ENV = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+    SHIPPING = ("cli", "kagami", "taira-launcher", "sorafs-bin")
 
     def run_until_codegen(self, scope, metadata_effect, codegen_effect):
         with contextlib.ExitStack() as stack:
             for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
                          "run_pure_fsm_checks", "run_lifecycle_source_checks"):
                 stack.enter_context(patch.object(gate, name))
-            stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=(
-                "cli", "kagami", "taira-launcher", "sorafs-bin")))
+            stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=self.SHIPPING))
             metadata = stack.enter_context(patch.object(
                 gate, "check_test_harnesses", side_effect=metadata_effect))
             codegen = stack.enter_context(patch.object(
@@ -39,16 +39,18 @@ class EarlyNetworkCompileGateTests(unittest.TestCase):
                                 environment=self.ENV, source_commit="a" * 40,
                                 lock_fds=(77, 88), update_independent_checks=checkpoint)
             self.assertEqual(metadata.call_args.args[0], Path("/frozen"))
+            expected = gate.native_harness_plan(gate.qualification_stages(scope), self.SHIPPING)[1]
+            self.assertTrue({"core", "cli", "network"}.issubset(expected))
             self.assertEqual(metadata.call_args.kwargs,
-                             {"harnesses": ("config", "network"), "lock_fds": (77, 88)})
+                             {"harnesses": expected, "lock_fds": (77, 88)})
             self.assertEqual(metadata.call_args.args[1],
                              self.ENV | {"VERGEN_GIT_SHA": "a" * 40,
                                          "IROHA_GIT_COMMIT_HASH": "a" * 40})
             checkpoint.assert_not_called()
             return caught.exception, metadata, codegen
 
-    def test_fixture_type_error_stops_complete_codegen_in_both_scopes(self):
-        failure = gate.CheckError("network fixture Rust metadata rejected E0308")
+    def test_selected_harness_type_error_stops_complete_codegen_in_both_scopes(self):
+        failure = gate.CheckError("selected test Rust metadata rejected E0308")
         for scope in gate.QUALIFICATION_SCOPES:
             with self.subTest(scope=scope):
                 caught, metadata, codegen = self.run_until_codegen(scope, failure, None)
@@ -62,19 +64,16 @@ class EarlyNetworkCompileGateTests(unittest.TestCase):
             with self.subTest(scope=scope):
                 order = []
                 def metadata(*_args, **_kwargs):
-                    order.append("fixture metadata")
+                    order.append("complete metadata")
                 def codegen(*_args, **_kwargs):
                     order.append("complete codegen")
                     raise failure
                 caught, checked, compiled = self.run_until_codegen(scope, metadata, codegen)
                 self.assertIs(caught, failure)
-                self.assertEqual(order, ["fixture metadata", "complete codegen"])
+                self.assertEqual(order, ["complete metadata", "complete codegen"])
                 checked.assert_called_once()
                 compiled.assert_called_once()
-                expected = gate.native_harness_plan(gate.qualification_stages(scope),
-                                                    ("cli", "kagami", "taira-launcher", "sorafs-bin"))[1]
-                self.assertEqual(compiled.call_args.kwargs,
-                                 {"harnesses": expected, "lock_fds": (77, 88)})
+                self.assertEqual(checked.call_args.kwargs, compiled.call_args.kwargs)
                 self.assertIs(checked.call_args.args[1], compiled.call_args.args[1])
 
 

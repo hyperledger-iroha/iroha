@@ -3615,7 +3615,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha3d-beacon-custody"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -3626,7 +3626,8 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         paths = {}
         for selection, record in records.items():
             package = {"iroha3d": "irohad", "iroha": "iroha_cli",
-                       "iroha3d-message-control": "irohad"}.get(selection)
+                       "iroha3d-message-control": "irohad",
+                       "iroha3d-beacon-custody": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
             if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
@@ -3934,14 +3935,16 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                              *, message_control: bool = False,
+                             beacon_custody: bool = False,
                              focused_fixture: bool = False) -> NativeArtifactCopies:
     """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
-    if message_control and focused_fixture:
-        raise CheckError("message-control codegen cannot use the focused fixture graph")
-    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else {
+    if (message_control and beacon_custody) or (focused_fixture and (message_control or beacon_custody)):
+        raise CheckError("feature-isolated daemon codegen cannot use another fixture graph")
+    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else (
+        {"iroha3d": ("iroha3d-beacon-custody", "irohad")} if beacon_custody else {
         "iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
-        "iroha3d_taira": ("taira-launcher", "irohad")}
-    if not message_control:
+        "iroha3d_taira": ("taira-launcher", "irohad")})
+    if not message_control and not beacon_custody:
         # Audit the complete shipping table even in the mutable diagnostic.
         # Only its known four-peer inputs need production codegen there; the
         # immutable release and signed build retain every shipping binary.
@@ -3960,8 +3963,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
                *(["--features", "irohad/test-network-message-control"] if message_control else []),
+               *(["--features", "irohad/test-network-production-beacon-custody"] if beacon_custody else []),
                "--message-format=json-render-diagnostics"]
     phase = ("message-control fixture codegen" if message_control else
+             "beacon-custody fixture codegen" if beacon_custody else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
     progress = CargoBuildProgress(phase, {("bin", name) for name in expected},
@@ -3970,7 +3975,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     production_libraries: set[str] = set()
-    audit_production_graph = not message_control and not focused_fixture
+    audit_production_graph = not message_control and not beacon_custody and not focused_fixture
     stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
@@ -4082,9 +4087,9 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
                 if "kagami" not in binaries:
                     raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
                 private_fixture_root = beacon_fixture_root()
-                with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
+                with compile_network_binaries(root, env, lock_fds, beacon_custody=True) as control:
                     beacon_env = network_env | {
-                        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
+                        "TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY": control["iroha3d-beacon-custody"],
                         "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
                         "KAGAMI_BIN": binaries["kagami"],
                     }
@@ -4778,18 +4783,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
-        # This integration target compiles late in the complete test graph. Check
-        # its Rust metadata first so a four-peer fixture type error does not wait
-        # for every unrelated test executable to finish codegen. Configuration
-        # shares the already-warm focused network graph. This check publishes no
-        # test pass or qualification checkpoint; the complete build still follows.
-        if "network" in selections:
-            early_compile = tuple(name for name in ("config", "network") if name in selections)
-            check_test_harnesses(root, env, harnesses=early_compile, lock_fds=lock_fds)
-        # The complete --no-run build type-checks this same selected feature graph
-        # and requires one executable for every selected native harness. Keep the
-        # faster metadata-only failure probe in focused prequalification; repeating
-        # it before release codegen adds no qualification evidence.
+        # Check the complete selected test graph before code generation so Rust
+        # import and type errors in any harness stop early. This publishes no test
+        # pass or qualification checkpoint; the complete --no-run build still
+        # requires one executable for every selected native harness.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:

@@ -12124,15 +12124,20 @@ fn read_config_and_genesis_with_filesystem_space(
     if config.kura.init_mode != InitMode::Fast {
         preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
     }
-    if config.kura.init_mode == InitMode::Fast {
-        // Fast constructs one inert State VM for structural completeness. Cap
-        // that VM at one minimum-stack worker and leave the global Rayon pool
-        // uninitialized; no contract or proof route is available in this mode.
-        let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
-        ivm::set_scheduler_thread_limits(Some(1), Some(1));
-        println!("{}", scheduler_banner_line(1));
-    } else {
-        apply_concurrency_config(&config.concurrency);
+    // An offline configuration check never starts a VM or worker pool. Keep
+    // stdout reserved for its single Ready/Pending result, and leave scheduler
+    // setup to the real daemon startup path.
+    if !args.startup.check_config {
+        if config.kura.init_mode == InitMode::Fast {
+            // Fast constructs one inert State VM for structural completeness. Cap
+            // that VM at one minimum-stack worker and leave the global Rayon pool
+            // uninitialized; no contract or proof route is available in this mode.
+            let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
+            ivm::set_scheduler_thread_limits(Some(1), Some(1));
+            println!("{}", scheduler_banner_line(1));
+        } else {
+            apply_concurrency_config(&config.concurrency);
+        }
     }
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
@@ -16301,7 +16306,10 @@ mod tests {
             "if!emergency_fast&&config.telemetry_profile.expensive_metrics_enabled(){letfastpq_device_labels=FastpqDeviceLabels::from_config(&config.zk.fastpq);install_fastpq_execution_mode_probe(&fastpq_device_labels);"
         ));
         assert!(compact_source.contains(
-            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}"
+            "if!args.startup.check_config{ifconfig.kura.init_mode==InitMode::Fast{"
+        ));
+        assert!(compact_source.contains(
+            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
