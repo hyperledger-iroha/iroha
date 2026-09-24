@@ -336,21 +336,22 @@ contract](https://source.android.com/docs/security/features/keystore/attestation
 and [phone algorithm](kagemusha_v1_phone_algorithm.md).
 
 The Android SDK now has typed method-12 enrollment framing over the existing
-native coordinator. Debug and release Kotlin compilation pass. Its six focused
-managed tests compile but cannot execute on the current host without a rebuilt
-ABI-23 `connect_norito_bridge` address validator; the prior four-test invocation
-failed during account fixture construction, before exercising the adapter.
-The adapter retains one
-phase-1 selection in process, freezes an ambiguous selection response and
-rejects issuer completion after a changed proof result. It
-does not create the missing qualified native backend or admit Android money.
+native coordinator. A rebuilt ABI-23 host bridge runs nine focused Android
+host-native tests, including original-ticket phase-6 cancellation retry after a
+lost response or a locally poisoned proof response. The adapter retains one
+phase-1 selection in process, can read its byte-identical response after a lost
+return through the same live owner, and rejects issuer completion after a changed proof
+result. It does not create the missing qualified native backend or admit Android
+money.
 The iOS app's native coordinator also dispatches method 12 through the exact
 schema-2 frame validator. It retains the original ticket, phase order, signed
 preparation selection and exact response/proof retries before exposure.
-Its focused transport source parses and its isolated state machine typechecks;
-the app still
-lacks an installed qualified enrollment components factory and current-source
-XCFramework for executable iOS qualification.
+Nine focused tests passed on the connected iPhone 17 Pro Max, including exact
+phase-2 response correlation, phase-3 challenge identity, and lost phase-6
+cancellation reply retry even after local response poisoning. This uses the
+development-signed diagnostic bridge;
+the app still lacks an installed qualified enrollment components factory and a
+source-sealed monetary XCFramework.
 
 ## Security findings and implementation work
 

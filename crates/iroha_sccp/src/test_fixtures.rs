@@ -118,6 +118,7 @@ pub struct SccpFinalizedBlockTestFixtureV1 {
 fn sccp_mint_finality_genesis_test_fixture_v1(
     network_id: iroha_data_model::NetworkId,
     roster: &[ValidatorPower],
+    last_height: u64,
 ) -> (
     iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1,
     iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
@@ -165,7 +166,7 @@ fn sccp_mint_finality_genesis_test_fixture_v1(
         .authority_generation
         .bind_network_id(network_id)
         .expect("bind SCCP mint-finality authority to exact genesis network");
-    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, 10)
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, last_height)
         .expect("canonical SCCP genesis scheduling authorization");
     (authorization, authority)
 }
@@ -199,6 +200,37 @@ impl SccpExactOutboundTestFixtureV1 {
             Some(parent.block().hash()),
         );
         self.with_finalized_block(&block, Some(parent))
+    }
+
+    /// Finalize the first block of epoch one through an authenticated genesis boundary.
+    ///
+    /// The height-one block certifies a complete next-epoch snapshot. The height-two
+    /// successor consumes that snapshot and embeds the boundary block's exact `CommitQC`.
+    #[must_use]
+    pub fn first_epoch_finalized_successor(&self) -> SccpFinalizedBlockTestFixtureV1 {
+        let genesis_block = self.finalized_block.block();
+        assert_eq!(genesis_block.header().height().get(), 1);
+        assert_eq!(
+            genesis_block.header().sccp_commitment_root(),
+            Some(self.bundle.commitment_root),
+        );
+        let boundary = sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+            genesis_block,
+            None,
+            SccpFinalityFixtureEpochSchedule::GenesisBoundary,
+        );
+        let successor = exact_sccp_fixture_block(
+            self.bundle.commitment.context,
+            &self.bundle.payload,
+            Some(self.bundle.commitment_root),
+            2,
+            Some(boundary.block().hash()),
+        );
+        sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+            &successor,
+            Some(&boundary),
+            SccpFinalityFixtureEpochSchedule::GenesisBoundary,
+        )
     }
 
     /// Rebuild this exact fixture around one complete finalized signed block.
@@ -906,19 +938,40 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 /// invalid or non-exact parent, has malformed source/output joins or a stale output cache,
 /// or cannot be bound to a cryptographically valid artifact.
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the test-only signer keeps the ordered block, roster, context, QC, and aggregate-binding checks cohesive"
-)]
 pub fn sccp_finalize_taira_block_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
 ) -> SccpFinalizedBlockTestFixtureV1 {
+    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+        block,
+        parent,
+        SccpFinalityFixtureEpochSchedule::FirstEpoch,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SccpFinalityFixtureEpochSchedule {
+    FirstEpoch,
+    GenesisBoundary,
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the test-only signer keeps the ordered block, roster, context, QC, and aggregate-binding checks cohesive"
+)]
+fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+    block: &SignedBlock,
+    parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+    epoch_schedule: SccpFinalityFixtureEpochSchedule,
+) -> SccpFinalizedBlockTestFixtureV1 {
     let block_header = block.header();
     let height = block_header.height().get();
     assert!(
-        (1..=9).contains(&height),
-        "the exact SCCP finality signer supports only pre-boundary heights in its fixed first epoch"
+        match epoch_schedule {
+            SccpFinalityFixtureEpochSchedule::FirstEpoch => (1..=9).contains(&height),
+            SccpFinalityFixtureEpochSchedule::GenesisBoundary => (1..=2).contains(&height),
+        },
+        "the exact SCCP finality signer received a height outside its selected epoch schedule"
     );
     assert_exact_fixture_block_body(block);
     let mut keypairs = [
@@ -956,15 +1009,69 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let network_id = sccp_taira_finality_network_id_v1();
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => {
-            let (authorization, authority) =
-                sccp_mint_finality_genesis_test_fixture_v1(network_id, &roster);
+            let genesis_last_height = match epoch_schedule {
+                SccpFinalityFixtureEpochSchedule::FirstEpoch => 10,
+                SccpFinalityFixtureEpochSchedule::GenesisBoundary => 1,
+            };
+            let (authorization, authority) = sccp_mint_finality_genesis_test_fixture_v1(
+                network_id,
+                &roster,
+                genesis_last_height,
+            );
+            let next_epoch_snapshot =
+                (epoch_schedule == SccpFinalityFixtureEpochSchedule::GenesisBoundary).then(|| {
+                    use iroha_data_model::{
+                        block::consensus_v2::finality::FinalizedNextEpochSnapshot,
+                        isi::kagemusha_v1::{
+                            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
+                            KagemushaMintFinalityEpochAuthorizationV1,
+                            KagemushaMintFinalityEpochDecisionV1,
+                        },
+                    };
+
+                    let next_authorization = KagemushaMintFinalityEpochAuthorizationV1 {
+                        version: authorization.version,
+                        network_id,
+                        epoch: 1,
+                        first_height: 2,
+                        last_height: 10,
+                        authority_generation: authority.generation,
+                        authority_id: authorization.authority_id,
+                        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                            session_id: [0xC4; 32],
+                            transcript_hash: [0xC5; 32],
+                        }),
+                        previous_authorization_id: authorization
+                            .authorization_id()
+                            .expect("canonical SCCP genesis authorization identity"),
+                        transition_id: [0; 32],
+                        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+                    };
+                    next_authorization
+                        .validate_against_authority(&authority)
+                        .expect("epoch-one SCCP authorization binds the incumbent authority");
+                    next_authorization
+                        .validate_successor(&authorization)
+                        .expect("epoch-one SCCP authorization succeeds signed genesis");
+                    FinalizedNextEpochSnapshot {
+                        epoch: next_authorization.epoch,
+                        kagemusha_mint_finality_authorization: next_authorization,
+                        kagemusha_mint_finality_authority: authority.clone(),
+                        epoch_end_height: next_authorization.last_height,
+                        mode: ConsensusMode::Npos,
+                        roster: roster.clone(),
+                        validator_set_pops: validator_set_pops.clone(),
+                        quorum,
+                        leader_seed: [0x5a; 32],
+                    }
+                });
             HeightContext {
                 network_id,
                 protocol_version: PROTOCOL_VERSION,
                 height,
                 epoch: authorization.epoch,
                 epoch_end_height: authorization.last_height,
-                next_epoch_snapshot: None,
+                next_epoch_snapshot,
                 mode: ConsensusMode::Npos,
                 parent_commit_qc: None,
                 snapshot_bootstrap: None,
@@ -976,6 +1083,40 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 leader_seed: [0x5a; 32],
                 kagemusha_mint_finality_authorization: authorization,
                 kagemusha_mint_finality_authority: authority,
+            }
+        }
+        (2, Some(parent_hash), Some(parent))
+            if epoch_schedule == SccpFinalityFixtureEpochSchedule::GenesisBoundary =>
+        {
+            assert_exact_finalized_block_fixture(parent);
+            assert_eq!(parent.block().header().height().get(), 1);
+            assert_eq!(parent_hash, parent.block().hash());
+            let parent_context = &parent.proof().finality_artifact.height_context;
+            assert_eq!(parent_context.epoch, 0);
+            assert_eq!(parent_context.epoch_end_height, 1);
+            let next = parent_context
+                .next_epoch_snapshot
+                .as_ref()
+                .expect("signed SCCP genesis boundary contains a complete next-epoch snapshot");
+            assert_eq!(next.epoch, 1);
+            HeightContext {
+                network_id: parent_context.network_id,
+                protocol_version: PROTOCOL_VERSION,
+                height,
+                epoch: next.epoch,
+                epoch_end_height: next.epoch_end_height,
+                next_epoch_snapshot: None,
+                mode: next.mode,
+                parent_commit_qc: Some(parent.proof().finality_artifact.commit_qc.clone()),
+                snapshot_bootstrap: None,
+                quorum: next.quorum,
+                roster: next.roster.clone(),
+                nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+                execution_policy_hash: parent_context.execution_policy_hash,
+                da_layout: parent_context.da_layout,
+                leader_seed: next.leader_seed,
+                kagemusha_mint_finality_authorization: next.kagemusha_mint_finality_authorization,
+                kagemusha_mint_finality_authority: next.kagemusha_mint_finality_authority.clone(),
             }
         }
         (2..=9, Some(parent_hash), Some(parent)) => {

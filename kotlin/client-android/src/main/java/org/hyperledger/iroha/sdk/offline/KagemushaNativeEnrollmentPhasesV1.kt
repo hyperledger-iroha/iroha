@@ -12,10 +12,10 @@ import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
  *
  * A validated frame is not issuer, app, device, or monetary authority. Only the qualified
  * native backend may authenticate the signed preparation, complete qualification and issuer
- * certificate. Stock JNI has no such backend; its open fails closed. There is no phase-1 read
- * opcode, so a lost selection response cannot be reconstructed or retried in this process.
- * TODO: qualify the platform backend and add an authenticated phase-1 original-result read
- * before this transport can recover a lost selection across process restarts.
+ * certificate. Stock JNI has no such backend; its open fails closed. Phase 7 reads the original
+ * selection only while its native owner and deadline remain live; it never selects again.
+ * TODO: qualify an online replacement protocol for process-death recovery of an unexposed
+ * phase-1 result. A new process cannot restore the original native deadline or kernel state.
  */
 class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     private val bridge: KagemushaCoreCoordinatorBridgeV1,
@@ -78,6 +78,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     }
 
     private var beginInvoked = false
+    private var begunAccountI105: String? = null
     private var selected: Selection? = null
     private var challengeRequest: List<ByteArray>? = null
     private var accepted: AcceptedChallenge? = null
@@ -86,6 +87,7 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
     private var finishRequest: List<ByteArray>? = null
     private var enrollmentId: ByteArray? = null
     private var cancelled = false
+    private var cancelledSelection: Selection? = null
     private var poisoned = false
 
     /** Revoke cached phase authority when the parent owner closes or changes account. */
@@ -94,12 +96,14 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         cancelled = true
         poisoned = true
         selected = null
+        begunAccountI105 = null
         accepted = null
         proof = null
         challengeRequest = null
         proofRequest = null
         finishRequest = null
         enrollmentId = null
+        cancelledSelection = null
     }
 
     /** Invoke phase 1 exactly once. An uncertain return freezes selection in this process. */
@@ -110,17 +114,22 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         val account = canonical.toByteArray(Charsets.UTF_8)
         require(account.size <= 512) { "Enrollment account exceeds native frame bound" }
         beginInvoked = true
+        begunAccountI105 = canonical
         val fields = bridge.invoke(METHOD, listOf(u32(1), account))
         return Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4],
             fields[5], fields[6])
             .also { selected = it }
     }
 
-    /** Return only a selection received earlier in this process; never dispatch phase 1 again. */
+    /** Read the exact live native selection after a lost phase-1 response; never select again. */
     @Synchronized
     fun recoverExactSelection(accountI105: String): Selection? {
-        requireCanonicalI105Address(accountI105, "enrollment account")
-        return selected?.takeIf { !cancelled && !poisoned && it.accountI105 == accountI105 }
+        val canonical = requireCanonicalI105Address(accountI105, "enrollment account")
+        if (!beginInvoked || cancelled || poisoned || begunAccountI105 != canonical) return null
+        selected?.let { return it }
+        val fields = bridge.invoke(METHOD, listOf(u32(7), canonical.toByteArray(Charsets.UTF_8)))
+        return Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4],
+            fields[5], fields[6]).also { selected = it }
     }
 
     /**
@@ -204,11 +213,16 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         return response[1].copyOf().also { enrollmentId = it.copyOf() }
     }
 
-    /** Phase 6 revokes this ticket; it never permits another selection in this object. */
+    /** Revoke the original ticket, including after local response poisoning; only exact retry follows. */
     @Synchronized
     fun cancel(selection: Selection) {
-        requireSelection(selection)
-        cancelled = true
+        check(selected === selection && (!cancelled || cancelledSelection === selection)) {
+            "Enrollment cancellation is not the original native ticket"
+        }
+        if (!cancelled) {
+            cancelled = true
+            cancelledSelection = selection
+        }
         bridge.invoke(METHOD, listOf(u32(6), selection.ticket()))
     }
 

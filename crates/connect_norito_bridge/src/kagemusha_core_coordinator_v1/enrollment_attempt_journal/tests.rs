@@ -151,6 +151,38 @@ fn live_selection_cannot_transfer_an_expired_original_deadline() {
         Err(KagemushaEnrollmentJournalErrorV1::Frozen)
     ));
 }
+
+#[test]
+fn revision_exhaustion_during_revocation_poisoned_live_selection() {
+    let store = Arc::new(MemoryStore::default());
+    store.0.lock().unwrap().0 = Some(
+        ImageV1 {
+            version: VERSION,
+            revision: u64::MAX - 1,
+            records: Vec::new(),
+        }
+        .encode_checked()
+        .unwrap(),
+    );
+    let journal = Arc::new(KagemushaEnrollmentAttemptJournalV1::open(store).unwrap());
+    let selected = select(&journal, &account());
+    let live = journal.retain_live(selected, pins()).unwrap();
+    assert!(live.require_live().is_ok());
+
+    assert_eq!(
+        journal.revoke_all(),
+        Err(KagemushaEnrollmentJournalErrorV1::Store)
+    );
+    assert_eq!(
+        live.require_live(),
+        Err(KagemushaEnrollmentJournalErrorV1::Store)
+    );
+    assert_eq!(
+        journal.select(&begin(&other_account()), pins()).err(),
+        Some(KagemushaEnrollmentJournalErrorV1::Store)
+    );
+}
+
 fn challenge_request(selected: &KagemushaEnrollmentJournalSelectionV1) -> Vec<u8> {
     frame(&super::super::initial_enrollment::tests::journal_challenge_fields(selected))
 }

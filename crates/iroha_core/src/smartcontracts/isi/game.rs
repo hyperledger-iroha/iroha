@@ -1741,6 +1741,7 @@ mod tests {
             prelude::{Json, TransactionBuilder, TransactionParameters},
             transaction::FeePaymentIntent,
         };
+        use iroha_primitives::time::TimeSource;
 
         let huge: Quantity = format!("1{}", "0".repeat(153)).parse().unwrap();
         let (state, mut session, relayer) = payout_state(huge);
@@ -1781,24 +1782,29 @@ mod tests {
             session.participants[1].account.clone(),
             "1.5".parse().unwrap(),
         );
+        // Keep signing and admission on one clock so concurrent NTS tests cannot
+        // reject the transaction before it reaches the game rollback path.
+        let (_clock, time_source) = TimeSource::new_mock(std::time::Duration::from_secs(1));
         let accept = |instructions: Vec<ClaimGamePayoutV1>| {
             let mut metadata = Metadata::default();
             metadata.insert("expires_at_height".parse().unwrap(), Json::new(100_u64));
             metadata.insert("tx_sequence".parse().unwrap(), Json::new(1_u64));
-            let signed = TransactionBuilder::new(
+            let signed = TransactionBuilder::new_with_time_source(
                 session.network_id,
                 relayer.clone(),
+                &time_source,
                 FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
             )
             .with_metadata(metadata)
             .with_instructions(instructions)
             .sign(key(30).private_key());
-            AcceptedTransaction::accept(
+            AcceptedTransaction::accept_with_time_source(
                 signed,
                 &session.network_id,
                 std::time::Duration::from_secs(1),
                 TransactionParameters::default(),
                 &iroha_config::parameters::actual::Crypto::default(),
+                &time_source,
             )
             .expect("canonical signed claim transaction must pass stateless admission")
         };

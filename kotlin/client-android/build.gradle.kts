@@ -2118,6 +2118,18 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     outputs.upToDateWhen { false }
 }
 
+// This library's instrumentation APK targets itself. Its compiled Kotlin classes are
+// supplied above, but AGP does not copy the library variant's JNI payload into that
+// self-targeted APK. Physical native probes must carry the same generated bridge.
+if (includeDebugNativeBridge) {
+    android.sourceSets.getByName("androidTest").jniLibs.srcDir(
+        layout.buildDirectory.get().asFile.resolve("generated/jniLibs/$nativeBuildMode"),
+    )
+    tasks.matching { it.name == "mergeDebugAndroidTestJniLibFolders" }.configureEach {
+        dependsOn(stripNativeLibs)
+    }
+}
+
 // Release always consumes the shipping bridge. Debug device integration can
 // opt in without making ordinary JVM-only test compilation launch Cargo/NDK.
 // Both variants use the same authenticated build, stripping and provenance;

@@ -1505,7 +1505,7 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
     assert!(!quarantine.contains("fn revalidate_recovered_markers<"));
     assert!(!quarantine.contains("fn into_revalidated_startup("));
     let finality = quarantine
-        .find("apply_service.recovered_finality_subject(context)")
+        .find("apply_service.recovered_finality_subject(context.context())")
         .expect("fixed replay derives the recovered-finality marker subject");
     let subject_filter = quarantine
         .find(".retain_recovered_markers_for_subject(subject)")
@@ -1513,15 +1513,19 @@ fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_clos
     let authority_filter = quarantine
         .find(".retain_recovered_markers_for_authority(validation_authority)")
         .expect("fixed replay then filters markers to authenticated WAL authority");
+    let replay_service = quarantine
+        .find("NativeApplyService::new(apply_service, &self.0, context)")
+        .expect("fixed replay binds one Native Apply service to the recovered context");
     let semantic_replay = quarantine
-        .find(".revalidate_recovered_markers(|body|")
+        .find("service.revalidate_recovered_markers(&mut self.0)")
         .expect("fixed replay semantically validates retained markers");
     let seal = quarantine
         .find("self.0.into_revalidated_startup()")
         .expect("fixed replay seals only replayed marker state");
     assert!(finality < subject_filter);
     assert!(subject_filter < authority_filter);
-    assert!(authority_filter < semantic_replay);
+    assert!(authority_filter < replay_service);
+    assert!(replay_service < semantic_replay);
     assert!(semantic_replay < seal);
     for forbidden in [
         "CandidateAdmission",

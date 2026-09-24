@@ -268,7 +268,7 @@ async fn block_events_carry_committed_lane_metadata_after_queue_pop() {
     );
 }
 #[test]
-fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
+fn proposal_pop_routes_ordinary_input_from_committed_policy() {
     let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
     let state = State::new_with_nexus_for_testing(
         world_with_test_domains(),
@@ -306,6 +306,10 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         Some(RoutingDecision::default())
     );
     router.set(refreshed);
+    let mut committed_nexus = state.nexus_snapshot();
+    committed_nexus.routing_policy.default_lane = refreshed.lane_id;
+    committed_nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
+    *state.nexus.write() = committed_nexus;
     let state_view = state.view();
     let mut expired = Vec::new();
     let guard = queue
@@ -313,7 +317,7 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         .expect("proposal pop should return admitted tx");
     drop(state_view);
     assert!(expired.is_empty());
-    assert_eq!(guard.routing(), RoutingDecision::default());
+    assert_eq!(guard.routing(), refreshed);
     assert_eq!(
         queue
             .routing_plans
@@ -357,8 +361,8 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
             _ => None,
         })
         .expect("missing transaction event for admitted routed transaction");
-    assert_eq!(tx_event.lane_id(), LaneId::SINGLE);
-    assert_eq!(tx_event.dataspace_id(), DataSpaceId::UNIVERSAL);
+    assert_eq!(tx_event.lane_id(), refreshed.lane_id);
+    assert_eq!(tx_event.dataspace_id(), refreshed.dataspace_id);
     drop(state_block);
     assert_eq!(
         u64::try_from(state.committed_height()).unwrap(),
@@ -378,7 +382,7 @@ fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
     );
 }
 #[test]
-fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
+fn proposal_pop_defers_unavailable_ordinary_route_without_fault() {
     let state = State::new_with_nexus_for_testing(
         world_with_test_domains(),
         test_nexus_for_routes(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]),
@@ -404,10 +408,9 @@ fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
     });
     let mut guards = Vec::new();
     queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
-    assert_eq!(guards.len(), 1);
-    assert_eq!(queue.queued_len(), 0);
+    assert!(guards.is_empty());
+    assert_eq!(queue.queued_len(), 1);
     assert_eq!(queue.active_len(), 1);
-    assert_eq!(guards[0].routing(), RoutingDecision::default());
     assert_eq!(
         queue
             .routing_plans
@@ -440,6 +443,10 @@ fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
         !saw_rejected,
         "replacement-router failure must not reject already accepted work"
     );
+    router.set(RoutingDecision::default());
+    queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+    assert_eq!(guards.len(), 1);
+    assert_eq!(guards[0].routing(), RoutingDecision::default());
 }
 #[test]
 fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {

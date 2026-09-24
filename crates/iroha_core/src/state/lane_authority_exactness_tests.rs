@@ -199,6 +199,20 @@ fn private_settlement_authority_accepts_exact_state_anchored_f1_roster() {
 #[test]
 fn private_settlement_authority_rejects_validator_only_state_authority() {
     let (state, keypairs) = exact_manifest_authority_fixture(1, 4);
+    // The shared lane fixture registers both consensus roles. Remove only the
+    // Committee keys so this case retains live Validator authority alone.
+    let mut world = state.world.block();
+    for keypair in &keypairs {
+        let validator_id = derive_validator_key_id(keypair.public_key());
+        let committee_id = derive_committee_key_id(keypair.public_key());
+        assert!(world.consensus_keys.get(&validator_id).is_some());
+        assert!(world.consensus_keys.get(&committee_id).is_some());
+        world.consensus_keys.remove(committee_id);
+        world
+            .consensus_keys_by_pk
+            .insert(keypair.public_key().to_string(), vec![validator_id]);
+    }
+    world.commit();
     let authority = private_settlement_authority_for_keys(&state, 1, &keypairs);
 
     assert!(

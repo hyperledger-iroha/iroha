@@ -18,6 +18,9 @@ use crate::zk::{kagemusha_v1_poseidon::KagemushaPoseidonFieldV1, pasta_sha256::P
 use super::{
     KagemushaAssignedGuardBundleV1, KagemushaStateRelationWitnessV1,
     app_attest_assertion_fold::constrain_original_apple_assertion_ecdsa_37_v1,
+    apple_compact_credential_id::{
+        AppleCompactCredentialIdCellsV1, constrain_apple_compact_credential_id_v1,
+    },
     apple_governed_policy_opening::{
         apple_policy_cells_from_state_guard_v1, constrain_apple_governed_signed_identity_v1,
     },
@@ -80,6 +83,31 @@ pub(super) fn constrain_apple_state_guard_assertion_stage_v1<
         canonical_s,
         authenticator_data,
     )?;
+    // Open the exact compact credential ID that Guard authenticated. Its
+    // firmware field and profile lifetime come from the same governed profile
+    // opening as the assertion's App ID, while network, key and epoch come
+    // from the recursively authenticated predecessor State/Guard cells.
+    let range = builder.range_chip();
+    let ctx = builder.main(0);
+    let compact_credential = AppleCompactCredentialIdCellsV1 {
+        network_id: state.predecessor.network_id,
+        hardware_profile_id: state.predecessor.hardware_profile_id,
+        suite_id: state.predecessor.suite_id,
+        firmware_policy_digest: governed.firmware_policy_digest,
+        policy_epoch: state.predecessor.policy_epoch,
+        lane_id: state.predecessor.lane_id,
+        epoch_id: state.predecessor.epoch_id,
+        epoch_generation: state.predecessor.epoch_generation,
+        device_public_key: guard.credential_device_public_keys[0].clone(),
+        key_reference: state.predecessor.key_reference,
+        profile_valid_from_ms: governed.valid_from_ms,
+        profile_expires_at_ms: governed.expires_at_ms,
+        issued_at_ms: ctx.load_witness(F::from(credential.issued_at_ms)),
+        expires_at_ms: ctx.load_witness(F::from(credential.expires_at_ms)),
+        app_policy_binding_digest: guard.credential_app_policy_binding_digests[0],
+        guard_issuance_digest: guard.credential_issuance_digests[0],
+    };
+    constrain_apple_compact_credential_id_v1(ctx, &range, jobs, &compact_credential)?;
     constrain_original_apple_assertion_ecdsa_37_v1::<F, N>(
         builder,
         jobs,

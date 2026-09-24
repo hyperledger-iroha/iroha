@@ -11,7 +11,8 @@ use iroha_data_model::account::AccountId;
 use super::*;
 use crate::kagemusha_core_coordinator_v1::{
     KagemushaEnrollmentJournalResultV1, KagemushaEnrollmentJournalStoreV1,
-    kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
+    kagemusha_core_coordinator_decode_request_v1, kagemusha_core_coordinator_decode_response_v1,
+    kagemusha_core_coordinator_encode_request_v1,
 };
 
 #[derive(Default)]
@@ -119,7 +120,31 @@ fn phase_one_uses_original_pins_and_deadline_once_then_fails_closed() {
     assert_eq!(backend.open("/durable/enrollment"), Ok(7));
     assert_eq!(inner.opens.load(Ordering::SeqCst), 1);
     let request = begin();
+    let account = kagemusha_core_coordinator_decode_request_v1(&request).unwrap()[1].clone();
+    let read_selection = kagemusha_core_coordinator_encode_request_v1(&[
+        7_u32.to_le_bytes().to_vec(),
+        account.clone(),
+    ])
+    .unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &read_selection),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
     let response = backend.invoke_initial_enrollment(7, &request).unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &read_selection),
+        Ok(response.clone())
+    );
+    let wrong_account = kagemusha_core_coordinator_decode_request_v1(&begin()).unwrap()[1].clone();
+    let wrong_read = kagemusha_core_coordinator_encode_request_v1(&[
+        7_u32.to_le_bytes().to_vec(),
+        wrong_account,
+    ])
+    .unwrap();
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &wrong_read),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
     let fields = kagemusha_core_coordinator_decode_response_v1(&response).unwrap();
     assert_eq!(fields.len(), 7);
     assert_eq!(fields[2], pins().release_id);
@@ -133,14 +158,24 @@ fn phase_one_uses_original_pins_and_deadline_once_then_fails_closed() {
         backend.invoke_initial_enrollment(7, &request),
         Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected),
     );
+    let selected = backend.owner.lock().unwrap().selection.clone().unwrap();
+    let live = journal.retain_live(selected, pins()).unwrap();
+    assert!(live.require_live().is_ok());
     let cancel = kagemusha_core_coordinator_encode_request_v1(&[
         6_u32.to_le_bytes().to_vec(),
         fields[0].clone(),
     ])
     .unwrap();
+    let cancelled = backend.invoke_initial_enrollment(7, &cancel).unwrap();
+    assert!(
+        kagemusha_core_coordinator_decode_response_v1(&cancelled)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(live.require_live().is_err());
     assert_eq!(
-        backend.invoke_initial_enrollment(7, &cancel),
-        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable),
+        backend.invoke_initial_enrollment(7, &read_selection),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
     );
     assert_eq!(
         backend.invoke(
@@ -151,15 +186,53 @@ fn phase_one_uses_original_pins_and_deadline_once_then_fails_closed() {
         Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected),
     );
     assert_eq!(inner.generic_invokes.load(Ordering::SeqCst), 0);
-    let selected = backend.owner.lock().unwrap().selection.clone().unwrap();
-    let live = journal.retain_live(selected, pins()).unwrap();
-    assert!(live.require_live().is_ok());
     assert_eq!(backend.close(7), Ok(()));
     assert_eq!(inner.closes.load(Ordering::SeqCst), 1);
     assert!(live.require_live().is_err());
     assert_eq!(
         backend.open("/durable/enrollment"),
         Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected),
+    );
+}
+
+#[test]
+fn repeated_open_revokes_existing_handle_and_selected_ticket() {
+    let inner = Arc::new(Delegate::default());
+    let journal = Arc::new(
+        KagemushaEnrollmentAttemptJournalV1::open(Arc::new(MemoryStore::default())).unwrap(),
+    );
+    let backend = KagemushaEnrollmentPhaseOneBackendV1::new(
+        inner.clone(),
+        journal.clone(),
+        pins(),
+        "/durable/enrollment",
+    )
+    .unwrap();
+    assert_eq!(backend.open("/durable/enrollment"), Ok(7));
+    let request = begin();
+    backend.invoke_initial_enrollment(7, &request).unwrap();
+    let selected = backend.owner.lock().unwrap().selection.clone().unwrap();
+    let live = journal.retain_live(selected, pins()).unwrap();
+    assert!(live.require_live().is_ok());
+
+    assert_eq!(
+        backend.open("/durable/other-account"),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+    assert_eq!(inner.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(inner.closes.load(Ordering::SeqCst), 1);
+    assert!(live.require_live().is_err());
+    assert_eq!(
+        backend.invoke_initial_enrollment(7, &request),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+    assert_eq!(
+        backend.open("/durable/enrollment"),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+    );
+    assert_eq!(
+        backend.close(7),
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
     );
 }
 

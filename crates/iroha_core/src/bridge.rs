@@ -3448,13 +3448,29 @@ mod tests {
         .expect("exact height-one finality verifies");
         assert_eq!(
             genesis_verified.sccp_sora_finality_anchor_v1(),
-            Err(SccpSoraFinalityAnchorBuildError::MissingParentCommitQc)
+            Err(SccpSoraFinalityAnchorBuildError::EpochZero)
         );
 
-        let fixture = genesis_fixture.with_exact_finalized_successor();
-        let finality =
-            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                .expect("exact height-two finality proof");
+        let same_epoch_fixture = genesis_fixture.with_exact_finalized_successor();
+        let same_epoch_finality = iroha_sccp::decode_taira_bridge_finality_proof(
+            &same_epoch_fixture.bundle.finality_proof,
+        )
+        .expect("exact same-epoch height-two finality proof");
+        let same_epoch_verified = VerifiedV2FinalityArtifact::verify_for_header(
+            same_epoch_finality.block_header,
+            same_epoch_finality.finality_artifact,
+        )
+        .expect("exact same-epoch height-two finality verifies");
+        assert_eq!(
+            same_epoch_verified.sccp_sora_finality_anchor_v1(),
+            Err(SccpSoraFinalityAnchorBuildError::EpochZero)
+        );
+
+        let epoch_one = genesis_fixture.first_epoch_finalized_successor();
+        let finality_bytes =
+            norito::to_bytes(epoch_one.proof()).expect("canonical epoch-one SCCP finality proof");
+        let finality = iroha_sccp::decode_taira_bridge_finality_proof(&finality_bytes)
+            .expect("exact epoch-one height-two finality proof");
         let verified = VerifiedV2FinalityArtifact::verify_for_header(
             finality.block_header,
             finality.finality_artifact,
@@ -3500,6 +3516,10 @@ mod tests {
         assert_internal_boundary_rejected(
             |artifact| artifact.height_context.epoch = 0,
             SccpSoraFinalityAnchorBuildError::EpochZero,
+        );
+        assert_internal_boundary_rejected(
+            |artifact| artifact.height_context.parent_commit_qc = None,
+            SccpSoraFinalityAnchorBuildError::MissingParentCommitQc,
         );
         assert_internal_boundary_rejected(
             |artifact| artifact.height_context.epoch_end_height = artifact.height - 1,

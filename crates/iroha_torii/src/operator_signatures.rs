@@ -1026,11 +1026,10 @@ pub async fn enforce_torii_proxy_peer_signature(
     let Some(receiver_peer_id) = torii_proxy_receiver_peer_id(&app) else {
         return OperatorSignatureError::torii_proxy_receiver_unavailable().into_response();
     };
-    // The peer signature itself needs the complete raw body. Hold the dedicated
-    // all-variant proxy working-set permit through handler completion; public
-    // signed-query ingress and fanout have separate reservations and cannot be
-    // starved by a slow or faulty peer body.
-    let proxy_memory_permit = match crate::acquire_torii_proxy_memory(&app) {
+    // The peer signature itself needs the complete raw body. Hold the peer
+    // receiver working-set permit through handler completion. Local quorum
+    // collectors and public signed-query ingress have separate reservations.
+    let proxy_memory_permit = match crate::try_acquire_torii_proxy_receiver_memory(&app) {
         Ok(permit) => permit,
         Err(response) => return response,
     };
@@ -1815,7 +1814,7 @@ mod tests {
         assert_eq!(error.code, "operator_signature_body_timeout");
     }
     #[tokio::test]
-    async fn stalled_torii_proxy_body_timeout_releases_global_proxy_lane() {
+    async fn stalled_torii_proxy_body_timeout_releases_peer_receiver_lane() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let receiver_key_pair = checked_ed25519_keypair();
         {
@@ -1825,7 +1824,12 @@ mod tests {
                 .expect("unique operator-signature state")
                 .body_read_timeout = Duration::from_millis(100);
         }
-        assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
+        let local_collector = crate::try_acquire_torii_proxy_memory(&app).unwrap();
+        assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+        assert_eq!(
+            app.torii_proxy_receiver_memory_inflight.available_permits(),
+            1
+        );
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
         let proxy_layer = axum::middleware::from_fn_with_state::<
             _,
@@ -1862,9 +1866,9 @@ mod tests {
             .expect("stalled body must be polled after acquiring proxy admission")
             .expect("body poll signal");
         assert_eq!(
-            app.torii_proxy_memory_inflight.available_permits(),
+            app.torii_proxy_receiver_memory_inflight.available_permits(),
             0,
-            "the stalled body must own the sole proxy lane until its deadline"
+            "the stalled body must own the peer receiver lane until its deadline"
         );
         let response = tokio::time::timeout(Duration::from_secs(1), response_task)
             .await
@@ -1880,10 +1884,13 @@ mod tests {
                 .contains("\"code\":\"operator_signature_body_timeout\"")
         );
         assert_eq!(
-            app.torii_proxy_memory_inflight.available_permits(),
+            app.torii_proxy_receiver_memory_inflight.available_permits(),
             1,
-            "timing out a stalled peer body must release the global proxy lane"
+            "timing out a stalled peer body must release the peer receiver lane"
         );
+        assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+        drop(local_collector);
+        assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
     }
     #[test]
     fn bad_signature_does_not_consume_its_claimed_nonce() {

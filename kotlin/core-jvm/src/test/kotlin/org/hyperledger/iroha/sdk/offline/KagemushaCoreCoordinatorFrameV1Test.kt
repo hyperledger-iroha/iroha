@@ -157,6 +157,10 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response)
         val decoded = KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin, responseFrame)
         decoded.zip(response).forEach { (left, right) -> assertContentEquals(right, left) }
+        val readSelection = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(7), "i105example".toByteArray(Charsets.UTF_8)))
+        val retained = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, readSelection, response)
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, readSelection, retained)
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
                 listOf(ticket, response[1], response[2], response[3], byteArrayOf(0x45)))

@@ -91,6 +91,26 @@ fn canonical_executed_network_fixture(
         output,
     };
     assert!(committed.verify_inclusion_in_block(&block));
+    let commitment = synthetic_executed_commitment(&block);
+    assert!(
+        committed.verify_inclusion_in_authenticated_execution(&block, &commitment),
+        "fixture commitment must bind its source block"
+    );
+    let decoded = decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
+    assert_eq!(decoded.execution_context(), block.execution_context());
+    assert_eq!(
+        decoded.network_input_merkle_commitment(),
+        commitment.transaction_input_commitment
+    );
+    assert_eq!(
+        decoded.output_merkle_commitment(),
+        commitment.transaction_output_commitment
+    );
+    assert!(committed.verify_inclusion_in_block(&decoded));
+    assert!(
+        committed.verify_inclusion_in_authenticated_execution(&decoded, &commitment),
+        "fixture commitment must bind its decoded wire"
+    );
     if include_internal {
         assert_eq!(
             block

@@ -111,10 +111,10 @@ impl V2ApplyService {
         }))
     }
 
-    /// Execute the disjoint genesis or current control source through the common
+    /// Execute genesis, direct ordinary inputs, or current control work through the common
     /// authenticated validator, keeping the same pre-execution shell/archive owners.
-    /// The source-class boundary excludes retired payloads and post-genesis direct
-    /// economics before this producer is selected. Common validation still checks
+    /// The source-class boundary excludes retired payloads and Native mixtures
+    /// before this producer is selected. Common validation still checks
     /// signatures, commitments, exact State/context, useful work and every control.
     pub(super) fn prepare_current_control_source_admitted<'state>(
         &'state self,

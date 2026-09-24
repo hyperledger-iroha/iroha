@@ -161,7 +161,7 @@ object KagemushaCoreCoordinatorFrameV1 {
                 qualification(fields, end + 2)
             }
             KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(fields, 0)) {
-                1 -> { count(fields, 2); bounded(fields, 1, 512) }
+                1, 7 -> { count(fields, 2); bounded(fields, 1, 512) }
                 2 -> {
                     count(fields, 11); ticket(fields, 1)
                     require(field(fields, 2).size == 273) { "invalid signed app preparation" }; bounded(fields, 3, 8 * 1024)
@@ -230,7 +230,7 @@ object KagemushaCoreCoordinatorFrameV1 {
                 nonempty(response, 3); nonempty(response, 4); equal(response, 3, request, senderInputs(request, 1))
             }
             KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(request, 0)) {
-                1 -> {
+                1, 7 -> {
                     count(response, 7); ticket(response, 0); (1..5).forEach { digest(response, it) }
                     // Fixed suspend-inclusive native expiry, never Unix time.
                     nativeContinuousDeadline(response, 6)

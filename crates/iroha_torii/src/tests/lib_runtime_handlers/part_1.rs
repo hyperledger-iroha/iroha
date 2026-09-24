@@ -2263,6 +2263,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         query_ingress_envelope: query_memory.ingress,
         torii_proxy_http_ingress_envelope,
         torii_proxy_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        torii_proxy_receiver_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
         query_ingress_inflight: Arc::new(tokio::sync::Semaphore::new(
             query_memory.ingress_slots.get(),
         )),

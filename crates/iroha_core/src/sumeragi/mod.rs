@@ -3476,10 +3476,11 @@ fn fair_v2_ingress_required_manifest_bytes(
 }
 /// Exact bare-Norito bytes of a structurally maximal execution commitment.
 ///
-/// The maximum carries the bounded top-up, Native AMX, lane-finality, and
-/// merge-carrier projections. The canonical structural proposal fixture below
-/// binds this allocation-free constant to the live wire codec.
-const FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES: usize = 306;
+/// The maximum carries the bounded top-up, Native AMX, lane-finality,
+/// merge-carrier, and selective transaction projections. The canonical
+/// structural proposal fixture below binds this allocation-free constant to
+/// the live wire codec.
+const FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES: usize = 396;
 fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Option<usize> {
     let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
     let signer_vector_bytes = roster_len.checked_mul(5)?.checked_add(8)?;
@@ -9048,7 +9049,7 @@ mod authoritative_runtime_gate_tests {
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 1_106_267,
+            required_proposal, 1_109_147,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -9057,13 +9058,30 @@ mod authoritative_runtime_gate_tests {
                 payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
                 ..
             }) => match &proposal.justification {
-                wire::ProposalJustification::Timeout(timeout) => timeout
-                    .highest_prepare_qc
-                    .as_ref()
-                    .expect("maximum proposal has a highest PrepareQC")
-                    .execution_commitment
-                    .encode()
-                    .len(),
+                wire::ProposalJustification::Timeout(timeout) => {
+                    let commitment = &timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .expect("maximum proposal has a highest PrepareQC")
+                        .execution_commitment;
+                    let maximum_leaf_count = NonZeroU64::new(wire::MAX_EXECUTED_BLOCK_WIRE_BYTES)
+                        .expect("maximum executed wire bound is non-zero");
+                    assert_eq!(
+                        commitment
+                            .transaction_input_commitment
+                            .map(|tree| tree.leaf_count()),
+                        Some(maximum_leaf_count),
+                        "maximal PrepareQC must carry the selective Network input tree",
+                    );
+                    assert_eq!(
+                        commitment
+                            .transaction_output_commitment
+                            .map(|tree| tree.leaf_count()),
+                        Some(maximum_leaf_count),
+                        "maximal PrepareQC must carry the selective output tree",
+                    );
+                    commitment.encode().len()
+                }
                 wire::ProposalJustification::ParentCommit(_) => {
                     unreachable!("maximum proposal uses Timeout justification")
                 }
@@ -9162,7 +9180,7 @@ mod authoritative_runtime_gate_tests {
         let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 67_236);
+        assert_eq!(minimal_proposal_bytes, 67_416);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,

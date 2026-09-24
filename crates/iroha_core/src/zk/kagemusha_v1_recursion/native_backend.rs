@@ -81,8 +81,9 @@ use super::{
 };
 use crate::zk::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, decode, digest_limbs, from_u128};
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_HALO2_K_V1, KagemushaArtifactRoleV1, KagemushaMintAuthorizationV1,
-    KagemushaPaymentRequestV1, KagemushaPaymentV1, kagemusha_asset_identity_digest_v1,
+    KAGEMUSHA_HALO2_K_V1, KagemushaArtifactRoleV1, KagemushaEnabledProfileV1,
+    KagemushaMintAuthorizationV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+    kagemusha_asset_identity_digest_v1,
 };
 
 const RECURSIVE_PROFILE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:paired-recursive-circuit-profile";
@@ -1277,6 +1278,13 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
         self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        validate_payment_receiver_profile_v1(
+            request,
+            release.enabled_profile(request.hardware_credential.hardware_profile_id),
+            self.suite_id,
+            self.vk_set_digest,
+        )?;
         payment
             .validate_shape_against(request)
             .map_err(|error| error.to_string())?;
@@ -1525,6 +1533,31 @@ fn require_monetary_release_v1(
     release.ok_or_else(|| {
         super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
     })
+}
+
+/// Authenticate a signed receiver request against the exact profile in the admitted release.
+fn validate_payment_receiver_profile_v1(
+    request: &KagemushaPaymentRequestV1,
+    enabled: Option<&KagemushaEnabledProfileV1>,
+    suite_id: [u8; 32],
+    vk_set_digest: [u8; 32],
+) -> Result<(), String> {
+    let enabled = enabled.ok_or_else(|| {
+        "Kagemusha payment receiver hardware profile is not release-enabled".to_owned()
+    })?;
+    let credential = &request.hardware_credential;
+    if enabled.hardware_profile_id != credential.hardware_profile_id
+        || enabled.hardware_profile.hardware_profile_id != enabled.hardware_profile_id
+        || enabled.suite_id != suite_id
+        || credential.suite_id != enabled.suite_id
+        || enabled.vk_digest != vk_set_digest
+        || credential.policy_epoch != enabled.policy_epoch
+    {
+        return Err("Kagemusha payment receiver release-profile binding mismatch".to_owned());
+    }
+    request
+        .validate_against_profile(&enabled.hardware_profile)
+        .map_err(|error| format!("Kagemusha payment receiver credential rejected: {error}"))
 }
 
 fn append_base_params(bytes: &mut Vec<u8>, params: &BaseCircuitParams) -> Result<(), String> {
@@ -1809,7 +1842,11 @@ mod checked_loader_tests {
         plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector, keygen_vk_custom},
         poly::{Rotation, ipa::commitment::ParamsIPA},
     };
-    use iroha_data_model::kagemusha::KagemushaArtifactBindingV1;
+    use iroha_data_model::kagemusha::{
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaArtifactBindingV1,
+        KagemushaDevicePublicKeyV1, KagemushaEvidenceFileV1, KagemushaHardwarePlatformClassV1,
+        KagemushaHardwareProfileV1, kagemusha_suite_commitment_v1,
+    };
 
     use super::*;
 
@@ -1869,6 +1906,108 @@ mod checked_loader_tests {
             assert_eq!(require_monetary_release_v1(None).err(), Some(
                 super::super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
             ));
+        }
+    }
+
+    #[test]
+    fn payment_receiver_requires_release_enabled_profile_and_governance_signature() {
+        use super::super::tests::{incoming_payment_fixture, p256_signing_key, sign};
+
+        let mut request = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128).request;
+        let issuer = p256_signing_key(8);
+        let issuer_public_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            issuer.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .expect("fixture issuer public key");
+        let suite_id = request.hardware_credential.suite_id;
+        let vk_set_digest = [0x35; 32];
+        let profile = KagemushaHardwareProfileV1 {
+            app_attestation_authority_policy_digest: [0xA5; 32],
+            version: request.version,
+            protocol_version: request.version,
+            hardware_profile_id: [0; 32],
+            provider_id: [1; 32],
+            platform_class: KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            product_class_digest: [2; 32],
+            firmware_policy_digest: request.hardware_credential.firmware_policy_digest,
+            enrollment_attestation_verifier_digest: [4; 32],
+            attestation_trust_roots_digest: [5; 32],
+            allowed_suite_commitment: kagemusha_suite_commitment_v1(suite_id),
+            policy_epoch: request.hardware_credential.policy_epoch,
+            governance_credential_public_key: issuer_public_key,
+            capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+            qualification_report_digest: [8; 32],
+            valid_from_ms: 1,
+            expires_at_ms: 25_000,
+        }
+        .seal_hardware_profile_id()
+        .expect("fixture profile identity");
+        request.hardware_credential.hardware_profile_id = profile.hardware_profile_id;
+        request.hardware_credential = request
+            .hardware_credential
+            .seal_credential_id()
+            .expect("fixture credential identity");
+        request.hardware_credential.governance_signature = sign(
+            &issuer,
+            &request
+                .hardware_credential
+                .canonical_signing_bytes()
+                .expect("fixture credential signing bytes"),
+        );
+        request.signature = sign(
+            &p256_signing_key(7),
+            &request
+                .canonical_signing_bytes()
+                .expect("fixture request signing bytes"),
+        );
+        request.validate_shape().expect("self-signed request shape");
+        let enabled = KagemushaEnabledProfileV1 {
+            hardware_profile: profile,
+            hardware_profile_id: profile.hardware_profile_id,
+            suite_id,
+            vk_digest: vk_set_digest,
+            qualification_digest: [9; 32],
+            policy_epoch: profile.policy_epoch,
+            qualification_report: KagemushaEvidenceFileV1 {
+                sha256: profile.qualification_report_digest,
+                byte_len: 1,
+            },
+        };
+        let check = |request: &KagemushaPaymentRequestV1,
+                     enabled: Option<&KagemushaEnabledProfileV1>| {
+            validate_payment_receiver_profile_v1(request, enabled, suite_id, vk_set_digest)
+        };
+        check(&request, Some(&enabled)).expect("governed receiver is release-enabled");
+        assert!(check(&request, None).is_err(), "unknown receiver profile");
+
+        let mut wrong_governance = request.clone();
+        wrong_governance.hardware_credential.governance_signature = sign(
+            &p256_signing_key(9),
+            &wrong_governance
+                .hardware_credential
+                .canonical_signing_bytes()
+                .expect("forged credential signing bytes"),
+        );
+        wrong_governance
+            .validate_shape()
+            .expect("receiver signature remains valid without issuer authority");
+        assert!(
+            check(&wrong_governance, Some(&enabled)).is_err(),
+            "a self-signed request cannot launder a forged governance credential"
+        );
+
+        for mutation in 0..4 {
+            let mut changed = enabled;
+            match mutation {
+                0 => changed.hardware_profile_id = [0x91; 32],
+                1 => changed.suite_id = [0x92; 32],
+                2 => changed.vk_digest = [0x93; 32],
+                _ => changed.policy_epoch += 1,
+            }
+            assert!(
+                check(&request, Some(&changed)).is_err(),
+                "release profile metadata mutation {mutation} must fail"
+            );
         }
     }
 

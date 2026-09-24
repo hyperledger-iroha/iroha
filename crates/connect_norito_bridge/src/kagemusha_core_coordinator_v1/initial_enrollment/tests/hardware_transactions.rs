@@ -392,7 +392,7 @@ fn admitted_history_factory_reopens_exact_wal_and_rejects_conflicts() {
     changed.lane_commitment[0] ^= 1;
     assert!(authenticate(vec![changed]).is_err());
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("history");
+    let path = directory.path().canonicalize().unwrap().join("history");
     let store = KagemushaDiskAuthenticatedHistoryStoreV1::create_new(
         &path,
         [44; 32],
@@ -490,7 +490,11 @@ fn hardware_journal_rejects_invalid_intent_before_wal_or_device_changes() {
         calls: AtomicUsize::new(0),
     });
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("transactions");
+    let path = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("transactions");
     let mut journal = KagemushaHardwareTransactionJournalV1::create_new(
         &path,
         verifier(&fixture),
@@ -549,7 +553,11 @@ fn hardware_journal_rejects_descriptor_replacement_before_pending_retry() {
         calls: AtomicUsize::new(0),
     });
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("transactions");
+    let path = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("transactions");
     let mut journal = KagemushaHardwareTransactionJournalV1::create_new(
         &path,
         verifier(&fixture),
@@ -588,7 +596,11 @@ fn hardware_journal_recovers_commit_loss_and_exact_exposed_bytes() {
         calls: AtomicUsize::new(0),
     });
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("transactions");
+    let path = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("transactions");
     let id = [74; 32];
     let mut journal = KagemushaHardwareTransactionJournalV1::create_new(
         &path,

@@ -75,6 +75,12 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
       requestFrame: beginFrame, fields: response)
     XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
       requestFrame: beginFrame, responseFrame: responseFrame), response)
+    let readSelection = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(7), begin[1]])
+    let retainedSelection = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: readSelection, fields: response)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
+      requestFrame: readSelection, responseFrame: retainedSelection), response)
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
       requestFrame: beginFrame, fields: [ticket, response[1], response[2], response[3], Data([0x45])]))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,

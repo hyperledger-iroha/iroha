@@ -14,6 +14,7 @@ mod archives;
 mod enrollment_attempt_journal;
 mod enrollment_phase_one_backend;
 mod exclusive_backend;
+mod qualified_enrollment_delegate;
 mod signed_app_preparation;
 pub use enrollment_attempt_journal::{
     KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentJournalDispatchV1,
@@ -22,11 +23,17 @@ pub use enrollment_attempt_journal::{
     KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
     KagemushaEnrollmentLiveSelectionV1,
 };
-pub use enrollment_phase_one_backend::KagemushaEnrollmentPhaseOneBackendV1;
+pub use enrollment_phase_one_backend::{
+    KagemushaEnrollmentPhaseOneBackendV1, KagemushaQualifiedEnrollmentDelegateV1,
+};
 pub use exclusive_backend::KagemushaExclusiveCoordinatorBackendV1;
 pub use initial_enrollment::{
     AcceptedIssuerChallengeV1, FreshIssuerAdmissionV1, InitialEnrollmentErrorV1,
     IssuerChallengeProjectionV1, PendingIssuerEnrollmentV1, PreparedIssuerProofV1,
+};
+pub use qualified_enrollment_delegate::{
+    KagemushaEnrollmentContextProviderV1, KagemushaEnrollmentProvisionedContextV1,
+    KagemushaKernelEnrollmentDelegateV1,
 };
 pub use signed_app_preparation::{
     SignedAppPreparationErrorV1, SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
@@ -103,6 +110,7 @@ const INITIAL_ENROLLMENT_PREPARE_PROOF_V1: u32 = 3;
 const INITIAL_ENROLLMENT_READ_PROOF_V1: u32 = 4;
 const INITIAL_ENROLLMENT_COMPLETE_V1: u32 = 5;
 const INITIAL_ENROLLMENT_CANCEL_V1: u32 = 6;
+const INITIAL_ENROLLMENT_READ_SELECTION_V1: u32 = 7;
 const APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:hardware-transition-selection\0";
 const APP_ATTEST_SELECTION_BODY_BYTES_V1: u64 = 403;
@@ -526,7 +534,7 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
         }
         KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
             match require_u32_field(fields.first())? {
-                INITIAL_ENROLLMENT_BEGIN_V1 => {
+                INITIAL_ENROLLMENT_BEGIN_V1 | INITIAL_ENROLLMENT_READ_SELECTION_V1 => {
                     require_field_count(&fields, 2)?;
                     require_bounded_nonempty_field(fields.get(1), 512)
                 }
@@ -933,7 +941,7 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
         }
         KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
             match require_u32_field(request.first())? {
-                INITIAL_ENROLLMENT_BEGIN_V1 => {
+                INITIAL_ENROLLMENT_BEGIN_V1 | INITIAL_ENROLLMENT_READ_SELECTION_V1 => {
                     require_field_count(&response, 7)?;
                     require_nonzero_ticket_field(response.first())?;
                     for index in 1..=5 {
@@ -1646,6 +1654,19 @@ mod tests {
         let good = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
         assert_eq!(
             kagemusha_core_coordinator_validate_method_response_v1(method, &request, &good),
+            Ok(())
+        );
+        let read = kagemusha_core_coordinator_encode_request_v1(&[
+            u32_field(INITIAL_ENROLLMENT_READ_SELECTION_V1),
+            b"i105example".to_vec(),
+        ])
+        .unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_request_v1(method, &read),
+            Ok(())
+        );
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(method, &read, &good),
             Ok(())
         );
         response[4] = vec![0; 32];

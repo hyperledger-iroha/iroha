@@ -580,7 +580,8 @@ class KagemushaAuthenticatedHardwareProviderV1(
             amount,
             validityWindowMillis,
         )
-        val canonical = payloadReader(control(command, id), 22).singleVector(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES)
+        val canonical = payloadReader(control(command, id), 22)
+            .singleVector(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES)
         val request = KagemushaNoritoV1.decodePaymentRequestShapeExact(canonical)
         require(request.requestId().contentEquals(id) && request.recipient == recipient)
         require(request.amount == amount)
@@ -1072,7 +1073,10 @@ class KagemushaAuthenticatedHardwareProviderV1(
                 requireNotNull(requestIntent.canonicalReply()))
             val reader = AuthenticatedReplyReader(reply.payload())
             require(reader.u16Field() == 1 && reader.u8Field() == 22)
-            require(reader.singleVector(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES).contentEquals(canonicalResult)) { "durable request differs from accepted device result" }
+            require(
+                reader.singleVector(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES)
+                    .contentEquals(canonicalResult),
+            ) { "durable request differs from accepted device result" }
             client.intents.acknowledge(22, id)
         } else {
             val installed = requireNotNull(client.intents.load(10, id)) { "installed terminal recovery intent is missing" }
@@ -1165,7 +1169,10 @@ private fun parseStagedReply(
     require(top.u128Field().signum() != 0) { "staged inbox revision must be nonzero" }
     val record = AuthenticatedReplyReader(top.field())
     top.finish()
-    require(record.vectorField(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES).contentEquals(requestBytes))
+    require(
+        record.vectorField(KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES)
+            .contentEquals(requestBytes),
+    )
     require(record.vectorField(7_552).contentEquals(paymentBytes))
     record.vectorField(1_024) // Authenticated transport metadata; empty is valid.
     val receipt = decodeInboxReceipt(record.field())

@@ -138,6 +138,14 @@ impl KagemushaEnrollmentLiveSelectionV1 {
         self.pins
     }
 
+    /// Compare two live references to the same process-local journal and original attempt.
+    pub(super) fn same_attempt(&self, other: &Self) -> Result<bool> {
+        if !Arc::ptr_eq(&self.journal, &other.journal) || self.pins != other.pins {
+            return Ok(false);
+        }
+        Ok(self.require_live()? == other.require_live()?)
+    }
+
     /// Check the exact retained journal record and original continuous deadline.
     pub fn require_live(&self) -> Result<&KagemushaEnrollmentJournalSelectionV1> {
         self.deadline()?;
@@ -435,12 +443,22 @@ impl KagemushaEnrollmentAttemptJournalV1 {
     }
 
     fn persist(&self, state: &mut StateV1, mut next: ImageV1) -> Result<()> {
-        next.revision = state
-            .image
-            .revision
-            .checked_add(1)
-            .ok_or(KagemushaEnrollmentJournalErrorV1::Store)?;
-        let bytes = next.encode_checked()?;
+        next.revision = match state.image.revision.checked_add(1) {
+            Some(revision) => revision,
+            None => {
+                state.poisoned = true;
+                state.deadlines.clear();
+                return Err(KagemushaEnrollmentJournalErrorV1::Store);
+            }
+        };
+        let bytes = match next.encode_checked() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                state.poisoned = true;
+                state.deadlines.clear();
+                return Err(error);
+            }
+        };
         let prior = state.persisted.then_some(state.image.revision);
         if self.store.compare_and_swap(prior, &bytes).is_err() {
             state.poisoned = true;
@@ -871,6 +889,15 @@ impl KagemushaEnrollmentAttemptJournalV1 {
         }
         state.deadlines.clear();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_ticket_for_test(&self, ticket: u64) {
+        self.state
+            .lock()
+            .unwrap()
+            .deadlines
+            .insert(ticket, NativeDeadlineV1::expired_for_test());
     }
 }
 

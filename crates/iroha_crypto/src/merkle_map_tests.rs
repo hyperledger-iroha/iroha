@@ -249,8 +249,9 @@ fn exact_membership_proof_binds_key_value_count_and_canonical_path() {
         let proof = map.proof(&hash(n)).expect("present key has proof");
         assert!(proof.verify(map.root()));
         let encoded = norito::codec::Encode::encode(&proof);
-        let decoded = norito::codec::Decode::decode_all(&mut encoded.as_slice())
-            .expect("membership proof decodes");
+        let decoded =
+            <MerkleMapProof as norito::codec::DecodeAll>::decode_all(&mut encoded.as_slice())
+                .expect("membership proof decodes");
         assert_eq!(proof, decoded);
         let mut changed = proof.clone();
         changed.value = hash(999);

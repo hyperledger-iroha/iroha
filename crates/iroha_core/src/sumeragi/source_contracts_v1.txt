@@ -2190,7 +2190,7 @@ region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|carrier|registry|after|struct DurableStoreBody {|before|impl DurableStoreBody
 region|validation|registry|after|impl DurableStoreBody {|before|struct DurableValidateBody
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_store_execution(|before|pub(super) fn prepare_durable_validate_execution(
-region|execution|registry|after|impl<'a> PreparedDurableStoreExecution<'a>|before|fn sealed_successor_parent<'a>(
+region|execution|registry_recovery_impl|after|impl<'a> PreparedDurableStoreExecution<'a>|end|-
 region|validate_token|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|#[derive(Clone, Copy)]\nenum DurableStoreValidateParentV1
 region|fetch_execution|registry|after|impl<'a> PreparedCertifiedFetchExecution<'a>|before|impl<'a> PreparedDurableStoreExecution<'a>
 region|callers|selector|begin|-|end|-
@@ -2787,13 +2787,14 @@ forbidden|entrypoint|enqueue_|completion entrypoint acquired forbidden durable o
 forbidden|entrypoint|persist_durable_projection|completion entrypoint acquired forbidden durable or scheduler machinery: persist_durable_projection
 forbidden|entrypoint|ledger_store.|completion entrypoint acquired forbidden durable or scheduler machinery: ledger_store.
 forbidden|entrypoint|replace_before_publication|completion entrypoint acquired forbidden durable or scheduler machinery: replace_before_publication
-required|waiting_exact|record.key == authority.lifecycle_key()|waiting completion exactness omitted record.key == authority.lifecycle_key()
-required|waiting_exact|record.stage == authority.lifecycle_stage()|waiting completion exactness omitted record.stage == authority.lifecycle_stage()
+required|waiting_exact|record.key == authority.lifecycle_key|waiting completion exactness omitted record.key == authority.lifecycle_key
+required|waiting_exact|record.stage == authority.lifecycle_stage|waiting completion exactness omitted record.stage == authority.lifecycle_stage
 required|waiting_exact|record.episode.frozen_predecessors.is_empty()|waiting completion exactness omitted record.episode.frozen_predecessors.is_empty()
 required|waiting_exact|.episode_authority\n            .universe_for(record.key)|waiting completion exactness omitted .episode_authority\n            .universe_for(record.key)
 required|waiting_exact|episode_authority.admits_slots(|waiting completion exactness omitted episode_authority.admits_slots(
 required|waiting_exact|durable_validate_payload_is_exact(record.key, metadata.payload)|waiting completion exactness omitted durable_validate_payload_is_exact(record.key, metadata.payload)
-required|waiting_exact|authority.matches_durable_payload(metadata.payload)|waiting completion exactness omitted authority.matches_durable_payload(metadata.payload)
+required|waiting_exact|authority.payload == metadata.payload|waiting completion exactness omitted authority.payload == metadata.payload
+required|waiting_exact|durable_validate_payload_is_exact(authority.lifecycle_key, authority.payload)|waiting completion exactness omitted durable_validate_payload_is_exact(authority.lifecycle_key, authority.payload)
 required|coordinator_export|DurableValidateCompletionPublication|coordinator lost the reviewed completion-publication re-export
 forbidden|worker_completion|DeferredDurableValidateDispatch|retired sidecar completion cannot regain production ownership
 required|turn_driver_publication|completion.into_publication_parts()|turn driver must retain dispatch and acknowledgement together

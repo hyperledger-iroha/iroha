@@ -54,14 +54,18 @@ pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
     );
     let _ = chip.enforce_less_than(ctx, point.x.clone());
     let _ = chip.enforce_less_than(ctx, point.y.clone());
-    let y2 = chip.mul_no_carry(ctx, &point.y, &point.y);
+    // Reduce each product before checking the curve equation. An unreduced
+    // square can exceed halo2-ecc's carry-check bound if the limbs are too narrow.
+    let y2 = chip.mul(ctx, &point.y, &point.y);
     let x2 = chip.mul(ctx, &point.x, &point.x);
-    let x3 = chip.mul_no_carry(ctx, x2, &point.x);
+    let x3 = chip.mul(ctx, x2, &point.x);
     let minus_three_x = chip.scalar_mul_no_carry(ctx, &point.x, -3);
     let x3_minus_three_x = chip.add_no_carry(ctx, x3, minus_three_x);
     let rhs = chip.add_constant_no_carry(ctx, x3_minus_three_x, Secp256r1Affine::b());
-    let difference = chip.sub_no_carry(ctx, y2, rhs);
-    chip.check_carry_mod_to_zero(ctx, difference);
+    let rhs = chip.carry_mod(ctx, rhs);
+    // Equality yields an unsatisfied proof for an off-curve witness. The
+    // library's zero carry checker debug-asserts on that expected input.
+    chip.assert_equal(ctx, y2, rhs);
     let y_is_zero = chip.is_zero(ctx, &point.y);
     chip.gate().assert_is_const(ctx, &y_is_zero, &F::ZERO);
 }

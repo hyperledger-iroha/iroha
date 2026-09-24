@@ -273,7 +273,7 @@ pub struct PhoneRetailCanonicalityPayloadV1 {
 )]
 #[norito_schema(name = "iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1")]
 pub struct PhoneRetailCanonicalityAttestationV1 {
-    /// Statement checked by the trusted canonicalization attestor.
+    /// Exact statement covered by the trusted canonicalization attestor's signature.
     pub payload: PhoneRetailCanonicalityPayloadV1,
     /// Signature under the key pinned in the identifier policy.
     pub signature: Signature,
