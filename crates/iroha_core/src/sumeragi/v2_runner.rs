@@ -6,6 +6,7 @@
 //! and performs an explicit Kura-authorized rollover after application.
 
 mod native_candidate;
+pub(crate) mod native_drain;
 pub(in crate::sumeragi) mod native_process;
 mod native_source;
 pub(in crate::sumeragi) use native_process::NativeRunnerProcess;
@@ -3418,7 +3419,14 @@ fn dispatch_lane_work_effect_from_snapshot(
             services.post_native_amx_with_reply_routes(peer, reply_routes, message);
         }
         V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
-            services.post_lane_drain_vote(peer, vote);
+            let ownership = services
+                .post_lane_drain_vote(peer.clone(), vote.clone())
+                .map_err(V2RunnerError::Service)?;
+            if ownership == ExactFanoutOwnership::SourceRetained {
+                return Ok(LaneWorkEffectDispatch::SourceRetained(
+                    V2LaneWorkEffect::PostLaneDrainVote { peer, vote },
+                ));
+            }
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
@@ -3489,27 +3497,34 @@ include!("v2_runner/merge_sidecar_recovery.rs");
 // turn prevents an expensive authenticated backlog from starving those owners.
 const OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST: usize = 1;
 
-/// The only relay authority retained by the Native runner is QueuePlan admission.
+/// Route each bounded relay occurrence to its one process-lived owner.
 /// Legacy lane certificates cannot construct another lane safety owner.
 fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    mut accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
     let mut drained_any = false;
     for _ in 0..limit.max(1) {
         let Ok(message) = lane_relay_rx.try_recv() else {
             break;
         };
-        if let super::LaneRelayMessage::QueuePlanAdmissionCertificate {
-            sender,
-            certificate,
-        } = message
-        {
-            queue_plan.accept_certificate(sender, certificate, active_view)?;
-        } else {
-            iroha_logger::debug!("retired legacy lane relay envelope");
+        match message {
+            super::LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender,
+                certificate,
+            } => {
+                queue_plan.accept_certificate(sender, certificate, active_view)?;
+            }
+            super::LaneRelayMessage::DrainVote { sender, vote } => {
+                accept_drain_vote(sender, vote)?;
+            }
+            _ => iroha_logger::debug!("retired legacy lane relay envelope"),
         }
         drained_any = true;
     }
@@ -3520,12 +3535,17 @@ fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
     drain_lane_relay_prefix(
         lane_relay_rx,
         queue_plan,
         active_view,
         OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
+        accept_drain_vote,
     )
 }
 
@@ -3534,8 +3554,18 @@ fn drain_finalized_lane_relay_prefix(
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
-    drain_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
+    drain_lane_relay_prefix(
+        lane_relay_rx,
+        queue_plan,
+        active_view,
+        limit,
+        accept_drain_vote,
+    )
 }
 
 #[cfg(test)]
@@ -3544,8 +3574,18 @@ pub(in crate::sumeragi) fn drain_finalized_lane_relay_prefix_for_test(
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
-    drain_finalized_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
+    drain_finalized_lane_relay_prefix(
+        lane_relay_rx,
+        queue_plan,
+        active_view,
+        limit,
+        accept_drain_vote,
+    )
 }
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]

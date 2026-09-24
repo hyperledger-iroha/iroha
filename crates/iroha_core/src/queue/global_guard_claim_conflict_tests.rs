@@ -44,19 +44,26 @@ fn globally_bound_absent_registry_skips_unadmitted_claim_without_blocking_ready_
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), two)
-        .expect("exact marker enables selection");
+        .expect("exact marker leaves QueuePlan selection with the autonomous owner");
     assert_eq!(
         pending
             .iter()
             .map(AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>(),
-        vec![hash, follower_hash]
+        vec![follower_hash]
+    );
+    assert!(
+        !fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&hash)
     );
     drop(lease);
 
     // A durable autonomous owner leaves the physical FIFO but keeps its
-    // immutable ordinal. That virtual predecessor must fence an ordinary
-    // follower until the reservation reaches a terminal release.
+    // immutable ordinal for custody. The leader can still sample an
+    // independent Ordinary input that arrived later on this node.
     let fixture = globally_bound_guard_fixture_with_journals(0, true);
     let hash = fixture.transaction.hash_as_entrypoint();
     let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
@@ -101,13 +108,23 @@ fn globally_bound_absent_registry_skips_unadmitted_claim_without_blocking_ready_
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))
-        .expect("a live autonomous FIFO cut is a healthy selection wait");
-    assert!(
-        pending.is_empty(),
-        "ordinary work must not overtake the reservation"
+        .expect("a live autonomous reservation does not block leader sampling");
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>(),
+        vec![follower_hash],
     );
-    assert!(fixture.queue.global_selection_owners.lock().is_empty());
+    assert!(
+        fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&follower_hash)
+    );
     drop(lease);
+    assert!(fixture.queue.global_selection_owners.lock().is_empty());
 }
 
 #[test]
@@ -192,47 +209,55 @@ fn bounded_leader_scan_reaches_ready_work_behind_unadmitted_claims() {
     assert!(!fixture.queue.accepted_work_validation_faulted());
     drop(lease);
 
-    // A new committed parent can make a previously skipped claim canonical.
-    // Its old FIFO position must be reconsidered before another local sample.
+    // A new committed parent can make a claim canonical, but it cannot reset
+    // the local scan to that autonomous claim ahead of later Ordinary work.
     install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
     seed_committed_height_for_queue_test(&fixture.state, 1);
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), one)
-        .expect("new parent resets the advisory leader cursor");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].hash_as_entrypoint(), first_hash);
-    assert!(
-        wake_rx.try_recv().is_err(),
-        "a canonical QueuePlan cut must not spin the local sampler"
-    );
-    drop(lease);
-    let (pending, lease) = fixture
+        .expect("new parent preserves bounded local scan progress");
+    assert!(pending.is_empty());
+    wake_rx
+        .try_recv()
+        .expect("remaining bounded windows must stay reachable after a parent change");
+    for _ in 0..2 {
+        let (pending, skipped_lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), one)
+            .expect("unadmitted claims keep their own custody");
+        assert!(pending.is_empty());
+        wake_rx
+            .try_recv()
+            .expect("the next bounded window remains reachable");
+        drop(skipped_lease);
+    }
+    let (pending, follower_lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), one)
-        .expect("canonical QueuePlan cut remains at the scan front");
+        .expect("local QueuePlan arrival order cannot hide ready Ordinary work");
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].hash_as_entrypoint(), first_hash);
+    assert_eq!(pending[0].hash_as_entrypoint(), follower_hash);
+    drop(follower_lease);
     assert!(
-        !fixture
+        fixture
             .queue
             .reject_exact_queue_plan_admission_claim(&fixture.binding)
-            .expect("held exact owner defers terminal cleanup")
+            .expect("ordinary leader lease cannot retain autonomous QueuePlan custody")
     );
-    assert!(fixture.queue.replay_terminal_cleanup_pending(first_hash));
-    let (blocked, blocked_lease) = fixture
+    assert!(!fixture.queue.replay_terminal_cleanup_pending(first_hash));
+    assert!(!fixture.queue.contains_entrypoint_hash(first_hash));
+    let (available, available_lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(4_usize))
-        .expect("held terminal owner is still an ordering fence");
-    assert!(
-        blocked.is_empty(),
-        "a deferred terminal claim cannot hide its live selection owner"
-    );
+        .expect("terminal QueuePlan removal leaves later Ordinary work available");
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].hash_as_entrypoint(), follower_hash);
     assert!(
         wake_rx.try_recv().is_err(),
-        "a held ownership fence must wait for release instead of self-waking"
+        "the completed bounded window has no unvisited work"
     );
-    drop(blocked_lease);
+    drop(available_lease);
     drop(lease);
 }
 
@@ -258,26 +283,31 @@ fn exact_queue_plan_rejection_waits_for_popped_guard_release() {
 }
 
 #[test]
-fn exact_queue_plan_rejection_waits_for_global_selection_lease() {
+fn exact_queue_plan_rejection_ignores_ordinary_leader_snapshot() {
     let fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash_as_entrypoint();
     install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
-        .expect("select the exact QueuePlan claim");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].hash_as_entrypoint(), hash);
-
+        .expect("the global leader cannot select autonomous QueuePlan work");
+    assert!(pending.is_empty());
     assert!(
         !fixture
             .queue
-            .reject_exact_queue_plan_admission_claim(&fixture.binding)
-            .expect("defer exact terminal claim while selection owns it"),
-        "terminal rejection must not tombstone a globally selected QueuePlan owner"
+            .global_selection_owners
+            .lock()
+            .contains_key(&hash)
     );
-    assert!(fixture.queue.replay_terminal_cleanup_pending(hash));
-    fixture.assert_live_journal_claim();
+
+    assert!(
+        fixture
+            .queue
+            .reject_exact_queue_plan_admission_claim(&fixture.binding)
+            .expect("terminal claim is independent of the ordinary leader lease"),
+        "terminal rejection must consume unreserved autonomous custody"
+    );
+    assert!(!fixture.queue.replay_terminal_cleanup_pending(hash));
 
     drop(lease);
     fixture.assert_terminally_removed();
@@ -678,13 +708,12 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     let bounded_snapshot_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&bounded_snapshot_fixture);
     let state_view = bounded_snapshot_fixture.state.view();
-    assert!(
-        bounded_snapshot_fixture
-            .queue
-            .bounded_pending_snapshot(&state_view, nonzero!(1_usize))
-            .is_none(),
-        "malformed expired global ownership must stop bounded selection"
-    );
+    let (pending, lease) = bounded_snapshot_fixture
+        .queue
+        .bounded_pending_snapshot(&state_view, nonzero!(1_usize))
+        .expect("unselected autonomous corruption cannot stop ordinary leader sampling");
+    assert!(pending.is_empty());
+    drop(lease);
     drop(state_view);
     assert!(
         bounded_snapshot_fixture
@@ -692,7 +721,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .push_remove_lock
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the Queue mutation lock"
+        "bounded exclusion must release the Queue mutation lock"
     );
     assert!(
         bounded_snapshot_fixture
@@ -700,7 +729,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .queued_age_ring
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the Queue age lock"
+        "bounded exclusion must release the Queue age lock"
     );
     assert!(
         bounded_snapshot_fixture
@@ -708,9 +737,14 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .global_selection_owners
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the selection-owner lock"
+        "bounded exclusion must release the selection-owner lock"
     );
-    assert_faulted_owner_retained(&bounded_snapshot_fixture);
+    assert!(
+        !bounded_snapshot_fixture
+            .queue
+            .accepted_work_validation_faulted()
+    );
+    bounded_snapshot_fixture.assert_live_journal_claim();
     let revalidation_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&revalidation_fixture);
     let revalidation_hash = revalidation_fixture.transaction.hash_as_entrypoint();
@@ -760,7 +794,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
         "revalidation fault publication must release the transition-index lock"
     );
     assert_faulted_owner_retained(&revalidation_fixture);
-    let fixture = globally_bound_guard_fixture();
+    let fixture = globally_bound_guard_fixture_with_journals(0, true);
     let hash = fixture.transaction.hash_as_entrypoint();
     assert_eq!(
         fixture
@@ -800,18 +834,33 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     let (pending, _lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
-        .expect("conflicting marker is durably rejected without a selection fault");
+        .expect("ordinary leader sampling leaves conflict reconciliation to the autonomous owner");
     assert!(
         pending.is_empty(),
         "the conflicting globally admitted owner must be rejected, not selected"
     );
     assert!(
         fixture.queue.global_selection_owners.lock().is_empty(),
-        "conflict rejection must not publish a candidate lease"
+        "autonomous conflict cannot publish an ordinary candidate lease"
     );
     assert!(
-        !fixture.queue.removed_hashes.contains_key(&hash),
-        "bounded conflict rejection must synchronously remove its FIFO cell"
+        fixture.queue.contains_entrypoint_hash(hash),
+        "the ordinary leader cannot terminalize autonomous custody"
+    );
+    assert!(
+        fixture
+            .queue
+            .reserve_transactions_for_lane(
+                &fixture.state,
+                lane_reservation_scope(
+                    &fixture.state,
+                    b"conflicting-owner-reconciliation",
+                    b"conflicting-owner-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("autonomous owner terminalizes its exact conflicting claim")
+            .is_empty()
     );
     fixture.assert_terminally_removed();
 }

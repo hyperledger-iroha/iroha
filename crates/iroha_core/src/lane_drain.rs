@@ -1,8 +1,10 @@
-//! Crash-safe local signing guard for automatic lane drain certificates.
+//! Crash-safe local signing guard for Native Commit votes and lane drain certificates.
 use crate::lane_consensus::validate_lane_drain_certificate_body;
+use crate::state::VerifiedLaneContext;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::{CertPhase, LaneBlockVoteBodyV1},
+    block::lane_consensus::{LanePhaseV1, LaneVoteStatementV1},
     merge::LaneDrainCertificateBodyV1,
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -18,7 +20,8 @@ use std::{
 };
 use thiserror::Error;
 const GUARD_VERSION: u8 = 1;
-// TODO: Remove these scoped allowances when the native lane adapter becomes the production runner.
+// TODO: Retire the old lane-vote entry point and its scoped allowances after
+// the Native drain-vote producer is connected to the sole production runner.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "TODO: activate native lane signing")
@@ -384,19 +387,85 @@ impl LaneDrainSigningGuard {
                 "expected a non-zero lane Commit vote".to_owned(),
             ));
         }
+        self.authorize_commit_lock(
+            LaneDrainSigningKeyV1::from_commit_vote(body),
+            LaneCommitVoteLockV1::from_body(body),
+            false,
+        )
+    }
+    /// Fence a Native Commit before its signature is created from the fsynced
+    /// `LockAndCommit` WAL entry. A later voting view may re-sign the same
+    /// immutable value; a different value at the same lane height may not.
+    ///
+    /// The caller must first bind `statement` to the exact current instance and
+    /// reducer-issued WAL entry. The verified opening carries authenticated
+    /// route authority, so signing does not reverify committee proofs.
+    pub(crate) fn authorize_native_commit_vote(
+        &self,
+        verified: &VerifiedLaneContext,
+        statement: &LaneVoteStatementV1,
+    ) -> Result<(), LaneDrainSigningGuardError> {
+        let frozen = verified.frozen();
+        let instance_id = Hash::from(verified.instance_id().0);
+        if statement.phase != LanePhaseV1::Commit
+            || statement.round.lane_height != frozen.next_lane_height
+            || statement.round.instance_id != instance_id
+            || statement.round.instance_id != statement.value.instance_id
+            || statement.value.admitted_binding_hash != frozen.admitted_binding_hash
+            || statement.value.origin_view > statement.round.voting_view
+            || usize::try_from(statement.value.origin_producer)
+                .map_or(true, |index| index >= frozen.committee.len())
+            || statement.value.descriptor_hash == Hash::prehashed([0; Hash::LENGTH])
+        {
+            return Err(LaneDrainSigningGuardError::InvalidInput(
+                "Native Commit differs from its frozen instance or immutable value".to_owned(),
+            ));
+        }
+        let subject = statement
+            .value
+            .subject_hash()
+            .map_err(|error| LaneDrainSigningGuardError::InvalidInput(error.to_string()))?;
+        let preimage = statement
+            .signature_preimage()
+            .map_err(|error| LaneDrainSigningGuardError::InvalidInput(error.to_string()))?;
+        self.authorize_commit_lock(
+            LaneDrainSigningKeyV1 {
+                lane_id: frozen.lane_id,
+                dataspace_id: frozen.dataspace_id,
+                lane_incarnation: frozen.lane_incarnation,
+            },
+            LaneCommitVoteLockV1 {
+                proposal_height: frozen.opening_global_height,
+                lane_block_height: statement.round.lane_height,
+                proposal_hash: subject,
+                descriptor_hash: statement.value.descriptor_hash,
+                vote_body_digest: Hash::new(preimage),
+            },
+            true,
+        )
+    }
+    fn authorize_commit_lock(
+        &self,
+        key: LaneDrainSigningKeyV1,
+        attempted: LaneCommitVoteLockV1,
+        allow_same_value_new_view: bool,
+    ) -> Result<(), LaneDrainSigningGuardError> {
         let _serial = self.serial.lock();
-        let key = LaneDrainSigningKeyV1::from_commit_vote(body);
         let (mut record, is_new) = self.load_or_empty(key)?;
         if record.drain_body.is_some() {
             return Err(LaneDrainSigningGuardError::LaneClosed);
         }
-        let attempted = LaneCommitVoteLockV1::from_body(body);
         match record.highest_commit_vote {
             Some(existing) if attempted.lane_block_height < existing.lane_block_height => {
                 return Err(LaneDrainSigningGuardError::CommitVoteEquivocation);
             }
             Some(existing) if attempted.lane_block_height == existing.lane_block_height => {
-                return if attempted == existing {
+                return if attempted == existing
+                    || (allow_same_value_new_view
+                        && attempted.proposal_height == existing.proposal_height
+                        && attempted.proposal_hash == existing.proposal_hash
+                        && attempted.descriptor_hash == existing.descriptor_hash)
+                {
                     Ok(())
                 } else {
                     Err(LaneDrainSigningGuardError::CommitVoteEquivocation)
@@ -754,6 +823,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
+        block::lane_consensus::{LaneRoundV1, LaneValueKindV1, LaneValueRefV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{LaneDrainFrontierV1, LaneDrainIntentV1},
     };
@@ -851,6 +921,115 @@ mod tests {
         guard
             .authorize_drain(&drain_body(5, 5))
             .expect("matching frontier closes lane");
+    }
+    #[test]
+    fn native_commit_lock_survives_views_and_restart_before_drain() {
+        let (state, _) = crate::state::State::native_dispatch_source_fixture_for_test();
+        let observed = state
+            .verified_lane_consensus_contexts()
+            .expect("authenticate Native openings")
+            .expect("fixture has an opening");
+        let lane = &observed.contexts()[0];
+        let frozen = lane.frozen();
+        let cached = state
+            .lane_drain_signing_guard()
+            .expect("open State-owned signer lock");
+        assert!(std::sync::Arc::ptr_eq(
+            &cached,
+            &state
+                .lane_drain_signing_guard()
+                .expect("reuse exact State-owned signer lock"),
+        ));
+        let value = LaneValueRefV1 {
+            instance_id: Hash::from(lane.instance_id().0),
+            admitted_binding_hash: frozen.admitted_binding_hash,
+            kind: LaneValueKindV1::Execution,
+            origin_view: 0,
+            origin_producer: 0,
+            descriptor_hash: Hash::new(b"native-commit-drain-lock-descriptor"),
+            payload_hash: Hash::new(b"native-commit-drain-lock-payload"),
+            availability_hash: Hash::new(b"native-commit-drain-lock-availability"),
+        };
+        let mut statement = LaneVoteStatementV1 {
+            round: LaneRoundV1 {
+                instance_id: value.instance_id,
+                lane_height: frozen.next_lane_height,
+                voting_view: 0,
+            },
+            phase: LanePhaseV1::Commit,
+            value,
+        };
+        let active = BTreeSet::from([(frozen.lane_id, frozen.lane_incarnation)]);
+        let temp = tempfile::tempdir().expect("signing guard root");
+        let intent = LaneDrainIntentV1 {
+            version: 1,
+            network_id: frozen.network_id.clone(),
+            lane_id: frozen.lane_id,
+            dataspace_id: frozen.dataspace_id,
+            lane_incarnation: frozen.lane_incarnation,
+            close_global_height: frozen.opening_global_height + 1,
+            initial_frontier: LaneDrainFrontierV1::ordinary(
+                frozen.lane_id,
+                frozen.dataspace_id,
+                frozen.lane_incarnation,
+                frozen.predecessor_height,
+                frozen.predecessor_hash,
+            ),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&frozen.committee),
+            validator_set: frozen.committee.clone(),
+            validator_count: u32::try_from(frozen.committee.len()).expect("bounded committee"),
+            min_quorum: u32::try_from(2 * ((frozen.committee.len() - 1) / 3) + 1)
+                .expect("bounded quorum"),
+        };
+        let below = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: intent.clone(),
+            final_frontier: intent.initial_frontier,
+        };
+        let matching = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent,
+            final_frontier: LaneDrainFrontierV1::ordinary(
+                frozen.lane_id,
+                frozen.dataspace_id,
+                frozen.lane_incarnation,
+                frozen.next_lane_height,
+                Some(value.descriptor_hash),
+            ),
+        };
+        {
+            let guard = LaneDrainSigningGuard::open(temp.path(), &active).expect("open guard");
+            guard
+                .authorize_native_commit_vote(lane, &statement)
+                .expect("durably lock first Native Commit");
+            statement.round.voting_view = 1;
+            guard
+                .authorize_native_commit_vote(lane, &statement)
+                .expect("same immutable value may be re-signed in a later view");
+            let mut conflict = statement;
+            conflict.value.payload_hash = Hash::new(b"conflicting-native-value");
+            assert_eq!(
+                guard.authorize_native_commit_vote(lane, &conflict),
+                Err(LaneDrainSigningGuardError::CommitVoteEquivocation)
+            );
+            assert_eq!(
+                guard.authorize_drain(&below),
+                Err(LaneDrainSigningGuardError::DrainFrontierBelowSignedCommit)
+            );
+        }
+        let guard = LaneDrainSigningGuard::open(temp.path(), &active).expect("reopen guard");
+        assert_eq!(
+            guard.authorize_drain(&below),
+            Err(LaneDrainSigningGuardError::DrainFrontierBelowSignedCommit)
+        );
+        guard
+            .authorize_drain(&matching)
+            .expect("exact applied Native descriptor covers signed high-water");
+        assert_eq!(
+            guard.authorize_native_commit_vote(lane, &statement),
+            Err(LaneDrainSigningGuardError::LaneClosed)
+        );
     }
     #[test]
     fn drain_guard_rejects_an_intent_with_a_non_exact_embedded_committee() {

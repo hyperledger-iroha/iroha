@@ -315,19 +315,14 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
     ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
      'method',
      'V2CandidateAssembler::snapshot_routable_candidates',
-     ('let mut queue_plan_barrier = false;',
-      'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
-      'let queue_plan_synced =',
+     ('crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(',
+      'state.network_id_ref(),',
+      'if transaction.entrypoint().admission_intent()',
       'TransactionAdmissionIntent::QueuePlanSynced',
-      'Ok(None) => {\n                            '
-      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
-      '                            continue;\n                        }',
-      'if queue_plan_barrier',
-      'exact_height_lifecycle_candidate(',
-      'crate::torii_proxy::validate_queue_plan_binding_for_request(',
-      'report.routable = report.routable.saturating_add(1)',
-      'if queue_plan_synced',
       'report.work_deferred = report.work_deferred.saturating_add(1)',
+      'continue;',
+      'let routing_plan = match queue.route_plan_with_state(&transaction, state)',
+      'report.routable = report.routable.saturating_add(1)',
       'records.push(CandidateRecord {')),
     (
         "crates/iroha_core/src/queue.rs",
@@ -335,18 +330,14 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
         "Queue::bounded_pending_snapshot",
         (
             "let live_reservations = self.lane_reservations.lock().live_hashes()",
-            "let mut live_reservation_fifo_cut = None",
-            "for hash in &live_reservations",
-            "let order = self.fifo_order_by_hash.get(hash)?",
-            "live_reservation_fifo_cut.map_or(order.value().ordinal",
-            "let parent_hash = state_view.latest_block_hash()",
+            "let mut scan_start = scan_cursor.next_index",
             ".skip(scan_start)",
-            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
-            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
-            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
-            "blocked_by_fifo_predecessor = true",
-            "canonical_queue_plan_fence.get_or_insert(scan_start + offset)",
-            "scan_cursor.next_index = fence",
+            "if live_reservations.contains(hash) {",
+            "if global_owners.contains_key(hash) {",
+            "if self.durability_transition_active(hash) {",
+            "let transaction = self.txs.get(hash)?",
+            "== TransactionAdmissionIntent::QueuePlanSynced",
+            "let Some(_) = self.fifo_order_by_hash.get(hash)",
             "scan_cursor.next_index = scan_start",
             "self.wake_sumeragi()",
         ),
@@ -418,20 +409,12 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
     ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
      'method',
      'V2CandidateAssembler::snapshot_routable_candidates',
-     ('let mut queue_plan_barrier = false;',
-      'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
-      'let queue_plan_synced =',
-      'Ok(None) => {\n                            '
-      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
-      '                            continue;\n                        }',
-      'if queue_plan_barrier',
-      'exact_height_lifecycle_candidate(',
-      'crate::torii_proxy::validate_queue_plan_binding_for_request(',
-      'report.routable = report.routable.saturating_add(1)',
-      'if queue_plan_synced',
+     ('if transaction.entrypoint().admission_intent()',
+      'TransactionAdmissionIntent::QueuePlanSynced',
       'report.work_deferred = report.work_deferred.saturating_add(1)',
-      'queue_plan_barrier = true;',
       'continue;',
+      'let routing_plan = match queue.route_plan_with_state(&transaction, state)',
+      'report.routable = report.routable.saturating_add(1)',
       'records.push(CandidateRecord {')),
     (
         "crates/iroha_core/src/queue.rs",
@@ -439,15 +422,17 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
         "Queue::bounded_pending_snapshot",
         (
             "let live_reservations = self.lane_reservations.lock().live_hashes()",
-            "let mut live_reservation_fifo_cut = None",
-            "for hash in &live_reservations",
-            "let order = self.fifo_order_by_hash.get(hash)?",
-            "live_reservation_fifo_cut = Some(",
             "let mut global_owners = self.global_selection_owners.lock()",
-            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
-            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
-            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
-            "if self.durability_transition_active(hash)",
+            "let mut scan_start = scan_cursor.next_index",
+            "if live_reservations.contains(hash) {",
+            "if global_owners.contains_key(hash) {",
+            "if self.durability_transition_active(hash) {",
+            "if self.replay_terminal_cleanup_pending(*hash) {",
+            "let transaction = self.txs.get(hash)?",
+            "== TransactionAdmissionIntent::QueuePlanSynced",
+            "let Some(_) = self.fifo_order_by_hash.get(hash)",
+            "if transaction.value().is_in_blockchain(state_view) {",
+            "scan_cursor.next_index = scan_start",
         ),
     ),
     (
@@ -516,14 +501,32 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
       'QueuePlanSynced work requires its globally admitted autonomous reservation')),
     (
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
-        "only_certified_queue_plan_intent_fences_later_ordinary_input",
+        "certified_queue_plan_intent_does_not_order_later_ordinary_input",
         (
             "TransactionAdmissionIntent::QueuePlanSynced",
             "vec![queue_plan.clone(), follower.clone()]",
             "assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint())",
             "install_queue_plan_pending_binding_for_test(&binding)",
-            "assert!(bound.is_empty())",
+            "assert_eq!(bound[0].entrypoint_hash, follower.hash_as_entrypoint())",
             "assert_eq!(bound_report.work_deferred, 1)",
+            "replace_queue_plan_registry_owner_for_test(",
+            "queue_plan_pending_binding_for_entrypoint(queue_plan.hash_as_entrypoint())",
+            "assert_eq!(stale[0].entrypoint_hash, follower.hash_as_entrypoint())",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "bounded_pending_snapshot_ignores_unselected_queue_plan_registry_conflict",
+        (
+            "replace_queue_plan_registry_owner_for_test(",
+            "queue_plan_pending_binding_for_entrypoint(",
+            ".bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))",
+            "assert!(skipped.is_empty())",
+            "seed_committed_height_for_queue_test(&fixture.state, 1)",
+            "assert_ne!(fixture.state.view().latest_block_hash(), first_parent)",
+            "vec![ordinary_hash]",
+            "contains_entrypoint_hash(queue_plan_hash)",
+            "global_selection_owners",
         ),
     ),
     (
@@ -536,7 +539,7 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
             "assert_eq!(fixture.queue.fifo_snapshot_for_test(), vec![follower_hash])",
             "assert!(predecessor_order < follower_order)",
             ".bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))",
-            "assert!(fixture.queue.global_selection_owners.lock().is_empty())",
+            "vec![follower_hash]",
         ),
     ),
     (
@@ -1852,11 +1855,27 @@ def validate_current_queue_plan_selection(items: dict, errors: list[str]) -> Non
     symbol = "V2CandidateAssembler::snapshot_routable_candidates"
     item = items.get(("crates/iroha_core/src/sumeragi/v2_candidate.rs", "method", symbol))
     if item is not None:
-        call = """crate::torii_proxy::validate_queue_plan_binding_for_request(
-            &binding, state.network_id_ref(), transaction.entrypoint(), &routing_plan,
-        )"""
-        if _code(call) not in _code(item):
-            errors.append(f"{symbol}: exact QueuePlan request authority delegation changed")
+        if any(
+            token in item
+            for token in (
+                "queue_plan_pending_binding_for_entrypoint(",
+                "validate_queue_plan_binding_for_request(",
+            )
+        ):
+            errors.append(f"{symbol}: unselected local QueuePlan input regains proposal authority")
+    symbol = "Queue::bounded_pending_snapshot"
+    item = items.get(("crates/iroha_core/src/queue.rs", "method", symbol))
+    if item is not None and any(
+        token in item
+        for token in (
+            "global_admission_registry_match_for_hash(",
+            "queue_plan_admission_registry_match(",
+            "queue_plan_pending_binding_for_entrypoint(",
+        )
+    ):
+        errors.append(f"{symbol}: unselected local QueuePlan registry regains proposal authority")
+    if item is not None and "scan_cursor.parent_hash" in item:
+        errors.append(f"{symbol}: committed parent resets local async sampling progress")
 
     request = items.get(("crates/iroha_core/src/torii_proxy.rs", "fn", "validate_queue_plan_binding_for_request"))
     if request is not None:
@@ -2057,14 +2076,7 @@ QUEUE_PLAN_RETAINED_ROUTE_BINDINGS = (('crates/iroha_core/src/state.rs',
  ('crates/iroha_core/src/queue.rs',
   'method',
   'Queue::bounded_pending_snapshot',
-  ('if !open {\n'
-   '                            match State::queue_plan_pending_route_authority_in_view(\n'
-   '                                state_view, &binding,\n'
-   '                            ) {\n'
-   '                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n'
-   '                                    blocked_by_fifo_predecessor = true;\n'
-   '                                    return None;\n'
-   '                                }',)),
+  ('== TransactionAdmissionIntent::QueuePlanSynced',)),
  ('crates/iroha_core/src/queue.rs',
   'method',
   'Queue::push_with_lane_internal_with_state_and_routing',
@@ -3184,12 +3196,12 @@ QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS = (('crates/iroha_core/src/queue.rs',
   'method',
   'Queue::bounded_pending_snapshot',
   ('if self.replay_terminal_cleanup_pending(*hash) {\n                    return None;\n                }',
-   'Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {\n'
-   '                        // An uncarried local claim has no canonical ordering\n'
-   '                        // promise. Keep its exact Queue ownership, but let the\n'
-   '                        // leader choose later independently eligible work.\n'
-   '                        return None;\n'
-   '                    }')),
+   'if transaction\n'
+   '                    .value()\n'
+   '                    .as_accepted()\n'
+   '                    .entrypoint()\n'
+   '                    .admission_intent()\n'
+   '                    == TransactionAdmissionIntent::QueuePlanSynced')),
  ('crates/iroha_core/src/queue.rs',
   'method',
   'Queue::pop_queued_hash',

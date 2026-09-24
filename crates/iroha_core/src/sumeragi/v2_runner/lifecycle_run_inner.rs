@@ -1145,6 +1145,7 @@ fn run_lifecycle_active_height(
                         lane_relay_rx,
                         queue_plan,
                         executor.current_tag().view(),
+                        |sender, vote| native.accept_lane_drain_vote(sender, vote),
                     )?;
                     dispatch_queue_plan_admission_effects(
                         queue_plan,
@@ -1327,6 +1328,7 @@ fn run_lifecycle_active_height(
                         lane_relay_rx,
                         queue_plan,
                         executor.current_tag().view(),
+                        |sender, vote| native.accept_lane_drain_vote(sender, vote),
                     )?;
                     dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity).map(|_| ())?;
                     let _ = services.retry_pending_exact_output().map_err(V2RunnerError::Service)?;
@@ -1929,6 +1931,7 @@ fn run_lifecycle_active_height(
                                 queue_plan,
                                 executor.current_tag().view(),
                                 control_queue_capacity,
+                                |sender, vote| native.accept_lane_drain_vote(sender, vote),
                             )?;
                             dispatch_queue_plan_admission_effects(
                                 queue_plan,

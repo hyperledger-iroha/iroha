@@ -2051,7 +2051,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         )
     replica_disposition_regression = (
         "queue::tests::"
-        "replica_disposition_observes_exact_fifo_beneath_global_selection_overlay"
+        "replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay"
     )
     assert replica_disposition_regression in production_inventory
     assert replica_disposition_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS

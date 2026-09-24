@@ -25192,6 +25192,7 @@ pub(super) mod tests {
                 &mut queue_plan,
                 observed_round.view,
                 1,
+                |_, _| unreachable!(),
             )
             .expect("terminal exact relay prefix"),
             "the closed terminal relay prefix retires the old envelope without adapter authority"
@@ -25202,6 +25203,7 @@ pub(super) mod tests {
                 &mut queue_plan,
                 observed_round.view,
                 1,
+                |_, _| unreachable!(),
             )
             .expect("terminal exact relay prefix"),
             "the admitted relay prefix is finite after shared ingress closure"

@@ -417,6 +417,30 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         self.matches_current_parked_record(context, address, digest, coordinator, None)
     }
 
+    /// Match an exact signed retransmit against its installed, still-live row.
+    ///
+    /// A duplicate has no service or retirement authority. An unrelated
+    /// scheduler lease therefore cannot make the durable Broadcast disappear
+    /// from duplicate detection while asynchronous input is being processed.
+    /// Finalization keeps its stricter idle-only predicate above.
+    pub(super) fn matches_current_retransmit_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        self.matches_current_ready_record(context, address, digest, coordinator)
+            || self.matches_current_parked_record_with_lease_policy(
+                context,
+                address,
+                digest,
+                coordinator,
+                coordinator.active_lease.as_ref(),
+                true,
+            )
+    }
+
     /// Compare the exact volatile wait installed after durable refanout.
     ///
     /// An exhaustive live-work census may run while its already-authenticated
@@ -431,6 +455,25 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
         digest: super::LifecycleDigest,
         coordinator: &super::LifecycleCoordinator,
         expected_active_lease: Option<&super::TurnLease>,
+    ) -> bool {
+        self.matches_current_parked_record_with_lease_policy(
+            context,
+            address,
+            digest,
+            coordinator,
+            expected_active_lease,
+            false,
+        )
+    }
+
+    fn matches_current_parked_record_with_lease_policy(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+        expected_active_lease: Option<&super::TurnLease>,
+        allow_unrelated_lease: bool,
     ) -> bool {
         let Ok((physical, universe, consumed)) = self.candidate.physical_geometry.normalized()
         else {
@@ -450,10 +493,11 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
             && coordinator.fault.is_none()
             && coordinator.active_lease.as_ref() == expected_active_lease
             && expected_active_lease.is_none_or(|lease| {
-                matches!(
-                    lease.work_class(),
-                    LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn
-                )
+                (allow_unrelated_lease && lease.ordinal() != address.ordinal)
+                    || matches!(
+                        lease.work_class(),
+                        LifecycleWorkClass::CertifiedServe | LifecycleWorkClass::ProducerTurn
+                    )
             })
             && coordinator.active_context == context
             && coordinator.high_water >= address.ordinal

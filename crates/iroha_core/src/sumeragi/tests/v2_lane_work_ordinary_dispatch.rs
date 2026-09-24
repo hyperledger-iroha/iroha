@@ -326,6 +326,29 @@ impl OrdinaryLaneDispatchFixture {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(!self.guard.restart_required());
+        let iroha_data_model::block::lane_consensus::LaneMessageV1::Vote(committed_vote) =
+            &self.expected_commit.message
+        else {
+            panic!("fixture expects a Native Commit vote");
+        };
+        let lane = self
+            .observed
+            .contexts()
+            .iter()
+            .find(|lane| {
+                Hash::from(lane.instance_id().0) == committed_vote.statement.round.instance_id
+            })
+            .expect("exact Native Commit opening");
+        let mut conflicting = committed_vote.statement;
+        conflicting.value.payload_hash = Hash::new(b"different-native-commit-after-signing");
+        assert_eq!(
+            self.state
+                .lane_drain_signing_guard()
+                .expect("State-owned signer lock")
+                .authorize_native_commit_vote(lane, &conflicting),
+            Err(crate::lane_drain::LaneDrainSigningGuardError::CommitVoteEquivocation),
+            "the actual Native Commit signature must first persist its cross-instance drain lock"
+        );
         self.assert_candidate_not_applied();
     }
 

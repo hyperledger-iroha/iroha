@@ -13048,6 +13048,8 @@ pub struct State {
     pub ivm: IVM,
     /// Reference to Kura subsystem.
     kura: Arc<Kura>,
+    /// One durable drain/Commit signer lock for this exact State/Kura process owner.
+    lane_drain_signing_guard: SyncOnceCell<Arc<crate::lane_drain::LaneDrainSigningGuard>>,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: LiveQueryStoreHandle,
     /// Pipeline execution preferences (dynamic prepass, parallel overlay).
@@ -28312,6 +28314,29 @@ impl State {
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
+    /// Open the shared Native drain/Commit signer lock once per State/Kura owner.
+    /// A second lane instance borrows this lock rather than acquiring a second
+    /// filesystem owner or creating a competing signing decision.
+    pub(crate) fn lane_drain_signing_guard(
+        &self,
+    ) -> Result<
+        Arc<crate::lane_drain::LaneDrainSigningGuard>,
+        crate::lane_drain::LaneDrainSigningGuardError,
+    > {
+        self.lane_drain_signing_guard
+            .get_or_try_init(|| {
+                let active_incarnations = self
+                    .lane_incarnations_snapshot()
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                crate::lane_drain::LaneDrainSigningGuard::open(
+                    &self.kura.store_root(),
+                    &active_incarnations,
+                )
+                .map(Arc::new)
+            })
+            .map(Arc::clone)
+    }
     /// Install or clear the node-local Soracloud runtime handle.
     pub fn set_soracloud_runtime(
         &self,
@@ -29747,6 +29772,7 @@ impl State {
             replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
             ivm: IVM::new(0),
             kura,
+            lane_drain_signing_guard: SyncOnceCell::new(),
             query_handle,
             da_commitments: PublicationRwLock::new(
                 crate::da::commitment_store::DaCommitmentStore::default(),
@@ -36070,6 +36096,25 @@ impl State {
             .ok()
         })
     }
+    /// Resolve a received drain frontier against one committed State generation.
+    /// Local Queue and Kura arrivals cannot determine whether a signed remote
+    /// vote belongs to the unique pending close or its exact committee.
+    pub(crate) fn committed_autoscale_lane_drain_body_for_frontier(
+        &self,
+        certified: LaneDrainFrontierV1,
+    ) -> Result<Option<(LaneDrainCertificateBodyV1, Vec<PeerId>)>, MergeLedgerCommitError> {
+        let _lease = self.consensus_publication_lease();
+        let state = self.view();
+        let frontier = Self::lane_drain_frontier_from_committed_state(&state, certified)?;
+        drop(state);
+        Ok(
+            self.pending_autoscale_lane_drain_body_with_frontier(|lane, dataspace, incarnation| {
+                frontier
+                    .matches_route(lane, dataspace, incarnation)
+                    .then_some(frontier)
+            }),
+        )
+    }
     /// Authenticate a committed close for one exact autoscale lane incarnation.
     ///
     /// The close remains terminal after its drain certificate is committed, so
@@ -37387,7 +37432,7 @@ impl State {
             replay
                 .validate_drain_payload(&state, carrier_height, active_lanes, certificates)
                 .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
-            Self::lane_drain_frontier_from_replay_state(&state, certificate.body.final_frontier)?
+            Self::lane_drain_frontier_from_committed_state(&state, certificate.body.final_frontier)?
         } else {
             Self::evidence_aware_lane_drain_frontier_from_world(
                 &self.world.view(),
@@ -40893,6 +40938,7 @@ impl State {
     /// `None` means no immutable owner exists, or the exact owner was already
     /// applied. Malformed, stale, or partially replicated marker state fails
     /// closed.
+    #[cfg(test)]
     pub(crate) fn queue_plan_pending_binding_for_entrypoint(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -57398,7 +57444,7 @@ impl<'state> StateBlock<'state> {
             replay
                 .validate_merge_stage(&self._curr_block, &*self, entry)
                 .map_err(LaneLifecycleError::Storage)?;
-            State::lane_drain_frontier_from_replay_state(&*self, certificate.body.final_frontier)
+            State::lane_drain_frontier_from_committed_state(&*self, certificate.body.final_frontier)
         } else {
             State::evidence_aware_lane_drain_frontier_from_world(
                 &self.world,

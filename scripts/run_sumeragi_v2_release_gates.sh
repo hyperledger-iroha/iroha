@@ -2251,7 +2251,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::transient_response_capacity_defers_materialization_on_the_same_delivery
   merge_sidecar::tests::writable_reconnect_during_materialization_keeps_exact_authorized_tenure
   state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired
-  queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay
+  queue::tests::replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_consumer_tag_after_tc
   sumeragi::v2::tests::prelock_current_commit_is_readmitted_with_priority_neutral_service_identity
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_consumer_tag
@@ -3381,7 +3381,7 @@ required_multilane_queue_journal_focus_tests=(
   queue::tests::queue_plan_journal_retains_inactive_future_autoscale_plan_fail_closed
   queue::tests::queue_plan_journal_retains_inactive_native_amx_participant_without_rebinding
   queue::tests::lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disabled
-  queue::tests::global_candidate_lease_excludes_autonomous_reservation_until_exact_drop
+  queue::tests::ordinary_candidate_snapshot_leaves_queue_plan_autonomous_reservation_available
   queue::tests::stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan
   queue::tests::stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan
   queue::tests::high_volume_commit_barriers_require_explicit_proof_before_consumption

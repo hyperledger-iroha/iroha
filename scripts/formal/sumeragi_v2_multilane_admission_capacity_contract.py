@@ -389,7 +389,11 @@ def validate_owners(root, models, errors, rust_binding_item):
         "schedule_local_proposal": (
             "let Some(assembly) = native.assemble_candidate(",
             "proposal_state.defer_candidate_snapshot(owner, Instant::now())",
-            "native.retain_candidate_source(source)", "let assembly = outcome?",
+            "native.retain_candidate_source(source)",
+            "let assembly = match outcome {",
+            "if !output_guard.restart_required()",
+            "&& proposal_state.defer_history_admission(",
+            "Err(error) => return Err(error.into())",
         ),
     }
     for symbol, relations in native_relations.items():
@@ -416,7 +420,12 @@ def validate_owners(root, models, errors, rust_binding_item):
             "let mut builder = self.prepare_block_builder(", "let (fitted, count) = fit_evidence_prefix(",
             "report.evidence_deferred =", "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()")
     ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
-            "native.retain_candidate_source(source)", "let assembly = outcome?", "let candidate = match assembly")
+            "native.retain_candidate_source(source)",
+            "let assembly = match outcome {",
+            "if !output_guard.restart_required()",
+            "&& proposal_state.defer_history_admission(",
+            "Err(error) => return Err(error.into())",
+            "let candidate = match assembly")
     ordered("NativeRunnerProcess::assemble_candidate", "self.poll_candidate()?", "if completed.owner == owner",
             "self.retain_candidate_source(assembly.source)", "if self.candidate_job.is_some()",
             "self.capture_decisions()?", "mpsc::sync_channel(1)", "assembler.assemble_native(CandidateRequest {")

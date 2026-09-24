@@ -454,10 +454,10 @@ Root {
             allow_tool_prefixes: [],
             deny_tool_prefixes: [],
             rate_per_minute: Some(
-                240,
+                1200,
             ),
             burst: Some(
-                120,
+                512,
             ),
         },
         proof_api: ProofApi {

@@ -283,6 +283,7 @@ pub(crate) struct LaneInstance {
     timeout_witnesses: BTreeMap<(u64, u32), LaneTimeoutVoteV1>,
     key: KeyPair,
     output_guard: Arc<ConsensusOutputGuard>,
+    lane_drain_signing_guard: Arc<crate::lane_drain::LaneDrainSigningGuard>,
     clock: LaneClock,
     base_timeout: Duration,
     retransmit_interval: Duration,

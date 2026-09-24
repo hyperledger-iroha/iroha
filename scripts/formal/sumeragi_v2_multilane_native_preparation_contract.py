@@ -3967,9 +3967,14 @@ def validate_native_preparation_contract(
             "proposal_state.history_admission_pending(owner, &queue.sumeragi_waker())", "let Some(assembly) = native.assemble_candidate(")
     ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
             "let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;",
-            "native.retain_candidate_source(source);", "let assembly = outcome?;")
+            "native.retain_candidate_source(source);", "let assembly = match outcome {",
+            "if !output_guard.restart_required()",
+            "&& proposal_state.defer_history_admission(",
+            "Err(error) => return Err(error.into())")
     scheduler = items.get("schedule_local_proposal", "")
-    for operation in ("native.assemble_candidate(", "native.retain_candidate_source(source);", "let assembly = outcome?;"):
+    for operation in ("native.assemble_candidate(", "native.retain_candidate_source(source);",
+                      "let assembly = match outcome {", "if !output_guard.restart_required()",
+                      "&& proposal_state.defer_history_admission("):
         if scheduler.count(_code(operation)) != 1:
             errors.append("Native preparation scheduler loses original source executable relation: " + operation)
     if _code("lane_work.schedule_autonomous_lane_production(") in scheduler:

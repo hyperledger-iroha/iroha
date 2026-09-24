@@ -3402,10 +3402,7 @@ fn submit_load_without_wait(
     client.submit_transaction(&signed)
 }
 
-fn submit_queue_plan_log_and_wait(
-    client: &Client,
-    message: String,
-) -> Result<HashOf<SignedTransaction>> {
+fn sign_queue_plan_log(client: &Client, message: String) -> Result<SignedTransaction> {
     let account = client.account_client();
     let mut payload = account.prepare_transaction(
         AccountTransactionDraft::new(
@@ -3419,7 +3416,13 @@ fn submit_queue_plan_log_and_wait(
     )?;
     let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
     payload.fee_payment = quote.intent;
-    let signed = account.sign_transaction(payload)?;
+    Ok(account.sign_transaction(payload)?)
+}
+fn submit_queue_plan_log_and_wait(
+    client: &Client,
+    message: String,
+) -> Result<HashOf<SignedTransaction>> {
+    let signed = sign_queue_plan_log(client, message)?;
     client.submit_transaction_and_wait(&signed)
 }
 fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSubmissionReport> {
@@ -5131,81 +5134,157 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
 }
 #[test]
 fn four_peer_async_ordinary_queues_commit_leader_snapshot() -> Result<()> {
-    run_autoscale_localnet_test_on_large_stack(
+    mixed_async_queue_plan_and_ordinary_queues_commit(
+        TOTAL_PEERS,
         stringify!(four_peer_async_ordinary_queues_commit_leader_snapshot),
-        || {
-            let context = stringify!(four_peer_async_ordinary_queues_commit_leader_snapshot);
-            let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
-                .lock()
-                .expect("autoscale localnet test mutex poisoned");
-            let builder = NetworkBuilder::new()
-                .with_peers(TOTAL_PEERS)
-                .with_block_cadence(Duration::from_millis(300))
-                .with_npos_consensus();
-            let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
-            else {
-                return Ok(());
-            };
-            let clients = network
-                .peers()
-                .iter()
-                .map(|peer| peer_client_with_timeout(peer))
-                .collect::<Vec<_>>();
-            wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
-            let baseline = status_snapshot(&network)?;
-            let barrier = Barrier::new(TOTAL_PEERS);
-            let submissions = thread::scope(|scope| {
-                let workers = clients
-                    .iter()
-                    .enumerate()
-                    .map(|(index, client)| {
-                        let barrier = &barrier;
-                        scope.spawn(move || {
-                            barrier.wait();
-                            submit_load_without_wait(client, usize_to_u64(index))
-                                .map_err(|error| error.to_string())
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                workers
-                    .into_iter()
-                    .map(|worker| worker.join().expect("ordinary submission worker panicked"))
-                    .collect::<Vec<_>>()
-            });
-            let hashes = submissions
-                .into_iter()
-                .enumerate()
-                .map(|(index, result)| {
-                    result.map_err(|error| eyre!("peer {index} rejected ordinary input: {error}"))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let started = Instant::now();
-            loop {
-                if let Ok(observed) = status_snapshot(&network)
-                    && observed.iter().zip(&baseline).all(|(current, before)| {
-                        current.txs_approved
-                            >= before.txs_approved.saturating_add(TOTAL_PEERS as u64)
-                    })
-                    && clients.iter().all(|client| {
-                        hashes.iter().all(|hash| {
-                            matches!(
-                                client.client().get_transaction_status(*hash),
-                                Ok(Some(TxConfirmationStatus::Applied))
-                            )
-                        })
-                    })
-                {
-                    break;
-                }
-                ensure!(
-                    started.elapsed() < Duration::from_secs(120),
-                    "leader's signed ordinary sample did not commit on every validator"
-                );
-                thread::sleep(LANE_POLL_INTERVAL);
-            }
-            Ok(())
-        },
     )
+}
+
+#[test]
+fn seven_peer_async_ordinary_queues_commit_leader_snapshot() -> Result<()> {
+    mixed_async_queue_plan_and_ordinary_queues_commit(
+        7,
+        stringify!(seven_peer_async_ordinary_queues_commit_leader_snapshot),
+    )
+}
+
+fn mixed_async_queue_plan_and_ordinary_queues_commit(
+    peer_count: usize,
+    context: &'static str,
+) -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(context, move || {
+        let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+            .lock()
+            .expect("autoscale localnet test mutex poisoned");
+        let builder = NetworkBuilder::new()
+            .with_peers(peer_count)
+            .with_block_cadence(Duration::from_millis(300))
+            .with_npos_consensus();
+        let builder = if peer_count == 7 {
+            // The default public lane has f=1 and four validators. A
+            // seven-peer test must configure the on-chain and Nexus
+            // authority bounds together, or admission has no route at h2.
+            builder
+                .with_genesis_instruction(super::localnet_npos::npos_override_instruction(
+                    peer_count,
+                ))
+                .with_config_layer(|layer| {
+                    let mut universal = Table::new();
+                    universal.insert("id".into(), TomlValue::Integer(0));
+                    universal.insert("alias".into(), TomlValue::String("universal".to_owned()));
+                    universal.insert("fault_tolerance".into(), TomlValue::Integer(2));
+                    layer
+                        .write(
+                            ["nexus", "dataspace_catalog"],
+                            TomlValue::Array(vec![TomlValue::Table(universal)]),
+                        )
+                        .write(["nexus", "staking", "max_validators"], 7_i64);
+                })
+        } else {
+            builder
+        };
+        let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
+        else {
+            return Ok(());
+        };
+        let clients = network
+            .peers()
+            .iter()
+            .map(|peer| {
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout = Duration::from_secs(75);
+                })
+            })
+            .collect::<Vec<_>>();
+        wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
+        // One peer sees the autonomous control before its Ordinary input;
+        // that local arrival order cannot fence a leader's later sample.
+        let queue_plan =
+            sign_queue_plan_log(&clients[0], "mixed-async-queue-plan-control".to_owned())?;
+        let queue_plan_hash = clients[0].submit_transaction(&queue_plan)?;
+        let barrier = Barrier::new(peer_count);
+        let submissions = thread::scope(|scope| {
+            let workers = clients
+                .iter()
+                .enumerate()
+                .map(|(index, client)| {
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        submit_load_without_wait(client, usize_to_u64(index))
+                            .map_err(|error| error.to_string())
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("ordinary submission worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        let hashes = submissions
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.map_err(|error| eyre!("peer {index} rejected ordinary input: {error}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let status_clients = clients
+            .iter()
+            .map(|client| {
+                integration_tests::sync::rebind_blocking_client(client, |client| {
+                    client.torii_request_timeout = Duration::from_secs(5);
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut awaiting = (0..peer_count)
+            .flat_map(|index| {
+                hashes
+                    .iter()
+                    .chain(std::iter::once(&queue_plan_hash))
+                    .map(move |hash| (index, *hash))
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        while !awaiting.is_empty() {
+            let mut terminal = None;
+            awaiting.retain(|(index, hash)| {
+                match status_clients[*index]
+                    .client()
+                    .get_transaction_status_response_local(*hash)
+                {
+                    Ok(Some(status))
+                        if status.resolved_from == "state" && status.status.kind == "Applied" =>
+                    {
+                        false
+                    }
+                    Ok(Some(status))
+                        if status.resolved_from == "state"
+                            && matches!(status.status.kind.as_str(), "Rejected" | "Expired") =>
+                    {
+                        terminal = Some(format!(
+                            "peer {index} reached {} for transaction {hash}",
+                            status.status.kind
+                        ));
+                        true
+                    }
+                    _ => true,
+                }
+            });
+            ensure!(
+                terminal.is_none(),
+                "mixed QueuePlan and independent Ordinary input failed: {}",
+                terminal.unwrap_or_default()
+            );
+            ensure!(
+                started.elapsed() < Duration::from_secs(240),
+                "mixed QueuePlan and independent Ordinary inputs did not commit on every validator; {} peer/transaction pairs remain, first={:?}",
+                awaiting.len(),
+                awaiting.first()
+            );
+            thread::sleep(LANE_POLL_INTERVAL);
+        }
+        Ok(())
+    })
 }
 
 #[test]
