@@ -7,9 +7,20 @@ pub(super) fn authenticated_release(
     app_policy_digest: [u8; 32],
     platform_class: KagemushaHardwarePlatformClassV1,
 ) -> Arc<KagemushaAuthenticatedReleaseV1> {
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"native-enrollment-test-network",
+    )));
+    authenticated_release_for_network(app_policy_digest, platform_class, network_id)
+}
+
+pub(super) fn authenticated_release_for_network(
+    app_policy_digest: [u8; 32],
+    platform_class: KagemushaHardwarePlatformClassV1,
+    network_id: NetworkId,
+) -> Arc<KagemushaAuthenticatedReleaseV1> {
     let artifacts = artifacts();
     let receipt = receipt(&artifacts, app_policy_digest, platform_class);
-    let manifest = manifest(artifacts, &receipt);
+    let manifest = manifest(artifacts, &receipt, network_id);
     let keys = authority_keys();
     let policy = authority_policy(&keys, 2);
     let attestation = release_attestation(&manifest, &receipt, &policy, &keys[..2]);
@@ -517,9 +528,11 @@ fn authorized_provider_entry(
 fn manifest(
     artifacts: Vec<KagemushaArtifactBindingV1>,
     receipt: &KagemushaInternalValidationReceiptV1,
+    network_id: NetworkId,
 ) -> KagemushaReleaseManifestV1 {
     KagemushaReleaseManifestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id,
         release_id: [0; 32],
         source_tree_digest: receipt.source_tree_digest,
         cargo_lock_digest: receipt.cargo_lock_digest,

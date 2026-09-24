@@ -1765,15 +1765,16 @@ fn governance_matches(
 }
 pub mod prelude {
     #[cfg(feature = "governance")]
-    pub use super::GovernanceEventFilter;
-    pub use super::{
-        AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
-        ConfigurationEventFilter, DataEventFilter, DomainEventFilter, EscrowEventFilter,
-        ExecutorEventFilter, MusubiEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
-        ProofEventFilter, RoleEventFilter, RuntimeUpgradeEventFilter, RwaEventFilter,
-        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
-        SpaceDirectoryEventFilter, TriggerEventFilter, VerifyingKeyEventFilter,
+    pub use super::model::GovernanceEventFilter;
+    pub use super::model::{
+        AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, ConfigurationEventFilter,
+        DataEventFilter, DomainEventFilter, EscrowEventFilter, ExecutorEventFilter,
+        MusubiEventFilter, NftEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter,
+        RuntimeUpgradeEventFilter, RwaEventFilter, SocialEventFilter, SoradnsDirectoryEventFilter,
+        SorafsGatewayEventFilter, SpaceDirectoryEventFilter, TriggerEventFilter,
+        VerifyingKeyEventFilter,
     };
+    pub use super::{BridgeEventFilter, OracleEventFilter};
 }
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]

@@ -80,6 +80,7 @@ use super::{
     },
 };
 use crate::zk::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, decode, digest_limbs, from_u128};
+use iroha_data_model::NetworkId;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HALO2_K_V1, KagemushaArtifactRoleV1, KagemushaEnabledProfileV1,
     KagemushaMintAuthorizationV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
@@ -89,6 +90,38 @@ use iroha_data_model::kagemusha::{
 const RECURSIVE_PROFILE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:paired-recursive-circuit-profile";
 const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize =
     RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
+
+fn require_authenticated_release_network_v1(
+    release_network: NetworkId,
+    operation_network: NetworkId,
+) -> Result<(), String> {
+    if release_network != operation_network {
+        return Err(
+            "Kagemusha operation network differs from the authenticated release".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod release_network_tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
+
+    use super::require_authenticated_release_network_v1;
+
+    #[test]
+    fn monetary_verification_requires_the_signed_release_network() {
+        let release = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"kagemusha-signed-release-network"),
+        ));
+        let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"kagemusha-foreign-operation-network"),
+        ));
+        assert!(require_authenticated_release_network_v1(release, release).is_ok());
+        assert!(require_authenticated_release_network_v1(release, foreign).is_err());
+    }
+}
 
 /// Check the fixed KAGEMUSHA layout and the actual `BaseConfig` allocation order.
 ///
@@ -1121,6 +1154,11 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         authorization: &KagemushaMintAuthorizationV1,
     ) -> Result<(), String> {
         self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            authorization.statement.context.network_id,
+        )?;
         authorization
             .validate_shape()
             .map_err(|error| error.to_string())?;
@@ -1205,6 +1243,11 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<(KagemushaEqAccumulatorV1, KagemushaEpAccumulatorV1), String> {
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            checkpoint.statement.lifecycle.network_id,
+        )?;
         checkpoint.validate_shape()?;
         validate_mint_checkpoint_release_v1(
             checkpoint,
@@ -1279,6 +1322,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
     ) -> Result<(), String> {
         self.require_authenticated_provider_policy_authority_v1()?;
         let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(release.network_id(), request.network_id)?;
         validate_payment_receiver_profile_v1(
             request,
             release.enabled_profile(request.hardware_credential.hardware_profile_id),
@@ -1343,7 +1387,11 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.public_output.lifecycle.network_id,
+        )?;
         if request.public_output.lifecycle.release_id != self.release_id
             || request.public_output.lifecycle.suite_id != self.suite_id
             || request.public_output.lifecycle.vk_digest != self.vk_set_digest
@@ -1412,7 +1460,17 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &KagemushaStateProofVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.public_inputs.successor.lane.network_id,
+        )?;
+        if let Some(predecessor) = request.public_inputs.predecessor.as_ref() {
+            require_authenticated_release_network_v1(
+                release.network_id(),
+                predecessor.lane.network_id,
+            )?;
+        }
         if request.public_inputs.commit_wrapper_eq_protocol_digest
             != self.commit_wrapper_eq_protocol_digest
             || request.public_inputs.commit_wrapper_ep_protocol_digest
@@ -1469,6 +1527,11 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &super::KagemushaMintFinalityHelperVerificationRequestV1<'_>,
     ) -> Result<(), String> {
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.statement.lifecycle.network_id,
+        )?;
         validate_mint_finality_release_v1(
             request,
             self.release_id,

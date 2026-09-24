@@ -821,6 +821,32 @@ fn begin_rejects_a_different_runtime_or_non_ed25519_account() {
 }
 
 #[test]
+fn begin_rejects_a_release_signed_for_another_network() {
+    let f = Fixture::new();
+    let foreign_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"other-native-enrollment-test-network",
+    )));
+    let foreign_release = catalog::authenticated_release_for_network(
+        f.app_policy.canonical_digest().unwrap(),
+        f.app_policy.platform_class,
+        foreign_network,
+    );
+    assert_ne!(foreign_release.network_id(), f.owner.runtime.network_id);
+    assert_eq!(
+        PendingIssuerEnrollmentV1::begin(
+            f.policy,
+            f.app_policy,
+            foreign_release,
+            f.owner,
+            f.native_key,
+            &norito::encode_canonical(&f.qualification).unwrap(),
+        )
+        .err(),
+        Some(InitialEnrollmentErrorV1::Binding)
+    );
+}
+
+#[test]
 fn initial_possession_preserves_exact_issuer_admission_and_requires_a_new_device_nonce() {
     use crate::kagemusha_core_coordinator_v1::enrolled_open::PendingEnrolledOpenV1;
     let f = Fixture::new();
@@ -902,5 +928,27 @@ fn admission_expiry_between_issuer_verification_and_possession_start_is_rejected
     assert_eq!(
         PendingEnrolledOpenV1::from_fresh_issuer_admission(admission).err(),
         Some(EnrolledOpenErrorV1::Expired)
+    );
+}
+
+#[test]
+fn fresh_admission_rechecks_original_deadline_at_handoff() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let proof = f.proof(pending.client_nonce().unwrap());
+    let certificate = f.certificate(&proof);
+    let mut admission = pending
+        .complete(
+            &proof.canonical_bytes().unwrap(),
+            &certificate.canonical_bytes().unwrap(),
+            &f.verified_app(&proof.challenge),
+        )
+        .unwrap();
+
+    assert_eq!(admission.require_live(), Ok(()));
+    admission.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
+    assert_eq!(
+        admission.require_live(),
+        Err(InitialEnrollmentErrorV1::Expired)
     );
 }

@@ -6705,6 +6705,18 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
+fn require_kagemusha_v1_release_network(
+    release_network: NetworkId,
+    state_network: NetworkId,
+) -> Result<(), String> {
+    if release_network != state_network {
+        return Err(format!(
+            "KAGEMUSHA V1 signed release network {release_network} differs from node network {state_network}"
+        ));
+    }
+    Ok(())
+}
+
 fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> Result<(), String> {
     let Some(files) = config.settlement.kagemusha.proof_release.as_ref() else {
         return Ok(());
@@ -6718,6 +6730,12 @@ fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> 
         iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
         "KAGEMUSHA V1 release manifest",
     )?;
+    let release_network = iroha_data_model::kagemusha::KagemushaReleaseManifestV1::decode_canonical_exact(
+        &manifest,
+    )
+    .map_err(|error| format!("invalid KAGEMUSHA V1 release manifest: {error}"))?
+    .network_id;
+    require_kagemusha_v1_release_network(release_network, state.network_id)?;
     let receipt = read(
         &files.validation_receipt,
         iroha_data_model::kagemusha::KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
@@ -16896,6 +16914,22 @@ mod tests {
     }
     mod replay_startup_config {
         use super::*;
+        #[test]
+        fn kagemusha_release_network_must_match_node_before_replay() {
+            let network = NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"kagemusha-release-network",
+                )),
+            );
+            let foreign = NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"foreign-kagemusha-release-network",
+                )),
+            );
+            assert!(require_kagemusha_v1_release_network(network, network).is_ok());
+            assert!(require_kagemusha_v1_release_network(foreign, network).is_err());
+        }
+
         #[test]
         fn installs_actual_zk_and_settlement_config_before_kura_replay() {
             let mut config_table = crate::config_tests::minimal_config_table();

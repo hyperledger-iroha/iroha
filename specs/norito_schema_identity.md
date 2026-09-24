@@ -964,6 +964,15 @@ still require disposition. That historical run predates the finite Native AMX
 participant-settlement wire repair; therefore it does not qualify the complete
 model suite.
 
+The first-release KAGEMUSHA manifest now includes the genesis-derived
+`NetworkId` in its payload and in the release-ID subject. Its payload and
+release ID change, but the captured `KagemushaReleaseManifestV1` and
+`KagemushaReleaseSubjectV1` frame identities remain exact: Norito's frame hash
+depends on the declared nominal root name, not on payload fields. The
+model-owned captured-schema test checks both unchanged hashes; the manifest
+roundtrip and signed-network mutation test check the changed payload and
+release-ID behavior. There is no backward decoder for the networkless shape.
+
 ### Batch declaration migration
 
 The inventory counts derive sites, not distinct types. Insert one independent

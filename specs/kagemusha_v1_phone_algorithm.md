@@ -351,6 +351,13 @@ index is invalid because an unseen payment at that index may exist.
    generation. Generate the key with that challenge and derive its actual
    point/reference from verified attestation. No key may be qualified from
    a device-provided claim alone.
+   The Android SDK has a JNI preflight for this exact 273-byte signed
+   preparation. It requires an independently pinned canonical issuer policy,
+   its SHA-256 digest and trusted service time, compares the signature to the
+   supplied process-owned selection, and returns only the verified server
+   nonce for KeyMint's challenge. The native enrollment owner still rechecks
+   the complete authority. Without those independently supplied inputs, app
+   enrollment remains unavailable.
 2. Verify the app attestation using its platform trust chain and approved app
    identity. The independent verifier signs both the actual SHA-256 key ID and
    the derived device-key reference from the same raw attested point, together
@@ -542,6 +549,11 @@ unqualified observation. A Rust-only owner retains that concrete
 verifier and one process-local lane lineage. No app-facing native installation
 or durable monetary capability exists yet; the terminal hardware fold and
 monetary admission remain separate.
+The signed release manifest includes the exact genesis-derived network ID.
+Node startup, native proof verification, enrollment and testnet observation
+reject a release signed for another network before admitting its artifacts or
+proofs. This prevents cross-network release reuse; it does not qualify device
+hardware or enable the experimental monetary route by itself.
 Core now has a read-only projection of the original paired outgoing State
 proof and canonical public inputs from a retained, authenticated candidate.
 It re-verifies the pair and rejects released or stale operations. Method 14 of

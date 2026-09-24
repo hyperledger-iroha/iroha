@@ -2665,13 +2665,7 @@ pub mod prelude {
     #[cfg(feature = "governance")]
     pub use super::governance::parliament::*;
     pub use super::{
-        AggregateOracleFeed, Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox,
-        Instruction, InstructionBox, Log, Mint, MintBox, OpenOracleDispute, ProposeOracleChange,
-        RecordTwitterBinding, Register, RegisterBox, RegisterOracleFeed, RemoveKeyValue,
-        RemoveKeyValueBox, ResolveOracleDispute, Revoke, RevokeBox, RevokeTwitterBinding,
-        RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
-        Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
-        UnregisterBox, Upgrade, VoteOracleChangeStage,
+        GrantBox, Instruction, InstructionBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox,
         account_recovery::{
             ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
             FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,
@@ -2712,7 +2706,13 @@ pub mod prelude {
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
         ministry::SubmitAgendaProposal,
+        mint_burn::{Burn, BurnBox, Mint, MintBox},
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        oracle::{
+            AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
+            RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, RollbackOracleChange,
+            SubmitOracleObservation, VoteOracleChangeStage,
+        },
         privacy::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
@@ -2736,6 +2736,7 @@ pub mod prelude {
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
+        register::{Register, RegisterBox, Unregister, UnregisterBox},
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         rwa::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
@@ -2799,6 +2800,11 @@ pub mod prelude {
             ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
             RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
             RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+        },
+        transfer::{Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox},
+        transparent::{
+            CustomInstruction, ExecuteTrigger, Grant, Log, RemoveKeyValue, Revoke, SetKeyValue,
+            SetParameter, Upgrade,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };

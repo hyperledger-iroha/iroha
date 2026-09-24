@@ -87,10 +87,12 @@ pub fn install_kagemusha_testnet_state_observation_owner_v1(
 
 fn require_scope_release_pins(
     scope: KagemushaTestnetStateObservationScopeV1,
+    authenticated_network_id: [u8; 32],
     authenticated_release_id: [u8; 32],
     authenticated_attestation_digest: [u8; 32],
 ) -> Result<(), String> {
-    if authenticated_release_id != scope.release_id()
+    if authenticated_network_id != scope.network_id()
+        || authenticated_release_id != scope.release_id()
         || authenticated_attestation_digest != scope.release_attestation_digest()
     {
         return Err("KAGEMUSHA release differs from operator-pinned testnet scope".to_owned());
@@ -138,7 +140,12 @@ pub fn load_and_install_kagemusha_testnet_state_observation_owner_v1(
     let release = manifest
         .authenticate(&receipt, trusted_authority_policy, &attestation)
         .map_err(|error| format!("unauthenticated KAGEMUSHA release: {error}"))?;
-    require_scope_release_pins(scope, release.release_id(), release.attestation_digest())?;
+    require_scope_release_pins(
+        scope,
+        *release.network_id().as_bytes(),
+        release.release_id(),
+        release.attestation_digest(),
+    )?;
     let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(&release)
         .map_err(|error| format!("invalid KAGEMUSHA State proof release: {error}"))?;
     let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_root)
@@ -456,13 +463,14 @@ mod tests {
     }
 
     #[test]
-    fn release_scope_requires_both_independently_pinned_identities() {
+    fn release_scope_requires_all_independently_pinned_identities() {
         let scope = KagemushaTestnetStateObservationScopeV1::new(
             [1; 32], [4; 32], [5; 32], 2, [6; 32], [2; 32], [3; 32],
         )
         .expect("distinct operator pins");
-        assert!(require_scope_release_pins(scope, [2; 32], [3; 32]).is_ok());
-        assert!(require_scope_release_pins(scope, [4; 32], [3; 32]).is_err());
-        assert!(require_scope_release_pins(scope, [2; 32], [4; 32]).is_err());
+        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [3; 32]).is_ok());
+        assert!(require_scope_release_pins(scope, [4; 32], [2; 32], [3; 32]).is_err());
+        assert!(require_scope_release_pins(scope, [1; 32], [4; 32], [3; 32]).is_err());
+        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [4; 32]).is_err());
     }
 }

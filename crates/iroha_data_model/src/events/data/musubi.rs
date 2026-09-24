@@ -347,7 +347,7 @@ impl MusubiEvent {
 }
 /// Common Musubi event exports.
 pub mod prelude {
-    pub use super::{
+    pub use super::model::{
         MusubiArchiveLocationEventV1, MusubiArchiveLocationTransitionV1,
         MusubiArchiveRegisteredEventV1, MusubiArtifactTakedownEventV1, MusubiEvent, MusubiEventSet,
         MusubiMaintainerInvitationLifecycleEventV1, MusubiPackageClaimedEventV1,

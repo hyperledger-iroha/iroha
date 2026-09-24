@@ -5,7 +5,7 @@ use super::{
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
 };
 
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId};
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -1550,6 +1550,8 @@ pub struct KagemushaInternalValidationReceiptV1 {
 pub struct KagemushaReleaseManifestV1 {
     /// Manifest version.
     pub version: u16,
+    /// Exact genesis-derived network on which this release may authorize value.
+    pub network_id: NetworkId,
     /// Digest-derived release identifier.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
@@ -1735,6 +1737,7 @@ pub struct KagemushaReleaseAttestationV1 {
 )]
 struct KagemushaReleaseSubjectV1 {
     version: u16,
+    network_id: NetworkId,
     source_tree_digest: [u8; 32],
     cargo_lock_digest: [u8; 32],
     profile_digest: [u8; 32],
@@ -2980,6 +2983,7 @@ impl KagemushaReleaseManifestV1 {
             self.validation_receipt_digest,
         ];
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || !digest_is_nonzero(*self.network_id.as_bytes())
             || self.halo2_k != KAGEMUSHA_HALO2_K_V1
             || digests.into_iter().any(|digest| !digest_is_nonzero(digest))
             || !validate_helper_protocols(&self.helper_protocols)
@@ -3004,6 +3008,7 @@ impl KagemushaReleaseManifestV1 {
     fn subject(&self) -> KagemushaReleaseSubjectV1 {
         KagemushaReleaseSubjectV1 {
             version: self.version,
+            network_id: self.network_id,
             source_tree_digest: self.source_tree_digest,
             cargo_lock_digest: self.cargo_lock_digest,
             profile_digest: self.profile_digest,
@@ -3213,6 +3218,12 @@ impl KagemushaAuthenticatedReleaseV1 {
     #[must_use]
     pub fn release_id(&self) -> [u8; 32] {
         self.manifest.release_id
+    }
+
+    /// Return the genesis-derived network authenticated by the release authorities.
+    #[must_use]
+    pub fn network_id(&self) -> NetworkId {
+        self.manifest.network_id
     }
 
     /// Return the exact sorted enabled hardware-profile set.

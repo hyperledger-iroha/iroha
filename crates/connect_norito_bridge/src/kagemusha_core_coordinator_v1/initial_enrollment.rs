@@ -294,7 +294,8 @@ impl PendingIssuerEnrollmentV1 {
         let enabled = release
             .enabled_profile(qualification.credential.hardware_profile_id)
             .ok_or(InitialEnrollmentErrorV1::Binding)?;
-        if qualification.release_id != release.release_id()
+        if release.network_id() != owner.runtime.network_id
+            || qualification.release_id != release.release_id()
             || qualification.hardware_policy_digest != release.hardware_policy_digest()
             || qualification.core_authorization_key_reference
                 != hardware_authorization_key_reference_v1(native_authorization_public_key)
@@ -726,7 +727,6 @@ pub struct FreshIssuerAdmissionV1 {
 
 impl FreshIssuerAdmissionV1 {
     /// Recheck the original live ticket and deadline before this admission is used.
-    #[cfg(test)]
     pub(super) fn require_live(&self) -> Result<()> {
         self.pending.require_unexpired()
     }

@@ -10,7 +10,7 @@ use crate::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
     KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use p256::ecdsa::{SigningKey, signature::Signer as _};
 use sha2::Sha256;
 
@@ -40,6 +40,10 @@ const MINT_HASH_SHARD_EQ_PROOF_BYTES: u32 = 4_000;
 const MINT_HASH_SHARD_EP_PROOF_BYTES: u32 = 4_032;
 const MINT_HASH_CLAIM_EQ_PROOF_BYTES: u32 = 6_016;
 const MINT_HASH_CLAIM_EP_PROOF_BYTES: u32 = 6_048;
+
+fn release_network(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed; 32])))
+}
 
 fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
     vec![
@@ -567,6 +571,7 @@ fn manifest(
 ) -> KagemushaReleaseManifestV1 {
     KagemushaReleaseManifestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id: release_network(0x21),
         release_id: [0; 32],
         source_tree_digest: receipt.source_tree_digest,
         cargo_lock_digest: receipt.cargo_lock_digest,
@@ -660,6 +665,7 @@ fn authenticates_complete_typed_evidence_release() {
         .authenticate(&decoded_receipt, &policy, &attestation)
         .expect("authenticate");
     assert_eq!(authenticated.release_id(), decoded_manifest.release_id);
+    assert_eq!(authenticated.network_id(), decoded_manifest.network_id);
     assert_eq!(
         authenticated.native_profile_digest(),
         receipt.native_profile_digest
@@ -1155,6 +1161,40 @@ fn manifest_profile_set_is_canonical_release_identity() {
     assert_eq!(
         duplicate.validate(),
         Err(KagemushaReleaseErrorV1::InvalidValidationReceipt)
+    );
+}
+
+#[test]
+fn release_network_is_in_release_id_and_threshold_signed_manifest() {
+    let artifacts = artifacts();
+    let receipt = receipt(&artifacts);
+    let original = manifest(artifacts, &receipt);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let attestation = release_attestation(&original, &receipt, &policy, &keys[..2]);
+    assert_eq!(
+        original
+            .authenticate(&receipt, &policy, &attestation)
+            .expect("original release")
+            .network_id(),
+        original.network_id
+    );
+
+    let mut foreign = original.clone();
+    foreign.network_id = release_network(0x22);
+    foreign = foreign.seal().expect("reseal for another network");
+    assert_ne!(foreign.release_id, original.release_id);
+    assert_eq!(
+        foreign.authenticate(&receipt, &policy, &attestation),
+        Err(KagemushaReleaseErrorV1::InvalidAttestation)
+    );
+    let foreign_attestation = release_attestation(&foreign, &receipt, &policy, &keys[..2]);
+    assert_eq!(
+        foreign
+            .authenticate(&receipt, &policy, &foreign_attestation)
+            .expect("separately authorized network")
+            .network_id(),
+        foreign.network_id
     );
 }
 

@@ -147,5 +147,5 @@ mod tests {
 }
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
-    pub use super::Domain;
+    pub use super::model::Domain;
 }

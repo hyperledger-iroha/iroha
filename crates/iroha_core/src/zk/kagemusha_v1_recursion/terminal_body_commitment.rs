@@ -9,7 +9,8 @@ use halo2_base::{
     gates::{GateInstructions as _, RangeChip, RangeInstructions as _},
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareTerminalBodyCommitmentLayoutV1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareSelectionSigningLayoutV1,
+    KagemushaHardwareTerminalBodyCommitmentLayoutV1,
 };
 
 use super::{
@@ -101,7 +102,7 @@ pub(super) fn constrain_terminal_body_commitment_from_sources_v1<F: KagemushaPos
     prefix: &KagemushaAuthenticatedTerminalBodyPrefixV1<F>,
     durable: Option<&KagemushaAuthenticatedTerminalBodyDurableSourcesV1<F>>,
     certificate_commitment: [AssignedValue<F>; 2],
-) -> Result<(), String> {
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
     let durable = durable.ok_or_else(|| {
         "terminal body lacks canonical journal and recovery SHA sources".to_owned()
     })?;
@@ -164,7 +165,40 @@ pub(super) fn constrain_terminal_body_commitment_from_sources_v1<F: KagemushaPos
     {
         ctx.constrain_equal(&actual, &expected);
     }
-    Ok(())
+    Ok(actual)
+}
+
+/// Copy-bind Apple's signed terminal-body field to the SHA-derived terminal body.
+///
+/// `derived_body` must be the result of the authenticated source relation above;
+/// a fresh digest witness would leave the signed selection detached from the
+/// terminal certificate. This staged link does not admit an app transition.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged Apple monetary assertion fold remains closed"
+    )
+)]
+pub(super) fn constrain_apple_signed_terminal_body_commitment_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    canonical_s: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    derived_body: &[PastaSha256ByteV1<F>; 32],
+) {
+    for (signed, derived) in canonical_s
+        [KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT]
+        .iter()
+        .zip(derived_body)
+    {
+        range.range_check(ctx, *signed, 8);
+        ctx.constrain_equal(
+            signed,
+            &derived
+                .assigned()
+                .expect("terminal-body SHA byte is assigned"),
+        );
+    }
 }
 
 fn append_digest_limbs_v1<F: KagemushaPoseidonFieldV1>(
@@ -358,6 +392,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum SourceMutation {
         None,
+        SignedTerminalByte,
         MissingDurable,
         Candidate,
         GuardLifecycle,
@@ -487,7 +522,7 @@ mod tests {
         };
         let mut jobs = PastaSha256JobsV1::default();
         let certificate_commitment = assign_digest(ctx, expected);
-        constrain_terminal_body_commitment_from_sources_v1(
+        let derived_body = constrain_terminal_body_commitment_from_sources_v1(
             ctx,
             &range,
             &mut jobs,
@@ -496,6 +531,23 @@ mod tests {
             (!matches!(mutation, SourceMutation::MissingDurable)).then_some(&durable),
             certificate_commitment,
         )?;
+        let mut signed_subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+        signed_subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT]
+            .copy_from_slice(&expected);
+        if matches!(mutation, SourceMutation::SignedTerminalByte) {
+            signed_subject
+                [KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT.start + 15] ^=
+                1;
+        }
+        let signed_subject = std::array::from_fn(|index| {
+            ctx.load_witness(F::from(u64::from(signed_subject[index])))
+        });
+        constrain_apple_signed_terminal_body_commitment_v1(
+            ctx,
+            &range,
+            &signed_subject,
+            &derived_body,
+        );
         assert_eq!(jobs.compression_blocks().expect("fixed SHA geometry"), 6);
         builder.calculate_params(Some(UNUSABLE_ROWS));
         Ok(TestCircuit { builder, jobs })
@@ -552,6 +604,37 @@ mod tests {
                     .is_err()
                 );
             }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[test]
+    fn apple_signed_terminal_body_rejects_distinct_nonzero_digest_in_both_pasta_fields() {
+        fn check<F: KagemushaPoseidonFieldV1>() {
+            let original = body();
+            let expected = original
+                .canonical_commitment()
+                .expect("valid terminal body");
+            MockProver::run(
+                K,
+                &circuit::<F>(original, expected, SourceMutation::None)
+                    .expect("matching signed terminal body"),
+                vec![],
+            )
+            .expect("matching terminal circuit")
+            .assert_satisfied();
+            assert!(
+                MockProver::run(
+                    K,
+                    &circuit::<F>(original, expected, SourceMutation::SignedTerminalByte)
+                        .expect("mutated signed terminal body"),
+                    vec![],
+                )
+                .expect("mutated terminal circuit")
+                .verify()
+                .is_err()
+            );
         }
         check::<Fp>();
         check::<Fq>();

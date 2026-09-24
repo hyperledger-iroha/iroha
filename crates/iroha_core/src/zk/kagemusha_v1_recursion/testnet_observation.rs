@@ -16,9 +16,9 @@ use crate::zk::kagemusha_v1_state::KagemushaStateV1;
 
 /// Trusted, exact testnet network, asset, reserve, and release supplied by the operator.
 ///
-/// The authenticated release manifest does not carry a network ID. An application must obtain
-/// the network and asset/reserve pins from its independently trusted testnet configuration.
-/// Self-declared identifiers copied from the submitted proof provide no pinning.
+/// The operator's independent network pin must match the threshold-signed release manifest.
+/// Asset/reserve pins also come from trusted testnet configuration; identifiers copied from a
+/// submitted proof provide no pinning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaTestnetStateObservationScopeV1 {
     network_id: DigestV1,
@@ -116,10 +116,12 @@ impl KagemushaTestnetStateObservationScopeV1 {
 
     fn check_release_bindings(
         self,
+        authenticated_network_id: DigestV1,
         authenticated_release_id: DigestV1,
         authenticated_release_attestation_digest: DigestV1,
     ) -> Result<(), KagemushaRecursionErrorV1> {
-        if authenticated_release_id != self.release_id
+        if authenticated_network_id != self.network_id
+            || authenticated_release_id != self.release_id
             || authenticated_release_attestation_digest != self.release_attestation_digest
         {
             return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
@@ -259,9 +261,13 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         verifier: KagemushaAuthenticatedRecursiveVerifierV1,
         scope: KagemushaTestnetStateObservationScopeV1,
     ) -> Result<Self, KagemushaRecursionErrorV1> {
-        let release_identity = verifier
-            .monetary_release()
-            .map(|release| (release.release_id(), release.attestation_digest()));
+        let release_identity = verifier.monetary_release().map(|release| {
+            (
+                *release.network_id().as_bytes(),
+                release.release_id(),
+                release.attestation_digest(),
+            )
+        });
         require_owner_release_pins(scope, release_identity)?;
         Ok(Self {
             verifier,
@@ -286,11 +292,11 @@ impl KagemushaTestnetProofObservationOwnerV1 {
 
 fn require_owner_release_pins(
     scope: KagemushaTestnetStateObservationScopeV1,
-    authenticated_release_identity: Result<(DigestV1, DigestV1), String>,
+    authenticated_release_identity: Result<(DigestV1, DigestV1, DigestV1), String>,
 ) -> Result<(), KagemushaRecursionErrorV1> {
-    let (release_id, attestation_digest) =
+    let (network_id, release_id, attestation_digest) =
         authenticated_release_identity.map_err(KagemushaRecursionErrorV1::StateProofRejected)?;
-    scope.check_release_bindings(release_id, attestation_digest)
+    scope.check_release_bindings(network_id, release_id, attestation_digest)
 }
 
 impl KagemushaTestnetLineageTrialV1 {
@@ -416,7 +422,11 @@ pub fn observe_kagemusha_testnet_state_proof_v1(
     let release = verifier
         .monetary_release()
         .map_err(KagemushaRecursionErrorV1::StateProofRejected)?;
-    scope.check_release_bindings(release.release_id(), release.attestation_digest())?;
+    scope.check_release_bindings(
+        *release.network_id().as_bytes(),
+        release.release_id(),
+        release.attestation_digest(),
+    )?;
     scope.check_state_bindings(&public_inputs.successor, public_inputs.predecessor.as_ref())?;
     let artifacts = verifier.state_checkpoint_material().artifacts;
     verify_kagemusha_state_proof_v1(verifier, artifacts, public_inputs, proof)?;
@@ -514,7 +524,11 @@ mod tests {
         let scope = trial.scope();
         let state = &public.successor;
         assert_eq!(
-            scope.check_release_bindings(scope.release_id(), scope.release_attestation_digest()),
+            scope.check_release_bindings(
+                scope.network_id(),
+                scope.release_id(),
+                scope.release_attestation_digest(),
+            ),
             Ok(()),
         );
         assert_eq!(scope.check_state_bindings(state, Some(state)), Ok(()));
@@ -525,11 +539,23 @@ mod tests {
             Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
         );
         assert_eq!(
-            scope.check_release_bindings([0xA2; 32], scope.release_attestation_digest()),
+            scope.check_release_bindings(
+                scope.network_id(),
+                [0xA2; 32],
+                scope.release_attestation_digest(),
+            ),
             Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
         );
         assert_eq!(
-            scope.check_release_bindings(scope.release_id(), [0xA3; 32]),
+            scope.check_release_bindings(scope.network_id(), scope.release_id(), [0xA3; 32]),
+            Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
+        );
+        assert_eq!(
+            scope.check_release_bindings(
+                [0xA4; 32],
+                scope.release_id(),
+                scope.release_attestation_digest()
+            ),
             Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
         );
         let mut changed = state.clone();
@@ -622,14 +648,18 @@ mod tests {
     fn native_owner_requires_an_authenticated_release_matching_operator_pins() {
         let scope = scope();
         assert_eq!(
-            require_owner_release_pins(scope, Ok((RELEASE, ATTESTATION))),
+            require_owner_release_pins(scope, Ok((NETWORK, RELEASE, ATTESTATION))),
             Ok(())
         );
         assert!(matches!(
             require_owner_release_pins(scope, Err("release not authorized".to_owned())),
             Err(KagemushaRecursionErrorV1::StateProofRejected(_))
         ));
-        for identity in [([4; 32], ATTESTATION), (RELEASE, [4; 32])] {
+        for identity in [
+            ([4; 32], RELEASE, ATTESTATION),
+            (NETWORK, [4; 32], ATTESTATION),
+            (NETWORK, RELEASE, [4; 32]),
+        ] {
             assert_eq!(
                 require_owner_release_pins(scope, Ok(identity)),
                 Err(KagemushaRecursionErrorV1::ArtifactSubstitution)
