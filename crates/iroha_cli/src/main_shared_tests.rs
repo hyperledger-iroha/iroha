@@ -1968,7 +1968,7 @@ fn authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl() {
 }
 
 #[test]
-fn fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry() {
+fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
     use iroha::data_model::{
         nexus::FeeDebitSource,
         transaction::{TransactionAdmissionIntent, TransactionPayload},
@@ -1980,8 +1980,8 @@ fn fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry() {
         thread,
     };
 
-    // Exercise both existing entry points too: neither may inherit Ordinary.
-    for mode in 0..3 {
+    // Every entry point must quote and sign its selected admission intent.
+    for mode in 0..4 {
         let mut config = fallback_config();
         let discriminant = config.account_chain_discriminant;
         let _profile = ChainDiscriminantGuard::enter(discriminant);
@@ -2074,7 +2074,14 @@ fn fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry() {
                 Metadata::default(),
                 expiry,
             ),
-            _ => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
+            2 => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
+            _ => quote_and_sign_transaction_with_admission(
+                &client,
+                executable,
+                fees,
+                Metadata::default(),
+                TransactionAdmissionIntent::QueuePlanSynced,
+            ),
         }
         .unwrap();
         let quoted = server.join().unwrap();
@@ -2087,15 +2094,14 @@ fn fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry() {
         quote
             .validate_for_signed_payload(transaction.payload())
             .unwrap();
-        assert_eq!(
-            transaction.admission_intent(),
-            if mode == 0 {
-                TransactionAdmissionIntent::Ordinary
-            } else {
-                TransactionAdmissionIntent::QueuePlanSynced
-            }
-        );
-        if mode != 2 {
+        let expected_intent = if mode == 3 {
+            TransactionAdmissionIntent::QueuePlanSynced
+        } else {
+            TransactionAdmissionIntent::Ordinary
+        };
+        assert_eq!(quoted.admission_intent(), expected_intent);
+        assert_eq!(transaction.admission_intent(), expected_intent);
+        if mode < 2 {
             assert!(quoted.creation_time_ms + quoted.time_to_live_ms.unwrap().get() <= expiry);
         }
     }

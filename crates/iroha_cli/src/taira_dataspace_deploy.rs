@@ -4,7 +4,7 @@
 //! reconciled by its retained signed transaction; it is never replaced or retried.
 //! Applied observations are not a finality proof or a deployment-complete claim.
 
-use crate::{Run, RunContext, quote_and_sign_transaction};
+use crate::{Run, RunContext, quote_and_sign_transaction_with_admission};
 use eyre::{Result, WrapErr, eyre};
 use iroha::{blocking::Client as BlockingClient, client::Client, sns::SnsNamespacePath};
 use iroha_data_model::{
@@ -22,7 +22,7 @@ use iroha_data_model::{
     },
     parameter::{Parameter, Parameters},
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
         signed::{FeeChargeKind, TransactionEntrypoint},
     },
 };
@@ -1435,11 +1435,12 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 !instructions.is_empty(),
                 "empty deployment transactions are forbidden",
             )?;
-            let (transaction, quote) = quote_and_sign_transaction(
+            let (transaction, quote) = quote_and_sign_transaction_with_admission(
                 &client,
                 Executable::from(instructions.clone()),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
+                TransactionAdmissionIntent::QueuePlanSynced,
             )
             .wrap_err_with(|| {
                 format!("deployment phase {phase}: quote and sign exact transaction")
