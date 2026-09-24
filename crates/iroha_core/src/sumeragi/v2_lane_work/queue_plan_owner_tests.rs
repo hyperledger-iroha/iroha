@@ -390,13 +390,21 @@ fn queue_plan_runner_relay_uses_global_owner_without_old_lane_admission() {
     let effects_before = adapter.effect_count();
     assert!(
         crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
-            &receive, &mut owner, 0, 1,
+            &receive,
+            &mut owner,
+            0,
+            1,
+            |_, _| unreachable!(),
         )
         .unwrap()
     );
     assert!(
         !crate::sumeragi::v2_runner::drain_finalized_lane_relay_prefix_for_test(
-            &receive, &mut owner, 0, 1,
+            &receive,
+            &mut owner,
+            0,
+            1,
+            |_, _| unreachable!(),
         )
         .unwrap()
     );

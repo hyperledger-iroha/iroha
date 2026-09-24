@@ -4218,7 +4218,9 @@ impl ProductionV2Services {
             completion_max_service_debt: completion.max_service_debt,
             local_completions: self.local_completions.len(),
             held_completion: self.held_io_completion.is_some(),
-            retained_apply_dependency: self.pending_local_apply.as_ref()
+            retained_apply_dependency: self
+                .pending_local_apply
+                .as_ref()
                 .map(|retained| retained.dependency.name()),
             sender_open,
             receiver_open,
@@ -5878,37 +5880,32 @@ impl ProductionV2Services {
             }
         }
     }
-    /// Send one exact durably authorized lane-drain vote to a selected peer.
-    pub(crate) fn post_lane_drain_vote(&self, peer: PeerId, vote: LaneDrainVoteV1) {
+    /// Offer one exact durably authorized lane-drain vote to a selected peer.
+    /// The caller retains the same signed vote when the bounded corridor refuses it.
+    pub(crate) fn post_lane_drain_vote(
+        &self,
+        peer: PeerId,
+        vote: LaneDrainVoteV1,
+    ) -> Result<ExactFanoutOwnership, String> {
         let output_guard = Arc::clone(&self.output_guard);
-        let Some(operation) = output_guard.begin_fail_stop_operation() else {
-            return;
-        };
-        if let Err(error) = vote.validate_ingress() {
-            iroha_logger::error!(%error, "lane-drain vote output failed validation");
-            return;
-        }
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| self.output_guard.restart_error())?;
+        vote.validate_ingress()
+            .map_err(|error| format!("lane-drain vote output failed validation: {error}"))?;
         let rollover_claim = ExactOutputRolloverClaim::LaneDrainVote {
             scope: self.exact_output_scope(),
             target: peer.clone(),
             vote_hash: HashOf::new(&vote),
         };
-        match self.enqueue_exact_fanout_while_guarded(
+        let ownership = self.enqueue_exact_fanout_while_guarded(
             vec![NetworkMessage::LaneDrainVote(Box::new(vote))],
             vec![peer],
             rollover_claim,
             operation.permit(),
-        ) {
-            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
-            Ok(ExactFanoutOwnership::SourceRetained) => {
-                iroha_logger::error!(
-                    "lane-drain vote fanout reached an unreserved outbound corridor boundary"
-                );
-            }
-            Err(error) => {
-                iroha_logger::error!(%error, "lane-drain vote output failed closed");
-            }
-        }
+        )?;
+        operation.complete();
+        Ok(ownership)
     }
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {

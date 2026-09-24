@@ -569,7 +569,7 @@ fn release_recomputes_fifo_while_unrelated_pop_is_held() {
     assert!(!queue.transaction_selection_durability_faulted());
 }
 #[test]
-fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
+fn ordinary_candidate_snapshot_leaves_queue_plan_autonomous_reservation_available() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -581,42 +581,22 @@ fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
     let (snapshot, lease) = queue
         .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
         .expect("global selection remains healthy");
-    assert_eq!(
-        snapshot
-            .iter()
-            .map(AcceptedTransaction::hash_as_entrypoint)
-            .collect::<Vec<_>>(),
-        vec![hash]
-    );
-    assert!(
-        queue
-            .reserve_transactions_for_lane(
-                &state,
-                lane_reservation_scope(
-                    &state,
-                    b"leased-autonomous-owner",
-                    b"leased-autonomous-proposal",
-                ),
-                nonzero!(1_usize),
-            )
-            .expect("leased hash is skipped rather than conflicted")
-            .is_empty(),
-        "an autonomous slot must not reserve globally selected work"
-    );
-    drop(lease);
+    assert!(snapshot.is_empty());
+    assert!(!queue.global_selection_owners.lock().contains_key(&hash));
     let reserved = queue
         .reserve_transactions_for_lane(
             &state,
             lane_reservation_scope(
                 &state,
-                b"released-autonomous-owner",
-                b"released-autonomous-proposal",
+                b"independent-autonomous-owner",
+                b"independent-autonomous-proposal",
             ),
             nonzero!(1_usize),
         )
-        .expect("dropping the exact global lease restores autonomous eligibility");
+        .expect("ordinary leader sampling cannot lease the autonomous QueuePlan claim");
     assert_eq!(reserved.len(), 1);
     assert_eq!(reserved[0].key().entrypoint_hash, hash);
+    drop(lease);
 }
 #[test]
 fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
@@ -2222,14 +2202,9 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
 
     let (selected, global_selection) = replica
         .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
-        .expect("acquire the replica's process-local global selection fence");
-    assert_eq!(
-        selected
-            .iter()
-            .map(|transaction| transaction.hash_as_entrypoint())
-            .collect::<Vec<_>>(),
-        vec![first_hash, second_hash],
-    );
+        .expect("ordinary selection excludes the autonomous replica group");
+    assert!(selected.is_empty());
+    assert!(replica.global_selection_owners.lock().is_empty());
 
     {
         let mut transactions = state.transactions.block();
@@ -2270,15 +2245,6 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
         );
     }
 
-    let conflict = replica
-        .commit_prepared_lane_reservation_groups(vec![prepared_canonical_cleanup_group(
-            keys.clone(),
-        )])
-        .expect_err("a live global selection lease must fence canonical replica cleanup");
-    assert!(matches!(
-        conflict,
-        LaneQueueReservationError::Conflict { hash } if hash == first_hash
-    ));
     drop(global_selection);
 
     let result = replica
@@ -2318,7 +2284,7 @@ fn canonical_cleanup_atomically_consumes_committed_revalidated_ordinary_replica_
     assert_eq!(retry_evidence.len(), 1);
 }
 #[test]
-fn replica_disposition_observes_exact_fifo_beneath_global_selection_overlay() {
+fn replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let (state, _kura_dir) = owned_lane_reservation_test_state();
     let replica = Arc::new(Queue::test(config_factory(), &time_source));
@@ -2394,11 +2360,12 @@ fn replica_disposition_observes_exact_fifo_beneath_global_selection_overlay() {
         .expect("reserve ordinary FIFO fee capacity");
     let (selected, mut global_selection) = replica
         .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
-        .expect("acquire process-local global selection overlay");
-    assert_eq!(selected[0].hash_as_entrypoint(), hash);
+        .expect("ordinary leader sampling excludes autonomous replica custody");
+    assert!(selected.is_empty());
+    assert!(replica.global_selection_owners.lock().is_empty());
     let disposition = replica
         .authorize_autonomous_lane_replica_queue_disposition(&cursor, keys)
-        .expect("the live signed-cursor path accepts exact FIFO beneath the overlay")
+        .expect("the live signed-cursor path accepts exact autonomous FIFO custody")
         .consume_for_kura(&cursor, keys)
         .expect("Kura consumes the same cursor-bound Queue authorization");
     assert!(matches!(
@@ -2416,8 +2383,8 @@ fn replica_disposition_observes_exact_fifo_beneath_global_selection_overlay() {
         "read-only replica disposition must retain ordinary FIFO fee capacity",
     );
     assert!(
-        global_selection.retain_only(&[hash]),
-        "the pre-existing global-selection lease must retain its exact ownership",
+        global_selection.retain_only(&[]),
+        "ordinary selection must hold no ownership of autonomous QueuePlan work",
     );
     drop(disposition);
     assert_eq!(replica.fifo_snapshot_for_test(), vec![hash]);
@@ -4572,7 +4539,9 @@ fn ambiguous_reservation_put_disables_global_and_lane_selection_until_restart_re
     }
 }
 
-fn poll_lane_retirement_release(wait: &mut concread::release::ReleaseFuture) -> std::task::Poll<()> {
+fn poll_lane_retirement_release(
+    wait: &mut concread::release::ReleaseFuture,
+) -> std::task::Poll<()> {
     std::future::Future::poll(
         std::pin::Pin::new(wait),
         &mut std::task::Context::from_waker(std::task::Waker::noop()),

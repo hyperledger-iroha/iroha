@@ -1,5 +1,6 @@
 //! One Native lane process retained across global-height activation and rollover.
 
+use super::native_drain::NativeDrainOwner;
 use super::native_source::{NativeSourceRequest, NativeSourceTarget};
 use super::ordinary_ingress_consumer::PreparedDequeuedV2IngressV1;
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,6 +36,7 @@ pub(in crate::sumeragi) struct NativeRunnerProcess {
         Option<super::super::v2_lane_driver::NativeLaneCandidatePreparation>,
     pub(super) recovered_sources:
         BTreeMap<Hash, Arc<crate::state::VerifiedFirstLaneAdmittedInputV1>>,
+    drain: NativeDrainOwner,
     driver: NativeLaneDriver,
     transport: NativeLaneTransport,
     outbound: Option<LaneOutbound>,
@@ -112,6 +114,7 @@ impl NativeRunnerProcess {
             candidate_result: None,
             candidate_source: None,
             recovered_sources: BTreeMap::new(),
+            drain: NativeDrainOwner::new(),
             state,
             outbound: None,
             decision: None,
@@ -120,6 +123,18 @@ impl NativeRunnerProcess {
             pending_ingress: None,
             publication: None,
         })
+    }
+
+    /// Route an authenticated drain relay to the process-owned collector.
+    pub(in crate::sumeragi) fn accept_lane_drain_vote(
+        &mut self,
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError> {
+        let _ = self
+            .drain
+            .accept_remote_vote(&self.state, sender, vote, Instant::now())?;
+        Ok(())
     }
 
     /// Service independent Native clocks, physical completions and one exact send.

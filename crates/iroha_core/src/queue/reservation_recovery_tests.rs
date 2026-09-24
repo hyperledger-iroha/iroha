@@ -2875,6 +2875,104 @@ fn authority_fee_reservations_prevent_overbooking_and_release_capacity() {
         .expect("released authority capacity is immediately reusable");
 }
 #[test]
+fn candidate_preflight_checks_only_the_selected_batch_fee_capacity() {
+    use iroha_data_model::IntoKeyValue;
+
+    let (_clock, time_source) = TimeSource::new_mock(Duration::from_secs(1));
+    let nexus = Nexus::default();
+    let NexusRoutingFixture {
+        mut state,
+        authority_id,
+        authority_keypair,
+    } = nexus_routing_fixture_with_nexus(nexus);
+    // This constructor zeroes fees for most unit tests; enable the exact
+    // schedule only after it has installed its test runtime defaults.
+    state.nexus.get_mut().fees.base_fee = Quantity::from(6_u32);
+    let fee_asset: AssetDefinitionId = state
+        .nexus_snapshot()
+        .fees
+        .fee_asset_id
+        .parse()
+        .expect("configured fee asset");
+    {
+        let mut block = state.world.block();
+        let mut world = block.transaction_without_telemetry(state.nexus_snapshot().lane_config, 0);
+        world.insert_asset_definition_entry(
+            fee_asset.clone(),
+            AssetDefinition::numeric(
+                fee_asset.clone(),
+                "candidate fee fixture".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&authority_id),
+        );
+        let (asset_id, value) = Asset::new(
+            AssetId::new(fee_asset.clone(), authority_id.clone()),
+            Quantity::from(10_u32),
+        )
+        .into_key_value();
+        world.assets.insert(asset_id.clone(), value);
+        world.track_asset_holder(&asset_id);
+        world.track_nonzero_asset_holder(&asset_id);
+        world
+            .increase_asset_total_amount(&fee_asset, &Quantity::from(10_u32))
+            .expect("fund exact fee asset");
+        world.apply();
+        block.commit();
+    }
+    let make_input = |label: &str| {
+        let draft = TransactionBuilder::new_with_time_source(
+            state.network_id,
+            authority_id.clone(),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .with_instructions([Log::new(Level::INFO, label.into())]);
+        let fee_intent = {
+            let view = state.view();
+            crate::executor::quote_nexus_fee_admission_draft(
+                view.world(),
+                view.nexus(),
+                &view.pipeline,
+                draft.payload(),
+                1_000,
+                1,
+                Some(DataSpaceId::UNIVERSAL),
+            )
+            .expect("quote candidate fee")
+            .recommended_intent
+        };
+        AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
+            draft
+                .with_fee_payment_intent(fee_intent)
+                .sign(authority_keypair.private_key()),
+        ))
+    };
+    let first = make_input("first selected fee");
+    let second = make_input("second selected fee");
+    assert_ne!(first.hash_as_entrypoint(), second.hash_as_entrypoint());
+    let route = RoutingPlan::single(RoutingDecision::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let view = state.view();
+    assert_eq!(
+        queue.preflight_ordinary_candidate_batch_in_view(
+            [(0, &first, &route), (1, &second, &route)],
+            &view,
+            1_000,
+        ),
+        BTreeSet::from([1]),
+        "both inputs pass parent-state admission alone, but 12 fees cannot spend a balance of 10"
+    );
+    assert!(
+        queue
+            .preflight_ordinary_candidate_batch_in_view([(0, &second, &route)], &view, 1_000)
+            .is_empty(),
+        "an unselected input cannot reserve capacity in another proposal"
+    );
+}
+#[test]
 fn relay_spend_lease_reservations_prevent_overbooking_and_release_capacity() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let first_hash = accepted_tx_by_someone(&time_source).hash_as_entrypoint();

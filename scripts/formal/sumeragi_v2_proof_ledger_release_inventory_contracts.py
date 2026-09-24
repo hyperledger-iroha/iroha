@@ -2565,7 +2565,7 @@ def _production_liveness_release_inventory_errors(
                     "0ce65185b396f72cf66b2929b0564f2d33175275ae9335b5dca86c8fc504b697"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "fd19b43e1499942b42a1d67bf64d4069cfa1a0a7c24a452f8f698753e7c46d3e"
+                    "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"

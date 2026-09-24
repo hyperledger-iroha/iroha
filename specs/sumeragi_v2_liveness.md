@@ -1638,7 +1638,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+`123fafed34cddd1f488af19ceccf1fb4e80c3cfba2f59e889e02c565a3b01892`.
 
 This is the prospective source inventory: six Native participant-role tests,
 the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,

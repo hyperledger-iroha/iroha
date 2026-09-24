@@ -40,6 +40,7 @@ struct OpeningResources {
     // body jobs and retirement tokens borrow it through shared ownership.
     verified: Arc<VerifiedLaneContext>,
     key: KeyPair,
+    lane_drain_signing_guard: Arc<crate::lane_drain::LaneDrainSigningGuard>,
     now: Instant,
     base_timeout: Duration,
     retransmit_interval: Duration,
@@ -91,6 +92,7 @@ impl OpeningResources {
             timeout_witnesses: BTreeMap::new(),
             key: self.key,
             output_guard: guard,
+            lane_drain_signing_guard: self.lane_drain_signing_guard,
             clock: LaneClock {
                 tag,
                 timeout: Some(timeout),
@@ -488,6 +490,7 @@ impl LaneInstance {
             .position(|peer| peer.public_key() == key.public_key())
             .and_then(|index| u32::try_from(index).ok())
             .ok_or_else(|| bad("key is outside frozen committee"))?;
+        let lane_drain_signing_guard = state.lane_drain_signing_guard().map_err(bad)?;
         let _lease = state.consensus_publication_lease();
         if Self::gate_for(verified, state, observed) != LaneCurrentGate::Current {
             return Err(bad("opening observation is no longer current"));
@@ -519,6 +522,7 @@ impl LaneInstance {
                 state_owner,
                 verified: Arc::new(verified.clone()),
                 key,
+                lane_drain_signing_guard,
                 now,
                 base_timeout,
                 retransmit_interval,

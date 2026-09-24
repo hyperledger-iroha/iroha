@@ -2057,11 +2057,11 @@ def test_sdk_receipt_binding_requires_only_canonical_kotlin_wrapper(
     ("registered_test", "unrelated_symbol"),
     (
         (
-            "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+            "queue::tests::replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay",
             "queue::replica_disposition",
         ),
         (
-            "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+            "queue::tests::replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay",
             "queue::tests_helper::replica_disposition",
         ),
         (

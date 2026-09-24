@@ -1780,6 +1780,11 @@ impl ProductionLifecycleOwnerV1 {
                     super::projection::reducer_fence_wait_source(self.coordinator.active_context);
                 let wait = super::WaitToken::new(source, generation);
                 if !self.coordinator.park_validate_on_reducer_fence(lease, wait) {
+                    iroha_logger::error!(
+                        ordinal,
+                        ?wait,
+                        "Ready Validate reducer fence rejected its exact lease"
+                    );
                     return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
                 }
                 Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait })
@@ -2457,6 +2462,7 @@ impl ProductionLifecycleOwnerV1 {
             runner_debt,
             None,
             None,
+            None,
         )
     }
 
@@ -2477,6 +2483,7 @@ impl ProductionLifecycleOwnerV1 {
             executor,
             runner_debt,
             Some(required_ordinal),
+            None,
             physical_completion.map(|completion| (required_ordinal, completion)),
         )
     }
@@ -2487,14 +2494,17 @@ impl ProductionLifecycleOwnerV1 {
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         runner_debt: u64,
         required_ordinal: Option<u128>,
+        preferred_ordinal: Option<u128>,
         required_ready_validate_completion: Option<(
             u128,
             crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
         )>,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
-        if required_ready_validate_completion
-            .is_some_and(|(ordinal, _)| Some(ordinal) != required_ordinal)
-        {
+        if required_ordinal.is_some_and(|required| {
+            required_ready_validate_completion.is_some_and(|(ordinal, _)| ordinal != required)
+        }) || preferred_ordinal.is_some_and(|preferred| {
+            required_ready_validate_completion.is_some_and(|(ordinal, _)| ordinal != preferred)
+        }) {
             return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
                 ProductionCompletionCarrierStageV1::RequiredValidateOrdinal,
             ));
@@ -2972,11 +2982,15 @@ impl ProductionLifecycleOwnerV1 {
             BTreeMap::from([(fence.source(), fence.generation())])
         };
         let inputs = authenticated_scheduler_inputs(factory, generations, ready_rows);
-        let plan = match required_ordinal {
-            Some(ordinal) => self
+        let plan = match (required_ordinal, preferred_ordinal) {
+            (Some(ordinal), None) => self
                 .coordinator
                 .plan_turn_requiring_ordinal(inputs, ordinal),
-            None => self.coordinator.plan_turn(inputs),
+            (None, Some(ordinal)) => self
+                .coordinator
+                .plan_turn_prioritizing_ordinal(inputs, ordinal),
+            (None, None) => self.coordinator.plan_turn(inputs),
+            (Some(_), Some(_)) => return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier),
         };
         let lease = match plan {
             super::TurnPlan::Execute(lease) => lease,
@@ -2988,7 +3002,14 @@ impl ProductionLifecycleOwnerV1 {
                     protected_live_apply_ordinal,
                 });
             }
-            super::TurnPlan::FailClosed(_) => {
+            super::TurnPlan::FailClosed(fault) => {
+                iroha_logger::error!(
+                    ?fault,
+                    required_ordinal,
+                    preferred_ordinal,
+                    ready_count = self.coordinator.ready_index.len(),
+                    "authenticated lifecycle Completion scheduler rejected its Ready census"
+                );
                 return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
             }
         };
@@ -2999,8 +3020,8 @@ impl ProductionLifecycleOwnerV1 {
         if lease.work_class() != expected_class {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
         }
-        if required_ready_validate_completion.is_some_and(|(required, _)| {
-            required != ordinal || expected_class != LifecycleWorkClass::Validate
+        if required_ready_validate_completion.is_some_and(|(target, _)| {
+            target == ordinal && expected_class != LifecycleWorkClass::Validate
         }) {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
         }
@@ -3012,8 +3033,9 @@ impl ProductionLifecycleOwnerV1 {
                         None => {}
                     }
                     drop(census);
-                    let physical_completion =
-                        required_ready_validate_completion.map(|(_, completion)| completion);
+                    let physical_completion = required_ready_validate_completion
+                        .filter(|(target, _)| *target == ordinal)
+                        .map(|(_, completion)| completion);
                     return self.publish_ready_validate_outcome(
                         services,
                         executor,
@@ -3208,7 +3230,7 @@ impl ProductionLifecycleOwnerV1 {
     /// Resolve one exact same-address Ready Validate successor ahead of
     /// physical completion classification.
     ///
-    /// The retained publication token must still name the global Ready minimum
+    /// The retained publication token names one authenticated Ready carrier
     /// and its complete registry coordinate. This path never observes or
     /// acknowledges the worker completion FIFO. The registry-authenticated
     /// preliminary owner is installed before any outcome can terminalize the
@@ -3276,12 +3298,18 @@ impl ProductionLifecycleOwnerV1 {
                 apply_is_authorized,
             )
             .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
-        let selected = self.dispatch_completion_requiring_ready_ordinal(
+        // This physical result already owns the executor's single preliminary
+        // Validate successor. Give it its authenticated causal turn ahead of
+        // unrelated Ready rank; if its own capacity is unavailable, retain
+        // it without selecting another row. Async arrival order cannot turn a
+        // valid result into a fail-stop scheduler mismatch.
+        let selected = self.dispatch_completion_with_runner_debt_and_required_ordinal(
             services,
             executor,
             runner_debt,
-            ordinal,
-            physical_completion,
+            None,
+            Some(ordinal),
+            physical_completion.map(|completion| (ordinal, completion)),
         )?;
         if matches!(
             selected,
@@ -3320,6 +3348,12 @@ impl ProductionLifecycleOwnerV1 {
             _ => false,
         };
         if !exact {
+            iroha_logger::error!(
+                ordinal,
+                ?selected,
+                requires_io = successor.requires_io_dispatch(),
+                "Ready Validate successor dispatch did not resolve its exact carrier"
+            );
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
         }
         Ok(ReadyValidateSuccessorDispatchV1::Resolved(selected))

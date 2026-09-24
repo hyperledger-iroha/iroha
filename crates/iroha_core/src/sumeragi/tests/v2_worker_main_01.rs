@@ -877,7 +877,14 @@ fn generation_hint_requires_exact_reply_route_ownership() {
 }
 #[test]
 fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
-    let (service, keys) = fixture();
+    let (mut service, keys) = fixture();
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
     let target = service.context.roster[1].validator.clone();
     let vote = lane_drain_vote(&keys[0]);
     let effect = V2LaneWorkEffect::PostLaneDrainVote {
@@ -885,7 +892,12 @@ fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
         vote: vote.clone(),
     };
     assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
-    service.post_lane_drain_vote(target.clone(), vote.clone());
+    assert_eq!(
+        service
+            .post_lane_drain_vote(target.clone(), vote.clone())
+            .expect("retain exact lane-drain output"),
+        ExactFanoutOwnership::Owned
+    );
     let pending = service
         .lock_pending_exact_output()
         .expect("inspect retained lane-drain output");
@@ -914,6 +926,54 @@ fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
         })
         .expect_err("tampered drain vote must fail before corridor reservation");
     assert!(error.contains("invalid vote evidence"));
+}
+#[test]
+fn lane_drain_vote_retains_source_when_exact_output_is_full() {
+    let (mut service, keys) = fixture();
+    service.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 1,
+        })
+    });
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("one exact output ownership unit");
+    let first_vote = lane_drain_vote(&keys[0]);
+    let second_vote = lane_drain_vote(&keys[1]);
+    let retained_vote = lane_drain_vote(&keys[2]);
+    let target = service.context.roster[3].validator.clone();
+    assert_eq!(
+        service
+            .post_lane_drain_vote(target.clone(), first_vote)
+            .expect("first vote output fits"),
+        ExactFanoutOwnership::Owned
+    );
+    assert_eq!(
+        service
+            .post_lane_drain_vote(target.clone(), second_vote)
+            .expect("the one shared ownership unit fits"),
+        ExactFanoutOwnership::Owned
+    );
+    assert_eq!(
+        service
+            .post_lane_drain_vote(target, retained_vote)
+            .expect("full corridor returns the signed vote to its caller"),
+        ExactFanoutOwnership::SourceRetained
+    );
+    assert!(
+        !service.output_guard.restart_required(),
+        "bounded backpressure must not become a fail-stop signature failure"
+    );
+    assert_eq!(
+        service
+            .lock_pending_exact_output()
+            .expect("inspect exact output after refusal")
+            .fanouts
+            .len(),
+        2
+    );
 }
 #[test]
 fn sidecar_receipts_use_a_separate_bounded_control_queue() {
@@ -3099,7 +3159,10 @@ fn certified_fetch_retry_reoffers_after_one_archive_target_keeps_its_ticket() {
             .is_empty(),
         "the first fanout must retain an actor ticket before the retry"
     );
-    assert_eq!(service.lock_pending_exact_output().unwrap().fanouts.len(), 1);
+    assert_eq!(
+        service.lock_pending_exact_output().unwrap().fanouts.len(),
+        1
+    );
 
     service
         .enqueue_body_fetch(task.clone())
@@ -3815,7 +3878,10 @@ fn block_sync_retry_retires_stalled_fanout_without_losing_signed_request() {
         assert_eq!(pending.fanouts.len(), 1);
         pending.fanouts[0].fifo_id
     };
-    assert_ne!(first_fifo, second_fifo, "the old fanout must not coalesce the retry");
+    assert_ne!(
+        first_fifo, second_fifo,
+        "the old fanout must not coalesce the retry"
+    );
     assert_eq!(request_hash, Some(signed_hash));
     assert!(discovery.retransmit(signed_hash).is_some());
 }
@@ -4835,7 +4901,8 @@ fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
         &context.roster,
         0xC0,
     );
-    let next_mint_authorization = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+    let next_mint_authorization =
+        crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
             &context.kagemusha_mint_finality_authorization,
             &next_mint_roster,
             context.height + 8,
@@ -4911,7 +4978,10 @@ fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
     )
     .expect("decode boundary seal share");
     assert_eq!(share.message.kagemusha_top_up_count, 0);
-    assert_eq!(share.message.next_epoch_authorization, Some(next_mint_authorization));
+    assert_eq!(
+        share.message.next_epoch_authorization,
+        Some(next_mint_authorization)
+    );
     crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
         &context.kagemusha_mint_finality_authority,
         &context,

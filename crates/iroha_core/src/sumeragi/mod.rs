@@ -7168,12 +7168,13 @@ impl SumeragiHandle {
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
         }
-        // QueuePlan has the sole live owner for this channel. Returning the
-        // original message prevents an obsolete relay producer from treating
-        // a successful enqueue as durable protocol admission.
+        // QueuePlan and Native drain have distinct process-lived owners for
+        // this bounded channel. Returning every retired relay unchanged keeps
+        // it from mistaking an enqueue for protocol admission.
         if !matches!(
             &message,
             LaneRelayMessage::QueuePlanAdmissionCertificate { .. }
+                | LaneRelayMessage::DrainVote { .. }
         ) {
             return SumeragiIngressDisposition::Rejected(message);
         }

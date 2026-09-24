@@ -48,8 +48,10 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::time::TimeSource;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeSet, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
@@ -850,7 +852,6 @@ impl V2CandidateAssembler {
             .ok_or(CandidateError::RestartRequired)?;
         drop(state_view);
         let mut pool = self.snapshot_routable_candidates(
-            request.context,
             request.queue,
             request.state,
             &request.attachments,
@@ -1434,34 +1435,14 @@ impl V2CandidateAssembler {
         ledger_time_ms: u64,
     ) -> BTreeSet<usize> {
         let state_view = state.view();
-        selected
-            .iter()
-            .enumerate()
-            .filter_map(|(index, candidate)| {
-                if !Queue::ordinary_single_route_is_reassignable(
-                    candidate.transaction.entrypoint(),
-                    &candidate.routing_plan,
-                ) {
-                    return None;
-                }
-                queue
-                    .preflight_ordinary_candidate_in_view(
-                        &candidate.transaction,
-                        &candidate.routing_plan,
-                        &state_view,
-                        ledger_time_ms,
-                    )
-                    .err()
-                    .map(|error| {
-                        iroha_logger::debug!(
-                            tx = %candidate.entrypoint_hash,
-                            %error,
-                            "deferring Ordinary input that no longer passes current admission"
-                        );
-                        index
-                    })
-            })
-            .collect()
+        queue.preflight_ordinary_candidate_batch_in_view(
+            selected
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| (index, &candidate.transaction, &candidate.routing_plan)),
+            &state_view,
+            ledger_time_ms,
+        )
     }
     fn prospective_candidate_creation_time(
         &self,
@@ -1486,7 +1467,6 @@ impl V2CandidateAssembler {
     }
     fn snapshot_routable_candidates(
         &self,
-        context: &wire::HeightContext,
         queue: &Queue,
         state: &State,
         attachments: &CandidateAttachments,
@@ -1502,57 +1482,42 @@ impl V2CandidateAssembler {
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
             .is_some();
-        let mut carrier_queue_plan_bindings = BTreeMap::new();
+        let mut carrier_queue_plan_entrypoints = BTreeSet::new();
         for certificate in &attachments.queue_plan_admissions {
             let admission = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
                 state.network_id_ref(),
                 certificate,
             )
             .map_err(CandidateError::MergeApplicationContext)?;
-            let binding = admission.certificate().certificate.binding.clone();
-            if carrier_queue_plan_bindings
-                .insert(binding.entrypoint_hash.clone(), binding)
-                .is_some()
-            {
+            if !carrier_queue_plan_entrypoints.insert(
+                admission
+                    .certificate()
+                    .certificate
+                    .binding
+                    .entrypoint_hash
+                    .clone(),
+            ) {
                 return Err(CandidateError::MergeApplicationContext(
                     "Sumeragi carrier repeats a QueuePlan entrypoint".to_owned(),
                 ));
             }
         }
         let mut records = Vec::with_capacity(pending.len());
-        let mut queue_plan_barrier = false;
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
-            // A certified QueuePlan item is an exact FIFO cut, but cannot make
-            // an exact-height lifecycle control behind it miss its only block.
-            if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction) {
+            if transaction.entrypoint().admission_intent()
+                == TransactionAdmissionIntent::QueuePlanSynced
+            {
+                // The authenticated carrier and autonomous lane own this input.
+                // A local Queue copy is never selected here, so its binding or
+                // route cannot veto independent Ordinary proposal work.
+                report.work_deferred = report.work_deferred.saturating_add(1);
                 continue;
             }
             let entrypoint_hash = transaction.hash_as_entrypoint();
-            let queue_plan_synced = transaction.entrypoint().admission_intent()
-                == TransactionAdmissionIntent::QueuePlanSynced;
-            let queue_plan_binding = if queue_plan_synced {
-                // Local arrival has no global ordering promise. Only the exact
-                // carrier or canonical parent binding makes this a FIFO cut.
-                match carrier_queue_plan_bindings.get(&entrypoint_hash) {
-                    Some(binding) => Some(binding.clone()),
-                    None => match state
-                        .queue_plan_pending_binding_for_entrypoint(entrypoint_hash.clone())
-                    {
-                        Ok(Some(binding)) => Some(binding),
-                        Ok(None) => {
-                            report.work_deferred = report.work_deferred.saturating_add(1);
-                            continue;
-                        }
-                        Err(_) => return Err(CandidateError::RestartRequired),
-                    },
-                }
-            } else {
-                None
-            };
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
                 Err(crate::queue::RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
@@ -1564,40 +1529,10 @@ impl V2CandidateAssembler {
                     return Err(CandidateError::RestartRequired);
                 }
             };
-            if queue_plan_barrier
-                && !exact_height_lifecycle_candidate(
-                    context,
-                    CandidateDescriptor::new(&transaction, &routing_plan),
-                )
-            {
-                continue;
-            }
-            if let Some(binding) = queue_plan_binding
-                && let Err(reason) = crate::torii_proxy::validate_queue_plan_binding_for_request(
-                    &binding,
-                    state.network_id_ref(),
-                    transaction.entrypoint(),
-                    &routing_plan,
-                )
-            {
-                return Err(CandidateError::MergeApplicationContext(format!(
-                    "QueuePlan candidate differs from its immutable admission binding: {reason}"
-                )));
-            }
             if queue.transaction_selection_durability_faulted() {
                 return Err(CandidateError::RestartRequired);
             }
             report.routable = report.routable.saturating_add(1);
-            if queue_plan_synced {
-                // The certificate is proposal-native control work; the
-                // transaction itself must cross the autonomous lane and merge
-                // corridor. Keep it as a strict FIFO cut even after the exact
-                // admission binding becomes canonical, so later ordinary work
-                // cannot overtake it while the lane author takes ownership.
-                report.work_deferred = report.work_deferred.saturating_add(1);
-                queue_plan_barrier = true;
-                continue;
-            }
             let encoded_len = transaction.encoded_len();
             if encoded_len > payload_limit {
                 report.payload_deferred = report.payload_deferred.saturating_add(1);
@@ -5122,8 +5057,8 @@ pub(super) mod tests {
         );
     }
     #[test]
-    fn only_certified_queue_plan_intent_fences_later_ordinary_input() {
-        let (state, height_context, anchor, key) = snapshot_parent_fixture();
+    fn certified_queue_plan_intent_does_not_order_later_ordinary_input() {
+        let (state, _, anchor, key) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
             iroha_config::parameters::actual::Queue::default(),
@@ -5139,7 +5074,6 @@ pub(super) mod tests {
         let mut blocked_report = CandidateScanReport::default();
         let unbound = assembler
             .snapshot_routable_candidates(
-                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -5151,6 +5085,7 @@ pub(super) mod tests {
         assert_eq!(unbound.len(), 1);
         assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint());
         assert_eq!(blocked_report.inspected, 2);
+        assert_eq!(blocked_report.routable, 1);
         assert_eq!(blocked_report.work_deferred, 1);
 
         let routing_plan = queue
@@ -5194,7 +5129,6 @@ pub(super) mod tests {
         let mut bound_report = CandidateScanReport::default();
         let bound = assembler
             .snapshot_routable_candidates(
-                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -5202,15 +5136,45 @@ pub(super) mod tests {
                 64 * 1024,
                 &mut bound_report,
             )
-            .expect("exact parent-state binding preserves the autonomous FIFO cut");
-        assert!(bound.is_empty());
+            .expect("exact parent-state binding leaves later Ordinary work eligible");
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].entrypoint_hash, follower.hash_as_entrypoint());
         assert_eq!(bound_report.inspected, 2);
         assert_eq!(bound_report.routable, 1);
         assert_eq!(bound_report.work_deferred, 1);
+
+        state
+            .replace_queue_plan_registry_owner_for_test(
+                &binding,
+                Hash::new(b"stale QueuePlan registry owner"),
+            )
+            .expect("make the unselected local QueuePlan binding inconsistent");
+        assert!(
+            state
+                .queue_plan_pending_binding_for_entrypoint(queue_plan.hash_as_entrypoint())
+                .is_err(),
+            "the old local QueuePlan lookup would stop candidate assembly"
+        );
+        let mut stale_report = CandidateScanReport::default();
+        let stale = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan, follower.clone()],
+                64 * 1024,
+                &mut stale_report,
+            )
+            .expect("unselected local QueuePlan state must not veto independent Ordinary work");
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].entrypoint_hash, follower.hash_as_entrypoint());
+        assert_eq!(stale_report.inspected, 2);
+        assert_eq!(stale_report.routable, 1);
+        assert_eq!(stale_report.work_deferred, 1);
     }
 
     #[test]
-    fn exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier() {
+    fn exact_height_lifecycle_control_preempts_independent_ordinary_input() {
         let (state, context, _, _) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
@@ -5240,7 +5204,6 @@ pub(super) mod tests {
         let mut report = CandidateScanReport::default();
         let mut pool = assembler
             .snapshot_routable_candidates(
-                &context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -5254,7 +5217,7 @@ pub(super) mod tests {
                 64 * 1024,
                 &mut report,
             )
-            .expect("bounded scan preserves the exact-height control after the FIFO cut");
+            .expect("bounded scan preserves the exact-height control after QueuePlan input");
         assert_eq!(pool.len(), 4);
         assert_eq!(pool[1].entrypoint_hash, ordinary_after.hash_as_entrypoint());
         assert_eq!(pool[2].entrypoint_hash, first.entrypoint_hash);

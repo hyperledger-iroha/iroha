@@ -108,6 +108,7 @@ use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
 };
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 use iroha_data_model::nexus::{
     DataSpaceCatalog, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
@@ -3884,7 +3885,6 @@ pub enum PendingKagemushaOperationLookupError {
 /// Advisory position for bounded leader sampling of local queue availability.
 #[derive(Default)]
 struct BoundedPendingScanCursor {
-    parent_hash: Option<HashOf<BlockHeader>>,
     next_index: usize,
 }
 
@@ -15294,9 +15294,9 @@ impl Queue {
         }
         pending.into_iter()
     }
-    /// Clone and fence a bounded queue-ordered sample without popping ownership.
-    /// Unadmitted QueuePlan claims are skipped; durable selected or reserved
-    /// predecessors retain their existing ordering fence.
+    /// Clone a bounded local queue sample without popping ownership.
+    /// QueuePlan reservations keep their own exact custody; their local FIFO
+    /// position cannot order independent Ordinary transactions for consensus.
     pub(crate) fn bounded_pending_snapshot(
         self: &Arc<Self>,
         state_view: &StateView<'_>,
@@ -15317,20 +15317,6 @@ impl Queue {
             return None;
         }
         let live_reservations = self.lane_reservations.lock().live_hashes();
-        // A durable autonomous reservation is deliberately absent from the
-        // physical FIFO while retaining its immutable ordinal. Preserve that
-        // ordinal as a virtual FIFO cut so ordinary work admitted later cannot
-        // overtake the reserved QueuePlan entrypoint.
-        let mut live_reservation_fifo_cut = None;
-        for hash in &live_reservations {
-            let order = self.fifo_order_by_hash.get(hash)?;
-            order.value().validate().ok()?;
-            live_reservation_fifo_cut = Some(
-                live_reservation_fifo_cut.map_or(order.value().ordinal, |cut: u64| {
-                    cut.min(order.value().ordinal)
-                }),
-            );
-        }
         let mut global_owners = self.global_selection_owners.lock();
         let mut age_ring = self.queued_age_ring.lock();
         let mut scan_cursor = self.pending_scan_cursor.lock();
@@ -15338,11 +15324,6 @@ impl Queue {
             || self.lane_reservation_startup_reconciliation_pending()
         {
             return None;
-        }
-        let parent_hash = state_view.latest_block_hash();
-        if scan_cursor.parent_hash != parent_hash {
-            scan_cursor.parent_hash = parent_hash;
-            scan_cursor.next_index = 0;
         }
         let mut remaining_scan = max_scan.get();
         while remaining_scan > 0
@@ -15371,54 +15352,21 @@ impl Queue {
             }
             return Some((Vec::new(), GlobalQueueSelectionLease::empty(self)));
         }
-        // The leader samples local availability in bounded windows. The parent
-        // hash resets this advisory cursor because a formerly absent admission
-        // can become canonical only through committed State. Live owners and
-        // durability transitions retain the older FIFO fence.
+        // The leader samples local availability in bounded windows. Advancing
+        // the committed parent cannot reset this local cursor: consecutive
+        // blocks must not starve work behind an excluded async arrival. A
+        // changed parent is observed when the bounded scan wraps.
         let mut scan_start = scan_cursor.next_index;
         if scan_start >= age_ring.len() {
             scan_start = 0;
         }
-        let mut active_fifo_cut = live_reservation_fifo_cut;
-        let mut unknown_owner_cut = false;
-        {
-            let active_transitions = self.durability_transitions.lock();
-            for hash in global_owners.keys().chain(active_transitions.iter()) {
-                if let Some(order) = self.fifo_order_by_hash.get(hash) {
-                    active_fifo_cut = Some(
-                        active_fifo_cut.map_or(order.ordinal, |cut: u64| cut.min(order.ordinal)),
-                    );
-                } else if self.queued_tx_enqueued_at_ms.contains_key(hash) {
-                    unknown_owner_cut = true;
-                }
-            }
-        }
-        if unknown_owner_cut {
-            scan_start = 0;
-        }
-        if let Some(cut) = active_fifo_cut
-            && scan_start > 0
-            && age_ring
-                .get(scan_start)
-                .and_then(|(hash, _)| self.fifo_order_by_hash.get(hash))
-                .is_none_or(|order| order.ordinal >= cut)
-        {
-            scan_start = 0;
-        }
         let mut seen = HashSet::with_capacity(remaining_scan);
         let mut pending_status_fault = None;
-        let mut blocked_by_fifo_predecessor = false;
-        let mut canonical_queue_plan_fence = None;
-        let mut conflicting_admission = None;
         let pending = age_ring
             .iter()
             .skip(scan_start)
             .take(remaining_scan)
-            .enumerate()
-            .filter_map(|(offset, (hash, enqueued_at_ms))| {
-                if blocked_by_fifo_predecessor {
-                    return None;
-                }
+            .filter_map(|(hash, enqueued_at_ms)| {
                 let is_current = self
                     .queued_tx_enqueued_at_ms
                     .get(hash)
@@ -15426,90 +15374,45 @@ impl Queue {
                 if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
                     return None;
                 }
-                if live_reservations.contains(hash) || global_owners.contains_key(hash) {
-                    // An exact owner at this FIFO position is still live. It
-                    // may be omitted from this lease, but no follower may pass
-                    // it in the same snapshot.
-                    blocked_by_fifo_predecessor = true;
+                if live_reservations.contains(hash) {
+                    // The autonomous owner retains this exact transaction, but
+                    // its local FIFO position cannot fence another proposal.
                     return None;
                 }
-                let Some(fifo_order) = self.fifo_order_by_hash.get(hash) else {
-                    blocked_by_fifo_predecessor = true;
-                    pending_status_fault.get_or_insert((
-                        *hash,
-                        "queued transaction is missing its immutable FIFO order".to_owned(),
-                    ));
-                    return None;
-                };
-                if live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut) {
-                    blocked_by_fifo_predecessor = true;
+                if global_owners.contains_key(hash) {
                     return None;
                 }
                 if self.durability_transition_active(hash) {
-                    // Canonical cleanup and durable admission release the Queue lock while their
-                    // exact journal boundary is synchronized. The transitioning FIFO predecessor
-                    // must stop this complete snapshot: publishing a later global owner would
-                    // overtake it, while publishing this hash would race terminal cleanup after
-                    // its QueuePlan tombstone.
-                    blocked_by_fifo_predecessor = true;
+                    // An in-progress durable transition excludes this exact
+                    // hash until it settles, without ordering another input.
                     return None;
                 }
                 if self.replay_terminal_cleanup_pending(*hash) {
                     return None;
                 }
                 let transaction = self.txs.get(hash)?;
-                if transaction.value().is_in_blockchain(state_view) {
+                if transaction
+                    .value()
+                    .as_accepted()
+                    .entrypoint()
+                    .admission_intent()
+                    == TransactionAdmissionIntent::QueuePlanSynced
+                {
+                    // The autonomous owner checks and terminalizes this exact
+                    // claim. Its async local copy cannot veto a global leader's
+                    // independent Ordinary sample, even if its local FIFO hint
+                    // needs repair.
                     return None;
                 }
-                match self.global_admission_registry_match_for_hash(*hash, state_view) {
-                    Ok(None) => {}
-                    Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Exact))) => {
-                        // Candidate assembly may inspect controls after this
-                        // QueuePlan item, but the next local scan must return
-                        // to its canonical FIFO cut until lane ownership or
-                        // terminal State settles it.
-                        canonical_queue_plan_fence.get_or_insert(scan_start + offset);
-                        let open = binding.routing_plan().is_ok_and(|plan| {
-                            resolve_routing_plan_for_queue_admission(
-                                plan,
-                                state_view.nexus(),
-                                state_view_height_for_routing(state_view),
-                            )
-                            .is_ok()
-                        });
-                        if !open {
-                            match State::queue_plan_pending_route_authority_in_view(
-                                state_view, &binding,
-                            ) {
-                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {
-                                    blocked_by_fifo_predecessor = true;
-                                    return None;
-                                }
-                                Ok(_) => {}
-                                Err(reason) => {
-                                    blocked_by_fifo_predecessor = true;
-                                    pending_status_fault.get_or_insert((*hash, reason));
-                                    return None;
-                                }
-                            }
-                        }
-                    }
-                    Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {
-                        // An uncarried local claim has no canonical ordering
-                        // promise. Keep its exact Queue ownership, but let the
-                        // leader choose later independently eligible work.
-                        return None;
-                    }
-                    Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
-                        blocked_by_fifo_predecessor = true;
-                        conflicting_admission = Some((*hash, binding));
-                        return None;
-                    }
-                    Err(reason) => {
-                        blocked_by_fifo_predecessor = true;
-                        pending_status_fault.get_or_insert((*hash, reason));
-                        return None;
-                    }
+                let Some(_) = self.fifo_order_by_hash.get(hash) else {
+                    pending_status_fault.get_or_insert((
+                        *hash,
+                        "queued transaction is missing its immutable FIFO order".to_owned(),
+                    ));
+                    return None;
+                };
+                if transaction.value().is_in_blockchain(state_view) {
+                    return None;
                 }
                 match self.pending_status(transaction.value().as_ref(), state_view) {
                     Ok(true) => Some((*hash, Arc::clone(transaction.value()))),
@@ -15534,37 +15437,11 @@ impl Queue {
             );
             return None;
         }
-        if let Some((hash, binding)) = conflicting_admission {
-            drop(scan_cursor);
-            drop(age_ring);
-            drop(global_owners);
-            drop(queue_guard);
-            if let Err(error) = self.reject_exact_queue_plan_admission_claim(&binding) {
-                self.mark_accepted_work_validation_fault(
-                    hash,
-                    "global_candidate_conflict_rejection",
-                    &error,
-                    None,
-                );
-                return None;
-            }
-            self.publish_backpressure_state(self.active_len(), None);
-            return Some((Vec::new(), GlobalQueueSelectionLease::empty(self)));
-        }
-        if blocked_by_fifo_predecessor {
-            scan_cursor.next_index = scan_start;
-        } else if let Some(fence) = canonical_queue_plan_fence {
-            scan_cursor.next_index = fence;
-        } else {
-            scan_cursor.next_index = scan_start
-                .saturating_add(remaining_scan)
-                .min(age_ring.len());
-        }
-        let scan_more = !blocked_by_fifo_predecessor
-            && canonical_queue_plan_fence.is_none()
-            && !unknown_owner_cut
-            && scan_cursor.next_index < age_ring.len()
-            && scan_cursor.next_index > scan_start;
+        scan_cursor.next_index = scan_start
+            .saturating_add(remaining_scan)
+            .min(age_ring.len());
+        let scan_more =
+            scan_cursor.next_index < age_ring.len() && scan_cursor.next_index > scan_start;
         drop(scan_cursor);
         if pending.is_empty() {
             drop(age_ring);
@@ -17739,46 +17616,68 @@ impl Queue {
             }
         }
     }
-    /// Run admission checks that do not require mutating queue indexes.
-    #[allow(clippy::too_many_lines)]
-    /// Recheck a queued Ordinary input against the exact committed parent used
-    /// for a candidate, without changing its FIFO or durable journal owner.
-    pub(crate) fn preflight_ordinary_candidate_in_view(
+    /// Recheck the leader's selected Ordinary subset against one committed
+    /// parent. Fee holds are local to this proposal: other queued transactions
+    /// have no ordering authority over it, but two selected inputs cannot both
+    /// spend the same parent-state fee capacity. Nothing is removed from Queue.
+    pub(crate) fn preflight_ordinary_candidate_batch_in_view<'candidate>(
         &self,
-        tx: &AcceptedTransaction<'static>,
-        routing_plan: &RoutingPlan,
+        candidates: impl IntoIterator<
+            Item = (
+                usize,
+                &'candidate AcceptedTransaction<'static>,
+                &'candidate RoutingPlan,
+            ),
+        >,
         state_view: &StateView<'_>,
         ledger_time_ms: u64,
-    ) -> Result<(), Error> {
-        if !Self::ordinary_single_route_is_reassignable(tx.entrypoint(), routing_plan) {
-            return Err(Error::UnresolvedRoute {
-                reason: "candidate admission preflight requires a single-route Ordinary input"
-                    .to_owned(),
-            });
+    ) -> BTreeSet<usize> {
+        let next_block_height = state_view_height_for_routing(state_view).checked_add(1);
+        let mut selected_fees = FeeAdmissionReservationStore::default();
+        let mut unavailable = BTreeSet::new();
+        for (index, tx, routing_plan) in candidates {
+            if !Self::ordinary_single_route_is_reassignable(tx.entrypoint(), routing_plan) {
+                continue;
+            }
+            let outcome = next_block_height
+                .ok_or_else(|| Error::UnresolvedRoute {
+                    reason: "candidate admission height exceeds the supported range".to_owned(),
+                })
+                .and_then(|height| {
+                    let mut state_access = EagerAdmissionStateAccess::new(
+                        state_view.world(),
+                        &state_view.nexus,
+                        &state_view.pipeline,
+                        height,
+                        ledger_time_ms,
+                    );
+                    self.prepare_checked_for_enqueue(
+                        CheckedTransaction::new_unchecked(tx.clone()),
+                        routing_plan.clone(),
+                        &mut state_access,
+                        None,
+                        QueueAdmissionPreparationMode::AtomicJournalReplay,
+                        #[cfg(feature = "telemetry")]
+                        state_view.telemetry,
+                    )
+                    .map_err(|failure| failure.err)
+                })
+                .and_then(|prepared| match prepared.fee_reservation {
+                    Some(reservation) => {
+                        selected_fees.reserve(tx.hash_as_entrypoint(), reservation)
+                    }
+                    None => Ok(()),
+                });
+            if let Err(error) = outcome {
+                iroha_logger::debug!(
+                    tx = %tx.hash_as_entrypoint(),
+                    %error,
+                    "deferring Ordinary input that cannot join the selected candidate batch"
+                );
+                unavailable.insert(index);
+            }
         }
-        let next_block_height = state_view_height_for_routing(state_view)
-            .checked_add(1)
-            .ok_or_else(|| Error::UnresolvedRoute {
-                reason: "candidate admission height exceeds the supported range".to_owned(),
-            })?;
-        let mut state_access = EagerAdmissionStateAccess::new(
-            state_view.world(),
-            &state_view.nexus,
-            &state_view.pipeline,
-            next_block_height,
-            ledger_time_ms,
-        );
-        self.prepare_checked_for_enqueue(
-            CheckedTransaction::new_unchecked(tx.clone()),
-            routing_plan.clone(),
-            &mut state_access,
-            None,
-            QueueAdmissionPreparationMode::AtomicJournalReplay,
-            #[cfg(feature = "telemetry")]
-            state_view.telemetry,
-        )
-        .map(|_| ())
-        .map_err(|failure| failure.err)
+        unavailable
     }
     fn prepare_checked_for_enqueue<C: QueueAdmissionStateAccess>(
         &self,
@@ -32050,7 +31949,7 @@ pub mod tests {
         assert!(!queue.accepted_work_validation_faulted());
     }
     #[test]
-    fn bounded_pending_snapshot_defers_durability_transition_without_overtaking_fifo() {
+    fn bounded_pending_snapshot_skips_transitioning_hash_without_hiding_later_work() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world_with_test_domains(), kura, query_handle);
@@ -32071,16 +31970,17 @@ pub mod tests {
             .expect("start exact durability transition for the FIFO head");
         drop(queue_guard);
 
-        let (blocked, blocked_lease) = queue
+        let (sampled, sampled_lease) = queue
             .bounded_pending_snapshot(&state.view(), nonzero!(2_usize))
             .expect("queue selection remains healthy while cleanup is durable");
+        assert_eq!(sampled.len(), 1);
+        assert_eq!(sampled[0].hash_as_entrypoint(), second_hash);
         assert!(
-            blocked.is_empty(),
-            "a global snapshot must not publish the transitioning head or overtake it"
-        );
-        assert!(
-            queue.global_selection_owners.lock().is_empty(),
-            "the durability boundary must remain free of newly published global owners"
+            !queue
+                .global_selection_owners
+                .lock()
+                .contains_key(&first_hash),
+            "the transitioning hash cannot acquire a selection owner"
         );
         let queue_guard = queue.push_remove_lock.lock();
         assert_eq!(
@@ -32089,7 +31989,7 @@ pub mod tests {
             "deferral must preserve exact FIFO order"
         );
         drop(queue_guard);
-        drop(blocked_lease);
+        drop(sampled_lease);
         drop(transition);
 
         let (selected, _lease) = queue
@@ -32102,6 +32002,63 @@ pub mod tests {
                 .collect::<Vec<_>>(),
             vec![first_hash, second_hash],
         );
+    }
+    #[test]
+    fn bounded_pending_snapshot_ignores_unselected_queue_plan_registry_conflict() {
+        let fixture = globally_bound_guard_fixture();
+        let queue_plan_hash = fixture.transaction.hash_as_entrypoint();
+        let ordinary_hash = fixture.follower_transaction.hash_as_entrypoint();
+        fixture
+            .queue
+            .push(fixture.follower_transaction.clone(), fixture.state.view())
+            .expect("admit independent Ordinary work after the QueuePlan claim");
+        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+        fixture
+            .state
+            .replace_queue_plan_registry_owner_for_test(
+                &fixture.binding,
+                Hash::new(b"conflicting QueuePlan owner"),
+            )
+            .expect("make the unselected QueuePlan registry owner inconsistent");
+        assert!(
+            fixture
+                .state
+                .queue_plan_pending_binding_for_entrypoint(
+                    fixture.transaction.hash_as_entrypoint(),
+                )
+                .is_err()
+        );
+        fixture.queue.fifo_order_by_hash.remove(&queue_plan_hash);
+
+        let first_parent = fixture.state.view().latest_block_hash();
+        let (skipped, _lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
+            .expect("the first bounded window skips its unselected QueuePlan copy");
+        assert!(skipped.is_empty());
+        seed_committed_height_for_queue_test(&fixture.state, 1);
+        assert_ne!(fixture.state.view().latest_block_hash(), first_parent);
+        let (sampled, _lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
+            .expect("unselected QueuePlan registry state cannot stop Ordinary sampling");
+        assert_eq!(
+            sampled
+                .iter()
+                .map(|transaction| transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>(),
+            vec![ordinary_hash],
+        );
+        assert!(fixture.queue.contains_entrypoint_hash(queue_plan_hash));
+        assert!(
+            !fixture
+                .queue
+                .global_selection_owners
+                .lock()
+                .contains_key(&queue_plan_hash),
+            "the autonomous owner retains the QueuePlan copy without a global selection lease"
+        );
+        assert!(!fixture.queue.accepted_work_validation_faulted());
     }
     #[test]
     fn nexus_revalidation_skips_owner_removed_after_hash_snapshot_without_latching_fault() {

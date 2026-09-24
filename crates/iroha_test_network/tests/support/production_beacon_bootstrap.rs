@@ -303,8 +303,10 @@ fn exact_meshed_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
     expected: u64,
 ) -> Result<bool> {
-    Ok(exact_height_reached(statuses, expected)?
-        && statuses.iter().all(|status| status.peers == 3))
+    Ok(
+        exact_height_reached(statuses, expected)?
+            && statuses.iter().all(|status| status.peers == 3),
+    )
 }
 
 async fn wait_for_exact_meshed_height(

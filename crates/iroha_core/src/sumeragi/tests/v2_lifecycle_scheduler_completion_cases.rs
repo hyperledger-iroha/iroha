@@ -1874,6 +1874,56 @@ mod recovered_sign_capacity_tests {
     }
 
     #[test]
+    fn recovered_broadcast_retransmit_stutters_while_another_lease_runs() {
+        let (
+            mut owner,
+            services,
+            _planner_io,
+            _directory,
+            broadcast_ordinal,
+            paired_ordinal,
+            unrelated_ordinal,
+        ) = recovered_broadcast_scheduler_fixture();
+        assert_eq!(
+            owner
+                .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&services, 0)
+                .expect("the recovered owner performs its exact refanout"),
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned {
+                ordinal: broadcast_ordinal,
+            }
+        );
+        let retransmit = owner
+            .recovered_broadcast_runtime_retransmit_for_test(broadcast_ordinal, 13, 0xA3)
+            .expect("seal the exact signed retransmit before claiming unrelated work");
+        let ready = [paired_ordinal, unrelated_ordinal].map(|ordinal| {
+            let record = &owner.coordinator.records[&ordinal];
+            (
+                ordinal,
+                super::super::SchedulerReadyInputs::new(record, None, [0; 6]),
+            )
+        });
+        let inputs = super::super::SchedulerInputs::new([], ready)
+            .expect("the two remaining Ready Sign rows form an exact census");
+        assert!(matches!(
+            owner.coordinator.plan_turn(inputs),
+            super::super::TurnPlan::Execute(_)
+        ));
+        let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal);
+        assert!(before.active_lease.is_some());
+        assert!(matches!(
+            owner.settle_lifecycle_output_admission::<()>(retransmit, |_, _| {
+                panic!("another lease cannot transfer the recovered output's service authority")
+            }),
+            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+        ));
+        assert_eq!(
+            owner.recovered_broadcast_scheduler_state_for_test(broadcast_ordinal),
+            before,
+            "the exact duplicate neither reclaims the active lease nor changes the durable owner"
+        );
+    }
+
+    #[test]
     fn recovered_broadcast_refanout_treats_adjacent_unlinked_sign_independently() {
         let (
             mut owner,

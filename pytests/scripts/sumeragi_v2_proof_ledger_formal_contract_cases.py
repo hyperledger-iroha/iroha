@@ -254,6 +254,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/tests/16_resource_file_admission_tests.rs'),
         Path('kura/tests/17_read_only_evidence_tests.rs'),
         Path('kura/tests/18_snapshot_hash_streaming.rs'),
+        Path('kura/tests/19_transaction_history_budget.rs'),
     ),
     Path('crates/iroha_core/src/kura/autonomous_application_evidence.rs'): (Path('passive_diagnostic_reads.rs'),),
     Path('crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs'): (Path('10c_native_amx_latest_index_support_and_bounds.rs'),),

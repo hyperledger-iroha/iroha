@@ -513,8 +513,13 @@ fn run_pending_active_height(
         activated.with_runner_runtime(
             &mut active_runner,
             |executor, _services| -> Result<_, V2RunnerError> {
-                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())
-                    .map_err(V2RunnerError::LaneWork)
+                drain_lane_relay_ingress(
+                    lane_relay_rx,
+                    queue_plan,
+                    executor.current_tag().view(),
+                    |sender, vote| native.accept_lane_drain_vote(sender, vote),
+                )
+                .map_err(V2RunnerError::LaneWork)
             },
         )?;
         let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
@@ -574,7 +579,12 @@ fn run_pending_active_height(
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
-                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())?;
+                drain_lane_relay_ingress(
+                    lane_relay_rx,
+                    queue_plan,
+                    executor.current_tag().view(),
+                    |sender, vote| native.accept_lane_drain_vote(sender, vote),
+                )?;
                 dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)
                     .map(|_| ())?;
                 let _ = services
@@ -664,6 +674,7 @@ fn run_pending_active_height(
                         queue_plan,
                         executor.current_tag().view(),
                         control_queue_capacity,
+                        |sender, vote| native.accept_lane_drain_vote(sender, vote),
                     )?;
                     dispatch_queue_plan_admission_effects(
                         queue_plan,

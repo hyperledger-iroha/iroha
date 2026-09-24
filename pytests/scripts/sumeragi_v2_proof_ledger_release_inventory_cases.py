@@ -697,7 +697,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
                 "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::complete_tip_corrupt_payload_rejects_before_live_apply_ledger_repair",
                 "sumeragi::v2::tests::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
                 "state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired",
-                "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+                "queue::tests::replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay",
             )
         ),
         *(
@@ -1928,10 +1928,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 881
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
+        "123fafed34cddd1f488af19ceccf1fb4e80c3cfba2f59e889e02c565a3b01892"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "172cdeba0914a253cb22c9158b5c09fb08469ca74c55617655d5261b13bae5b7"
+        "1a4bcc10366ed45a25b0b19d3f6a5de720e28d1f364dfd794769519f37592342"
     )
     assert module._production_liveness_release_inventory_guard_errors(ROOT_DIR) == []
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
@@ -1943,7 +1943,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 531
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 532
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "a2240e515a7a344da4bfcb6fddc2e1b1d0e5bb3430906efbf1671716a72ee13f"
+        "d0ba71cb8828597559263131a79c57a050ae2b2e2acf4b3f4d3059ce72e3aa5d"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
