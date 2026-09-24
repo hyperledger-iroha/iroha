@@ -354,6 +354,9 @@ account migration and entity deletion preserve these obligations.
   `Validator` key. Fresh global candidates outside the frozen topology are
   refused until prepared epoch-key transitions can safely activate them. Non-zero participant lanes
   require a live, unbounded `Committee` key without adding that peer to global quorum.
+  A global validator proposed for an autoscaled participant lane needs both
+  role records: its `Validator` key does not satisfy the lane's `Committee`
+  authority check. Provision the Committee record before scale-out.
   Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release

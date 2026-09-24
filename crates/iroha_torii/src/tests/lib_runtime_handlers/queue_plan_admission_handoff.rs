@@ -34,7 +34,8 @@ impl QueuePlanHandoffFixture {
         owner.set_admission_ready(false);
         let app_mut = Arc::get_mut(&mut app).unwrap();
         app_mut.sumeragi = Some(owner.handle());
-        app_mut.torii_proxy_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        app_mut.torii_proxy_receiver_memory_inflight =
+            Arc::new(tokio::sync::Semaphore::new(1));
         let directory = tempfile::tempdir().unwrap();
         let journal = directory.path().join("admission.norito");
         app.queue
@@ -69,13 +70,13 @@ async fn incoming_queue_plan_handoff_waits_without_claim_then_attests_exact_requ
             &fixture.app,
             fixture.request.clone(),
             None,
-            Some(super::acquire_torii_proxy_memory(&fixture.app).unwrap()),
+            Some(super::try_acquire_torii_proxy_receiver_memory(&fixture.app).unwrap()),
         ),
     );
     assert!(futures_util::poll!(&mut request).is_pending());
     fixture.assert_unclaimed();
     assert_eq!(
-        fixture.app.torii_proxy_memory_inflight.available_permits(),
+        fixture.app.torii_proxy_receiver_memory_inflight.available_permits(),
         0
     );
     fixture.owner.set_admission_ready(true);
@@ -155,13 +156,13 @@ async fn incoming_queue_plan_handoff_expiry_never_creates_journal_claim() {
             &fixture.app,
             fixture.request.clone(),
             None,
-            Some(super::acquire_torii_proxy_memory(&fixture.app).unwrap()),
+            Some(super::try_acquire_torii_proxy_receiver_memory(&fixture.app).unwrap()),
         ),
     );
     assert!(futures_util::poll!(&mut request).is_pending());
     fixture.assert_unclaimed();
     assert_eq!(
-        fixture.app.torii_proxy_memory_inflight.available_permits(),
+        fixture.app.torii_proxy_receiver_memory_inflight.available_permits(),
         0
     );
     let response = request.await;
@@ -169,7 +170,7 @@ async fn incoming_queue_plan_handoff_expiry_never_creates_journal_claim() {
     drop(response);
     fixture.assert_unclaimed();
     assert_eq!(
-        fixture.app.torii_proxy_memory_inflight.available_permits(),
+        fixture.app.torii_proxy_receiver_memory_inflight.available_permits(),
         1
     );
 }
@@ -430,12 +431,12 @@ async fn incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty
             &fixture.app,
             retry.clone(),
             None,
-            Some(super::acquire_torii_proxy_memory(&fixture.app).unwrap()),
+            Some(super::try_acquire_torii_proxy_receiver_memory(&fixture.app).unwrap()),
         )
         .await;
         assert_queue_plan_handoff_uncertainty(&response, &retry);
         assert_eq!(
-            fixture.app.torii_proxy_memory_inflight.available_permits(),
+            fixture.app.torii_proxy_receiver_memory_inflight.available_permits(),
             1
         );
         assert_eq!(fixture.app.queue.active_len(), 1);

@@ -317,6 +317,12 @@ pub enum RoutingResolveError {
     /// provided routing plan does not match the current Nexus routing policy
     #[error("provided routing plan does not match the current Nexus routing policy")]
     StaleRoutingPlan,
+    /// An authenticated Ordinary input has no currently executable single route.
+    #[error("Ordinary input has no current executable single route: {reason}")]
+    OrdinaryRouteUnavailable {
+        /// Current committed-policy routing refusal.
+        reason: String,
+    },
 }
 impl RoutingResolveError {
     /// Stable telemetry label for deterministic routing failures.
@@ -344,6 +350,7 @@ impl RoutingResolveError {
             Self::FxCorridorPolicyNotFound { .. } => "fx_corridor_policy_not_found",
             Self::MultisigProposalCycle { .. } => "multisig_proposal_cycle",
             Self::StaleRoutingPlan => "stale_routing_plan",
+            Self::OrdinaryRouteUnavailable { .. } => "ordinary_route_unavailable",
         }
     }
 }

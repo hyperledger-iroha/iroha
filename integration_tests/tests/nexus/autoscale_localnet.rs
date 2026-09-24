@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::TxConfirmationStatus,
+    client::{AccountTransactionDraft, FeeQuoteRequest, TxConfirmationStatus},
     crypto::Hash,
     data_model::{
         Level, NetworkId,
@@ -21,7 +21,7 @@ use iroha::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
-        isi::Log,
+        isi::{InstructionBox, Log},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         prelude::{HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
         query::{
@@ -45,7 +45,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Barrier, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -132,6 +132,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_genesis_committee_keys_for_global_peers()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "autoscale", "enabled"], true)
@@ -162,6 +163,7 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_genesis_committee_keys_for_global_peers()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "lane_count"], 3_i64)
@@ -3368,6 +3370,58 @@ fn autoscale_soak_force_fail_cycle() -> Option<usize> {
         .and_then(|raw| raw.parse::<usize>().ok())
         .filter(|value| *value > 0)
 }
+fn submit_load_without_wait(
+    client: &Client,
+    load_sequence: u64,
+) -> Result<HashOf<SignedTransaction>> {
+    let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+    let mut payload = client
+        .account_client()
+        .prepare_transaction(AccountTransactionDraft::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("autoscale-load-{load_sequence}"),
+            ))],
+            fee_payment,
+            Metadata::default(),
+        ))?;
+    ensure!(
+        payload.admission_intent()
+            == iroha::data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        "single-route load must use direct ordinary admission"
+    );
+    let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "autoscale load fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let signed = client.account_client().sign_transaction(payload)?;
+    client.submit_transaction(&signed)
+}
+
+fn submit_queue_plan_log_and_wait(
+    client: &Client,
+    message: String,
+) -> Result<HashOf<SignedTransaction>> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(
+        AccountTransactionDraft::new(
+            vec![InstructionBox::from(Log::new(Level::INFO, message))],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+        .with_admission_intent(
+            iroha::data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        ),
+    )?;
+    let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    payload.fee_payment = quote.intent;
+    let signed = account.sign_transaction(payload)?;
+    client.submit_transaction_and_wait(&signed)
+}
 fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSubmissionReport> {
     ensure!(
         !clients.is_empty(),
@@ -3382,15 +3436,38 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSu
     };
     let mut samples_per_client = vec![0_usize; clients.len()];
     let mut first_error = None::<String>;
-    for tx in 0..tx_count {
-        let load_sequence = LOAD_TX_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let client_index =
-            usize::try_from(load_sequence % usize_to_u64(clients.len())).unwrap_or(0);
-        let client = &clients[client_index];
-        match client.submit(
-            Log::new(Level::INFO, format!("autoscale-load-{load_sequence}")),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
+    // Each peer has one bounded origin collector. Submit to those collectors
+    // concurrently, but return on admission so finality does not serialize
+    // the producer and hide the asynchronous queue from the autoscaler.
+    let first_sequence = LOAD_TX_SEQUENCE.fetch_add(usize_to_u64(tx_count), Ordering::Relaxed);
+    let worker_count = tx_count.min(clients.len());
+    let mut outcomes = thread::scope(|scope| -> Result<Vec<_>> {
+        let mut workers = Vec::with_capacity(worker_count);
+        for client_index in 0..worker_count {
+            workers.push(scope.spawn(move || {
+                let mut outcomes = Vec::new();
+                for tx in (client_index..tx_count).step_by(clients.len()) {
+                    let load_sequence = first_sequence.wrapping_add(usize_to_u64(tx));
+                    let result = submit_load_without_wait(&clients[client_index], load_sequence)
+                        .map_err(|error| error.to_string());
+                    outcomes.push((tx, client_index, result));
+                }
+                outcomes
+            }));
+        }
+        let mut outcomes = Vec::with_capacity(tx_count);
+        for worker in workers {
+            outcomes.extend(
+                worker
+                    .join()
+                    .map_err(|_| eyre!("autoscale load submission worker panicked"))?,
+            );
+        }
+        Ok(outcomes)
+    })?;
+    outcomes.sort_unstable_by_key(|(tx, _, _)| *tx);
+    for (tx, client_index, outcome) in outcomes {
+        match outcome {
             Ok(hash) => {
                 report.submitted = report.submitted.saturating_add(1);
                 report.per_client_submitted[client_index] =
@@ -5098,6 +5175,163 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
     .map_err(|err| eyre!("merge QC aggregate signature is invalid: {err:?}"))?;
     Ok(())
 }
+#[test]
+fn four_peer_async_ordinary_queues_commit_leader_snapshot() -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(
+        stringify!(four_peer_async_ordinary_queues_commit_leader_snapshot),
+        || {
+            let context = stringify!(four_peer_async_ordinary_queues_commit_leader_snapshot);
+            let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+                .lock()
+                .expect("autoscale localnet test mutex poisoned");
+            let builder = NetworkBuilder::new()
+                .with_peers(TOTAL_PEERS)
+                .with_block_cadence(Duration::from_millis(300))
+                .with_npos_consensus();
+            let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
+            else {
+                return Ok(());
+            };
+            let clients = network
+                .peers()
+                .iter()
+                .map(|peer| peer_client_with_timeout(peer))
+                .collect::<Vec<_>>();
+            wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
+            let baseline = status_snapshot(&network)?;
+            let barrier = Barrier::new(TOTAL_PEERS);
+            let submissions = thread::scope(|scope| {
+                let workers = clients
+                    .iter()
+                    .enumerate()
+                    .map(|(index, client)| {
+                        let barrier = &barrier;
+                        scope.spawn(move || {
+                            barrier.wait();
+                            submit_load_without_wait(client, usize_to_u64(index))
+                                .map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().expect("ordinary submission worker panicked"))
+                    .collect::<Vec<_>>()
+            });
+            let hashes = submissions
+                .into_iter()
+                .enumerate()
+                .map(|(index, result)| {
+                    result.map_err(|error| eyre!("peer {index} rejected ordinary input: {error}"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let started = Instant::now();
+            loop {
+                if let Ok(observed) = status_snapshot(&network)
+                    && observed.iter().zip(&baseline).all(|(current, before)| {
+                        current.txs_approved
+                            >= before.txs_approved.saturating_add(TOTAL_PEERS as u64)
+                    })
+                    && clients.iter().all(|client| {
+                        hashes.iter().all(|hash| {
+                            matches!(
+                                client.client().get_transaction_status(*hash),
+                                Ok(Some(TxConfirmationStatus::Applied))
+                            )
+                        })
+                    })
+                {
+                    break;
+                }
+                ensure!(
+                    started.elapsed() < Duration::from_secs(120),
+                    "leader's signed ordinary sample did not commit on every validator"
+                );
+                thread::sleep(LANE_POLL_INTERVAL);
+            }
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn four_peer_simultaneous_queue_plan_collectors_make_progress() -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(
+        stringify!(four_peer_simultaneous_queue_plan_collectors_make_progress),
+        || {
+            let context = stringify!(four_peer_simultaneous_queue_plan_collectors_make_progress);
+            let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+                .lock()
+                .expect("autoscale localnet test mutex poisoned");
+            let builder = NetworkBuilder::new()
+                .with_peers(TOTAL_PEERS)
+                .with_block_cadence(Duration::from_millis(300))
+                .with_npos_consensus();
+            let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
+            else {
+                return Ok(());
+            };
+            ensure!(network.peers().len() == TOTAL_PEERS);
+            let clients = network
+                .peers()
+                .iter()
+                .map(|peer| {
+                    integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                        client.torii_request_timeout = Duration::from_secs(75);
+                    })
+                })
+                .collect::<Vec<_>>();
+            wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
+            let baseline = status_snapshot(&network)?;
+            let barrier = Barrier::new(TOTAL_PEERS);
+            let submissions = thread::scope(|scope| {
+                let workers = clients
+                    .iter()
+                    .enumerate()
+                    .map(|(index, client)| {
+                        let barrier = &barrier;
+                        scope.spawn(move || {
+                            barrier.wait();
+                            submit_queue_plan_log_and_wait(
+                                client,
+                                format!("simultaneous-admission-{index}"),
+                            )
+                            .map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().expect("submission worker panicked"))
+                    .collect::<Vec<_>>()
+            });
+            for (index, result) in submissions.into_iter().enumerate() {
+                ensure!(
+                    result.is_ok(),
+                    "peer {index} could not collect admission: {result:?}"
+                );
+            }
+            let started = Instant::now();
+            loop {
+                if let Ok(observed) = status_snapshot(&network)
+                    && observed.iter().zip(&baseline).all(|(current, before)| {
+                        current.txs_approved
+                            >= before.txs_approved.saturating_add(TOTAL_PEERS as u64)
+                    })
+                {
+                    break;
+                }
+                ensure!(
+                    started.elapsed() < Duration::from_secs(120),
+                    "four simultaneous complete admissions did not become applied on every validator"
+                );
+                thread::sleep(LANE_POLL_INTERVAL);
+            }
+            Ok(())
+        },
+    )
+}
+
 #[test]
 fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart() -> Result<()> {
     run_autoscale_localnet_test_on_large_stack(

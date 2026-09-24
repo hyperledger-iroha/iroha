@@ -319,8 +319,9 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
       'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
       'let queue_plan_synced =',
       'TransactionAdmissionIntent::QueuePlanSynced',
-      'Ok(None) => {',
-      'queue_plan_barrier = true;',
+      'Ok(None) => {\n                            '
+      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
+      '                            continue;\n                        }',
       'if queue_plan_barrier',
       'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
@@ -420,9 +421,9 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
      ('let mut queue_plan_barrier = false;',
       'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
       'let queue_plan_synced =',
-      'Ok(None) => {',
-      'queue_plan_barrier = true;',
-      'continue;',
+      'Ok(None) => {\n                            '
+      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
+      '                            continue;\n                        }',
       'if queue_plan_barrier',
       'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
@@ -515,10 +516,11 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
       'QueuePlanSynced work requires its globally admitted autonomous reservation')),
     (
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
-        "queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding",
+        "only_certified_queue_plan_intent_fences_later_ordinary_input",
         (
             "TransactionAdmissionIntent::QueuePlanSynced",
             "vec![queue_plan.clone(), follower.clone()]",
+            "assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint())",
             "install_queue_plan_pending_binding_for_test(&binding)",
             "assert!(bound.is_empty())",
             "assert_eq!(bound_report.work_deferred, 1)",
@@ -2022,8 +2024,14 @@ QUEUE_PLAN_RETAINED_ROUTE_BINDINGS = (('crates/iroha_core/src/state.rs',
    '                && claim.routing_plan == plan;\n'
    '            if !exact_claim {\n'
    '                return Err(RoutingResolveError::StaleRoutingPlan);\n'
-   '            }\n'
-   '            Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?',
+   '            }',
+   'if ordinary_single && claim.global_admission_identity.is_none() {',
+   'Self::durable_plan_claim_original_context_authenticates_in_view(',
+   'Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?',
+   'if ordinary_single && authority == QueuePlanPendingRouteAuthority::Active {',
+   '.try_route_plan_with_view(tx.as_accepted(), state_view)',
+   'resolve_routing_plan_for_queue_admission(plan, nexus, committed_height)',
+   'return Ok((fresh, authority));',
    'Ok((plan, authority))')),
  ('crates/iroha_core/src/queue.rs',
   'method',
@@ -2431,7 +2439,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
   'execute_torii_transaction_via_proxy',
   ("accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>",
    'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
-   '        return threshold_key_lifecycle_ingress::submit(\n'
+   '        return ordinary_transaction_ingress::submit(\n'
    '            app.clone(),\n'
    '            accepted_transaction,\n'
    '            routing_plan,\n'
@@ -2528,7 +2536,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));\n'
    '            }\n'
    '            // Keep route/policy preflight before the first durable write. Ordinary\n'
-   '            // inputs have exactly the same authenticated lifecycle exception.\n'
+   '            // inputs must be single-route; lifecycle controls need their own QC.\n'
    '            prepared\n'
    '                .into_iter()\n'
    '                .map(|(hash, prepared)| {',
@@ -2539,7 +2547,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'if prepared.transaction.entrypoint().admission_intent()\n'
    '                                != TransactionAdmissionIntent::QueuePlanSynced\n'
    '                            {\n'
-   '                                threshold_key_lifecycle_ingress::authenticate(\n'
+   '                                ordinary_transaction_ingress::authenticate(\n'
    '                                    &worker_app,\n'
    '                                    prepared.transaction.entrypoint(),\n'
    '                                    &prepared.routing_plan,\n'
@@ -2830,7 +2838,7 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "if response.status() == StatusCode::ACCEPTED",
             "reservation.commit();", "Ok(response)")
     ordered("execute_torii_transaction_via_proxy",
-            "threshold_key_lifecycle_ingress::submit(",
+            "ordinary_transaction_ingress::submit(",
             "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())",
             "let already_durably_admitted = durable_retry_claim.is_some();",
             "AuthenticatedQueuePlanRetry::from_accepted(",
@@ -2850,7 +2858,7 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "AuthenticatedQueuePlanRetry::from_signed(", "canonical_queue_plan_submission_response(",
             "accept_decoded_signed_transaction_for_ingress_with_precheck(",
             "prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));",
-            "prepare_fresh_transaction_ingress(", "threshold_key_lifecycle_ingress::authenticate(",
+            "prepare_fresh_transaction_ingress(", "ordinary_transaction_ingress::authenticate(",
             ".collect::<Result<Vec<_>, Error>>()", "drop(permit);",
             "for (hash, entry) in prepared", "submit_prepared_transaction_ingress(",
             "outcomes.push(TransactionBatchEntryOutcome", "let accepted = outcomes.iter()",
