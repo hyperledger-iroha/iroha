@@ -113,108 +113,55 @@ fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
     assert!(
         ordinary_consumer.contains("retired certified body response outside lifecycle selection")
     );
-    assert!(
-        ordinary_consumer
-            .contains("a selected fetch response must instead complete through lifecycle")
-    );
+    assert!(ordinary_consumer.contains("native.admits_source_response_hash(response.request_hash)"));
+    assert!(ordinary_consumer.contains("native.accept_source_response(response, &sender)?"));
     assert!(!ordinary_consumer.contains(concat!("accept_certified_body_", "response(")));
     assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
     assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
 }
 
 #[test]
-fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before_yield() {
+fn blocked_ordinary_lifecycle_owner_services_native_and_lane_relay_before_yield() {
     let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
-    // Inspect the ordinary discovery/runtime branch, not the earlier sealed
-    // Validate-sidecar pacemaker branch that also reconciles a directive.
-    let ordinary_discovery = source_region(
+    let pre_barrier = source_region(
         run_inner,
-        "let discovery_was_outstanding =",
-        "producer_claim = activated.producer_claim_projection()?;",
-    );
-    let reconciled_turn = source_region(
-        ordinary_discovery,
-        "let directive = reconcile_executor_locked_body(executor, services)?;",
-        "services\n                        .replay_buffered_chunks(executor)",
+        "fn run_lifecycle_active_height(",
+        "let lane_only_completion_barrier = producer_claim.blocks_runtime();",
     );
     assert_source_tokens_in_order(
-        reconciled_turn,
+        pre_barrier,
         &[
-            "local_proposal\n                        .state\n                        .reconcile(LocalProposalOwner::from(directive))",
-            "lane_work.retain_merge_sidecars_for_global_view(",
-            "executor.acknowledge_runner_decision_cleanup(",
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-            "drain_lane_relay_ingress(",
-            "drive_merge_sidecar_recovery(executor, services, &mut lane_work)",
-            "service_historical_recovery_tick(&mut lane_work, services)",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()",
-            "dispatch_lane_work_effects(",
+            "native.take_service_publication(services)",
+            "native.service_sources(services, now)",
+            "native\n            .poll(native_global, native_network, now, receiver)",
+            "dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)",
         ],
     );
+    let barrier = source_region(
+        run_inner,
+        "} else if lane_only_completion_barrier {",
+        "} else {\n            activated.with_runner_runtime(",
+    );
+    assert_source_tokens_in_order(
+        barrier,
+        &[
+            "producer_claim.native_source_pacemaker_escape_permit()",
+            "producer_claim.decided_lane_recovery_permit()",
+            "settle_apply_barrier_runner_decision_handoff(",
+            "drain_lane_relay_ingress(",
+            "dispatch_queue_plan_admission_effects(",
+        ],
+    );
+    assert!(barrier.contains("drain_decided_lane_recovery_ingress("));
     for forbidden in [
         "drive_ingress_turn(",
-        "commit_certified_serve(",
+        "advance_executor(",
         "mark_leader_wire_volatile",
         "bind_leader_wire_runtime_ownership",
     ] {
         assert!(
-            !reconciled_turn.contains(forbidden),
-            "blocked ordinary lane-local turn regained global authority: {forbidden}"
-        );
-    }
-
-    let runtime_barrier = source_region(
-        run_inner,
-        "if lane_only_completion_barrier {",
-        "} else {\n            activated.with_runner_runtime(",
-    );
-    assert_source_tokens_in_order(
-        runtime_barrier,
-        &[
-            "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
-            "drain_blocked_ordinary_lane_local_ingress(",
-            "drain_lane_relay_ingress(",
-            "drive_merge_sidecar_recovery(executor, services, &mut lane_work)",
-            "service_historical_recovery_tick(&mut lane_work, services)",
-            "lane_work.schedule_autonomous_new_view_timeouts(",
-            "lane_work.schedule_retransmission()",
-            "dispatch_lane_work_effects(",
-        ],
-    );
-
-    let height_driver = include_str!("v2_runner/lifecycle_height_driver.rs");
-    let permit = source_region(
-        height_driver,
-        ") -> Option<LifecycleBlockedOrdinaryLaneLocalIngressPermitV1> {",
-        "/// Closed result of one bounded Completion/Runtime/Ingress batch.",
-    );
-    assert_source_tokens_in_order(
-        permit,
-        &[
-            "self.blocks_ingress()",
-            "!self.permits_decided_lane_recovery_ingress()",
-            "LifecycleBlockedOrdinaryLaneLocalIngressPermitV1",
-        ],
-    );
-
-    let recovery = include_str!("v2_runner/decided_lane_recovery.rs");
-    let selector = source_region(
-        recovery,
-        "fn select_blocked_ordinary_lane_local_ingress(",
-        "fn drain_blocked_ordinary_lane_local_ingress(",
-    );
-    assert!(selector.contains(".try_recv_lifecycle_lane_local_checked(permit)"));
-    for forbidden in [
-        "CertifiedBodyRequest",
-        "commit_certified_serve",
-        "KuraReplicaAdvert",
-        "LeaderWireRetire",
-    ] {
-        assert!(
-            !selector.contains(forbidden),
-            "lane-local selector gained a global ingress class: {forbidden}"
+            !barrier.contains(forbidden),
+            "blocked ordinary barrier gained global authority: {forbidden}"
         );
     }
 
@@ -228,7 +175,7 @@ fn blocked_ordinary_lifecycle_owner_services_only_lane_local_fair_ingress_before
         &[
             "producer_claim = activated.producer_claim_projection()?;",
             "if drain_disposition.requires_yield() || producer_claim.requires_yield()",
-            "wake_rx.recv_timeout(IDLE_POLL)",
+            "wake_rx.recv_timeout(native_wait)",
             "continue;",
         ],
     );
@@ -270,7 +217,7 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
         &[
             "if let AdvanceExecutorSliceOutcomeV1::Yielded(_) = executor_slice",
             "return Ok::<_, V2RunnerError>((false, executor_slice, false));",
-            "retry_exact_output_and_apply_sidecar_admissions(",
+            "services.retry_pending_exact_output()",
             "let directive = reconcile_executor_locked_body(executor, services)?",
             "if executor_slice",
             "== AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary",
@@ -357,7 +304,7 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
     let apply_recovery = source_region(
         barrier,
         "if producer_claim.permits_decided_lane_recovery_ingress() {",
-        "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
+        "drain_lane_relay_ingress(",
     );
     assert_source_tokens_in_order(
         apply_recovery,
@@ -385,7 +332,6 @@ fn apply_barriers_reconcile_current_serve_and_unadmitted_fetch_capacity_before_d
             "executor.reconcile_pending_runner_decision_cleanup(services)?",
             "let directive = executor.local_proposal_directive()?",
             "local_proposal\n        .state\n        .reconcile(LocalProposalOwner::from(directive))",
-            "lane_work.retain_merge_sidecars_for_global_view(",
             "executor.acknowledge_runner_decision_cleanup(",
         ],
     );

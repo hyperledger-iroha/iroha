@@ -21814,6 +21814,48 @@ impl World {
                     "Identifier claim {opaque_id} carries an all-zero receipt hash"
                 ));
             }
+            if claim.policy_id.is_phone_retail() {
+                let nullifier = claim.phone_retail_nullifier.ok_or_else(|| {
+                    format!("Phone retail claim {opaque_id} lacks a canonical nullifier")
+                })?;
+                if nullifier == Hash::prehashed([0; Hash::LENGTH]) {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has a zero nullifier"
+                    ));
+                }
+                let policy = self
+                    .identifier_policies
+                    .view()
+                    .get(&claim.policy_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned policy")
+                    })?;
+                if policy.program_id.to_string() != "phone_retail"
+                    || policy.normalization
+                        != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+                    || policy.phone_retail_attestor_public_key.is_none()
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted policy metadata"
+                    ));
+                }
+                let program_id_bytes = norito::encode_canonical(&policy.program_id)
+                    .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
+                let (expected_id, expected_receipt_hash) =
+                    iroha_crypto::identifier_hashes_from_output_hash(&program_id_bytes, &nullifier);
+                if *opaque_id != OpaqueAccountId::from(expected_id)
+                    || claim.receipt_hash != expected_receipt_hash
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} diverges from its canonical nullifier index"
+                    ));
+                }
+            } else if claim.phone_retail_nullifier.is_some() {
+                return Err(format!(
+                    "Non-phone claim {opaque_id} carries a phone nullifier"
+                ));
+            }
             let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
                 return Err(format!(
                     "Identifier claim {opaque_id} is missing from the opaque UAID index"

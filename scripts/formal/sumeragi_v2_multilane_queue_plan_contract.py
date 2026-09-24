@@ -319,8 +319,9 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
       'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
       'let queue_plan_synced =',
       'TransactionAdmissionIntent::QueuePlanSynced',
-      'Ok(None) => {',
-      'queue_plan_barrier = true;',
+      'Ok(None) => {\n                            '
+      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
+      '                            continue;\n                        }',
       'if queue_plan_barrier',
       'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
@@ -420,9 +421,9 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
      ('let mut queue_plan_barrier = false;',
       'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
       'let queue_plan_synced =',
-      'Ok(None) => {',
-      'queue_plan_barrier = true;',
-      'continue;',
+      'Ok(None) => {\n                            '
+      'report.work_deferred = report.work_deferred.saturating_add(1);\n'
+      '                            continue;\n                        }',
       'if queue_plan_barrier',
       'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
@@ -515,10 +516,11 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
       'QueuePlanSynced work requires its globally admitted autonomous reservation')),
     (
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
-        "queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding",
+        "only_certified_queue_plan_intent_fences_later_ordinary_input",
         (
             "TransactionAdmissionIntent::QueuePlanSynced",
             "vec![queue_plan.clone(), follower.clone()]",
+            "assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint())",
             "install_queue_plan_pending_binding_for_test(&binding)",
             "assert!(bound.is_empty())",
             "assert_eq!(bound_report.work_deferred, 1)",
@@ -2022,8 +2024,14 @@ QUEUE_PLAN_RETAINED_ROUTE_BINDINGS = (('crates/iroha_core/src/state.rs',
    '                && claim.routing_plan == plan;\n'
    '            if !exact_claim {\n'
    '                return Err(RoutingResolveError::StaleRoutingPlan);\n'
-   '            }\n'
-   '            Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?',
+   '            }',
+   'if ordinary_single && claim.global_admission_identity.is_none() {',
+   'Self::durable_plan_claim_original_context_authenticates_in_view(',
+   'Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?',
+   'if ordinary_single && authority == QueuePlanPendingRouteAuthority::Active {',
+   '.try_route_plan_with_view(tx.as_accepted(), state_view)',
+   'resolve_routing_plan_for_queue_admission(plan, nexus, committed_height)',
+   'return Ok((fresh, authority));',
    'Ok((plan, authority))')),
  ('crates/iroha_core/src/queue.rs',
   'method',

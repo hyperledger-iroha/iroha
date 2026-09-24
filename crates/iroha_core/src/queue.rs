@@ -6342,6 +6342,7 @@ impl Queue {
             ) {
                 Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,
                 Ok((routing_plan, QueuePlanPendingRouteAuthority::Active)) => routing_plan,
+                Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => continue,
                 Err(error) => {
                     self.mark_accepted_work_validation_fault(
                         hash,
@@ -12209,8 +12210,13 @@ impl Queue {
                 ));
                 continue;
             }
-            let closed_unadmitted_route = if global_registry_match
-                == Some(QueuePlanAdmissionRegistryMatch::Exact)
+            let ordinary_single = recorded_global_admission_identity.is_none()
+                && Self::ordinary_single_route_is_reassignable(
+                    accepted.entrypoint(),
+                    &recorded_routing_plan,
+                );
+            let closed_unadmitted_route = if ordinary_single
+                || global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Exact)
             {
                 false
             } else {
@@ -12264,10 +12270,22 @@ impl Queue {
                 continue;
             }
             if !state_committed {
-                Self::durable_plan_claim_route_authority_in_view(state_view, &claim)
-                    .map_err(|error| invalid(format!(
-                        "queue-plan journal transaction {hash} no longer authenticates its retained route authority; retaining immutable ownership evidence: {error}"
-                    )))?;
+                if ordinary_single {
+                    if !Self::durable_plan_claim_original_context_authenticates_in_view(
+                        state_view,
+                        &recorded_routing_plan,
+                        &recorded_admission_context,
+                    ) {
+                        return Err(invalid(format!(
+                            "Ordinary queue journal transaction {hash} has invalid original admission context"
+                        )));
+                    }
+                } else {
+                    Self::durable_plan_claim_route_authority_in_view(state_view, &claim)
+                        .map_err(|error| invalid(format!(
+                            "queue-plan journal transaction {hash} no longer authenticates its retained route authority; retaining immutable ownership evidence: {error}"
+                        )))?;
+                }
             }
             if self.durable_plan_claims.contains_key(&hash)
                 || self.routing_plans.contains_key(&hash)
@@ -12326,25 +12344,99 @@ impl Queue {
                             .unwrap_or(u64::MAX)
                     }),
                 );
-                self.prepare_checked_for_enqueue(
-                    checked,
-                    recorded_routing_plan,
-                    &mut state_access,
-                    None,
-                    if canonical_pending_handoff {
-                        QueueAdmissionPreparationMode::CanonicalPendingHandoff
+                let current_routing_plan = if ordinary_single {
+                    let current = self
+                        .router
+                        .read()
+                        .try_route_plan_with_view(checked.as_accepted(), state_view)
+                        .and_then(|plan| {
+                            resolve_routing_plan_for_queue_admission(
+                                plan,
+                                state_view.nexus(),
+                                state_view_height_for_routing(state_view),
+                            )
+                        });
+                    if let Ok(fresh @ RoutingPlan::Single(_)) = current {
+                        Some(fresh)
                     } else {
-                        QueueAdmissionPreparationMode::AtomicJournalReplay
-                    },
+                        // The original hint may still support immediate admission checks, but
+                        // never grants execution authority under a changed policy. If neither
+                        // route is active, replay retains the authenticated signed bytes below
+                        // and defers every route-dependent check to candidate selection.
+                        resolve_routing_plan_for_queue_admission(
+                            recorded_routing_plan.clone(),
+                            state_view.nexus(),
+                            state_view_height_for_routing(state_view),
+                        )
+                        .ok()
+                    }
+                } else {
+                    Some(recorded_routing_plan.clone())
+                };
+                let mut admission = if let Some(current_routing_plan) = current_routing_plan {
+                    self.prepare_checked_for_enqueue(
+                        checked,
+                        current_routing_plan,
+                        &mut state_access,
+                        None,
+                        if canonical_pending_handoff {
+                            QueueAdmissionPreparationMode::CanonicalPendingHandoff
+                        } else {
+                            QueueAdmissionPreparationMode::AtomicJournalReplay
+                        },
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle,
+                    )
+                    .map_err(|failure| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
+                            failure.err
+                        ))
+                    })?
+                } else {
+                    debug_assert!(ordinary_single);
+                    // Local Ordinary input owns signed bytes and FIFO position, not a lane.
+                    // Stateless validation and original-context authentication above are enough
+                    // to publish that custody. The next leader turn must recheck all current
+                    // route-dependent admission before selecting it for a proposal.
+                    let kagemusha_operation =
+                        Self::classify_pending_kagemusha_operation(&checked).map_err(|error| {
+                            invalid(format!(
+                                "deferred Ordinary queue journal transaction {hash} has an invalid operation carrier: {error}"
+                            ))
+                        })?;
+                    let proposal_gas_cost =
+                        Self::compute_proposal_gas_cost(checked.as_accepted()).map_err(|error| {
+                            invalid(format!(
+                                "deferred Ordinary queue journal transaction {hash} has an invalid proposal gas bound: {error}"
+                            ))
+                        })?;
                     #[cfg(feature = "telemetry")]
-                    telemetry_handle,
-                )
-                .map_err(|failure| {
-                    invalid(format!(
-                        "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
-                        failure.err
-                    ))
-                })?
+                    let pending_teu = Self::compute_teu_weight(checked.as_accepted());
+                    PreparedQueueAdmission {
+                        encoded_len: Self::compute_tx_encoded_len(checked.as_accepted()),
+                        proposal_gas_cost,
+                        routing_decision: recorded_routing_plan.coordinator_route(),
+                        routing_plan: recorded_routing_plan.clone(),
+                        hash,
+                        kagemusha_operation,
+                        enqueued_at_ms: enqueue_timestamp_ms,
+                        checked,
+                        admission_context: None,
+                        global_admission_identity: None,
+                        expected_journal_record_digest: None,
+                        replayed_journal_record_digest: None,
+                        fee_reservation: None,
+                        #[cfg(feature = "telemetry")]
+                        pending_teu,
+                    }
+                };
+                if ordinary_single {
+                    // Admission checks and fee reservation use the current route. The journal
+                    // index keeps its authenticated original claim for exact crash recovery.
+                    admission.routing_plan = recorded_routing_plan;
+                }
+                admission
             };
             admission.enqueued_at_ms = enqueue_timestamp_ms;
             admission.admission_context = Some(recorded_admission_context);
@@ -12745,6 +12837,15 @@ impl Queue {
             debug_assert_eq!(restored_reservation, replaces_missing_payload);
             let lane_id = routing_decision.lane_id;
             let dataspace_id = routing_decision.dataspace_id;
+            let notification_routing_plan = if claim.global_admission_identity.is_none()
+                && Self::ordinary_single_route_is_reassignable(
+                    checked.as_accepted().entrypoint(),
+                    &routing_plan,
+                ) {
+                RoutingPlan::single(routing_decision)
+            } else {
+                routing_plan.clone()
+            };
             let authority = checked.as_ref().authority_opt().cloned();
             let tx_arc = Arc::new(checked);
             self.fifo_order_by_hash.insert(hash, fifo_order);
@@ -12773,7 +12874,7 @@ impl Queue {
                     dataspace_id,
                     enqueue_timestamp_ms: enqueued_at_ms,
                     journal_record_digest: Some(claim.journal_record_digest),
-                    routing_plan,
+                    routing_plan: notification_routing_plan,
                     admission_context,
                     global_admission_identity,
                     signed_transaction_hash: claim.signed_transaction_hash,
@@ -12791,15 +12892,14 @@ impl Queue {
     }
     /// Replay live pending queue-plan journal records against the current state.
     ///
-    /// A still-active record is requeued with its exact original routing plan and durable claim.
-    /// Ordinary height, validator-roster, and current routing-policy advancement therefore cannot
-    /// mutate acknowledged ownership. If the recorded route was retired or any recorded lane ID
-    /// now denotes a different incarnation, startup fails with the record retained; delayed work
-    /// from an earlier generation is never rebound into a recreated lane.
+    /// A still-active record retains its exact signed transaction and original journal claim.
+    /// Ordinary single-route input regains FIFO custody even if no route is currently available;
+    /// route-dependent admission waits until selection. QueuePlan ownership keeps its exact bound
+    /// route and incarnation.
     ///
     /// Only semantically terminal records (committed or expired) are tombstoned. Any malformed or
-    /// unverifiable routing, context, stateless-validation, admission, or durability result leaves
-    /// the live record intact and aborts startup.
+    /// original context, stateless-validation, exact QueuePlan authority, admission, or durability
+    /// failure leaves the live record intact and aborts startup.
     ///
     /// # Errors
     /// Returns journal replay I/O or frame decode errors.
@@ -13180,8 +13280,9 @@ impl Queue {
         };
         self.reject_unreserved_terminal_plan_claim(&claim)
     }
-    /// Terminalize local durable claims whose exact autoscale route has closed
-    /// without acquiring canonical admission membership.
+    /// Terminalize QueuePlan claims whose exact autoscale route closed without
+    /// canonical admission membership. Signed Ordinary input remains queued and
+    /// takes its effective single route from current committed State.
     ///
     /// The committed close is authenticated by State before Queue mutates its
     /// journal. Selected, reserved and popped claims retain their original
@@ -13223,8 +13324,18 @@ impl Queue {
             .collect::<Vec<_>>();
         let mut claims = Vec::new();
         for claim in observed {
-            if Self::durable_claim_is_unadmitted_after_close_in_view(&state_view, &claim)
-                .map_err(LaneQueueReservationError::InvalidIdentity)?
+            let ordinary_single = self.txs.get(&claim.entrypoint_hash).is_some_and(|tx| {
+                Self::ordinary_single_route_is_reassignable(
+                    tx.as_accepted().entrypoint(),
+                    &claim.routing_plan,
+                )
+            });
+            if Self::durable_claim_is_unadmitted_after_close_in_view(
+                &state_view,
+                &claim,
+                ordinary_single,
+            )
+            .map_err(LaneQueueReservationError::InvalidIdentity)?
             {
                 claims.push(claim);
             }
@@ -13239,7 +13350,11 @@ impl Queue {
     fn durable_claim_is_unadmitted_after_close_in_view(
         state_view: &StateView<'_>,
         claim: &QueuePlanDurableClaimIndexEntry,
+        ordinary_single: bool,
     ) -> Result<bool, String> {
+        if ordinary_single && claim.global_admission_identity.is_none() {
+            return Ok(false);
+        }
         let mut closed = false;
         for bound in &claim.admission_context.route_incarnations {
             closed |= State::has_closed_autoscale_lane_route_in_view(
@@ -15644,7 +15759,12 @@ impl Queue {
         ) -> Result<Option<RoutingPlan>, RoutingResolveError>,
     {
         let mut batch = Vec::with_capacity(n as usize);
-        while let Some(hash) = self.tx_gossip.pop() {
+        let mut remaining_scan = self.tx_gossip.len();
+        while remaining_scan > 0 && batch.len() < n as usize {
+            remaining_scan -= 1;
+            let Some(hash) = self.tx_gossip.pop() else {
+                break;
+            };
             let Some(tx_arc) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 // NOTE: Transaction already in the blockchain
                 continue;
@@ -15661,7 +15781,16 @@ impl Queue {
                                     "failed to restore transitioning queued transaction to gossip backlog"
                                 );
                             }
-                            break;
+                            continue;
+                        }
+                        Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
+                            if let Err(requeue_hash) = self.tx_gossip.push(hash) {
+                                warn!(
+                                    tx = %requeue_hash,
+                                    "failed to restore temporarily unroutable Ordinary input to gossip backlog"
+                                );
+                            }
+                            continue;
                         }
                         Err(err) => {
                             iroha_logger::error!(
@@ -15779,6 +15908,8 @@ impl Queue {
             "durable queue-plan claim index must remain bounded by queue capacity"
         );
     }
+    /// Bind the saved plan to its original predecessor and structural context.
+    /// This does not grant current route authority to an Ordinary input.
     fn durable_plan_claim_original_context_authenticates_in_view(
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
@@ -16029,15 +16160,22 @@ impl Queue {
                 .try_route_plan_with_view(tx.as_accepted(), state_view)
                 .and_then(|plan| {
                     resolve_routing_plan_for_queue_admission(plan, nexus, committed_height)
+                })
+                .map_err(|error| RoutingResolveError::OrdinaryRouteUnavailable {
+                    reason: error.to_string(),
                 })?;
             if !matches!(fresh, RoutingPlan::Single(_)) {
-                return Err(RoutingResolveError::StaleRoutingPlan);
+                return Err(RoutingResolveError::OrdinaryRouteUnavailable {
+                    reason: "current policy requires a certified multi-route input".to_owned(),
+                });
             }
             return Ok((fresh, authority));
         }
         Ok((plan, authority))
     }
-    fn ordinary_single_route_is_reassignable(
+    /// Return whether an entrypoint is local signed Ordinary input whose
+    /// single-route admission hint may be replaced at proposal selection.
+    pub(crate) fn ordinary_single_route_is_reassignable(
         entrypoint: &TransactionEntrypoint,
         plan: &RoutingPlan,
     ) -> bool {
@@ -16142,7 +16280,8 @@ impl Queue {
         }
         (None, None, indexed_removal)
     }
-    /// Return the queue-owned full routing plan for an admitted entrypoint.
+    /// Return the admission-time routing hint for an admitted entrypoint.
+    /// Ordinary input may use a different route under current committed State.
     #[must_use]
     pub fn routing_plan_hint(&self, hash: &HashOf<TransactionEntrypoint>) -> Option<RoutingPlan> {
         self.routing_plans
@@ -16200,7 +16339,9 @@ impl Queue {
                 Ok(None) => return Err(RoutingResolveError::StaleRoutingPlan),
                 Err(error) => Err(error),
             };
-            if let Err(error) = result.as_ref() {
+            if let Err(error) = result.as_ref()
+                && !matches!(error, RoutingResolveError::OrdinaryRouteUnavailable { .. })
+            {
                 self.mark_accepted_work_validation_fault(hash, "queued_route_lookup", error, None);
             }
             if self.transaction_selection_durability_faulted() {
@@ -17607,6 +17748,45 @@ impl Queue {
     }
     /// Run admission checks that do not require mutating queue indexes.
     #[allow(clippy::too_many_lines)]
+    /// Recheck a queued Ordinary input against the exact committed parent used
+    /// for a candidate, without changing its FIFO or durable journal owner.
+    pub(crate) fn preflight_ordinary_candidate_in_view(
+        &self,
+        tx: &AcceptedTransaction<'static>,
+        routing_plan: &RoutingPlan,
+        state_view: &StateView<'_>,
+        ledger_time_ms: u64,
+    ) -> Result<(), Error> {
+        if !Self::ordinary_single_route_is_reassignable(tx.entrypoint(), routing_plan) {
+            return Err(Error::UnresolvedRoute {
+                reason: "candidate admission preflight requires a single-route Ordinary input"
+                    .to_owned(),
+            });
+        }
+        let next_block_height = state_view_height_for_routing(state_view)
+            .checked_add(1)
+            .ok_or_else(|| Error::UnresolvedRoute {
+                reason: "candidate admission height exceeds the supported range".to_owned(),
+            })?;
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            &state_view.pipeline,
+            next_block_height,
+            ledger_time_ms,
+        );
+        self.prepare_checked_for_enqueue(
+            CheckedTransaction::new_unchecked(tx.clone()),
+            routing_plan.clone(),
+            &mut state_access,
+            None,
+            QueueAdmissionPreparationMode::AtomicJournalReplay,
+            #[cfg(feature = "telemetry")]
+            state_view.telemetry,
+        )
+        .map(|_| ())
+        .map_err(|failure| failure.err)
+    }
     fn prepare_checked_for_enqueue<C: QueueAdmissionStateAccess>(
         &self,
         checked: CheckedTransaction<'static>,
@@ -19245,7 +19425,15 @@ impl Queue {
                 .get(&hash)
                 .map(|claim| claim.value().clone())
             {
-                match Self::durable_claim_is_unadmitted_after_close_in_view(state_view, &claim) {
+                let ordinary_single = Self::ordinary_single_route_is_reassignable(
+                    tx_arc.as_accepted().entrypoint(),
+                    &claim.routing_plan,
+                );
+                match Self::durable_claim_is_unadmitted_after_close_in_view(
+                    state_view,
+                    &claim,
+                    ordinary_single,
+                ) {
                     Ok(true) => {
                         match self.reject_unreserved_terminal_plan_claim(&claim) {
                             Ok(true) => {}
@@ -19384,6 +19572,22 @@ impl Queue {
                         self.mark_accepted_work_validation_fault(
                             hash,
                             "proposal_transition_restore",
+                            &error,
+                            backpressure_telemetry,
+                        );
+                    }
+                    return None;
+                }
+                Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
+                    // A local Ordinary arrival does not own its admission-time route. Retain
+                    // the signed input and exact FIFO identity until a committed route exists.
+                    let queue_guard = self.push_remove_lock.lock();
+                    let restore_error = self.restore_popped_hash_locked(hash);
+                    drop(queue_guard);
+                    if let Err(error) = restore_error {
+                        self.mark_accepted_work_validation_fault(
+                            hash,
+                            "proposal_route_defer_restore",
                             &error,
                             backpressure_telemetry,
                         );
@@ -22581,6 +22785,7 @@ impl Queue {
                 block_height,
             ) {
                 Ok((plan, _)) => plan,
+                Err(RoutingResolveError::OrdinaryRouteUnavailable { .. }) => continue,
                 Err(err) => {
                     iroha_logger::warn!(
                         tx = %hash,
@@ -22792,7 +22997,7 @@ impl Queue {
         self.lane_compliance.read().clone()
     }
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
-    /// update while preserving still-valid immutable plans and evicting work whose route retired.
+    /// update. Certified plans retain their exact route; Ordinary input is rerouted from State.
     pub fn reconfigure_nexus(
         &self,
         nexus: &Nexus,
@@ -22840,7 +23045,7 @@ impl Queue {
         );
     }
     /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
-    /// update while preserving still-valid immutable plans and evicting work whose route retired.
+    /// update. Certified plans retain their exact route; Ordinary input is rerouted from State.
     pub fn reconfigure_nexus_with_state(
         &self,
         nexus: &Nexus,
@@ -23311,8 +23516,31 @@ pub mod tests {
                 .expect("deterministic queue manifest validator PoP");
             state.world.register_validator_pop_for_testing(
                 validator_key.public_key().clone(),
-                validator_pop,
+                validator_pop.clone(),
             );
+            let id = crate::state::derive_committee_key_id(validator_key.public_key());
+            let record = iroha_data_model::consensus::ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: validator_key.public_key().clone(),
+                pop: Some(validator_pop),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
+            };
+            let mut world = state.world.block();
+            world.consensus_keys.insert(id.clone(), record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&id) {
+                by_pk.push(id);
+                world.consensus_keys_by_pk.insert(pk, by_pk);
+            }
+            world.commit();
         }
         {
             let mut topology = state.commit_topology.block();
@@ -23834,7 +24062,7 @@ pub mod tests {
         assert_eq!(state.lane_incarnation(lane_id), Some(lane_incarnation));
     }
     #[test]
-    fn closed_autoscale_route_terminalizes_uncarried_durable_queue_claim() {
+    fn closed_autoscale_route_terminalizes_uncarried_queue_plan_but_retains_ordinary_input() {
         let dir = tempfile::tempdir().expect("closed-route QueuePlan journal directory");
         let mut state = state_with_future_created_autoscale_lane(1, 1);
         install_single_validator_topology_for_queue_test(&mut state, 0xD1);
@@ -23879,6 +24107,7 @@ pub mod tests {
         let (_ordinary_time_handle, ordinary_time_source) =
             TimeSource::new_mock(Duration::from_millis(820));
         let ordinary = accepted_tx_by_someone(&ordinary_time_source);
+        let ordinary_hash = ordinary.hash_as_entrypoint();
         register_accepted_tx_authority_for_queue_test(&mut state, &ordinary);
         let ordinary_plan = queue
             .route_plan_with_state(&ordinary, &state)
@@ -23888,7 +24117,7 @@ pub mod tests {
             .expect("capture ordinary autoscale context");
         queue
             .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                ordinary,
+                ordinary.clone(),
                 &state,
                 ordinary_plan,
                 &ordinary_context,
@@ -23946,20 +24175,30 @@ pub mod tests {
                     dataspace_id,
                     incarnation,
                 )
-                .expect("terminalize the exact closed claim"),
-            1
+                .expect("retain Ordinary input after QueuePlan cleanup"),
+            0
         );
         assert!(!queue.lane_has_pending_work(lane_id, dataspace_id, incarnation));
-        assert_eq!(queue.active_len(), 0);
-        assert!(
+        assert_eq!(queue.active_len(), 1);
+        assert!(queue.contains_entrypoint_hash(ordinary_hash));
+        assert_eq!(
             queue
                 .plan_journal
                 .lock()
                 .as_ref()
                 .expect("installed journal")
                 .replay()
-                .expect("read terminalized journal")
-                .is_empty()
+                .expect("read retained Ordinary journal")
+                .len(),
+            1,
+        );
+        assert_eq!(
+            queue
+                .route_plan_with_state(&ordinary, &state)
+                .expect("committed close reroutes Ordinary input")
+                .coordinator_route()
+                .lane_id,
+            LaneId::SINGLE,
         );
     }
     #[test]
@@ -24023,6 +24262,63 @@ pub mod tests {
                 .expect("read terminal restart journal")
                 .is_empty()
         );
+    }
+    #[test]
+    fn restart_retains_ordinary_input_after_autoscale_lane_close() {
+        let dir = tempfile::tempdir().expect("Ordinary restart journal directory");
+        let journal_path = dir.path().join("ordinary-after-close.norito");
+        let mut state = state_with_future_created_autoscale_lane(1, 1);
+        install_single_validator_topology_for_queue_test(&mut state, 0xD4);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(823));
+        let old_lane = LaneId::new(1);
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install original Ordinary journal");
+        let ordinary = accepted_tx_by_someone(&time_source);
+        let hash = ordinary.hash_as_entrypoint();
+        register_accepted_tx_authority_for_queue_test(&mut state, &ordinary);
+        let original_plan = queue
+            .route_plan_with_state(&ordinary, &state)
+            .expect("resolve active elastic lane");
+        assert_eq!(original_plan.coordinator_route().lane_id, old_lane);
+        let context = queue
+            .plan_admission_context_with_state(&state, &original_plan)
+            .expect("capture original admission context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                ordinary.clone(),
+                &state,
+                original_plan.clone(),
+                &context,
+            )
+            .expect("persist exact signed Ordinary input");
+        drop(queue);
+        install_autoscale_drain_close_for_queue_test(&state, old_lane, 2);
+        seed_committed_height_for_queue_test(&state, 2);
+        let replay = Queue::test(config_factory(), &time_source);
+        replay
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen Ordinary journal");
+        let summary = replay
+            .replay_plan_journal(&state)
+            .expect("retarget signed Ordinary input after committed close");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay.contains_entrypoint_hash(hash));
+        assert_eq!(replay.routing_plan_hint(&hash), Some(original_plan));
+        assert_eq!(
+            replay
+                .route_plan_with_state(&ordinary, &state)
+                .expect("effective route follows committed topology")
+                .coordinator_route()
+                .lane_id,
+            LaneId::SINGLE,
+        );
+        let batch = replay.gossip_batch_with_state(1, &state);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].routing.lane_id, LaneId::SINGLE);
+        assert!(!replay.accepted_work_validation_faulted());
     }
     #[test]
     fn closed_autoscale_route_preserves_canonically_admitted_queue_claim() {
@@ -24557,7 +24853,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn reconfiguration_evicts_only_transaction_whose_lane_was_removed() {
+    fn reconfiguration_retains_ordinary_input_when_its_admission_lane_is_removed() {
         let retired_lane = LaneId::new(1);
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
@@ -24647,12 +24943,17 @@ pub mod tests {
             dataspace_catalog.as_ref(),
             false,
         );
-        assert_eq!(queue.active_len(), 0);
-        assert_eq!(queue.queued_len(), 0);
-        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 0);
-        assert!(queue.txs.get(&tx_hash).is_none());
-        assert!(queue.routing_plans.get(&tx_hash).is_none());
-        assert!(queue.routing_plan_hint(&tx_hash).is_none());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 1);
+        assert!(queue.txs.get(&tx_hash).is_some());
+        assert_eq!(
+            queue.routing_plan_hint(&tx_hash),
+            Some(RoutingPlan::single(RoutingDecision::new(
+                retired_lane,
+                DataSpaceId::UNIVERSAL,
+            )))
+        );
         assert!(!queue.accepted_work_validation_faulted());
         assert!(!queue.transaction_selection_durability_faulted());
         assert!(
@@ -24664,7 +24965,7 @@ pub mod tests {
         queue.assert_pressure_counters_consistent_for_tests();
     }
     #[test]
-    fn proposal_queue_preserves_admitted_route_across_policy_change() {
+    fn proposal_queue_routes_ordinary_input_from_committed_policy() {
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
         let mut nexus = test_nexus_for_routes(&[
@@ -24730,16 +25031,19 @@ pub mod tests {
         assert_eq!(
             queue
                 .route_plan_with_state(&admitted, &state)
-                .expect("queued plan remains active")
+                .expect("queued Ordinary input follows committed policy")
                 .coordinator_route(),
-            RoutingDecision::default()
+            RoutingDecision::new(lane_id, dataspace_id)
         );
         assert!(!queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
         assert!(!queue.accepted_work_validation_faulted());
         let mut popped = Vec::new();
         queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut popped);
         assert_eq!(popped.len(), 1);
-        assert_eq!(popped[0].routing(), RoutingDecision::default());
+        assert_eq!(
+            popped[0].routing(),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
     }
     #[test]
     fn autoscale_scale_out_preserves_pending_default_route() {
@@ -24974,7 +25278,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn forced_scale_in_evicts_retired_lane_work_without_global_fault() {
+    fn forced_scale_in_reassigns_ordinary_input_without_global_fault() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -25059,7 +25363,9 @@ pub mod tests {
             })
             .expect("fixture should find a transaction hashing to the lane that will retire");
         let tx_hash = tx.as_ref().hash_as_entrypoint();
-        queue.push(tx, state.view()).expect("push pending tx");
+        queue
+            .push(tx.clone(), state.view())
+            .expect("push pending tx");
         assert_eq!(
             queue
                 .routing_plans
@@ -25076,10 +25382,27 @@ pub mod tests {
             .expect("publish the exact retired incarnation through lifecycle ownership");
         let committed_nexus = state.nexus_snapshot();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
-        assert_eq!(queue.active_len(), 0);
-        assert_eq!(queue.queued_len(), 0);
-        assert!(queue.routing_plans.get(&tx_hash).is_none());
-        assert!(queue.routing_plan_hint(&tx_hash).is_none());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            queue
+                .routing_plan_hint(&tx_hash)
+                .map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
+            "the durable admission hint still authenticates the original signed input"
+        );
+        let current_route = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("Ordinary input must route through current committed lanes")
+            .coordinator_route();
+        assert_ne!(current_route.lane_id, LaneId::new(1));
+        assert!(
+            committed_nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == current_route.lane_id)
+        );
         assert!(!queue.accepted_work_validation_faulted());
         assert!(!queue.transaction_selection_durability_faulted());
         assert!(
@@ -28798,7 +29121,7 @@ pub mod tests {
         assert!(!queue.transaction_selection_durability_faulted());
     }
     #[test]
-    fn v1_replay_rejects_same_lane_id_after_incarnation_recreation() {
+    fn v1_replay_rejects_stale_retry_but_recovers_ordinary_input_after_incarnation_recreation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("stale-incarnation-v1.norito");
         let mut state = State::new(
@@ -28912,17 +29235,26 @@ pub mod tests {
                 .expect("reopen stale-incarnation journal"),
             1
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("recreated lane incarnation must fail startup without rebinding");
-        assert!(
-            error
-                .to_string()
-                .contains("retaining immutable ownership evidence"),
-            "unexpected ABA replay error: {error}"
+            .expect("recover signed Ordinary input under the recreated incarnation");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(plan.clone()));
+        assert_eq!(
+            replay_queue
+                .durable_plan_claims
+                .get(&hash)
+                .expect("authenticated original claim")
+                .admission_context,
+            original_context,
         );
-        assert!(!replay_queue.txs.contains_key(&hash));
-        assert!(replay_queue.durable_plan_claims.get(&hash).is_none());
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve current route"),
+            plan,
+        );
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -28938,7 +29270,7 @@ pub mod tests {
                 .expect("retained incarnation journal metadata")
                 .len(),
             original_journal_len,
-            "ABA rejection must not append, replace, or remove the old claim"
+            "Ordinary replay must not append, replace, or remove the original claim"
         );
     }
     #[test]
@@ -29019,7 +29351,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn v1_replay_preserves_immutable_admitted_plan_across_router_policy_drift() {
+    fn v1_replay_retains_ordinary_claim_when_current_route_is_unavailable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("immutable-plan-policy-drift-v1.norito");
         let mut state = State::new(
@@ -29076,29 +29408,39 @@ pub mod tests {
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect("policy drift must not mutate acknowledged ownership");
+            .expect("an active original route can retain signed Ordinary custody");
         assert_eq!(summary.replayed, 1);
-        assert_eq!(
-            *replay_queue
-                .routing_plans
-                .get(&hash)
-                .expect("replayed immutable plan"),
-            admitted_plan
-        );
+        assert!(replay_queue.contains_entrypoint_hash(hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(admitted_plan));
         assert_eq!(
             replay_queue
                 .durable_plan_claims
                 .get(&hash)
-                .expect("replayed immutable claim")
+                .expect("replayed exact claim")
                 .admission_context,
-            admitted_context
+            admitted_context,
+        );
+        assert!(matches!(
+            replay_queue.route_plan_with_state(&tx, &state),
+            Err(RoutingResolveError::OrdinaryRouteUnavailable { .. })
+        ));
+        assert!(!replay_queue.accepted_work_validation_faulted());
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("unmodified original journal")
+                .live_record_count()
+                .expect("count retained claim"),
+            1,
         );
         assert_eq!(
             fs::metadata(&journal_path)
                 .expect("immutable-plan journal after replay")
                 .len(),
             original_len,
-            "router policy drift must not append a replacement or tombstone the admitted plan"
+            "an unavailable route must not append a replacement or tombstone the signed input"
         );
     }
     #[test]
@@ -30211,7 +30553,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_retains_unverifiable_plan_and_fails_startup() {
+    fn queue_plan_journal_retains_ordinary_input_without_any_active_route() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let state = State::new(
@@ -30255,20 +30597,34 @@ pub mod tests {
             replay_router,
             &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL), (lane, dataspace)],
         );
+        replay_queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         assert_eq!(
             replay_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("install replay journal"),
             1
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("unverifiable acknowledged routing must fail startup");
-        assert!(
-            error.to_string().contains("retaining"),
-            "unexpected replay error: {error}"
+            .expect("retain signed Ordinary input without an active route");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(plan));
+        assert!(matches!(
+            replay_queue.route_plan_with_state(&tx, &state),
+            Err(RoutingResolveError::OrdinaryRouteUnavailable { .. })
+        ));
+        assert!(!replay_queue.accepted_work_validation_faulted());
+        *replay_queue.router.write() = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve the newly available committed route"),
+            RoutingPlan::single(RoutingDecision::default()),
         );
-        assert!(!replay_queue.txs.contains_key(&hash));
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -30278,7 +30634,7 @@ pub mod tests {
                 .live_record_count()
                 .expect("count retained live record"),
             1,
-            "unverifiable recovery must never tombstone acknowledged ownership"
+            "Ordinary recovery must preserve the original signed-input record"
         );
         drop(replay_queue);
         let final_router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
@@ -30296,7 +30652,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_retains_admitted_plan_when_current_policy_route_lacks_authority() {
+    fn queue_plan_journal_recovers_ordinary_input_after_policy_reroute() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -30367,14 +30723,18 @@ pub mod tests {
                 .expect("install replay journal"),
             1
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("missing current route authority must fail startup");
-        assert!(
-            error.to_string().contains("retaining"),
-            "unexpected replay error: {error}"
+            .expect("recover Ordinary input under current policy");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(stale_plan));
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve current policy route"),
+            RoutingPlan::single(current_route),
         );
-        assert!(!replay_queue.txs.contains_key(&hash));
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -30395,7 +30755,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_retains_dataspace_rebind_without_current_authority() {
+    fn queue_plan_journal_recovers_ordinary_input_after_dataspace_rebind() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -30539,14 +30899,18 @@ pub mod tests {
                 .expect("install replay journal"),
             1
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("missing re-bound route authority must fail startup");
-        assert!(
-            error.to_string().contains("retaining"),
-            "unexpected replay error: {error}"
+            .expect("recover Ordinary input under current dataspace binding");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(stale_plan));
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve current dataspace binding"),
+            RoutingPlan::single(RoutingDecision::new(lane, current_dataspace)),
         );
-        assert!(!replay_queue.txs.contains_key(&hash));
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -30567,7 +30931,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_retains_retired_elastic_plan_without_rebinding() {
+    fn queue_plan_journal_recovers_ordinary_input_after_elastic_lane_retirement() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -30664,11 +31028,18 @@ pub mod tests {
                 .coordinator_route(),
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("retired elastic ownership must fail startup without rebinding");
-        assert!(error.to_string().contains("retaining"));
-        assert!(!replay_queue.txs.contains_key(&hash));
+            .expect("recover Ordinary input after elastic lane retirement");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(stale_plan));
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("route Ordinary input to active base lane"),
+            RoutingPlan::single(RoutingDecision::default()),
+        );
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -30689,7 +31060,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_retains_inactive_future_autoscale_plan_fail_closed() {
+    fn queue_plan_journal_ignores_inactive_future_lane_hint_for_ordinary_input() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -30764,16 +31135,17 @@ pub mod tests {
             RoutingDecision::default(),
             "live routing must not select the future-created elastic lane"
         );
-        let error = replay_queue
+        let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("future-lane evidence must fail startup without rebinding");
-        assert!(error.to_string().contains("retaining"));
-        assert!(!replay_queue.txs.contains_key(&hash));
-        assert!(replay_queue.routing_plans.get(&hash).is_none());
+            .expect("recover Ordinary bytes without treating a future lane hint as custody");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        assert_eq!(replay_queue.routing_plan_hint(&hash), Some(forged_plan));
         assert_eq!(
-            replay_queue.routing_plan_hint(&hash),
-            None,
-            "retained future-created plan must not enter the queue-owned plan store"
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("route using the active committed catalog"),
+            RoutingPlan::single(RoutingDecision::default()),
         );
         drop(replay_queue);
         let final_queue = Queue::test(config_factory(), &time_source);

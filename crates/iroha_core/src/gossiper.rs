@@ -6379,12 +6379,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert!(gossiper.state.pipeline.stateless_cache_cap > 0);
         let (valid, _) = build_transaction("signature-cache-identity");
         let (max_clock_drift, limits) = gossiper.state.transaction_admission_limits();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock, time_source) = TimeSource::new_mock(valid.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             valid.clone(),
             gossiper.state.network_id_ref(),
             max_clock_drift,
             limits,
             &gossiper.state.crypto(),
+            &time_source,
         )
         .expect("validate the complete original signed envelope");
         gossiper

@@ -61,6 +61,7 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
     "IrohaSwift/VERSION",
     "scripts/archive_norito_xcframework.py",
+    "scripts/apple_proc_macro_rustc_wrapper.sh",
     "scripts/build_norito_xcframework.sh",
     "scripts/normalize_pqcrypto_archive.py",
     "scripts/exec_with_file_lock.py",

@@ -35,10 +35,15 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
     let mut state =
         State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
+    install_single_validator_topology_for_queue_test(&mut state, 0xE1);
     let queue = Queue::test(config_factory(), &time_source);
     let journal_dir = tempfile::tempdir().expect("Ordinary queue journal directory");
     queue
-        .install_plan_journal(&journal_dir.path().join("ordinary.norito"), 1024 * 1024, true)
+        .install_plan_journal(
+            &journal_dir.path().join("ordinary.norito"),
+            1024 * 1024,
+            true,
+        )
         .expect("install durable Ordinary queue journal");
     let (account_id, key_pair) = gen_account_in("wonderland");
     register_test_authority(&state, &account_id);
@@ -93,4 +98,94 @@ fn ordinary_gossip_and_selection_follow_committed_routing_across_policy_change()
         Some(RoutingDecision::default())
     );
     assert!(!queue.accepted_work_validation_faulted());
+}
+
+#[test]
+fn temporarily_unroutable_ordinary_input_does_not_fault_the_queue() {
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
+    let queue =
+        Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+    let tx = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let hash = tx.hash_as_entrypoint();
+    queue
+        .push_with_lane_with_state(tx.clone(), &state)
+        .expect("admit signed Ordinary input on the initial route");
+    router.set_error(RoutingResolveError::UnknownDataspace {
+        dataspace_id: DataSpaceId::new(91),
+    });
+    assert!(matches!(
+        queue.route_plan_with_state(&tx, &state),
+        Err(RoutingResolveError::OrdinaryRouteUnavailable { .. })
+    ));
+    assert!(queue.gossip_batch_with_state(1, &state).is_empty());
+    assert!(queue.contains_entrypoint_hash(hash));
+    assert!(!queue.accepted_work_validation_faulted());
+    router.set(RoutingDecision::default());
+    assert_eq!(queue.gossip_batch_with_state(1, &state).len(), 1);
+    assert!(!queue.accepted_work_validation_faulted());
+}
+
+#[test]
+fn gossip_skips_an_unavailable_ordinary_route_without_blocking_later_input() {
+    let state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
+    let make_tx = |message: &str| {
+        accepted_tx_with(
+            account_id.clone(),
+            &key_pair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(Level::INFO, message.into()))],
+            Metadata::default(),
+        )
+    };
+    let first = make_tx("temporarily unavailable");
+    let second = make_tx("independent later input");
+    let first_hash = first.hash_as_entrypoint();
+    let second_hash = second.hash_as_entrypoint();
+    queue
+        .push(first, state.view())
+        .expect("enqueue first input");
+    queue
+        .push(second, state.view())
+        .expect("enqueue second input");
+    let batch = queue.gossip_batch_inner(
+        1,
+        |_, _| GossipEntryState::Pending,
+        |hash, _| {
+            if hash == first_hash {
+                Err(RoutingResolveError::OrdinaryRouteUnavailable {
+                    reason: "route temporarily unavailable".to_owned(),
+                })
+            } else {
+                Ok(Some(RoutingPlan::single(RoutingDecision::default())))
+            }
+        },
+        None,
+    );
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].tx.hash_as_entrypoint(), second_hash);
+    assert!(queue.contains_entrypoint_hash(first_hash));
+    assert!(!queue.accepted_work_validation_faulted());
+    let retried = queue.gossip_batch_inner(
+        1,
+        |_, _| GossipEntryState::Pending,
+        |_, _| Ok(Some(RoutingPlan::single(RoutingDecision::default()))),
+        None,
+    );
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].tx.hash_as_entrypoint(), first_hash);
 }

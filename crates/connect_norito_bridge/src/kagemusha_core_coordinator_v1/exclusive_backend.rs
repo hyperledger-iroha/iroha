@@ -82,10 +82,12 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaExclusiveCoordinatorBackendV
             method,
             KagemushaCoreCoordinatorMethodV1::InitialEnrollment
                 | KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest
+                | KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof
         ) {
             // These operations must use their dedicated native-owner hooks. A caller using
             // the public Rust adapter directly cannot bypass the opaque enrollment attempt
-            // or the installed-terminal/App Attest journal check through generic dispatch.
+            // the committed App Attest journal check, or the retained proof archive through
+            // generic dispatch.
             return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
         }
         // Keep the lock through device I/O and delegate result handling. The C/JNI entry point
@@ -124,6 +126,24 @@ impl KagemushaCoreCoordinatorBackendV1 for KagemushaExclusiveCoordinatorBackendV
             .acknowledge_committed_app_attest(handle, request_frame)
     }
 
+    fn export_outgoing_state_proof(
+        &self,
+        handle: u64,
+        operation_id: [u8; 32],
+    ) -> Result<
+        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        KagemushaCoreCoordinatorBackendErrorV1,
+    > {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+        if handle == 0 || state.selected_handle != Some(handle) {
+            return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+        }
+        self.inner.export_outgoing_state_proof(handle, operation_id)
+    }
+
     fn close(&self, handle: u64) -> Result<(), KagemushaCoreCoordinatorBackendErrorV1> {
         let mut state = self
             .state
@@ -151,6 +171,31 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn outgoing_proof_export_cannot_fall_back_to_generic_dispatch() {
+        let backend = Arc::new(Backend::new(false));
+        let owner = KagemushaExclusiveCoordinatorBackendV1::new(backend.clone());
+        assert_eq!(owner.open("/private/wallet"), Ok(7));
+        let operation_id = [0x5a; 32];
+        assert_eq!(
+            owner.export_outgoing_state_proof(7, operation_id),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+        );
+        assert_eq!(
+            owner.invoke(
+                7,
+                KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
+                b"forged-generic-request",
+            ),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(
+            owner.export_outgoing_state_proof(8, operation_id),
+            Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)
+        );
+        assert_eq!(backend.invoke_calls.load(Ordering::SeqCst), 0);
+    }
 
     struct Backend {
         open_calls: AtomicUsize,

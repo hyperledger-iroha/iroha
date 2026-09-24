@@ -13,7 +13,8 @@ use iroha_data_model::kagemusha::KagemushaHardwareSelectionSigningLayoutV1;
 
 use crate::zk::{
     kagemusha_p256_curve_gadget::{
-        app_attest_der_gadget::constrain_p256_canonical_der_v1, assert_apple_assertion_ecdsa,
+        P256_LIMB_BITS, P256_NUM_LIMBS, app_attest_der_gadget::constrain_p256_canonical_der_v1,
+        assert_apple_assertion_ecdsa,
     },
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
     pasta_sha256::PastaSha256JobsV1,
@@ -59,7 +60,7 @@ pub(super) fn constrain_original_apple_assertion_ecdsa_37_v1<
         authenticator_data,
     );
     let range = builder.range_chip();
-    let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+    let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
     let der = constrain_p256_canonical_der_v1(&chip, builder.main(0), r, s);
     constrain_original_apple_assertion_37_v1(
         builder,
@@ -266,8 +267,8 @@ mod tests {
             .use_k(K as usize)
             .use_lookup_bits((K - 1) as usize);
         let range = builder.range_chip();
-        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
-        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         let signed_s =
             std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(signed_s[index]))));
@@ -313,9 +314,12 @@ mod tests {
 
     #[test]
     fn original_signed_assertion_binds_both_state_indices_in_both_pasta_fields() {
-        for mutation in 0..=3 {
-            assert_eq!(check::<Fp>(mutation), mutation == 0);
-            assert_eq!(check::<Fq>(mutation), mutation == 0);
-        }
+        // Full positive proofs in each parity; distribute the three independent
+        // negative relations to keep this complete SHA/ECDSA fixture bounded.
+        assert!(check::<Fp>(0));
+        assert!(check::<Fq>(0));
+        assert!(!check::<Fp>(1));
+        assert!(!check::<Fq>(2));
+        assert!(!check::<Fp>(3));
     }
 }

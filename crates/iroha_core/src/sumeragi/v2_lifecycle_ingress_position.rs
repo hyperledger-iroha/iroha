@@ -3246,13 +3246,13 @@ mod tests {
             b"lifecycle-ingress-foreign-context",
         )));
         let peer = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 0);
+        let ingress = FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
         ingress
             .configure_roster([peer.clone()])
             .expect("configure foreign-winner lane");
         ingress.state.lock().leader_wire_context = Some((bound_context, HEIGHT));
         ingress.open().expect("open foreign-winner ingress");
-        let message = commit_certificate_request(foreign_context, HEIGHT, &peer, 9);
+        let message = certified_body_response(foreign_context, HEIGHT, &peer);
         assert!(matches!(
             ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                 message.clone(),
@@ -3265,6 +3265,11 @@ mod tests {
             .capture_next_ingress_turn_cut(|_| true)
             .expect("capture exact foreign winner")
             .expect("foreign winner exists");
+        assert_eq!(
+            cut.selected_occurrence().context(),
+            Some(lifecycle_context_from_wire((foreign_context, HEIGHT))),
+            "the response carrier must retain its foreign lifecycle context"
+        );
         let cut = match cut
             .narrow_to_lifecycle(lifecycle_context_from_wire((bound_context, HEIGHT)))
             .unwrap_or_else(|_| panic!("foreign winner remains a valid ordinary cut"))

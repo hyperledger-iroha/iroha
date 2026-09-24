@@ -3303,6 +3303,9 @@ pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
     pub encrypted_input: String,
     pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+    #[norito(default)]
+    pub phone_retail_canonicality:
+        Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
 }
 }
 impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
@@ -3313,6 +3316,8 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
         let mut policy_id = None;
         let mut encrypted_input = None;
         let mut output_opening = None;
+        let mut phone_retail_canonicality = None;
+        let mut seen_phone_retail_canonicality = false;
         while let Some(key) = object.next_key()? {
             match key.as_str() {
                 "policy_id" => {
@@ -3335,6 +3340,13 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                         object.parse_value::<iroha_data_model::ram_lfe::RamLfeOutputOpening>()?,
                     );
                 }
+                "phone_retail_canonicality" => {
+                    if seen_phone_retail_canonicality {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    seen_phone_retail_canonicality = true;
+                    phone_retail_canonicality = object.parse_value::<Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>>()?;
+                }
                 other => return Err(norito::json::MapVisitor::unknown_field(other)),
             }
         }
@@ -3346,6 +3358,7 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                 .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
             output_opening: output_opening
                 .ok_or_else(|| norito::json::MapVisitor::missing_field("output_opening"))?,
+            phone_retail_canonicality,
         })
     }
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
@@ -3355,6 +3368,8 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
         let mut policy_id = None;
         let mut encrypted_input = None;
         let mut output_opening = None;
+        let mut phone_retail_canonicality = None;
+        let mut seen_phone_retail_canonicality = false;
         for (key, value) in object {
             match key.as_str() {
                 "policy_id" => {
@@ -3381,6 +3396,13 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                         <iroha_data_model::ram_lfe::RamLfeOutputOpening as norito::json::JsonDeserialize>::json_from_value(value)?,
                     );
                 }
+                "phone_retail_canonicality" => {
+                    if seen_phone_retail_canonicality {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    seen_phone_retail_canonicality = true;
+                    phone_retail_canonicality = <Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1> as norito::json::JsonDeserialize>::json_from_value(value)?;
+                }
                 other => return Err(norito::json::Error::unknown_field(other)),
             }
         }
@@ -3390,6 +3412,7 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                 .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
             output_opening: output_opening
                 .ok_or_else(|| norito::json::Error::missing_field("output_opening"))?,
+            phone_retail_canonicality,
         })
     }
 }
@@ -3399,6 +3422,9 @@ derived_items! {
 pub struct IdentifierResolveResponseDto {
     pub payload: IdentifierResolutionReceiptPayloadDto,
     pub attestation: RamLfeReceiptAttestationDto,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_canonicality:
+        Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
 }
 }
 #[cfg(all(test, feature = "app_api"))]

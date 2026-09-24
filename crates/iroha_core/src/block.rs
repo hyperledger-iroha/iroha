@@ -14187,6 +14187,35 @@ pub(crate) mod valid {
                 );
             }
         }
+        fn insert_active_participant_keys(world: &mut World, keypairs: &[KeyPair]) {
+            for keypair in keypairs {
+                let id = crate::state::derive_committee_key_id(keypair.public_key());
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key: keypair.public_key().clone(),
+                    pop: Some(
+                        iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                            .expect("participant committee proof of possession"),
+                    ),
+                    activation_height: 0,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                };
+                world.consensus_keys.insert(id.clone(), record.clone());
+                let pk = record.public_key.to_string();
+                let mut by_pk = world
+                    .consensus_keys_by_pk
+                    .view()
+                    .get(&pk)
+                    .cloned()
+                    .unwrap_or_default();
+                if !by_pk.contains(&id) {
+                    by_pk.push(id);
+                    world.consensus_keys_by_pk.insert(pk, by_pk);
+                }
+            }
+        }
         #[cfg(feature = "bls")]
         #[test]
         fn bls_normal_public_key_check_uses_checked_algorithm_access() {
@@ -17299,6 +17328,7 @@ pub(crate) mod valid {
             let account = Account::new(authority.clone()).build(&authority);
             let mut world = World::with([domain], [account], []);
             insert_active_consensus_keys(&mut world, &key_pairs);
+            insert_active_participant_keys(&mut world, &key_pairs);
             let paynet_lane = LaneId::new(3);
             let paynet_dataspace = DataSpaceId::new(10);
             let nexus = {
@@ -17407,6 +17437,7 @@ pub(crate) mod valid {
             let second_dataspace = DataSpaceId::new(8);
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
+            insert_active_participant_keys(&mut world, &key_pairs);
             let nexus = {
                 let mut nexus = iroha_config::parameters::actual::Nexus::default();
                 nexus.lane_catalog = LaneCatalog::new(
@@ -17554,6 +17585,7 @@ pub(crate) mod valid {
             let second_dataspace = DataSpaceId::new(8);
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
+            insert_active_participant_keys(&mut world, &key_pairs);
             let nexus = {
                 let mut nexus = iroha_config::parameters::actual::Nexus::default();
                 nexus.lane_catalog = LaneCatalog::new(
@@ -18317,12 +18349,14 @@ pub(crate) mod valid {
             .with_instructions([Log::new(Level::INFO, "test".to_string())])
             .sign(alice_keypair.private_key());
             let crypto_cfg = state.crypto();
-            let tx = AcceptedTransaction::accept(
+            let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+            let tx = AcceptedTransaction::accept_with_time_source(
                 tx,
                 &state.network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
+                &time_source,
             )
             .expect("valid tx");
             state
@@ -29111,12 +29145,14 @@ seiyaku DynamicTarget {
         .with_instructions::<InstructionBox>([create_account.clone().into(), fail_isi.into()])
         .sign(alice_keypair.private_key());
         let crypto_cfg = state.crypto();
-        let tx_fail = AcceptedTransaction::accept(
+        let (_clock, time_source) = TimeSource::new_mock(tx_fail.creation_time());
+        let tx_fail = AcceptedTransaction::accept_with_time_source(
             tx_fail,
             &state.network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
+            &time_source,
         )
         .expect("Valid");
         let tx_accept = TransactionBuilder::new(
@@ -29126,12 +29162,14 @@ seiyaku DynamicTarget {
         )
         .with_instructions::<InstructionBox>([create_account.into(), create_asset.into()])
         .sign(alice_keypair.private_key());
-        let tx_accept = AcceptedTransaction::accept(
+        let (_clock, time_source) = TimeSource::new_mock(tx_accept.creation_time());
+        let tx_accept = AcceptedTransaction::accept_with_time_source(
             tx_accept,
             &state.network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
+            &time_source,
         )
         .expect("Valid");
         let fail_hash = tx_fail.as_ref().hash_as_entrypoint();

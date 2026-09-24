@@ -1221,7 +1221,9 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     let assets = state_block.world.assets();
     assert_eq!(
-        assets.get(&payer_asset).map_or_else(Quantity::zero, |asset| asset.0.clone()),
+        assets
+            .get(&payer_asset)
+            .map_or_else(Quantity::zero, |asset| asset.0.clone()),
         Quantity::zero(),
         "the rejected transfer must retain exactly its execution-owned base fee"
     );
@@ -2365,15 +2367,19 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
     ])
     .sign(keypair.private_key());
     let crypto_cfg = state.crypto();
-    let tx = AcceptedTransaction::accept(
+    let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+    let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
+        &time_source,
     )
     .expect("admission should accept transaction shape");
-    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())

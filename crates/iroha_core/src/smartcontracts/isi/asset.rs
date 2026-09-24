@@ -5317,6 +5317,14 @@ pub mod isi {
             .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
         let mut outbound = BTreeMap::<AssetId, Quantity>::new();
         for movement in movements.as_slice() {
+            for bucket in [&movement.source, &movement.destination] {
+                validate_committed_public_balance_scope(
+                    state_transaction,
+                    bucket.definition(),
+                    *bucket.scope(),
+                    "in atomic settlement",
+                )?;
+            }
             let total = outbound
                 .entry(movement.source.clone())
                 .or_insert_with(Quantity::zero);

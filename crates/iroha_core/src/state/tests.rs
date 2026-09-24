@@ -443,20 +443,6 @@ macro_rules! seed_elastic_lane {
     };
 }
 
-macro_rules! reject_stale {
-    ($state:ident $indices:ident $keypairs:ident $committee:ident $header:ident $height:ident) => {
-        let_row! { _signer_keys: Vec<&KeyPair> = $indices .iter() .map(|idx| $keypairs.get(&$committee[*idx]).expect("signer key")) .collect() };
-        let _signers_bitmap = signer_bitmap(&$indices, $committee.len());
-        let_row! { settlement = LaneBlockCommitment { block_height: $height, lane_id: LaneId::new(0), lane_incarnation: active_lane_incarnation_for_state_test( &$state, $height, LaneId::SINGLE, ), dataspace_id: DataSpaceId::UNIVERSAL, tx_count: 1, total_local_amount: "0.000001".parse().expect("valid settlement quantity"), total_xor_due: "0.000001".parse().expect("valid settlement quantity"), total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"), total_xor_variance: "0".parse().expect("valid settlement quantity"), swap_metadata: None, receipts: vec![LaneSettlementReceipt { source_id: [0xAA; 32], local_amount: "0.000001".parse().expect("valid settlement quantity"), xor_due: "0.000001".parse().expect("valid settlement quantity"), xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"), xor_variance: "0".parse().expect("valid settlement quantity"), timestamp_ms: 1_700_000_000_000, }], nexus_fee_receipts: Vec::new(), native_amx_receipts: Vec::new(), } };
-        let_row! { mut envelope = LaneRelayEnvelope::new($header, None, settlement, 0) .expect("lane relay envelope") .with_lane_block_descriptor_hash(Some(Hash::new( b"state-test-stale-emergency-lane-descriptor", ))) .with_manifest_root(Some([0x44; 32])) };
-        envelope.finality_authority = Some(structural_lane_finality_authority(&envelope));
-        let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
-        let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
-        let_row! { err = $state .record_lane_relay(&envelope) .expect_err("emergency metadata cannot replace global finality authority") };
-        assert!(matches!(err, LaneRelayError::FinalityArtifactMismatch));
-    };
-}
-
 macro_rules! activated_manifest_record {
     ($record:ident, $uaid:ident, $dataspace:ident) => {
         let_row! { manifest = AssetPermissionManifest { version: ManifestVersion::default(), uaid: $uaid, dataspace: $dataspace, issued_ms: 0, activation_epoch: 1, expiry_epoch: None, entries: Vec::new(), } };
@@ -4167,6 +4153,26 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
     let nominator = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let request_id = Hash::new("staking-invariant-unbond");
     let mut world = World::default();
+    let stake_asset = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("stakeinvariant", "universal").expect("fixture domain"),
+            "reserve".parse().expect("fixture asset name"),
+        ),
+        validator.clone(),
+    );
+    let (account_id, account) = Account::new(validator.clone())
+        .build(&validator)
+        .into_key_value();
+    world.accounts.insert(account_id, account);
+    let (account_id, account) = Account::new(nominator.clone())
+        .build(&nominator)
+        .into_key_value();
+    world.accounts.insert(account_id, account);
+    world = reward_reserves::registered_custody_world_for_test(
+        world,
+        &stake_asset,
+        Quantity::from(34_u32),
+    );
     {
         let mut parameters = world.parameters.block();
         parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
@@ -4226,6 +4232,13 @@ fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture 
             metadata: Metadata::default(),
         },
     );
+    world.public_lane_stake_custody.insert(
+        (lane_id, validator.clone()),
+        (stake_asset.clone(), Quantity::from(34_u32)),
+    );
+    world
+        .public_lane_stake_reserves
+        .insert(stake_asset, Quantity::from(34_u32));
     PublicLaneStakingInvariantFixture {
         world,
         lane_id,
@@ -4257,6 +4270,8 @@ state_test! { sync public_lane_staking_quantity_invariant_accepts_exact_canonica
         .world
         .validate_quantity_ledger_invariants()
         .expect("canonical validator, self-stake, and nominator totals must agree");
+    super::stake_reserves::validate_public_lane_stake_reserves(&fixture.world.view())
+        .expect("canonical fixture stake is backed by its exact pinned custody asset");
 }
 state_test! { sync public_lane_staking_quantity_invariant_rejects_mismatched_keys_and_orphans
     let fixture = public_lane_staking_invariant_fixture();
@@ -4483,8 +4498,11 @@ state_test! { sync state_snapshot_rejects_committed_public_lane_staking_aggregat
         .err()
         .expect("persisted staking aggregate corruption must fail closed");
     let message = error.to_string();
-    assert!(message.contains("state.world.numeric_ledgers"), "{message}");
-    assert!(message.contains("total stake 31"), "{message}");
+    assert!(message.contains("public_lane_stake_reserves.blocks"), "{message}");
+    assert!(
+        message.contains("staking validator totals do not match canonical shares"),
+        "{message}"
+    );
 }
 state_test! { sync world_snapshot_names_successful_settlement_receipts_explicitly
     let state = blank_state();
@@ -9734,10 +9752,24 @@ state_test! { sync drain_intent_uses_incarnation_pin_across_disjoint_roster_and_
         peers.apply();
     }
     for keypair in &old_keypairs {
-        let key_id = derive_validator_key_id(keypair.public_key());
-        let_row! { mut record = state_block .world .consensus_keys .get(&key_id) .cloned() .expect("old committee key record") };
-        record.status = ConsensusKeyStatus::Disabled;
-        state_block.world.consensus_keys.insert(key_id, record);
+        for key_id in [
+            derive_validator_key_id(keypair.public_key()),
+            derive_committee_key_id(keypair.public_key()),
+        ] {
+            let_row! { mut record = state_block .world .consensus_keys .get(&key_id) .cloned() .expect("old committee key record") };
+            record.status = ConsensusKeyStatus::Disabled;
+            state_block.world.consensus_keys.insert(key_id, record);
+        }
+        assert_eq!(
+            crate::state::peer_consensus_key_gate_for_lane(
+                &state_block.world,
+                &PeerId::new(keypair.public_key().clone()),
+                1,
+                lane_id,
+            ),
+            crate::state::ConsensusKeyGate::Disabled,
+            "the old participant signing role must be disabled in the current overlay",
+        );
     }
     state_block
         .commit_topology
@@ -13586,7 +13618,6 @@ state_test! { sync autoscale_scale_out_committee_uses_same_dataspace_manifest_po
     let topology_keypairs = seed_autoscale_transport_peers_for_test(&state, 4);
     let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &manifest_keypairs);
-    seed_committee_keys_with_pops(&state, &manifest_keypairs);
     install_lane_manifest_registry(
         &state,
         &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, manifest_validators)],
@@ -13642,7 +13673,6 @@ state_test! { sync autoscale_scale_out_committee_uses_same_dataspace_stake_pool
     let topology_keypairs = seed_autoscale_transport_peers_for_test(&state, 4);
     let (stake_validators, stake_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &stake_keypairs);
-    seed_committee_keys_with_pops(&state, &stake_keypairs);
     for (validator, keypair) in stake_validators.iter().zip(&stake_keypairs) {
         insert_active_public_lane_validator_for_test(
             &state,
@@ -13742,6 +13772,15 @@ state_test! { sync autoscale_scale_out_committee_preflight_rejects_non_live_cons
         ConsensusKeyStatus::Active,
         0,
         Some(3),
+    );
+    assert_eq!(
+        crate::state::peer_consensus_key_gate_for_lane(
+            &state.world.view(),
+            &PeerId::new(keypairs[3].public_key().clone()),
+            3,
+            LaneId::new(1),
+        ),
+        crate::state::ConsensusKeyGate::Expired,
     );
     let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
     let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -26171,12 +26210,6 @@ fn peer_id_for_account(account: &AccountId) -> PeerId {
     )
 }
 fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
-    seed_consensus_keys_with_role(state, keypairs, ConsensusKeyRole::Validator);
-}
-fn seed_committee_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
-    seed_consensus_keys_with_role(state, keypairs, ConsensusKeyRole::Committee);
-}
-fn seed_consensus_keys_with_role(state: &State, keypairs: &[KeyPair], role: ConsensusKeyRole) {
     let mut world_block = state.world.block();
     {
         let mut peers = world_block.peers_mut_for_testing().transaction();
@@ -26190,22 +26223,28 @@ fn seed_consensus_keys_with_role(state: &State, keypairs: &[KeyPair], role: Cons
     }
     for keypair in keypairs {
         let_row! { pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key()) .expect("generate pop for consensus key") };
-        let id = match role {
-            ConsensusKeyRole::Validator => derive_validator_key_id(keypair.public_key()),
-            ConsensusKeyRole::Committee => derive_committee_key_id(keypair.public_key()),
-            ConsensusKeyRole::Endorsement => {
-                panic!("lane consensus fixture does not use endorsement keys")
+        // Shared fixtures use each peer on the global and participant routes.
+        // Those routes require distinct authenticated consensus-key roles.
+        for id in [
+            derive_validator_key_id(keypair.public_key()),
+            derive_committee_key_id(keypair.public_key()),
+        ] {
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(pop.clone()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block.consensus_keys.insert(id, record.clone());
+            let pk = record.public_key.to_string();
+            let_row! { mut by_pk = world_block .consensus_keys_by_pk .get(&pk) .cloned() .unwrap_or_default() };
+            if !by_pk.contains(&record.id) {
+                by_pk.push(record.id.clone());
+                world_block.consensus_keys_by_pk.insert(pk, by_pk);
             }
-        };
-        let_row! { record = ConsensusKeyRecord { id: id.clone(), public_key: keypair.public_key().clone(), pop: Some(pop), activation_height: 0, expiry_height: None, replaces: None, status: ConsensusKeyStatus::Active, } };
-        world_block
-            .consensus_keys
-            .insert(id.clone(), record.clone());
-        let pk = record.public_key.to_string();
-        let_row! { mut by_pk = world_block .consensus_keys_by_pk .get(&pk) .cloned() .unwrap_or_default() };
-        if !by_pk.contains(&record.id) {
-            by_pk.push(record.id.clone());
-            world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
     }
     world_block.commit();
@@ -26238,16 +26277,26 @@ fn seed_consensus_key_with_lifecycle_for_test(
         peers.apply();
     }
     let_row! { pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key()) .expect("generate pop for consensus key") };
-    let id = derive_validator_key_id(keypair.public_key());
-    let_row! { record = ConsensusKeyRecord { id: id.clone(), public_key: keypair.public_key().clone(), pop: Some(pop), activation_height, expiry_height, replaces: None, status, } };
-    world_block
-        .consensus_keys
-        .insert(id.clone(), record.clone());
-    let pk = record.public_key.to_string();
-    let_row! { mut by_pk = world_block .consensus_keys_by_pk .get(&pk) .cloned() .unwrap_or_default() };
-    if !by_pk.contains(&record.id) {
-        by_pk.push(record.id.clone());
-        world_block.consensus_keys_by_pk.insert(pk, by_pk);
+    for id in [
+        derive_validator_key_id(keypair.public_key()),
+        derive_committee_key_id(keypair.public_key()),
+    ] {
+        let record = ConsensusKeyRecord {
+            id: id.clone(),
+            public_key: keypair.public_key().clone(),
+            pop: Some(pop.clone()),
+            activation_height,
+            expiry_height,
+            replaces: None,
+            status,
+        };
+        world_block.consensus_keys.insert(id, record.clone());
+        let pk = record.public_key.to_string();
+        let_row! { mut by_pk = world_block .consensus_keys_by_pk .get(&pk) .cloned() .unwrap_or_default() };
+        if !by_pk.contains(&record.id) {
+            by_pk.push(record.id.clone());
+            world_block.consensus_keys_by_pk.insert(pk, by_pk);
+        }
     }
     world_block.commit();
 }
@@ -27740,43 +27789,26 @@ enum StaleEmergencyPeerReason {
 }
 
 impl StaleEmergencyPeerReason {
-    const fn dependency_message(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
-            Self::OutsideCommitTopology => {
-                "test must build a QC that depends on the now-out-of-topology emergency peer"
-            }
-            Self::ExpiredConsensusKey => {
-                "test must build a QC whose validator set depends on the expired emergency peer"
-            }
-            Self::RemovedWorldPeer => {
-                "test must build a QC whose validator set depends on the removed emergency peer"
-            }
-        }
-    }
-
-    const fn cache_message(self) -> &'static str {
-        match self {
-            Self::OutsideCommitTopology => {
-                "rejected stale-topology override must not populate relay cache"
-            }
-            Self::ExpiredConsensusKey => {
-                "rejected expired-key override must not populate relay cache"
-            }
-            Self::RemovedWorldPeer => {
-                "rejected removed-peer override must not populate relay cache"
-            }
+            Self::OutsideCommitTopology => "outside commit topology",
+            Self::ExpiredConsensusKey => "expired consensus key",
+            Self::RemovedWorldPeer => "removed world peer",
         }
     }
 }
 
 #[allow(clippy::too_many_lines)]
-fn assert_stale_emergency_peer_is_rejected(reason: StaleEmergencyPeerReason) {
+fn assert_stale_emergency_peer_cannot_seed_authority_but_finality_is_accepted(
+    reason: StaleEmergencyPeerReason,
+) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let (base_1, base_1_kp) = bls_account_in("wonderland");
     let (base_2, base_2_kp) = bls_account_in("wonderland");
     let (extra_1, extra_1_kp) = bls_account_in("wonderland");
     let (stale_account, stale_keypair) = bls_account_in("wonderland");
+    let (_, finality_replacement_keypair) = bls_account_in("wonderland");
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
     install_lane_relay_base_fixture!(state, base_1, base_2);
     seed_consensus_keys_with_pops(
@@ -27786,6 +27818,7 @@ fn assert_stale_emergency_peer_is_rejected(reason: StaleEmergencyPeerReason) {
             base_2_kp.clone(),
             extra_1_kp.clone(),
             stale_keypair.clone(),
+            finality_replacement_keypair.clone(),
         ],
     );
     let stale_peer = peer_id_for_account(&stale_account);
@@ -27838,88 +27871,126 @@ fn assert_stale_emergency_peer_is_rejected(reason: StaleEmergencyPeerReason) {
         StaleEmergencyPeerReason::OutsideCommitTopology => {}
     }
     let height = 1;
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        None,
-        None,
-        0,
-        0,
+    let peer_is_in_topology = state
+        .commit_topology
+        .view()
+        .iter()
+        .any(|peer| peer == &stale_peer);
+    let peer_is_in_world = state
+        .world
+        .view()
+        .peers()
+        .iter()
+        .any(|peer| peer == &stale_peer);
+    let key_gate = crate::state::peer_consensus_key_gate_for_lane(
+        &state.world.view(),
+        &stale_peer,
+        height,
+        LaneId::SINGLE,
     );
-    let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
+    match reason {
+        StaleEmergencyPeerReason::OutsideCommitTopology => {
+            assert!(!peer_is_in_topology);
+            assert!(peer_is_in_world);
+            assert_eq!(key_gate, crate::state::ConsensusKeyGate::Live);
+        }
+        StaleEmergencyPeerReason::ExpiredConsensusKey => {
+            assert!(peer_is_in_topology);
+            assert!(peer_is_in_world);
+            assert_eq!(key_gate, crate::state::ConsensusKeyGate::Expired);
+        }
+        StaleEmergencyPeerReason::RemovedWorldPeer => {
+            assert!(peer_is_in_topology);
+            assert!(!peer_is_in_world);
+            assert_eq!(key_gate, crate::state::ConsensusKeyGate::Live);
+        }
+    }
     let authority_error = state
         .resolve_lane_committee_at_height(
             LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             height,
         )
         .expect_err("the ordinary route authority must be undersized before the override");
-    assert!(matches!(
-        authority_error,
-        LaneAuthorityError::UndersizedPool {
-            required: 4,
-            actual: 2,
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            authority_error,
+            LaneAuthorityError::UndersizedPool {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                authority_height: 1,
+                required: 4,
+                actual: 2,
+            }
+        ),
+        "{}: {authority_error:?}",
+        reason.label()
+    );
     let base_pool =
         lane_relay_committee_for_state_test(&state, height, LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let emergency_pool = vec![peer_id_for_account(&extra_1), stale_peer.clone()];
-    let fillers = State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
-    assert!(
-        fillers.contains(&stale_peer),
-        "{}",
-        reason.dependency_message()
-    );
-    let mut stale_committee = base_pool;
-    stale_committee.extend(fillers);
-    let signer_indices = if matches!(reason, StaleEmergencyPeerReason::OutsideCommitTopology) {
-        vec![0, 1, 2]
-    } else {
-        let live_signer_peers = BTreeSet::from([
-            peer_id_for_account(&base_1),
-            peer_id_for_account(&base_2),
-            peer_id_for_account(&extra_1),
-        ]);
-        let indices = stale_committee
+    assert_eq!(base_pool.len(), 2, "{}", reason.label());
+    assert!(!base_pool.contains(&stale_peer), "{}", reason.label());
+    assert!(state.lane_relay_snapshot().is_empty());
+
+    // Current emergency metadata cannot seed lane authority. A separately
+    // finalized global statement remains authoritative at relay ingress.
+    let finality_keypairs = [
+        base_1_kp,
+        base_2_kp,
+        extra_1_kp,
+        finality_replacement_keypair,
+    ];
+    {
+        let mut topology = state.commit_topology.block();
+        *topology = finality_keypairs
             .iter()
-            .enumerate()
-            .filter_map(|(index, peer)| live_signer_peers.contains(peer).then_some(index))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            indices.len(),
-            3,
-            "test must sign the stale committee with exactly the live quorum"
-        );
-        indices
-    };
-    let keypairs = [
-        (peer_id_for_account(&base_1), base_1_kp),
-        (peer_id_for_account(&base_2), base_2_kp),
-        (peer_id_for_account(&extra_1), extra_1_kp),
-        (stale_peer, stale_keypair),
-    ]
-    .into_iter()
-    .collect::<BTreeMap<PeerId, KeyPair>>();
-    reject_stale!(state signer_indices keypairs stale_committee header height);
-    assert!(
-        state.lane_relay_snapshot().is_empty(),
-        "{}",
-        reason.cache_message()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        topology.commit();
+    }
+    let envelope =
+        sample_lane_relay_envelope_for_state(&state, height, LaneId::SINGLE, &finality_keypairs);
+    let artifact = state
+        .kura
+        .v2_finality_artifact(height)
+        .expect("read exact relay finality")
+        .expect("signed global CommitQC must be stored");
+    artifact.verify().expect("genuine signed global CommitQC");
+    assert_eq!(
+        envelope
+            .finality_authority
+            .as_ref()
+            .expect("relay references its global CommitQC")
+            .finality_artifact_hash,
+        HashOf::new(&artifact),
+    );
+    assert_eq!(
+        state
+            .record_lane_relay(&envelope)
+            .expect("global finality admits the exact relay despite stale local metadata"),
+        LaneRelayInsert::Inserted,
+    );
+    assert_eq!(state.lane_relay_snapshot(), vec![envelope]);
+}
+
+#[test]
+fn stale_emergency_peer_outside_topology_cannot_seed_authority_but_finality_admits_relay() {
+    assert_stale_emergency_peer_cannot_seed_authority_but_finality_is_accepted(
+        StaleEmergencyPeerReason::OutsideCommitTopology,
     );
 }
 
 #[test]
-fn record_lane_relay_rejects_stored_emergency_override_peer_outside_commit_topology() {
-    assert_stale_emergency_peer_is_rejected(StaleEmergencyPeerReason::OutsideCommitTopology);
+fn expired_emergency_peer_cannot_seed_authority_but_finality_admits_relay() {
+    assert_stale_emergency_peer_cannot_seed_authority_but_finality_is_accepted(
+        StaleEmergencyPeerReason::ExpiredConsensusKey,
+    );
 }
 
 #[test]
-fn record_lane_relay_rejects_stored_emergency_override_peer_with_expired_consensus_key() {
-    assert_stale_emergency_peer_is_rejected(StaleEmergencyPeerReason::ExpiredConsensusKey);
-}
-
-#[test]
-fn record_lane_relay_rejects_stored_emergency_override_removed_world_peer() {
-    assert_stale_emergency_peer_is_rejected(StaleEmergencyPeerReason::RemovedWorldPeer);
+fn removed_emergency_peer_cannot_seed_authority_but_finality_admits_relay() {
+    assert_stale_emergency_peer_cannot_seed_authority_but_finality_is_accepted(
+        StaleEmergencyPeerReason::RemovedWorldPeer,
+    );
 }
 
 lane_relay_state_test! { lane_relay_committee_seed_is_deterministic let state = blank_test_state(); let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1); let same = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1); assert_eq!(seed, same); let different_lane = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(1), 1); assert_ne!(seed, different_lane); let different_ds = state.lane_relay_committee_seed(DataSpaceId::new(1), LaneId::new(0), 1); assert_ne!(seed, different_ds); }
@@ -29822,11 +29893,11 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_undeclared_manifes
     );
 }
 state_test! { sync record_lane_relay_keeps_creation_pin_after_non_live_manifest_binding_drift
-    for (case, status, activation_height, expiry_height, height) in [
-        ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
-        ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
-        ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
-        ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
+    for (case, status, activation_height, expiry_height, height, expected_gate) in [
+        ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64, crate::state::ConsensusKeyGate::NotYetActive),
+        ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64, crate::state::ConsensusKeyGate::NotYetActive),
+        ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64, crate::state::ConsensusKeyGate::Disabled),
+        ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64, crate::state::ConsensusKeyGate::Expired),
     ] {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -29855,6 +29926,16 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_non_live_manifest_
             status,
             activation_height,
             expiry_height,
+        );
+        assert_eq!(
+            crate::state::peer_consensus_key_gate_for_lane(
+                &state.world.view(),
+                &PeerId::new(manifest_keypair.public_key().clone()),
+                height,
+                lane_id,
+            ),
+            expected_gate,
+            "{case}: the participant key must have the intended lifecycle gate",
         );
         install_lane_manifest_registry(
             &state,
@@ -29946,11 +30027,11 @@ state_test! { sync record_lane_relay_rejects_unpinned_topology_after_creation_pr
     );
 }
 state_test! { sync record_lane_relay_rejects_unpinned_lifecycle_topology_signer
-    for (case, status, activation_height, expiry_height, height) in [
-        ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
-        ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
-        ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
-        ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
+    for (case, status, activation_height, expiry_height, height, expected_gate) in [
+        ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64, crate::state::ConsensusKeyGate::NotYetActive),
+        ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64, crate::state::ConsensusKeyGate::NotYetActive),
+        ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64, crate::state::ConsensusKeyGate::Disabled),
+        ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64, crate::state::ConsensusKeyGate::Expired),
     ] {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -29970,6 +30051,16 @@ state_test! { sync record_lane_relay_rejects_unpinned_lifecycle_topology_signer
             status,
             activation_height,
             expiry_height,
+        );
+        assert_eq!(
+            crate::state::peer_consensus_key_gate_for_lane(
+                &state.world.view(),
+                &PeerId::new(topology_keypairs[3].public_key().clone()),
+                height,
+                lane_id,
+            ),
+            expected_gate,
+            "{case}: the participant key must have the intended lifecycle gate",
         );
         {
             let mut topology = state.commit_topology.block();
@@ -40661,6 +40752,22 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
 
     let world_with_receipt = |receipt: SoraRuntimeReceiptV1| {
         let mut world = World::default();
+        let stake_asset = AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("mailboxreserve", "universal").expect("reserve domain"),
+                "stake".parse().expect("reserve asset name"),
+            ),
+            ALICE_ID.clone(),
+        );
+        let (account_id, account) = Account::new(ALICE_ID.clone())
+            .build(&ALICE_ID)
+            .into_key_value();
+        world.accounts.insert(account_id, account);
+        world = reward_reserves::registered_custody_world_for_test(
+            world,
+            &stake_asset,
+            Quantity::from(1_u64),
+        );
         world.soracloud_service_revisions.insert(
             (
                 bundle.service.service_name.as_ref().to_owned(),
@@ -40702,6 +40809,13 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
                 metadata: Metadata::default(),
             },
         );
+        world.public_lane_stake_custody.insert(
+            (LaneId::SINGLE, ALICE_ID.clone()),
+            (stake_asset.clone(), Quantity::from(1_u64)),
+        );
+        world
+            .public_lane_stake_reserves
+            .insert(stake_asset, Quantity::from(1_u64));
         world
             .soracloud_mailbox_messages
             .insert(message.message_id, message.clone());

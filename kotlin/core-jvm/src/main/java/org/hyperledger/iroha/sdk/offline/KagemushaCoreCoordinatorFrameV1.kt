@@ -15,6 +15,7 @@ enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
     ACCEPT_INSTALLED_TERMINAL(7), RECOVER_SENDER(8), RECOVER_TERMINAL_ENVELOPE(9), RELEASE_OUTBOX(10), BEGIN_OBSERVATION(11),
     INITIAL_ENROLLMENT(12),
     ACKNOWLEDGE_COMMITTED_APP_ATTEST(13),
+    EXPORT_OUTGOING_STATE_PROOF(14),
 }
 
 /**
@@ -120,6 +121,9 @@ object KagemushaCoreCoordinatorFrameV1 {
             KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION -> {
                 count(fields, 2); require(number(fields, 0) in setOf(1, 13, 18, 21)); nonempty(fields, 1)
             }
+            KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF -> {
+                count(fields, 1); digest(fields, 0)
+            }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_QUALIFICATION -> {
                 count(fields, 6); qualification(fields, 0); digest(fields, 5)
             }
@@ -202,6 +206,11 @@ object KagemushaCoreCoordinatorFrameV1 {
                 count(response, 1); digest(response, 0); equal(response, 0, request, 1)
             }
             KagemushaCoreCoordinatorMethodV1.BEGIN_OBSERVATION -> { count(response, 1); digest(response, 0) }
+            KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF -> {
+                count(response, 3); equal(response, 0, request, 0)
+                bounded(response, 1, 4 * 1024)
+                bounded(response, 2, 6_528)
+            }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_QUALIFICATION,
             KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY -> count(response, 0)
             KagemushaCoreCoordinatorMethodV1.BEGIN_SENDER_TRANSITION -> {
@@ -268,7 +277,7 @@ object KagemushaCoreCoordinatorFrameV1 {
 
     private fun bounded(fields: List<ByteArray>, index: Int, maximum: Int) {
         val value = field(fields, index)
-        require(value.isNotEmpty() && value.size <= maximum) { "invalid enrollment field size" }
+        require(value.isNotEmpty() && value.size <= maximum) { "invalid coordinator field size" }
     }
 
     private fun ticket(fields: List<ByteArray>, index: Int) {

@@ -112,6 +112,36 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         .expect("install configured owner policy before genesis");
     let configured_predecessor = state.canonical_runtime.view().get().clone();
     let (validator, keypair) = bls_account_in("snapshot-owner");
+    let custody_asset = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("snapshotowner", "universal").expect("custody domain"),
+            "stake".parse().expect("custody asset name"),
+        ),
+        validator.clone(),
+    );
+    {
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(Account::new(validator.clone()))
+            .execute(&validator, &mut transaction)
+            .expect("register staking validator account");
+        Register::asset_definition(AssetDefinition::numeric(
+            custody_asset.definition().clone(),
+            "Snapshot staking reserve",
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&validator, &mut transaction)
+        .expect("register staking custody definition");
+        Mint::asset_quantity(Quantity::from(1_000_000_u64), custody_asset.clone())
+            .execute(&validator, &mut transaction)
+            .expect("fund staking custody");
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("publish staking custody backing");
+    }
     insert_active_public_lane_validator_for_test(
         &state,
         LaneId::new(3),
@@ -123,11 +153,21 @@ fn snapshot_owner_policy_fixture_with_stored_history(
         let mut world = state.world.block();
         world
             .public_lane_validators
-            .get_mut(&(LaneId::new(3), validator))
+            .get_mut(&(LaneId::new(3), validator.clone()))
             .expect("fixture validator exists")
             .activation_height = 1;
+        world.public_lane_stake_custody.insert(
+            (LaneId::new(3), validator.clone()),
+            (custody_asset.clone(), Quantity::from(1_000_000_u64)),
+        );
+        world.public_lane_stake_reserves.insert(
+            custody_asset,
+            Quantity::from(1_000_000_u64),
+        );
         world.commit();
     }
+    // The fixture models a committed staking owner at both snapshot cuts.
+    state.world.block().commit();
     if store_history {
         // Replacement rebuilds DA indexes from the exact canonical Kura prefix.
         // Store checked empty, result-bearing bodies for this structural history;
@@ -242,6 +282,87 @@ state_test! { sync snapshot_owner_policy_survives_startup_with_live_nondefault_s
         before,
         "startup must preserve the snapshot World, lineage and owner policy"
     );
+}
+
+state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configured_dataspace_baseline
+    use iroha_data_model::nexus::{
+        NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, dataspace_catalog_hash,
+    };
+
+    let (_directory, mut state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
+    let baseline = configured.configured_dataspace_catalog.clone();
+    assert!(baseline.entries().iter().any(|entry| entry.description.is_some()));
+    let manifest_hash = [0x63; 32];
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: dataspace_catalog_hash(&baseline),
+        baseline_manifests_hash: Hash::prehashed(
+            state.lane_manifests.read().baseline_consensus_policy_digest(),
+        ),
+        dataspaces: vec![RuntimeDataSpaceAdditionV1 {
+            descriptor: DataSpaceMetadata {
+                id: DataSpaceId::from_hash(&manifest_hash),
+                alias: "paid-runtime-dataspace".to_owned(),
+                description: Some("committed catalog description".to_owned()),
+                fault_tolerance: 1,
+            },
+            manifest_hash,
+        }],
+        manifests: Vec::new(),
+    };
+    let effective = runtime_catalog_dataspaces(&baseline, Some(&runtime))
+        .expect("valid baseline and committed addition");
+    let mut current_nexus = configured.clone();
+    current_nexus.dataspace_catalog = effective.clone();
+    *state.nexus.write() = current_nexus.clone();
+    let mut current_runtime = state.canonical_runtime.view().get().clone();
+    current_runtime.owner_policy = SnapshotNexusOwnerPolicy::from_nexus(&current_nexus);
+    state.canonical_runtime.replace_current_preserving_predecessor(current_runtime);
+    {
+        let mut world = state.world.block();
+        world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(
+                runtime.into_custom_parameter().expect("valid protected catalog"),
+            ),
+        );
+        world.commit();
+    }
+    let snapshot = norito::json::to_json(&state).expect("serialize committed catalog snapshot");
+    let seed = || deserialize::KuraSeed {
+        kura: Arc::clone(&state.kura),
+        lane_manifests: state.lane_manifests.read().clone(),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    };
+    let restored = seed()
+        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+            &snapshot,
+            configured.clone(),
+        )
+        .expect("full startup baseline restores the committed runtime catalog");
+    assert_eq!(restored.nexus_snapshot().configured_dataspace_catalog, baseline);
+    assert_eq!(restored.nexus_snapshot().dataspace_catalog, effective);
+
+    let mut changed_config = configured;
+    let mut entries = baseline.entries().to_vec();
+    entries.last_mut().expect("configured dataspace").description =
+        Some("different configured description".to_owned());
+    changed_config.configured_dataspace_catalog =
+        DataSpaceCatalog::new(entries).expect("same physical geometry, changed baseline bytes");
+    let error = seed()
+        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+            &snapshot,
+            changed_config,
+        )
+        .err()
+        .expect("changed full baseline must fail catalog authentication");
+    assert!(error.to_string().contains("configured dataspace baseline differs"), "{error}");
+    let error = seed()
+        .into_state_from_json_str_without_durable_recovery(&snapshot)
+        .err()
+        .expect("catalog restore without full configured baseline must fail closed");
+    assert!(error.to_string().contains("requires the complete configured dataspace baseline"), "{error}");
 }
 
 state_test! { sync snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration

@@ -5,7 +5,10 @@ use iroha_crypto::{
     identifier_hashes_from_output_hash,
 };
 use iroha_data_model::{
-    identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierResolutionReceipt},
+    identifier::{
+        IdentifierClaimRecord, IdentifierNormalization, IdentifierPolicy,
+        IdentifierResolutionReceipt,
+    },
     prelude::*,
     ram_lfe::{
         RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramPolicy,
@@ -42,6 +45,7 @@ pub mod isi {
                     format!("Identifier policy {} is already registered", policy.id).into(),
                 ));
             }
+            validate_phone_retail_policy_registration(&policy, state_transaction)?;
             state_transaction
                 .world
                 .identifier_policies
@@ -147,10 +151,13 @@ pub mod isi {
                     "Identifier receipt hash must not be zero".to_owned().into(),
                 ));
             }
+            let now_ms = state_transaction.block_unix_timestamp_ms();
             validate_program_receipt(
                 &receipt,
                 &policy,
                 &program_policy,
+                state_transaction.network_id(),
+                now_ms,
                 crate::zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
             )?;
             let uaid = *state_transaction
@@ -181,7 +188,6 @@ pub mod isi {
                     .into(),
                 ));
             }
-            let now_ms = state_transaction.block_unix_timestamp_ms();
             if receipt.resolved_at_ms() > now_ms {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -284,6 +290,10 @@ pub mod isi {
                     policy_id: receipt_payload.policy_id,
                     opaque_id: receipt_payload.opaque_id,
                     receipt_hash: receipt_payload.receipt_hash,
+                    phone_retail_nullifier: receipt
+                        .phone_retail_canonicality
+                        .as_ref()
+                        .map(|attestation| attestation.payload.canonical_phone_nullifier),
                     uaid,
                     account_id: self.account,
                     verified_at_ms: receipt.resolved_at_ms(),
@@ -366,6 +376,62 @@ pub mod isi {
                 .into(),
         ))
     }
+    fn validate_phone_retail_policy_registration(
+        policy: &IdentifierPolicy,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let is_phone = policy.id.kind.as_ref() == "phone"
+            || policy.normalization == IdentifierNormalization::PhoneE164;
+        if !is_phone {
+            if policy.phone_retail_attestor_public_key.is_some() {
+                return Err(Error::InvariantViolation(
+                    "phone attestor key is only valid for phone#retail"
+                        .to_owned()
+                        .into(),
+                ));
+            }
+            return Ok(());
+        }
+        if !policy.id.is_phone_retail()
+            || policy.normalization != IdentifierNormalization::PhoneE164
+            || policy.program_id.to_string() != "phone_retail"
+        {
+            return Err(Error::InvariantViolation(
+                "first-release phone bindings require exactly phone#retail with PhoneE164 and program phone_retail"
+                    .to_owned().into(),
+            ));
+        }
+        if policy.phone_retail_attestor_public_key.is_none() {
+            return Err(Error::InvariantViolation(
+                "phone#retail requires an explicit pinned canonicality attestor key"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        let program = state_transaction
+            .world
+            .ram_lfe_program_policies
+            .get(&policy.program_id)
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "phone#retail requires its pinned RAM-LFE program to be registered first"
+                        .to_owned()
+                        .into(),
+                )
+            })?;
+        if program.owner != policy.owner
+            || program.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program.commitment.backend != program.backend
+            || program.verification_mode != RamLfeVerificationMode::Signed
+        {
+            return Err(Error::InvariantViolation(
+                "phone#retail requires one owner-pinned signed programmed BFV policy"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
     fn evict_expired_identifier_binding(
         state_transaction: &mut StateTransaction<'_, '_>,
         opaque_id: &OpaqueAccountId,
@@ -413,6 +479,8 @@ pub mod isi {
         receipt: &IdentifierResolutionReceipt,
         policy: &IdentifierPolicy,
         program_policy: &RamLfeProgramPolicy,
+        network_id: &iroha_data_model::NetworkId,
+        now_ms: u64,
         guardrails: crate::zk::ZkVerifyGuardrails,
     ) -> Result<(), Error> {
         let execution = &receipt.payload.execution;
@@ -526,7 +594,15 @@ pub mod isi {
             ));
         }
         validate_output_opening(&receipt.payload.opening, execution, program_policy)?;
-        let expected_hashes = expected_identifier_hashes(policy, &receipt.payload.opening)?;
+        let phone_nullifier = validate_phone_retail_canonicality(
+            receipt,
+            policy,
+            program_policy,
+            network_id,
+            now_ms,
+        )?;
+        let expected_hashes =
+            expected_identifier_hashes(policy, &receipt.payload.opening, phone_nullifier.as_ref())?;
         if receipt.payload.opaque_id != OpaqueAccountId::from(expected_hashes.0) {
             return Err(Error::InvariantViolation(
                 format!(
@@ -599,6 +675,7 @@ pub mod isi {
     fn expected_identifier_hashes(
         policy: &IdentifierPolicy,
         opening: &RamLfeOutputOpening,
+        phone_nullifier: Option<&Hash>,
     ) -> Result<(Hash, Hash), Error> {
         let program_id_bytes = norito::encode_canonical(&policy.program_id).map_err(|err| {
             Error::InvariantViolation(
@@ -611,8 +688,76 @@ pub mod isi {
         })?;
         Ok(identifier_hashes_from_output_hash(
             &program_id_bytes,
-            &opening.payload.opened_output_hash,
+            phone_nullifier.unwrap_or(&opening.payload.opened_output_hash),
         ))
+    }
+    fn validate_phone_retail_canonicality(
+        receipt: &IdentifierResolutionReceipt,
+        policy: &IdentifierPolicy,
+        program_policy: &RamLfeProgramPolicy,
+        network_id: &iroha_data_model::NetworkId,
+        now_ms: u64,
+    ) -> Result<Option<Hash>, Error> {
+        if !policy.id.is_phone_retail() {
+            if receipt.phone_retail_canonicality.is_some() {
+                return Err(Error::InvariantViolation(
+                    "canonical phone attestation is only valid for phone#retail"
+                        .to_owned()
+                        .into(),
+                ));
+            }
+            return Ok(None);
+        }
+        let attestation = receipt.phone_retail_canonicality.as_ref().ok_or_else(|| {
+            Error::InvariantViolation(
+                "phone#retail requires a trusted canonical E.164 nullifier attestation"
+                    .to_owned()
+                    .into(),
+            )
+        })?;
+        let pinned_key = policy
+            .phone_retail_attestor_public_key
+            .as_ref()
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "phone#retail attestor key is not pinned".to_owned().into(),
+                )
+            })?;
+        let statement = &attestation.payload;
+        let execution = &receipt.payload.execution;
+        let opening = &receipt.payload.opening.payload;
+        if statement.network_id != *network_id
+            || statement.policy_id != policy.id
+            || statement.program_id != policy.program_id
+            || statement.program_id != program_policy.program_id
+            || statement.input_ciphertext_hash != execution.input_ciphertext_hash
+            || statement.output_ciphertext_hash != execution.output_ciphertext_hash
+            || statement.opened_output_hash != opening.opened_output_hash
+            || statement.uaid != receipt.payload.uaid
+            || statement.account_id != receipt.payload.account_id
+        {
+            return Err(Error::InvariantViolation(
+                "phone#retail canonicality statement differs from network, program, ciphertext, opening, or beneficiary"
+                    .to_owned().into(),
+            ));
+        }
+        if statement.canonical_phone_nullifier == Hash::prehashed([0; Hash::LENGTH])
+            || statement.issued_at_ms > now_ms
+            || statement.expires_at_ms <= now_ms
+            || statement.expires_at_ms <= statement.issued_at_ms
+        {
+            return Err(Error::InvariantViolation(
+                "phone#retail canonicality nullifier or validity window is invalid"
+                    .to_owned()
+                    .into(),
+            ));
+        }
+        attestation.verify(pinned_key).map_err(|err| {
+            Error::InvariantViolation(
+                format!("phone#retail canonicality signature is invalid: {err}").into(),
+            )
+        })?;
+        Ok(Some(statement.canonical_phone_nullifier))
     }
     fn validate_output_opening(
         opening: &RamLfeOutputOpening,
@@ -1029,6 +1174,7 @@ mod tests {
         IdentifierResolutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(signature),
+            phone_retail_canonicality: None,
         }
     }
     fn sample_program_policy(

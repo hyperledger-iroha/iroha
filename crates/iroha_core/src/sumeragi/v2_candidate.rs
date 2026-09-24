@@ -265,6 +265,8 @@ impl CandidateWorkUnavailable {
 /// Why the complete snapshot cannot currently produce a useful carrier, independently of its row count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CandidateWorkDeferral {
+    /// Committed State published another generation during bounded assembly.
+    CommittedStateMoved,
     /// The authenticated native source or its applying State is not available.
     NativeLaneSource,
     /// The exact committed merge frontier or installed reducer view is moving.
@@ -756,6 +758,13 @@ impl V2CandidateAssembler {
         mut request: CandidateRequest<'_, Work>,
     ) -> Result<CandidateAssemblyOutcome, CandidateError> {
         validate_request(&request)?;
+        let state_generation = request.state.state_view_generation();
+        if !candidate_state_generation_is_current(request.state, state_generation) {
+            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                report: CandidateScanReport::default(),
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+            });
+        }
         if request.queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
         }
@@ -817,6 +826,27 @@ impl V2CandidateAssembler {
                 let unavailable = CandidateWorkUnavailable::new(
                     unavailable_routes,
                     "committed routing plan is unavailable at the exact candidate time",
+                );
+                remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
+                fill_selection(
+                    &mut selected,
+                    &mut reserve,
+                    selection_max,
+                    exact_payload_limit,
+                    &mut report,
+                );
+                continue;
+            }
+            let unavailable_admission = self.unavailable_ordinary_admission_indices(
+                request.queue,
+                request.state,
+                &selected,
+                candidate_ledger_time_ms,
+            );
+            if !unavailable_admission.is_empty() {
+                let unavailable = CandidateWorkUnavailable::new(
+                    unavailable_admission,
+                    "Ordinary input no longer passes admission against the committed parent",
                 );
                 remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
                 fill_selection(
@@ -1167,10 +1197,18 @@ impl V2CandidateAssembler {
             }
             // Candidate signing begins only after the complete actual carrier
             // fits. The sizing projection never signs or publishes placeholder bytes.
-            let _native_publication = prepared_work
-                .native_lane_decisions
-                .as_ref()
-                .map(|_| request.state.consensus_publication_lease());
+            // Every selection and admission check above observed the same committed
+            // generation. Exclude publication until the private-key action and
+            // canonical bytes are complete; a moving parent is a retry, not an
+            // output-guard failure after signing.
+            let _state_publication = request.state.consensus_publication_lease();
+            if !candidate_state_generation_is_current(request.state, state_generation) {
+                return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                    report,
+                    reason: CandidateWorkDeferral::CommittedStateMoved,
+                });
+            }
+            validate_request(&request)?;
             if prepared_work
                 .native_lane_decisions
                 .as_ref()
@@ -1301,6 +1339,43 @@ impl V2CandidateAssembler {
         }
         Ok(unavailable)
     }
+    fn unavailable_ordinary_admission_indices(
+        &self,
+        queue: &Queue,
+        state: &State,
+        selected: &[CandidateRecord],
+        ledger_time_ms: u64,
+    ) -> BTreeSet<usize> {
+        let state_view = state.view();
+        selected
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                if !Queue::ordinary_single_route_is_reassignable(
+                    candidate.transaction.entrypoint(),
+                    &candidate.routing_plan,
+                ) {
+                    return None;
+                }
+                queue
+                    .preflight_ordinary_candidate_in_view(
+                        &candidate.transaction,
+                        &candidate.routing_plan,
+                        &state_view,
+                        ledger_time_ms,
+                    )
+                    .err()
+                    .map(|error| {
+                        iroha_logger::debug!(
+                            tx = %candidate.entrypoint_hash,
+                            %error,
+                            "deferring Ordinary input that no longer passes current admission"
+                        );
+                        index
+                    })
+            })
+            .collect()
+    }
     fn prospective_candidate_creation_time(
         &self,
         view: wire::View,
@@ -1364,8 +1439,8 @@ impl V2CandidateAssembler {
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
-            // A QueuePlan item remains an ordinary FIFO cut, but cannot make an
-            // exact-height lifecycle control behind it miss its only block.
+            // A certified QueuePlan item is an exact FIFO cut, but cannot make
+            // an exact-height lifecycle control behind it miss its only block.
             if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction) {
                 continue;
             }
@@ -1373,6 +1448,8 @@ impl V2CandidateAssembler {
             let queue_plan_synced = transaction.entrypoint().admission_intent()
                 == TransactionAdmissionIntent::QueuePlanSynced;
             let queue_plan_binding = if queue_plan_synced {
+                // Local arrival has no global ordering promise. Only the exact
+                // carrier or canonical parent binding makes this a FIFO cut.
                 match carrier_queue_plan_bindings.get(&entrypoint_hash) {
                     Some(binding) => Some(binding.clone()),
                     None => match state
@@ -1380,10 +1457,7 @@ impl V2CandidateAssembler {
                     {
                         Ok(Some(binding)) => Some(binding),
                         Ok(None) => {
-                            // A QueuePlan transaction is a FIFO barrier until the same carrier or
-                            // canonical parent state owns its exact admission certificate.
-                            // Continue only to find an independent exact-height control.
-                            queue_plan_barrier = true;
+                            report.work_deferred = report.work_deferred.saturating_add(1);
                             continue;
                         }
                         Err(_) => return Err(CandidateError::RestartRequired),
@@ -1394,6 +1468,10 @@ impl V2CandidateAssembler {
             };
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
+                Err(crate::queue::RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
+                    report.unresolved = report.unresolved.saturating_add(1);
+                    continue;
+                }
                 Err(_) => {
                     report.unresolved = report.unresolved.saturating_add(1);
                     return Err(CandidateError::RestartRequired);
@@ -1789,6 +1867,9 @@ fn record_ordinary_execution_carrier_exclusion(
     }
     report.carrier_excluded = report.carrier_excluded.saturating_add(1);
     true
+}
+fn candidate_state_generation_is_current(state: &State, expected: u64) -> bool {
+    expected % 2 == 0 && state.state_view_generation() == expected
 }
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
     request
@@ -3129,6 +3210,75 @@ pub(super) mod tests {
             BTreeSet::from([0]),
             "a changed Native-AMX topology must defer without hiding later live work"
         );
+    }
+    #[test]
+    fn candidate_admission_preflight_skips_unregistered_ordinary_input() {
+        let (state, _context, _anchor, _) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(4));
+        let queue = Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        );
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(2), nonzero(64 * 1024), nonzero(2))
+                .expect("candidate limits"),
+            time_source.clone(),
+        );
+        let missing_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("deterministic missing authority");
+        let missing = TransactionBuilder::new_with_time_source(
+            *state.network_id_ref(),
+            AccountId::new(missing_key.public_key().clone()),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "missing authority".into(),
+        )])
+        .sign(missing_key.private_key());
+        let missing = AcceptedTransaction::new_unchecked(Cow::Owned(missing));
+        let ready = record(0x42, "registered authority", 1);
+        let ready_authority = ready.transaction.as_ref().authority().clone();
+        let mut world = state.world.block();
+        world.accounts.insert(
+            ready_authority,
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.commit();
+        let selected = [
+            CandidateRecord {
+                entrypoint_hash: missing.hash_as_entrypoint(),
+                encoded_len: missing.encoded_len(),
+                transaction: missing,
+                routing_plan: RoutingPlan::single(RoutingDecision::default()),
+                source_ordinal: 0,
+            },
+            ready,
+        ];
+        assert_eq!(
+            assembler.unavailable_ordinary_admission_indices(&queue, &state, &selected, 4),
+            BTreeSet::from([0]),
+            "an unavailable authority must not hide a later eligible local input"
+        );
+    }
+    #[test]
+    fn candidate_generation_gate_accepts_only_the_same_stable_state_cut() {
+        let (state, _context, _anchor, _) = snapshot_parent_fixture();
+        let generation = state.state_view_generation();
+        assert_eq!(generation % 2, 0);
+        assert!(candidate_state_generation_is_current(&state, generation));
+        assert!(!candidate_state_generation_is_current(
+            &state,
+            generation.saturating_add(1),
+        ));
+        assert!(!candidate_state_generation_is_current(
+            &state,
+            generation.saturating_add(2),
+        ));
     }
     #[test]
     fn candidate_build_uses_the_exact_preflight_creation_time() {
@@ -4756,7 +4906,7 @@ pub(super) mod tests {
         );
     }
     #[test]
-    fn queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding() {
+    fn only_certified_queue_plan_intent_fences_later_ordinary_input() {
         let (state, height_context, anchor, key) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
@@ -4771,7 +4921,7 @@ pub(super) mod tests {
             time_source,
         );
         let mut blocked_report = CandidateScanReport::default();
-        let blocked = assembler
+        let unbound = assembler
             .snapshot_routable_candidates(
                 &height_context,
                 &queue,
@@ -4781,9 +4931,11 @@ pub(super) mod tests {
                 64 * 1024,
                 &mut blocked_report,
             )
-            .expect("an absent marker is a normal bounded wait");
-        assert!(blocked.is_empty());
+            .expect("an absent marker is a local autonomous admission wait");
+        assert_eq!(unbound.len(), 1);
+        assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint());
         assert_eq!(blocked_report.inspected, 2);
+        assert_eq!(blocked_report.work_deferred, 1);
 
         let routing_plan = queue
             .route_plan_with_state(&queue_plan, &state)
@@ -4879,7 +5031,7 @@ pub(super) mod tests {
                 vec![
                     ordinary_before,
                     queue_plan,
-                    ordinary_after,
+                    ordinary_after.clone(),
                     first.transaction.clone(),
                     second.transaction.clone(),
                 ],
@@ -4887,9 +5039,10 @@ pub(super) mod tests {
                 &mut report,
             )
             .expect("bounded scan preserves the exact-height control after the FIFO cut");
-        assert_eq!(pool.len(), 3);
-        assert_eq!(pool[1].entrypoint_hash, first.entrypoint_hash);
-        assert_eq!(pool[2].entrypoint_hash, second.entrypoint_hash);
+        assert_eq!(pool.len(), 4);
+        assert_eq!(pool[1].entrypoint_hash, ordinary_after.hash_as_entrypoint());
+        assert_eq!(pool[2].entrypoint_hash, first.entrypoint_hash);
+        assert_eq!(pool[3].entrypoint_hash, second.entrypoint_hash);
         prioritize_exact_height_lifecycle_candidates(&context, &mut pool);
         assert_eq!(pool[0].entrypoint_hash, first.entrypoint_hash);
         assert_eq!(pool[1].entrypoint_hash, second.entrypoint_hash);

@@ -18,7 +18,7 @@ public static class Kagemusha
     public const int MaximumAssetScale = 28;
     public const ulong RequestMaximumTtlMilliseconds = 5 * 60 * 1_000;
     public const int MaximumAggregateBytes = 768;
-    public const int MaximumRequestBytes = 928;
+    public const int MaximumRequestBytes = 1_024;
     public const int MaximumPaymentBytes = 7_552;
     public const int MaximumAcknowledgementBytes = 256;
     public const int MaximumMintAuthorizationBytes = 7_936;
@@ -2147,7 +2147,7 @@ public static class Kagemusha
 
     private static (int Raw, int Text) Limits(PayloadKind kind) => kind switch
     {
-        PayloadKind.PaymentRequest => (MaximumRequestBytes, 1_243),
+        PayloadKind.PaymentRequest => (MaximumRequestBytes, 1_371),
         PayloadKind.Payment => (MaximumPaymentBytes, 10_075),
         PayloadKind.Acknowledgement => (MaximumAcknowledgementBytes, 347),
         PayloadKind.MintAuthorization => (MaximumMintAuthorizationBytes, 10_587),

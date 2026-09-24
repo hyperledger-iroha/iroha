@@ -1984,7 +1984,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let phase_carrier = source_region(
         registry_source,
         "impl DurableRecoveredWalSignWork {",
-        "/// Whether one concrete registry row is still an executable adapter effect",
+        "/// Whether one concrete registry row is still an executable adapter effect or",
     );
     assert_source_token_count(
         phase_carrier,

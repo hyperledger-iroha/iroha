@@ -5553,8 +5553,6 @@ mod tests {
             meta: &mut halo2_proofs::plonk::ConstraintSystem<F>,
             params: Self::Params,
         ) -> Self::Config {
-            use halo2_proofs::plonk::Circuit as _;
-
             let usable_rows = (1_usize << params.k) - super::MINIMUM_UNUSABLE_ROWS;
             let mut base = halo2_base::gates::circuit::BaseConfig::configure(meta, params);
             base.set_usable_rows(usable_rows);
@@ -5573,8 +5571,6 @@ mod tests {
             config: Self::Config,
             mut layouter: impl halo2_proofs::circuit::Layouter<F>,
         ) -> Result<(), halo2_proofs::plonk::Error> {
-            use halo2_proofs::plonk::Circuit as _;
-
             self.builder.synthesize(
                 config.base,
                 layouter.namespace(|| "candidate envelope Base"),

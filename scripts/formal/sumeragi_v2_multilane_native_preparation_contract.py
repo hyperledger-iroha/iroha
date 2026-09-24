@@ -730,8 +730,13 @@ QUEUE_GEOMETRY_OWNER_BINDINGS = (
     )),
     (QUEUE_OWNER, "method", "Queue::lane_has_pending_route_work", (
         "reservation_owned_hashes: &HashSet<EntrypointHash>",
-        "self.routing_plans.iter().any(|entry| {\n            !reservation_owned_hashes.contains(entry.key())",
-        "self.txs.contains_key(entry.key())", "entry.value().legs().into_iter().any(|leg|",
+        "self.routing_plans.iter().any(|entry| {",
+        "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
+        "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
+        "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
+        "claim.global_admission_identity.is_none()",
+        "claim.routing_plan == *entry.value()",
+        "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
         "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id",
     )),
     (QUEUE_OWNER, "method", "QueueLaneRetirementObserver::try_into_cut", ('fn try_into_cut(\n        self,\n    ) -> Result<QueueLaneRetirementCut<\'queue>, (QueueRetirementBusy, QueueRetirementCleanup)> {\n        let mutation = match self.queue.push_remove_lock.try_lock_or_wait() {\n            Ok(guard) => guard,\n            Err(wait) => {\n                return Err((\n                    QueueRetirementBusy {\n                        field: "push_remove_lock",\n                        wait,\n                    },\n                    QueueRetirementCleanup {\n                        released: [None, None, Some(self.release_deferred())],\n                    },\n                ));\n            }\n        };\n        let reservations = match self.queue.lane_reservations.try_lock_or_wait() {\n            Ok(guard) => guard,\n            Err(wait) => {\n                let mutation = mutation.release_deferred();\n                let transition = self.release_deferred();\n                return Err((\n                    QueueRetirementBusy {\n                        field: "lane_reservations",\n                        wait,\n                    },\n                    QueueRetirementCleanup {\n                        released: [None, Some(mutation), Some(transition)],\n                    },\n                ));\n            }\n        };\n        Ok(QueueLaneRetirementCut {\n            reservations,\n            _mutation: mutation,\n            observer: self,\n        })\n    }',)),
@@ -3583,8 +3588,10 @@ def validate_native_preparation_contract(
             "let reservation_owned_hashes =", "if reservations", "return None;",
             "Some(reservation_owned_hashes)")
     ordered("Queue::lane_has_pending_route_work",
-            "!reservation_owned_hashes.contains(entry.key())", "self.txs.contains_key(entry.key())",
-            "entry.value().legs().into_iter().any(|leg|")
+            "if reservation_owned_hashes.contains(entry.key())", "let Some(tx) = self.txs.get(entry.key())",
+            "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
+            "claim.global_admission_identity.is_none()", "claim.routing_plan == *entry.value()",
+            ".legs()", ".any(|leg|")
     ordered("QueueLaneRetirementObserver::try_into_cut",
             "let mutation = match self.queue.push_remove_lock.try_lock_or_wait()",
             "let reservations = match self.queue.lane_reservations.try_lock_or_wait()",

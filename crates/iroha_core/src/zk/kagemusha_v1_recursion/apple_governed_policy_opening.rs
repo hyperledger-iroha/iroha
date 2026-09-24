@@ -68,10 +68,9 @@ pub(super) fn apple_policy_cells_from_state_guard_v1<F: KagemushaPoseidonFieldV1
     }
 }
 
-/// RP/App ID and app release bytes that must be passed unchanged to assertion SHA.
+/// Authenticated RP/App ID bytes passed unchanged to assertion SHA.
 pub(super) struct AppleGovernedAppBytesV1<F: KagemushaPoseidonFieldV1> {
     pub(super) rp_id_hash: [AssignedValue<F>; 32],
-    pub(super) app_release_digest: [AssignedValue<F>; 32],
 }
 
 fn uint_le<F: KagemushaPoseidonFieldV1>(
@@ -298,12 +297,6 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
             .collect::<Vec<_>>()
             .try_into()
             .expect("RP width"),
-        app_release_digest: app_release
-            .iter()
-            .map(|byte| byte.assigned().expect("governed app release assigned"))
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("app release width"),
     })
 }
 

@@ -7,7 +7,7 @@ use crate::zk::kagemusha_v1_recursion::{
     terminal_durable_commitments as durable,
 };
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 fn blocks(length: usize) -> usize {
     (length + 9).div_ceil(BLOCK_BYTE_SIZE)
