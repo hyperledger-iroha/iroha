@@ -3042,6 +3042,91 @@ fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
     );
 }
 #[test]
+fn certified_fetch_retry_reoffers_after_one_archive_target_keeps_its_ticket() {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let request = certified_fetch_task(&service, 64, tag, None, proposal.round, proposal.subject)
+        .certified_request()
+        .expect("fixture certified request")
+        .clone();
+    let sources = service
+        .context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect();
+    let task = BodyFetchTask::certified_for_test(64, tag, None, sources, request.clone());
+    let blocked = service.context.roster[1].validator.clone();
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let admitted_for_hook = Arc::clone(&admitted);
+    let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+    let ticket_fixtures_for_hook = Arc::clone(&ticket_fixtures);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        if post.peer_id == blocked {
+            let ticket = ticket.unwrap_or_else(|| {
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                ticket_fixtures_for_hook
+                    .lock()
+                    .expect("retain actor-ticket fixture")
+                    .push(fixture);
+                ticket
+            });
+            return Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: Some(ticket),
+                rank: 1,
+            });
+        }
+        assert!(ticket.is_none());
+        admitted_for_hook.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("first exact certified request");
+    let first_admissions = admitted.load(Ordering::Relaxed);
+    assert!(first_admissions > 0);
+    assert!(
+        !ticket_fixtures
+            .lock()
+            .expect("inspect retained actor-ticket fixtures")
+            .is_empty(),
+        "the first fanout must retain an actor ticket before the retry"
+    );
+    assert_eq!(service.lock_pending_exact_output().unwrap().fanouts.len(), 1);
+
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("periodic Fetch re-offers the same signed request");
+    assert!(
+        admitted.load(Ordering::Relaxed) > first_admissions,
+        "a retained target ticket must not suppress a retry to responsive archives"
+    );
+    assert_eq!(service.fetches[&task.id()].task, task);
+    let pending = service.lock_pending_exact_output().unwrap();
+    assert_eq!(pending.fanouts.len(), 1);
+    assert!(matches!(
+        pending.fanouts[0].messages.as_slice(),
+        [NetworkMessage::SumeragiBlock(envelope)]
+            if matches!(
+                envelope.as_message(),
+                BlockMessage::V2(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(reoffered)
+                            if reoffered == &request
+                    )
+            )
+    ));
+    assert!(!service.output_guard.restart_required());
+}
+#[test]
 fn certified_fetch_keeps_actor_ticket_across_later_view_retention() {
     let (mut service, keys) = fixture();
     allow_fixture_block_payload(&mut service.context);

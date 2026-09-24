@@ -25324,18 +25324,47 @@ async fn persist_queue_plan_admission_certificate(
             iroha_logger::warn!(
                 %certificate_hash,
                 entrypoint_hash = %expected_binding.entrypoint_hash,
-                "Sumeragi QueuePlan wake was deferred; preserving the known durable acceptance"
+                "Sumeragi QueuePlan wake was deferred; preserving the durable input"
             );
         }
         None => {
             iroha_logger::warn!(
                 %certificate_hash,
                 entrypoint_hash = %expected_binding.entrypoint_hash,
-                "Sumeragi QueuePlan wake could not be delivered because no owner is attached; preserving the known durable acceptance"
+                "Sumeragi QueuePlan wake could not be delivered because no owner is attached; preserving the durable input"
             );
         }
     }
-    queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)
+    match deadline
+        .wait_for_canonical_admission(&app.state, &durable_input)
+        .await
+    {
+        Ok(
+            PendingQueuePlanAdmissionDisposition::ExactPending
+            | PendingQueuePlanAdmissionDisposition::Applied,
+        ) => queue_plan_completed_admission_response(snapshot, expected_binding, &deadline),
+        Ok(PendingQueuePlanAdmissionDisposition::DefinitiveConflict) => {
+            queue_plan_admission_registry_conflict_response(
+                expected_binding.entrypoint_hash.clone(),
+                "canonical WSV committed a different QueuePlan admission for this transaction",
+            )
+        }
+        Ok(PendingQueuePlanAdmissionDisposition::Stale) => queue_plan_outcome_unknown_response(
+            expected_binding.entrypoint_hash.clone(),
+            expected_binding.signed_transaction_hash.clone(),
+            "the durable QueuePlan input became stale before canonical inclusion",
+        ),
+        Ok(other) => queue_plan_outcome_unknown_response(
+            expected_binding.entrypoint_hash.clone(),
+            expected_binding.signed_transaction_hash.clone(),
+            format!("durable QueuePlan input still awaits canonical inclusion: {other:?}"),
+        ),
+        Err(error) => queue_plan_outcome_unknown_response(
+            expected_binding.entrypoint_hash.clone(),
+            expected_binding.signed_transaction_hash.clone(),
+            format!("durable QueuePlan input awaits canonical inclusion: {error}"),
+        ),
+    }
 }
 #[cfg(feature = "connect")]
 fn queue_plan_completed_admission_response(
@@ -25348,7 +25377,7 @@ fn queue_plan_completed_admission_response(
             expected_binding.entrypoint_hash.clone(),
             expected_binding.signed_transaction_hash.clone(),
             format!(
-                "{error}; completed durable QueuePlan admission is preserved; reconcile the exact transaction status"
+                "{error}; canonical QueuePlan admission is preserved; reconcile the exact transaction status"
             ),
         );
     }
@@ -44699,7 +44728,7 @@ impl Torii {
         mount_account_transactions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            TRANSACTIONS_HISTORY_GET => optional_canonical_signature_get(handler_transactions_history_get);
+            TRANSACTIONS_HISTORY_GET => canonical_signature_get(handler_transactions_history_get);
             CONTRACTS_ACTIVITY_GET => optional_canonical_signature_get(handler_contracts_activity_get);
             CONTRACTS_EVENTS_GET => optional_canonical_signature_get(handler_contracts_events_get);
             CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => optional_canonical_signature_get(handler_contracts_rollups_swaps_fills_get);

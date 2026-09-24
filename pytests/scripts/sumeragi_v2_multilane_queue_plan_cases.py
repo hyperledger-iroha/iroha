@@ -1072,6 +1072,7 @@ def queue_plan_publication_source_contract_errors(module, sources: dict[str, str
         "PublicationGuard",
         "PhysicalPublicationGuard",
         "PublicationMutex::wrap",
+        "PublicationMutex::wrap_read_only",
         "PublicationMutex::lock",
         "PublicationGuard<'_, T>::unlock_fair",
         "PhysicalPublicationGuard<'_, T>::drop",
@@ -1249,8 +1250,27 @@ def test_queue_plan_publication_scoped_contract_keeps_native_control_anchors() -
             "expected_durable_height.checked_add(1) == Some(*actual_durable_height)",
             "expected_durable_height < actual_durable_height",
         ),
+        (
+            "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+            "wait_for_canonical_admission",
+            "state.wait_for_committed_height(next_height)",
+            "state.wait_for_committed_height(committed_height)",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "persist_queue_plan_admission_certificate",
+            ".wait_for_canonical_admission(&app.state, &durable_input)",
+            ".remaining()",
+        ),
     ],
-    ids=("authenticated-network", "exact-history", "admission-scope", "one-ahead-wait"),
+    ids=(
+        "authenticated-network",
+        "exact-history",
+        "admission-scope",
+        "one-ahead-wait",
+        "canonical-height-wait",
+        "canonical-response-gate",
+    ),
 )
 def test_queue_plan_pending_membership_contract_rejects_current_owner_drift(
     tmp_path: Path, relative: str, symbol: str, old: str, new: str,
@@ -1330,8 +1350,8 @@ def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path:
 
 @pytest.mark.parametrize(("kind", "symbol", "old", "new"), [
     ("method", "PublicationMutex::lock", "self.wrap(self.inner.lock())", "self.inner.lock()"),
-    ("method", "PublicationMutex::wrap", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
-    ("method", "PublicationMutex::wrap", "guard: Some(guard),", "guard: None,"),
+    ("method", "PublicationMutex::wrap_read_only", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
+    ("method", "PublicationMutex::wrap_read_only", "guard: Some(guard),", "guard: None,"),
     ("method", "PublicationGuard<'_, T>::unlock_fair", "self.inner.fair = true;", "self.inner.fair = false;"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "if self.fair {", "if !self.fair {"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),
@@ -1899,8 +1919,8 @@ def test_replay_terminal_queue_plan_custody_accepts_actual_sources() -> None:
     ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.inflight_guards.load(Ordering::Acquire) != 0", "|| false"),
     ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.selection_attempts.load(Ordering::Acquire) != 0", "|| false"),
     ("Queue::resume_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
-    ("Queue::resume_replay_terminal_cleanup", "claim.global_admission_binding()", "replacement.global_admission_binding()"),
-    ("Queue::resume_replay_terminal_cleanup", "self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)", "self.reject_exact_queue_plan_admission_claim(&binding)"),
+    ("Queue::resume_replay_terminal_cleanup", "claim.value().clone()", "replacement.value().clone()"),
+    ("Queue::resume_replay_terminal_cleanup", "self.reject_unreserved_terminal_plan_claim(&claim)", "self.reject_exact_queue_plan_admission_claim(&binding)"),
     ("Queue::resume_replay_terminal_cleanup", "self.mark_accepted_work_validation_fault(", "ignore_fault("),
     ("Queue::resume_unowned_replay_terminal_cleanup", ".swap(false, Ordering::AcqRel)", ".load(Ordering::Acquire)"),
     ("Queue::resume_unowned_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),

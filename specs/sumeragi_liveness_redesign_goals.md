@@ -40,6 +40,35 @@ controlled FIFO drain, and its exact wait remains under investigation. The full
 unchanged fault campaign remains open; these corrections do not close a
 redesign goal.
 
+The subsequent retained-Validate candidate durably cancels an exact
+pre-execution Waiting row once finalized State passes its proposal height,
+including while the original first-input recovery wait is parked. The two
+ledger/carrying-owner tests and guarded driver-completion test pass;
+the unchanged daemon and harness pass one run each for silent author,
+same- and distinct-subject quorum release, nine-peer slow-observer pressure,
+four- and seven-validator restart, and NPoS stopped-leader rotation. Those
+runs do not prove the superseded Validate cut occurred in a network. The
+controlled-drain timeout is a separate open counterexample; the full unchanged
+fault campaign remains open.
+
+The Native lane deadline projection now excludes an overdue clock while its
+original instance lacks the effect reservation needed to enter the reducer or
+has an unacknowledged completion. The runner uses its existing bounded idle
+wake while physical completion or retirement can free that same reservation.
+The saturated-clock Core regression and the real-owner silent-initial-author
+regression pass; this is scheduler-pressure coverage, not network qualification.
+
+The process-wide Native source slot now retires a signed Validate body request
+when its exact lifecycle wait (subject, execution index and source allocation)
+has been superseded. A candidate body request is tied to the authenticated
+current frozen lane head; lane closure retires its redundant network request
+and prunes old candidate waits, while an already authenticated buffered body
+is settled for any other current route sharing that first admission. A moving
+State observation cannot prove closure. Retiring either request cancels only
+its unadmitted network-actor ticket. The focused three-case source-closure
+selection passes, but these cuts still need unchanged multi-peer loss and
+restart qualification.
+
 Current retained-execution prerequisite: [admitted Storage restoration](../docs/history/2026-09-21/admitted-storage-restoration.md) now reconstructs exact current/undo images with per-edit funding and generic borrowed history. Replacement and ordinary blocks retain one original pool and both writers inside their callback. [Publication identities](../docs/history/2026-09-21/funded-publication-identities.md) now share that original admission, retain successor storage before execution and refund old versions only after publication unlock; exact startup and writer demands include those layouts. [Scoped detached capture](../docs/history/2026-09-21/funded-detached-storage.md) now retains original prepaid journals without writers and borrows the original refund scope for reattachment; native capture/abort signals follow both writer releases. [Executing-block abandonment](../docs/history/2026-09-21/executing-block-abandonment.md) now shares the prepared pair's original writer owner through ordinary/admitted opening, replacement, execution and snapshot restore; both locks release before callbacks and actual mutex poison survives payload and wake unwind. [Native reader readiness](../docs/history/2026-09-21/native-reader-readiness.md) now binds BlockHashes refusals to the actual blocking reader mutex and retains published native notifications through retirement. [Complete component preparation](../docs/history/2026-09-21/prepared-component-retirement.md) now retains native prepared map/Cell owners and identity before transfer, with successful World/runtime/membership cleanup held through State fences and original State/Kura/Queue completion notifications retained until commit unlock. [Fully acquired carrier abort](../docs/history/2026-09-21/prepared-component-abort.md) now keeps original component cleanup through all fences on explicit abort and Drop. [Returned preparation refusals](../docs/history/2026-09-21/prepared-refusal-cleanup.md) now return original MV/runtime/TriggerSet/World cleanup through the enclosing consumer. [Prepared runtime/trigger abandonment](../docs/history/2026-09-21/prepared-aggregate-abandonment.md) now releases all sibling writers before callbacks on Drop and unwind, retaining both original capacities. [Successor hash admission](../docs/history/2026-09-21/successor-acquisition-readiness.md) now binds the actual fresh writer before callbacks and waits on the native reader mutex when reader observation is contended. [Fresh MV pair construction](../docs/history/2026-09-21/fresh-pair-acquisition.md) now owns both actual mutexes and notifications before either constructor or policy can unwind. [Cell pair custody](../docs/history/2026-09-21/cell-pair-custody.md) now retains both raw guards before cloning and keeps joint release through complete Block/CurrentReplacement abandonment, detachment and publication-lock refusal. [World acquisition and abandonment](../docs/history/2026-09-21/world-acquisition-custody.md) now retains caller-owned field slots and releases all siblings before cleanup; its candidate validation is recorded separately. The [World/TriggerSet capture candidate](../docs/history/2026-09-21/world-capture-custody.md) now retains original slots and deferred notifications through all sibling captures; its qualification is separate. The [State capture correction](../docs/history/2026-09-21/state-capture-custody.md) composes those original World slots with all runtime and membership writers through refusal and unwind. The [State acquisition candidate](../docs/history/2026-09-22/state-acquisition-custody.md) now keeps partial acquisitions and executing blocks jointly armed through refusal and unwind; its qualification remains separate. The [direct State publication candidate](../docs/history/2026-09-22/direct-state-publication.md) passes its consumer test-target check; the [retained hash correction](../docs/history/2026-09-22/retained-hash-preparation.md) passes 636 distinct Core controls, 474 native unit tests and the canonical structural gate in their captured scopes. The complete participant candidate below covers sibling preparation. Complete process-memory accounting and production qualification remain open under the scoped admission boundary above; concrete nested World payloads, native control storage, decoding and aggregate execution/restore admission are not funded by the shell pool. The original Apply service already survives startup; unfinished-height recovery must retain its original executed owner and the named allocation charges before exposing validation markers. The later State effect-lock and aggregate cleanup records describe their actual custody corrections. This does not activate the retained production validator or close L1–L6.
 
 Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
@@ -84,16 +113,15 @@ Remove independent decisions around them; do not add a third scheduling authorit
 | Runtime ingress and worker adapters | Authenticated messages, opaque jobs, physical queues and results | Authenticate and execute; derive eligibility from authoritative state instead of maintaining competing scheduling state. |
 | Kura, body store and safety WAL | Canonical durable artifacts and validated persistence receipts | Reconstruct work from those artifacts; simplify duplicate journals only after preserving all crash boundaries and bounded recovery. |
 
-The first concrete target is the runner's independently transitioned
+The runner's former independently transitioned
 `LifecycleProducerClaimDispositionV1` in
-`crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs`.
-Replace remembered completion history with a fresh permitted-action projection
-of the launched owner's actual state. Audit all nine variants first: some hold
-real successor ordinals or wait tokens that cannot simply be dropped. Facts not
-already represented must acquire one authoritative owner before removing the
-runner copy. A projection is read-only, uncached, and cannot mint work.
+`crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs` now comes
+from a fresh permitted-action projection of the launched owner's actual state.
+Its nine variants include real successor ordinals and wait tokens, and the
+historical transition oracle remains test-only until owner-fixture coverage can
+replace it. The projection is read-only, uncached, and cannot mint work.
 
-Then consolidate separate deferred-owner, timer-episode and schedule decisions
+Next consolidate separate deferred-owner, timer-episode and schedule decisions
 in `v2_runtime.rs`. Ordinary production dispatch must use the surviving owner
 after each change. Moving the same state to another file, adding bypasses, or
 running two implementations behind a toggle does not satisfy this goal.
@@ -2348,23 +2376,22 @@ pass on their unchanged input captures. The [dated record](../docs/history/2026-
 retains detailed selection and failed attempts. The canonical close intent already
 fixes admission closure at C; the next slice
 must distinguish retained, WSV-ranked pre-close inputs from fresh admission and
-drain them through the existing Native Decision owner. Reconcile their original
-Queue custody only from exact Kura terminal receipts before drain voting. A
-QueuePlanSynced f+1 acknowledgement does not guarantee an honest intersection
-with a 2f+1 drain quorum: delayed uncarried inputs need an explicit authenticated
-carry/terminal contract across closure. Never wait for the same blocked height
-to discharge its own promises or treat local Queue emptiness as agreed validity.
-Increasing acknowledgements to 2f+1 alone is insufficient: current coordinator
-receipts need not intersect a participant's pinned drain committee. A durable
-promise/drain fence must cover each affected immutable committee, record promises
-before signing, and retain them until exact canonical terminal evidence. Complete
-the carry/closure protocol for delayed publication and partial acknowledgements;
-otherwise an abandoned partial attempt can itself prevent drain forever.
-The decisive four-validator test must delay pre-close receipt publication through
-closure and restart, preserve every acknowledged input, and finish final work
-without an empty-block dependency. Also qualify distinct pinned route committees
-and a pause between durable admission and attestation; same-roster tests cannot
-establish cross-route promise custody.
+drain them through the existing Native Decision owner. Reconcile those ranked
+inputs' Queue custody only from exact Kura terminal receipts before drain voting. An
+`f+1` QueuePlan certificate has no guaranteed honest intersection with the
+`2f+1` drain quorum, especially across distinct pinned route committees. The
+first-release correction therefore makes the certificate internal availability
+evidence and gives public `202` only after canonical registry inclusion. An
+uncarried or partial attempt makes no public admission promise. Its exact
+unreserved QueuePlan claim can be durably terminalized once a committed close
+makes future inclusion impossible; canonical pending owners remain blockers.
+Never wait for the same blocked height to discharge its own claims or treat
+local Queue emptiness as agreed validity. The [September 24 close checkpoint](../docs/history/2026-09-24/queue-close-canonical-admission.md)
+implements this local boundary, including restart replay and Queue pop. The
+decisive four-validator test must delay pre-close receipt publication through
+closure and restart, retain every canonically admitted input, and finish final
+work without an empty-block dependency. Also qualify distinct pinned route
+committees and a pause between durable admission and attestation.
 Full workspace, real unchanged four/seven-validator campaigns and L1–L6 remain open.
 
 
@@ -2390,8 +2417,9 @@ independence remains open. Connect exact terminal reconciliation before drain
 through the original Queue/State/Kura owner. A Queue release can restore FIFO before Kura writes its
 Complete outcome; absent Complete authorization never proves the input had no
 old autonomous owner. Preserve that crash cut, exact group/alias evidence and
-all reservation/selection barriers. Complete per-committee promise custody and
-canonical carry/terminal disposition for late and partial receipts. The actual
+all reservation/selection barriers. Qualify canonical carry and terminal
+disposition for late and partial receipts under the no-precanonical-promise
+public response. The actual
 shared-lane execution/publication cutover, prepared Validate-to-Apply ownership,
 full workspace and unchanged four/seven-validator campaigns remain open. L1–L6
 remain open.

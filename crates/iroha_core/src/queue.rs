@@ -4708,7 +4708,8 @@ enum QueuePlanLocalCustody {
     Available,
     /// Autonomous ownership requires its checked direct release or Kura terminal proof.
     Autonomous,
-    /// Canonical State authenticated cleanup; an ordinary selection still owns the claim.
+    /// Canonical replay or closed-route evidence authorized cleanup, but a
+    /// selection or popped guard still owns the exact claim.
     ReplayTerminalPending,
 }
 impl QueuePlanDurableClaimIndexEntry {
@@ -12165,6 +12166,40 @@ impl Queue {
                 ));
                 continue;
             }
+            let closed_unadmitted_route = if global_registry_match
+                == Some(QueuePlanAdmissionRegistryMatch::Exact)
+            {
+                false
+            } else {
+                let mut closed = false;
+                for bound in &claim.admission_context.route_incarnations {
+                    closed |= State::has_closed_autoscale_lane_route_in_view(
+                        state_view,
+                        bound.leg.route.lane_id,
+                        bound.leg.route.dataspace_id,
+                        bound.lane_incarnation,
+                    )
+                    .map_err(|reason| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} cannot authenticate its closed route: {reason}"
+                        ))
+                    })?;
+                }
+                closed
+            };
+            if closed_unadmitted_route {
+                if has_materialized_owner || has_durable_reservation_owner {
+                    return Err(invalid(format!(
+                        "queue-plan journal transaction {hash} has an unadmitted closed route while selected or reserved custody remains live"
+                    )));
+                }
+                terminal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                continue;
+            }
             if self.is_expired_at_with_enqueue_timestamp(
                 &accepted,
                 replay_observed_at,
@@ -13059,6 +13094,218 @@ impl Queue {
     ) -> Result<bool, LaneQueueReservationError> {
         self.reject_exact_queue_plan_admission_claim_inner(binding, false)
     }
+    /// Terminalize local durable claims whose exact autoscale route has closed
+    /// without acquiring canonical admission membership.
+    ///
+    /// The committed close is authenticated by State before Queue mutates its
+    /// journal. Selected, reserved and popped claims retain their original
+    /// owners until those owners release; no local observation grants a drain
+    /// vote or physical retirement by itself.
+    pub(crate) fn reconcile_closed_autoscale_route_claims(
+        &self,
+        state: &State,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<usize, LaneQueueReservationError> {
+        let state_view = state.view();
+        if !State::has_closed_autoscale_lane_route_in_view(
+            &state_view,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+        .map_err(LaneQueueReservationError::InvalidIdentity)?
+        {
+            return Ok(0);
+        }
+        let observed = self
+            .durable_plan_claims
+            .iter()
+            .filter(|claim| {
+                claim
+                    .admission_context
+                    .route_incarnations
+                    .iter()
+                    .any(|bound| {
+                        bound.leg.route.lane_id == lane_id
+                            && bound.leg.route.dataspace_id == dataspace_id
+                            && bound.lane_incarnation == lane_incarnation
+                    })
+            })
+            .map(|claim| claim.value().clone())
+            .collect::<Vec<_>>();
+        let mut claims = Vec::new();
+        for claim in observed {
+            if Self::durable_claim_is_unadmitted_after_close_in_view(&state_view, &claim)
+                .map_err(LaneQueueReservationError::InvalidIdentity)?
+            {
+                claims.push(claim);
+            }
+        }
+        drop(state_view);
+        let mut removed = 0;
+        for claim in claims {
+            removed += usize::from(self.reject_unreserved_terminal_plan_claim(&claim)?);
+        }
+        Ok(removed)
+    }
+    fn durable_claim_is_unadmitted_after_close_in_view(
+        state_view: &StateView<'_>,
+        claim: &QueuePlanDurableClaimIndexEntry,
+    ) -> Result<bool, String> {
+        let mut closed = false;
+        for bound in &claim.admission_context.route_incarnations {
+            closed |= State::has_closed_autoscale_lane_route_in_view(
+                state_view,
+                bound.leg.route.lane_id,
+                bound.leg.route.dataspace_id,
+                bound.lane_incarnation,
+            )?;
+        }
+        if !closed {
+            return Ok(false);
+        }
+        if claim.global_admission_identity.is_none() {
+            return Ok(true);
+        }
+        let binding = claim.global_admission_binding()?;
+        binding.validate_structure()?;
+        if binding.network_id_digest
+            != crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id())
+        {
+            return Err("closed-route QueuePlan claim belongs to another network".to_owned());
+        }
+        State::queue_plan_admission_registry_match_in_view(
+            state_view,
+            binding.entrypoint_hash,
+            binding.canonical_hash(),
+        )
+        .map(|registry| registry != QueuePlanAdmissionRegistryMatch::Exact)
+    }
+    /// Retire only the same durable Queue claim observed at canonical terminalization.
+    /// No Queue lock crosses the exact journal fsync, and the hash transition
+    /// prevents another owner from replacing the claim before memory release.
+    fn reject_unreserved_terminal_plan_claim(
+        &self,
+        expected: &QueuePlanDurableClaimIndexEntry,
+    ) -> Result<bool, LaneQueueReservationError> {
+        let hash = expected.entrypoint_hash;
+        loop {
+            let queue_guard = self.push_remove_lock.lock();
+            if self.transaction_selection_durability_faulted() {
+                return Err(LaneQueueReservationError::DurabilityFault);
+            }
+            if self.durability_transition_active(&hash) {
+                drop(queue_guard);
+                self.wait_for_durability_transitions(&[hash]);
+                continue;
+            }
+            let Some(current) = self
+                .durable_plan_claims
+                .get(&hash)
+                .map(|claim| claim.value().clone())
+            else {
+                return Ok(false);
+            };
+            if current != *expected {
+                return Ok(false);
+            }
+            let reservation_owned = {
+                let reservations = self.lane_reservations.lock();
+                reservations.live_by_entrypoint.contains_key(&hash)
+                    || reservations
+                        .commit_barriers
+                        .iter()
+                        .any(|key| key.entrypoint_hash == hash)
+                    || reservations
+                        .plan_tombstoned
+                        .iter()
+                        .any(|key| key.entrypoint_hash == hash)
+                    || reservations.release_barriers.iter().any(|barrier| {
+                        barrier
+                            .ordered_keys
+                            .iter()
+                            .any(|key| key.entrypoint_hash == hash)
+                    })
+                    || reservations.completed_releases.iter().any(|completion| {
+                        completion
+                            .ordered_records
+                            .iter()
+                            .any(|record| record.key.entrypoint_hash == hash)
+                    })
+            };
+            if reservation_owned || current.local_custody == QueuePlanLocalCustody::Autonomous {
+                return Ok(false);
+            }
+            self.durable_plan_claims
+                .get_mut(&hash)
+                .expect("the Queue lock retains the terminal claim")
+                .local_custody = QueuePlanLocalCustody::ReplayTerminalPending;
+            self.replay_terminal_cleanup_dirty
+                .store(true, Ordering::Release);
+            if self.global_selection_owners.lock().contains_key(&hash)
+                || self.inflight_guards.load(Ordering::Acquire) != 0
+                || self.selection_attempts.load(Ordering::Acquire) != 0
+            {
+                return Ok(false);
+            }
+            let transaction = self
+                .txs
+                .get(&hash)
+                .map(|entry| Arc::clone(entry.value()))
+                .ok_or_else(|| {
+                    LaneQueueReservationError::InvalidIdentity(
+                        "terminal durable QueuePlan claim has no live transaction".to_owned(),
+                    )
+                })?;
+            let transition = self
+                .begin_durability_transition_locked([hash])
+                .expect("terminal claim has no active transition under the Queue lock");
+            drop(queue_guard);
+            self.tombstone_exact_durable_plan_claim(&current)?;
+            let queue_guard = self.push_remove_lock.lock();
+            self.durable_plan_claims.remove(&hash);
+            self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+            self.remove_transaction_locked(&transaction, &current.routing_plan, None, None);
+            drop(transition);
+            drop(queue_guard);
+            self.publish_backpressure_state(self.active_len(), None);
+            return Ok(true);
+        }
+    }
+    fn tombstone_exact_durable_plan_claim(
+        &self,
+        claim: &QueuePlanDurableClaimIndexEntry,
+    ) -> Result<(), LaneQueueReservationError> {
+        let removal = {
+            let mut guard = self.plan_journal.lock();
+            let journal = guard
+                .as_mut()
+                .ok_or(LaneQueueReservationError::JournalNotInstalled)?;
+            match journal.remove_exact_strict_durable(
+                claim.entrypoint_hash,
+                claim.routing_plan.digest(),
+                claim.journal_record_digest,
+            ) {
+                Ok(removal) => removal,
+                Err(error) => {
+                    drop(guard);
+                    self.mark_plan_journal_durability_fault(&error, None);
+                    return Err(LaneQueueReservationError::Journal(error));
+                }
+            }
+        };
+        if removal != QueuePlanJournalExactRemoveResult::Removed {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "terminal QueuePlan claim has live Queue ownership without its exact journal record",
+            );
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(LaneQueueReservationError::Journal(error));
+        }
+        Ok(())
+    }
     /// Durably release an exact replay-terminal QueuePlan owner which never entered a lane.
     ///
     /// Canonical State must first resolve the owner's pending obligation through a committed
@@ -13076,7 +13323,7 @@ impl Queue {
             claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending
         })
     }
-    /// Finish previously authenticated State cleanup after an ordinary owner releases.
+    /// Finish previously authenticated canonical cleanup after an ordinary owner releases.
     ///
     /// Call only outside Queue locks. The claim retains the authority; no State
     /// read, replacement binding, or Kura Pending inference is permitted here.
@@ -13084,15 +13331,12 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return;
         }
-        let binding = self.durable_plan_claims.get(&hash).and_then(|claim| {
+        let claim = self.durable_plan_claims.get(&hash).and_then(|claim| {
             (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)
-                .then(|| claim.global_admission_binding())
+                .then(|| claim.value().clone())
         });
-        let result = match binding {
-            Some(Ok(binding)) => {
-                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)
-            }
-            Some(Err(reason)) => Err(LaneQueueReservationError::InvalidIdentity(reason)),
+        let result = match claim {
+            Some(claim) => self.reject_unreserved_terminal_plan_claim(&claim),
             None => return,
         };
         match result {
@@ -18904,6 +19148,12 @@ impl Queue {
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
+            if self.replay_terminal_cleanup_pending(hash) {
+                // State has already authenticated terminal ownership. Leave the
+                // popped hash with its original cleanup marker; the selection
+                // attempt's release resumes the exact journal tombstone.
+                return None;
+            }
             let tx_arc = if let Some(entry) = self.txs.get(&hash) {
                 Arc::clone(entry.value())
             } else {
@@ -18913,6 +19163,50 @@ impl Queue {
                 warn!("Looks like we're experiencing a high load");
                 continue;
             };
+            if let Some(claim) = self
+                .durable_plan_claims
+                .get(&hash)
+                .map(|claim| claim.value().clone())
+            {
+                match Self::durable_claim_is_unadmitted_after_close_in_view(state_view, &claim) {
+                    Ok(true) => {
+                        match self.reject_unreserved_terminal_plan_claim(&claim) {
+                            Ok(true) => {}
+                            Ok(false) if self.replay_terminal_cleanup_pending(hash) => {}
+                            Ok(false) => {
+                                if let Err(reason) = self.restore_popped_globally_bound_hash(
+                                    hash,
+                                    backpressure_telemetry,
+                                ) {
+                                    self.mark_accepted_work_validation_fault(
+                                        hash,
+                                        "closed_route_restore",
+                                        &reason,
+                                        backpressure_telemetry,
+                                    );
+                                }
+                            }
+                            Err(reason) => self.retain_popped_hash_after_validation_failure(
+                                hash,
+                                "closed_route_terminal",
+                                &reason,
+                                backpressure_telemetry,
+                            ),
+                        }
+                        return None;
+                    }
+                    Ok(false) => {}
+                    Err(reason) => {
+                        self.retain_popped_hash_after_validation_failure(
+                            hash,
+                            "closed_route_authentication",
+                            &reason,
+                            backpressure_telemetry,
+                        );
+                        return None;
+                    }
+                }
+            }
             let mut prechecked_global_admission = None;
             let check_error = match self.check_tx(
                 tx_arc.as_ref(),
@@ -23457,6 +23751,257 @@ pub mod tests {
         // close visible to canonical State readers, preserving that identity.
         state.reseed_static_lane_incarnations_for_tests();
         assert_eq!(state.lane_incarnation(lane_id), Some(lane_incarnation));
+    }
+    #[test]
+    fn closed_autoscale_route_terminalizes_uncarried_durable_queue_claim() {
+        let dir = tempfile::tempdir().expect("closed-route QueuePlan journal directory");
+        let mut state = state_with_future_created_autoscale_lane(1, 1);
+        install_single_validator_topology_for_queue_test(&mut state, 0xD1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(819));
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let queue = Arc::new(queue_with_state_free_future_created_router(
+            &state,
+            &time_source,
+        ));
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        queue
+            .install_plan_journal(&dir.path().join("closed-route.norito"), 1024 * 1024, true)
+            .expect("install strict QueuePlan journal");
+        install_test_reservation_journal(&queue, &dir);
+        queue.complete_empty_startup_for_test(&state);
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        let plan = queue
+            .route_plan_with_state(&transaction, &state)
+            .expect("resolve active autoscale route");
+        assert_eq!(plan.coordinator_route().lane_id, lane_id);
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture active autoscale context");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            state.network_id_ref(),
+            transaction.entrypoint(),
+            &plan,
+            context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("bind exact QueuePlan claim");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction,
+                &state,
+                plan,
+                &binding,
+            )
+            .expect("persist uncarried QueuePlan claim");
+        let (_ordinary_time_handle, ordinary_time_source) =
+            TimeSource::new_mock(Duration::from_millis(820));
+        let ordinary = accepted_tx_by_someone(&ordinary_time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &ordinary);
+        let ordinary_plan = queue
+            .route_plan_with_state(&ordinary, &state)
+            .expect("resolve ordinary autoscale route");
+        let ordinary_context = queue
+            .plan_admission_context_with_state(&state, &ordinary_plan)
+            .expect("capture ordinary autoscale context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                ordinary,
+                &state,
+                ordinary_plan,
+                &ordinary_context,
+            )
+            .expect("persist unbound ordinary QueuePlan claim");
+        let incarnation = state.lane_incarnation(lane_id).expect("active incarnation");
+        assert!(queue.lane_has_pending_work(lane_id, dataspace_id, incarnation));
+        install_autoscale_drain_close_for_queue_test(&state, lane_id, 2);
+        assert!(
+            !State::has_closed_autoscale_lane_route_in_view(
+                &state.view(),
+                lane_id,
+                dataspace_id,
+                incarnation,
+            )
+            .expect("authenticate future close")
+        );
+        assert_eq!(
+            queue
+                .reconcile_closed_autoscale_route_claims(
+                    &state,
+                    lane_id,
+                    dataspace_id,
+                    incarnation,
+                )
+                .expect("future close retains claim"),
+            0
+        );
+        seed_committed_height_for_queue_test(&state, 2);
+        assert!(
+            State::has_closed_autoscale_lane_route_in_view(
+                &state.view(),
+                lane_id,
+                dataspace_id,
+                incarnation,
+            )
+            .expect("authenticate committed close")
+        );
+        assert_eq!(
+            state
+                .queue_plan_admission_binding_registry_match(&binding)
+                .expect("inspect uncarried admission"),
+            QueuePlanAdmissionRegistryMatch::Absent
+        );
+        let mut expired = Vec::new();
+        assert!(queue.pop_from_queue(&state.view(), &mut expired).is_none());
+        assert!(expired.is_empty());
+        assert!(!queue.accepted_work_validation_faulted());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            queue
+                .reconcile_closed_autoscale_route_claims(
+                    &state,
+                    lane_id,
+                    dataspace_id,
+                    incarnation,
+                )
+                .expect("terminalize the exact closed claim"),
+            1
+        );
+        assert!(!queue.lane_has_pending_work(lane_id, dataspace_id, incarnation));
+        assert_eq!(queue.active_len(), 0);
+        assert!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .replay()
+                .expect("read terminalized journal")
+                .is_empty()
+        );
+    }
+    #[test]
+    fn restart_tombstones_uncarried_claim_after_autoscale_close() {
+        let dir = tempfile::tempdir().expect("restart closed-route journal directory");
+        let journal_path = dir.path().join("closed-route-restart.norito");
+        let mut state = state_with_future_created_autoscale_lane(1, 1);
+        install_single_validator_topology_for_queue_test(&mut state, 0xD2);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(821));
+        let lane_id = LaneId::new(1);
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install original QueuePlan journal");
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        let plan = queue
+            .route_plan_with_state(&transaction, &state)
+            .expect("resolve pre-close route");
+        assert_eq!(plan.coordinator_route().lane_id, lane_id);
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture pre-close context");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            state.network_id_ref(),
+            transaction.entrypoint(),
+            &plan,
+            context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("bind restart claim");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction,
+                &state,
+                plan,
+                &binding,
+            )
+            .expect("persist the pre-close claim");
+        drop(queue);
+        install_autoscale_drain_close_for_queue_test(&state, lane_id, 2);
+        seed_committed_height_for_queue_test(&state, 2);
+        let replay = queue_with_state_free_future_created_router(&state, &time_source);
+        replay.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        replay
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen original QueuePlan journal");
+        let summary = replay
+            .replay_plan_journal(&state)
+            .expect("closed uncarried claim is a terminal replay, not a startup fault");
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(replay.active_len(), 0);
+        assert!(
+            replay
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("reopened journal")
+                .replay()
+                .expect("read terminal restart journal")
+                .is_empty()
+        );
+    }
+    #[test]
+    fn closed_autoscale_route_preserves_canonically_admitted_queue_claim() {
+        let dir = tempfile::tempdir().expect("canonical closed-route journal directory");
+        let mut state = state_with_future_created_autoscale_lane(1, 1);
+        install_single_validator_topology_for_queue_test(&mut state, 0xD3);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(822));
+        let lane_id = LaneId::new(1);
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        queue
+            .install_plan_journal(
+                &dir.path().join("canonical-close.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install canonical QueuePlan journal");
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        let plan = queue
+            .route_plan_with_state(&transaction, &state)
+            .expect("resolve canonical route");
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture canonical context");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            state.network_id_ref(),
+            transaction.entrypoint(),
+            &plan,
+            context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("bind canonical QueuePlan admission");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction,
+                &state,
+                plan,
+                &binding,
+            )
+            .expect("persist canonical QueuePlan claim");
+        state
+            .install_queue_plan_pending_binding_for_test(&binding)
+            .expect("commit exact QueuePlan admission membership");
+        install_autoscale_drain_close_for_queue_test(&state, lane_id, 2);
+        seed_committed_height_for_queue_test(&state, 2);
+        let incarnation = state.lane_incarnation(lane_id).expect("closed incarnation");
+        assert_eq!(
+            queue
+                .reconcile_closed_autoscale_route_claims(
+                    &state,
+                    lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    incarnation,
+                )
+                .expect("canonical membership retains exact queue owner"),
+            0
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert!(queue.lane_has_pending_work(lane_id, DataSpaceId::UNIVERSAL, incarnation));
     }
     struct FutureCreatedNoStateRouter;
     impl LaneRouter for FutureCreatedNoStateRouter {

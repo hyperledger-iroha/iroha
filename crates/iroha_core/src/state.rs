@@ -36011,6 +36011,63 @@ impl State {
             .ok()
         })
     }
+    /// Authenticate a committed close for one exact autoscale lane incarnation.
+    ///
+    /// The close remains terminal after its drain certificate is committed, so
+    /// Queue recovery can resolve uncarried claims without depending on another
+    /// carrier or on the transient pending-drain body.
+    pub(crate) fn has_closed_autoscale_lane_route_in_view(
+        state_view: &StateView<'_>,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<bool, String> {
+        let nexus = state_view.nexus();
+        if !nexus.autoscale.enabled {
+            return Ok(false);
+        }
+        let Some(lane) = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+        else {
+            return Ok(false);
+        };
+        if lane.dataspace_id != dataspace_id || !lane_claims_autoscale_managed(lane) {
+            return Ok(false);
+        }
+        let Some(drain) = decode_autoscale_lane_drain_state(lane).map_err(str::to_owned)? else {
+            return Ok(false);
+        };
+        if drain.intent.lane_incarnation != lane_incarnation {
+            return Ok(false);
+        }
+        let committed_height = u64::try_from(state_view.height())
+            .map_err(|_| "committed height does not fit autoscale close observation".to_owned())?;
+        if drain.intent.close_global_height > committed_height {
+            return Ok(false);
+        }
+        if state_view.lane_incarnation_at_height(lane_id, drain.intent.close_global_height)
+            != Some(lane_incarnation)
+            || !nexus_autoscale_lane_active_for_authority(
+                lane,
+                nexus,
+                drain.intent.close_global_height,
+            )
+            || !autoscale_lane_drain_state_matches_context(
+                lane,
+                &drain,
+                state_view.network_id(),
+                lane_incarnation,
+            )
+        {
+            return Err(
+                "committed autoscale close differs from its canonical route authority".to_owned(),
+            );
+        }
+        Ok(true)
+    }
     fn pending_autoscale_lane_drain_body_with_frontier(
         &self,
         frontier: impl FnOnce(LaneId, DataSpaceId, Hash) -> Option<LaneDrainFrontierV1>,

@@ -190,7 +190,7 @@ application.subscriptions_post	POST	/v1/subscriptions	public	canonical_account_s
 application.telemetry_live_get	GET	/v1/telemetry/live	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	true	false	false
 application.telemetry_peers_info_get	GET	/v1/telemetry/peers-info	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	true	false	false
 application.telemetry_propagation_get	GET	/v1/telemetry/propagation	diagnostic	torii_default	public	read	http	all(app_api,telemetry)	false	false	false	false
-application.transactions_history_get	GET	/v1/transactions/history	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.transactions_history_get	GET	/v1/transactions/history	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 application.transactions_query_post	POST	/v1/transactions/query	public	optional_canonical_account_signature	dataspace_visible	compute	http	feature(app_api)	true	true	false	true
 application.webhooks_by_id_delete	DELETE	/v1/webhooks/{id}	public	operator_signature	operator	mutation	http	feature(app_api)	true	true	false	true
 application.webhooks_get	GET	/v1/webhooks	public	operator_signature	operator	read	http	feature(app_api)	true	true	false	true

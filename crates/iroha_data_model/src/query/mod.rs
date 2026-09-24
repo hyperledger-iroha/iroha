@@ -534,7 +534,7 @@ pub mod json;
 #[cfg(feature = "fault_injection")]
 use crate::{
     ValidationFail,
-    prelude::{InstructionBox, TransactionEntrypoint, TransactionRejectionReason},
+    prelude::{InstructionBox, TransactionRejectionReason},
 };
 /// Builder helpers for constructing query instances.
 #[doc = "Builder utilities for composing typed queries."]

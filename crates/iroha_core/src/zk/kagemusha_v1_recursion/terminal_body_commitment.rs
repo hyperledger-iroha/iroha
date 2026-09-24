@@ -260,11 +260,9 @@ pub(super) fn hash_terminal_body_commitment_from_assigned_v1<F: KagemushaPoseido
 mod tests {
     use super::*;
     use crate::zk::{
-        kagemusha_v1_poseidon::digest_limbs,
-        kagemusha_v1_recursion::guard_bundle::{assign_bytes, digest_limbs_assigned},
+        kagemusha_v1_poseidon::digest_limbs, kagemusha_v1_recursion::guard_bundle::assign_bytes,
         pasta_sha256::PastaSha256ConfigV1,
     };
-    use halo2_base::gates::GateInstructions as _;
     use halo2_base::gates::circuit::{BaseCircuitParams, BaseConfig, builder::BaseCircuitBuilder};
     use halo2_proofs::{
         circuit::{Layouter, V1},

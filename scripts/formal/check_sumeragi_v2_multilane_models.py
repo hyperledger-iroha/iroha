@@ -2172,6 +2172,8 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "let (certificate_hash, durable_input) = match outcome",
             "disseminate_queue_plan_admission_publication(app, &durable_input, expected_binding)",
             "notify_pending_queue_plan_admission",
+            ".wait_for_canonical_admission(&app.state, &durable_input)",
+            "PendingQueuePlanAdmissionDisposition::ExactPending\n            | PendingQueuePlanAdmissionDisposition::Applied,\n        ) => queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)",
             "queue_plan_completed_admission_response(snapshot, expected_binding, &deadline)",
         ),
     ),
@@ -2451,6 +2453,25 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     ),
     (
         "crates/iroha_torii/src/queue_plan_publication_wait.rs",
+        "method",
+        "PersistenceDeadline::wait_for_canonical_admission",
+        (
+            "let remaining = self.remaining().map_err(str::to_owned)?;",
+            "let committed_height = u64::try_from(state.committed_height())",
+            "let next_height = committed_height.checked_add(1).ok_or_else(|| {",
+            "classify_pending_queue_plan_admission(complete_input, next_height)",
+            "PendingQueuePlanAdmissionDisposition::ExactPending",
+            "PendingQueuePlanAdmissionDisposition::Applied",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "PendingQueuePlanAdmissionDisposition::Stale => return Ok(disposition)",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent",
+            "PendingQueuePlanAdmissionDisposition::Future { .. }",
+            "PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}",
+            "tokio::time::timeout(remaining, state.wait_for_committed_height(next_height))",
+        ),
+    ),
+    (
+        "crates/iroha_torii/src/queue_plan_publication_wait.rs",
         "fn",
         "publication_overlap_height",
         (
@@ -2498,6 +2519,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
             "validate_queue_plan_admissions_for_carrier_in_view",
             "stage_queue_plan_admissions",
             "resolve_queue_plan_pending_obligations_for_entrypoints",
+            "PersistenceDeadline::wait_for_canonical_admission",
         )
     ),
     (

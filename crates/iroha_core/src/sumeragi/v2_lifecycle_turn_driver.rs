@@ -1204,6 +1204,9 @@ impl LaunchedProductionLifecycleV1 {
         &mut self,
         mut retained: RetainedLocalLifecycleValidateV1,
     ) -> ProductionLifecycleCompletionSelectionV1 {
+        if retained.is_superseded() {
+            return self.cancel_superseded_local_validate(retained);
+        }
         if retained.awaits_native_source() {
             match self
                 .services

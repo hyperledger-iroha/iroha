@@ -27,8 +27,8 @@ use crate::zk::kagemusha_v1_recursion::{
     KagemushaMintAuthorizationGenerationWitnessV1, KagemushaMintAuthorizationRelationWitnessV1,
     KagemushaMintCertificateWitnessV1, KagemushaMintFinalitySignerV1, KagemushaMintFinalityTreeV1,
     KagemushaMintHashArtifactGenerationWitnessV1, KagemushaMintHashClaimGenerationWitnessV1,
-    KagemushaProviderRootCircuitParamsV1, KagemushaReceiveFoldCreditV1,
-    KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaPreparedIntentCommitmentsV1, KagemushaProviderRootCircuitParamsV1,
+    KagemushaReceiveFoldCreditV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
     KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
     KagemushaReplayInsertWitnessV1,
     accumulation::{

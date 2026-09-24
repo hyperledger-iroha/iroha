@@ -114310,7 +114310,6 @@
           }
         },
         "security": [
-          {},
           {
             "IrohaCanonicalAccount": [],
             "IrohaCanonicalNonce": [],
@@ -114326,8 +114325,8 @@
           "Transactions"
         ],
         "x-iroha-route-auth": {
-          "admission": "dataspace_visible",
-          "authentication": "optional_canonical_account_signature",
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.transactions_history_get"
         },

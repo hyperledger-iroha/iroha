@@ -816,6 +816,43 @@ struct ExpectedAck<'a> {
     queue_capacity: usize,
     drain: bool,
 }
+/// Keep an actively draining controller bounded by both idle and total time.
+/// Each terminal release proves progress; new held ingress alone does not.
+struct DrainWaitBudget {
+    idle_timeout: Duration,
+    deadline: Instant,
+    hard_deadline: Instant,
+    completed_releases: usize,
+}
+impl DrainWaitBudget {
+    fn new(start: Instant, timeout: Duration, drain: bool) -> Self {
+        let deadline = start + timeout;
+        let hard_deadline = if drain {
+            start
+                .checked_add(timeout.saturating_mul(6))
+                .unwrap_or(deadline)
+        } else {
+            deadline
+        };
+        Self {
+            idle_timeout: timeout,
+            deadline,
+            hard_deadline,
+            completed_releases: 0,
+        }
+    }
+
+    fn observe_terminal_releases(&mut self, completed_releases: usize, now: Instant) {
+        if completed_releases <= self.completed_releases {
+            return;
+        }
+        self.completed_releases = completed_releases;
+        self.deadline = now
+            .checked_add(self.idle_timeout)
+            .unwrap_or(self.hard_deadline)
+            .min(self.hard_deadline);
+    }
+}
 impl ConsensusMessageControl {
     #[cfg(unix)]
     pub(crate) fn create(root: PathBuf) -> Result<Self> {
@@ -1249,7 +1286,7 @@ impl ConsensusMessageControl {
         timeout: Duration,
         rejected_before: Option<u64>,
     ) -> Result<ConsensusMessageControlAck> {
-        let deadline = Instant::now() + timeout;
+        let mut budget = DrainWaitBudget::new(Instant::now(), timeout, expected.drain);
         loop {
             match self.read_ack() {
                 Ok(ack) if ack.fatal => {
@@ -1292,7 +1329,12 @@ impl ConsensusMessageControl {
                         && ack.drain_fence == Some(expected.revision) =>
                 {
                     // The exact command is active, but the FIFO fence has not
-                    // yet drained all pre-cutover and racing v2 ingress.
+                    // yet drained all pre-cutover and racing v2 ingress. Count
+                    // only terminal releases as progress, with a finite cap.
+                    budget.observe_terminal_releases(
+                        ack.delivered.len().saturating_add(ack.retired.len()),
+                        Instant::now(),
+                    );
                 }
                 Ok(ack) if ack.revision >= expected.revision => {
                     return Err(eyre!(
@@ -1312,12 +1354,12 @@ impl ConsensusMessageControl {
                     ));
                 }
                 Ok(_) => {}
-                Err(error) if Instant::now() < deadline => {
+                Err(error) if Instant::now() < budget.deadline => {
                     let _ = error;
                 }
                 Err(error) => return Err(error),
             }
-            if Instant::now() >= deadline {
+            if Instant::now() >= budget.deadline {
                 return Err(eyre!(
                     "timed out waiting for consensus message-control revision {revision}",
                     revision = expected.revision
@@ -2543,6 +2585,26 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use tempfile::tempdir;
+    #[test]
+    fn drain_wait_budget_extends_only_for_terminal_progress_with_a_hard_cap() {
+        let start = Instant::now();
+        let timeout = Duration::from_secs(20);
+        let mut budget = DrainWaitBudget::new(start, timeout, true);
+        assert_eq!(budget.deadline, start + timeout);
+        assert_eq!(budget.hard_deadline, start + Duration::from_secs(120));
+        budget.observe_terminal_releases(0, start + Duration::from_secs(19));
+        assert_eq!(budget.deadline, start + timeout);
+        budget.observe_terminal_releases(1, start + Duration::from_secs(19));
+        assert_eq!(budget.deadline, start + Duration::from_secs(39));
+        budget.observe_terminal_releases(1, start + Duration::from_secs(38));
+        assert_eq!(budget.deadline, start + Duration::from_secs(39));
+        budget.observe_terminal_releases(2, start + Duration::from_secs(119));
+        assert_eq!(budget.deadline, budget.hard_deadline);
+
+        let mut ordinary = DrainWaitBudget::new(start, timeout, false);
+        ordinary.observe_terminal_releases(1, start + Duration::from_secs(19));
+        assert_eq!(ordinary.deadline, start + timeout);
+    }
     fn descriptor_peer() -> PeerId {
         PeerId::new(
             KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)

@@ -3014,8 +3014,7 @@ mod tests {
         Args, GENESIS_EXPECTED_HASH_RUNTIME_TARGET, MAX_PEER_OVERRIDE_BYTES_V1,
         load_peer_overrides, load_prepared_bundle, materialize_read_only_file_at,
         parse_peer_override_toml, parse_prepared_peer_config, read_owner_only_runtime_file_bounded,
-        read_runtime_file_bounded, signed_genesis_consensus_metadata,
-        validate_prepared_genesis,
+        read_runtime_file_bounded, signed_genesis_consensus_metadata, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
     use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _, localnet::LocalnetOptions};

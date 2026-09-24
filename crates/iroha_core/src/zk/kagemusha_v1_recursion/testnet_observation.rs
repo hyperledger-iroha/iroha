@@ -432,6 +432,7 @@ pub fn observe_kagemusha_testnet_state_proof_v1(
 
 #[cfg(test)]
 mod tests {
+    use super::super::KagemushaPreparedIntentCommitmentsV1;
     use super::*;
 
     const NETWORK: DigestV1 = [1; 32];
@@ -700,7 +701,7 @@ mod tests {
             operation,
             KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
         )
-        .then_some(super::KagemushaPreparedIntentCommitmentsV1 {
+        .then_some(KagemushaPreparedIntentCommitmentsV1 {
             preparation_id: [tag; 32],
             sealed_transition_inputs_digest: [tag.wrapping_add(1); 32],
             sealed_recovery_seeds_digest: [tag.wrapping_add(2); 32],
