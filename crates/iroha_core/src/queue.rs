@@ -27214,7 +27214,8 @@ pub mod tests {
             &time,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([sample_unregister_instruction()]);
+        .with_instructions([sample_unregister_instruction()])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         let fee_intent = {
             let view = state.view();
             let quote = crate::executor::quote_nexus_fee_admission_draft(
@@ -27245,6 +27246,11 @@ pub mod tests {
         let route = queue
             .route_plan_with_state(&transaction, state)
             .expect("fixture route");
+        assert_eq!(
+            transaction.entrypoint().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "retirement fixture must bind its queued work to the retiring route"
+        );
         assert_eq!(route.coordinator_route().lane_id, LaneId::new(1));
         queue
             .push_with_lane_with_state_and_routing_plan(transaction, state, route)
