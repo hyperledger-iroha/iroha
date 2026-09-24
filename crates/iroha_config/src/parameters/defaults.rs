@@ -2276,14 +2276,13 @@ pub mod torii {
             .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
             .filter(|phase| *phase > 1)
     }
-    // Default per-authority query rate (tokens/sec). Set low but permissive.
-    // None disables limiting; Some enables it.
-    // Chosen to be friendly under normal usage while protecting from bursty abuse.
+    // A 128-proof operator walk consumes 1,024 tokens at eight tokens per
+    // bridge-finality GET. Keep a finite 20-proof/s refill and the separate
+    // heavy-query concurrency and proof-egress limits.
     /// Default steady-state query rate tokens issued per authority every second.
-    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(25);
-    // Default burst capacity in tokens per authority.
+    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(160);
     /// Maximum burst tokens accumulated per authority.
-    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(50);
+    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(1_024);
     /// Default steady-state transaction submission rate tokens per authority every second.
     pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
     /// Default transaction submission burst tokens per authority.

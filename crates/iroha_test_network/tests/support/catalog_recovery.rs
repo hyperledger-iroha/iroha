@@ -303,7 +303,12 @@ async fn canonical_execution(
     dataspace: DataSpaceId,
     expected_committee: Option<&[PeerId]>,
 ) -> Result<Vec<u8>> {
-    let client = peer.client.clone();
+    // One absolute deadline covers the complete authenticated history read.
+    // Bridge finality proofs consume Torii's heavy-query burst and may return
+    // Retry-After; the client retries that backpressure only with a deadline.
+    let client = peer
+        .client
+        .with_request_deadline(Instant::now() + FUNCTIONAL_FINALITY_TIMEOUT);
     let finality = finality.clone();
     let peer_identity = peer.peer_id.clone();
     let store = peer.kura_store.clone();
