@@ -21045,9 +21045,11 @@ mod tests {
     fn terminal_rollback_releases_host_lease_before_expiry() {
         let admitted = progress_admission();
         let mut progress = initial_host_progress(&admitted);
-        progress.touched_hosts = vec!["taira-validator-1".to_owned()];
         assert!(!host_progress_releasable(&progress, false));
         assert!(host_progress_releasable(&progress, true));
+        progress.touched_hosts = vec!["taira-validator-1".to_owned()];
+        assert!(!host_progress_releasable(&progress, false));
+        assert!(!host_progress_releasable(&progress, true));
 
         progress.rolling_back = true;
         assert!(!host_progress_releasable(&progress, false));

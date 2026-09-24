@@ -1,7 +1,7 @@
 //! Read-only producer for one fresh topology intent after a durable dispatcher apply.
-use super::super::super::super as reset;
 use super::super::{admission, storage};
 use super::*;
+use crate::taira_public_reset as reset;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use reset::{
     BUILD_PROFILE, BUILD_TARGET, CHAIN_ID, EdgeInitialStateV1, FaucetPolicyV1, FeeIntentV1,
@@ -237,7 +237,7 @@ fn daemon_identity(
         table,
         crate::soracloud::zeroize_taira_toml_table,
     ))
-    .wrap_err("candidate validator config failed current typed admission")?;
+    .map_err(|_| eyre!("candidate validator config failed current typed admission"))?;
     need(
         config.common.chain.to_string() == CHAIN_ID,
         "candidate validator chain differs",
