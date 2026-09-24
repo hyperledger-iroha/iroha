@@ -308,7 +308,7 @@ async fn canonical_execution(
     // Retry-After; the client retries that backpressure only with a deadline.
     let client = peer
         .client
-        .with_request_deadline(Instant::now() + FUNCTIONAL_FINALITY_TIMEOUT);
+        .with_request_deadline(std::time::Instant::now() + FUNCTIONAL_FINALITY_TIMEOUT);
     let finality = finality.clone();
     let peer_identity = peer.peer_id.clone();
     let store = peer.kura_store.clone();
