@@ -8,6 +8,20 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class KagemushaV1Tests
 {
     [Fact]
+    public void PaymentRequestTextAdmitsTheFullFirstReleaseWireBudget()
+    {
+        var request = Enumerable.Repeat((byte)0x5a, 1_024).ToArray();
+        var text = KagemushaCodec.EncodeText(KagemushaCodec.PayloadKind.PaymentRequest, request);
+        Assert.Equal(1_371, text.Length);
+        Assert.Equal(request,
+            KagemushaCodec.DecodeText(KagemushaCodec.PayloadKind.PaymentRequest, text));
+        Assert.Throws<ArgumentException>(() => KagemushaCodec.EncodeText(
+            KagemushaCodec.PayloadKind.PaymentRequest, new byte[1_025]));
+        Assert.Throws<FormatException>(() => KagemushaCodec.DecodeText(
+            KagemushaCodec.PayloadKind.PaymentRequest, text + "AA"));
+    }
+
+    [Fact]
     public void PendingCreditSelectionDistinguishesMintAndReceiveAndRequiresAnAmount()
     {
         var creditId = Enumerable.Repeat((byte)0x5a, 32).ToArray();

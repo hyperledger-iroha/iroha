@@ -2966,16 +2966,19 @@ where
         &mut self,
         candidate: PersistedOutgoingCandidateV1,
     ) -> Result<PersistedOutgoingCandidateV1, KagemushaStateErrorV1> {
+        let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
         next_journal.persist_candidate(candidate.clone())?;
+        next_outbox.reconcile_capacity_meters(&next_journal)?;
         next_journal.validate_recovered(
             &self.state,
             self.journal_revision,
-            &self.sender_outbox_capacity,
+            &next_outbox,
             &self.proof_release,
             self.proof_release.artifacts,
             &self.recursive_verifier,
         )?;
+        self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
         Ok(candidate)
     }
@@ -3009,10 +3012,23 @@ where
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
+        let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
         next_journal.commit(committed.clone())?;
-        self.state = prepared.private_state_link().1.clone();
-        self.journal_revision = prepared.proof_statement.journal_revision_after;
+        next_outbox.reconcile_capacity_meters(&next_journal)?;
+        let next_state = prepared.private_state_link().1.clone();
+        let next_revision = prepared.proof_statement.journal_revision_after;
+        next_journal.validate_recovered(
+            &next_state,
+            next_revision,
+            &next_outbox,
+            &self.proof_release,
+            self.proof_release.artifacts,
+            &self.recursive_verifier,
+        )?;
+        self.state = next_state;
+        self.journal_revision = next_revision;
+        self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
         Ok(committed)
     }

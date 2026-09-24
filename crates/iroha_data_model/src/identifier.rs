@@ -1,5 +1,6 @@
 //! Hidden-function-backed identifier policy and claim types.
 use crate::{
+    NetworkId,
     account::{AccountId, OpaqueAccountId},
     nexus::UniversalAccountId,
     ram_lfe::{
@@ -7,7 +8,7 @@ use crate::{
         RamLfeReceiptAttestation, signature_for_public_key_algorithm,
     },
 };
-use iroha_crypto::{Hash, PublicKey, SignatureOf};
+use iroha_crypto::{Hash, PublicKey, Signature, SignatureOf};
 use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -118,6 +119,11 @@ impl IdentifierPolicyId {
             business_rule,
         }
     }
+    /// Whether this is the single first-release retail phone namespace.
+    #[must_use]
+    pub fn is_phone_retail(&self) -> bool {
+        self.kind.as_ref() == "phone" && self.business_rule.as_ref() == "retail"
+    }
 }
 impl fmt::Display for IdentifierPolicyId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -165,6 +171,10 @@ pub struct IdentifierPolicy {
     pub normalization: IdentifierNormalization,
     /// Referenced generic RAM-LFE program policy.
     pub program_id: RamLfeProgramId,
+    /// Exact canonical-phone attestor key. Mandatory only for `phone#retail`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub phone_retail_attestor_public_key: Option<PublicKey>,
     /// Whether the policy is active for new claims and resolutions.
     pub active: bool,
     /// Optional human-readable note.
@@ -186,6 +196,7 @@ impl IdentifierPolicy {
             owner,
             normalization,
             program_id,
+            phone_retail_attestor_public_key: None,
             active: false,
             note: None,
         }
@@ -195,6 +206,48 @@ impl IdentifierPolicy {
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
         self.note = Some(note.into());
         self
+    }
+    /// Pin the authority that certifies canonical E.164 nullifiers.
+    #[must_use]
+    pub fn with_phone_retail_attestor_public_key(mut self, key: PublicKey) -> Self {
+        self.phone_retail_attestor_public_key = Some(key);
+        self
+    }
+}
+/// Signed statement that a trusted verifier checked one encrypted phone input,
+/// canonicalized it to E.164, and derived its stable secret-keyed nullifier.
+/// No phone number or unkeyed phone digest is put on chain.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+    crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1")]
+pub struct PhoneRetailCanonicalityPayloadV1 {
+    pub network_id: NetworkId,
+    pub policy_id: IdentifierPolicyId,
+    pub program_id: RamLfeProgramId,
+    pub input_ciphertext_hash: Hash,
+    pub output_ciphertext_hash: Hash,
+    pub opened_output_hash: Hash,
+    /// Stable keyed digest of the canonical E.164 value within this network.
+    pub canonical_phone_nullifier: Hash,
+    pub uaid: UniversalAccountId,
+    pub account_id: AccountId,
+    pub issued_at_ms: u64,
+    pub expires_at_ms: u64,
+}
+/// Attestor signature over the exact canonicality statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+    crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1")]
+pub struct PhoneRetailCanonicalityAttestationV1 {
+    pub payload: PhoneRetailCanonicalityPayloadV1,
+    pub signature: Signature,
+}
+impl PhoneRetailCanonicalityAttestationV1 {
+    /// Verify the attestor's canonical statement under the pinned public key.
+    pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
+        let signature = signature_for_public_key_algorithm(public_key, &self.signature)?;
+        SignatureOf::<PhoneRetailCanonicalityPayloadV1>::from_signature(signature)
+            .verify(public_key, &self.payload)
     }
 }
 /// Persisted claim binding an opaque identifier to a UAID under one policy.
@@ -220,6 +273,10 @@ pub struct IdentifierClaimRecord {
     pub opaque_id: OpaqueAccountId,
     /// Hidden-function receipt hash that produced the opaque identifier.
     pub receipt_hash: Hash,
+    /// Secret-keyed canonical E.164 nullifier for the phone namespace.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub phone_retail_nullifier: Option<Hash>,
     /// UAID that owns the identifier claim.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
@@ -252,6 +309,10 @@ pub struct IdentifierResolutionReceipt {
     pub payload: IdentifierResolutionReceiptPayload,
     /// Explicit receipt attestation.
     pub attestation: RamLfeReceiptAttestation,
+    /// Required canonicality evidence for the `phone#retail` namespace.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub phone_retail_canonicality: Option<PhoneRetailCanonicalityAttestationV1>,
 }
 /// Canonical payload covered by an identifier-resolution receipt signature.
 #[derive(
@@ -325,6 +386,7 @@ pub mod prelude {
         IdentifierClaimRecord, IdentifierNormalization, IdentifierNormalizationError,
         IdentifierPolicy, IdentifierPolicyId, IdentifierPolicyIdParseError,
         IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
+        PhoneRetailCanonicalityAttestationV1, PhoneRetailCanonicalityPayloadV1,
     };
 }
 fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationError> {
@@ -336,9 +398,12 @@ fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationErro
         .strip_prefix('+')
         .or_else(|| compact.strip_prefix("00"))
         .unwrap_or(compact.as_str());
-    if without_prefix.is_empty() || !without_prefix.chars().all(|ch| ch.is_ascii_digit()) {
+    if !(2..=15).contains(&without_prefix.len())
+        || !matches!(without_prefix.as_bytes()[0], b'1'..=b'9')
+        || !without_prefix.bytes().all(|ch| ch.is_ascii_digit())
+    {
         return Err(IdentifierNormalizationError::InvalidFormat(
-            "phone normalization expects digits with optional leading `+` or `00`".to_owned(),
+            "phone normalization expects 2–15 digits, a non-zero country code, and optional leading `+` or `00`".to_owned(),
         ));
     }
     Ok(format!("+{without_prefix}"))
@@ -482,6 +547,7 @@ mod tests {
                 iroha_crypto::Signature::try_from_bytes(signature.payload())
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
+            phone_retail_canonicality: None,
         };
         assert_eq!(receipt.payload_bytes(), payload.encode());
         signature
@@ -533,6 +599,7 @@ mod tests {
                 let proof_receipt = IdentifierResolutionReceipt {
                     payload: receipt.payload.clone(),
                     attestation,
+                    phone_retail_canonicality: None,
                 };
                 proof_receipt
                     .verify(&resolver_key)
@@ -602,6 +669,7 @@ mod tests {
                 Signature::try_from_bytes(signature.payload())
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
+            phone_retail_canonicality: None,
         };
         payload.opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
         receipt.payload = payload;
@@ -622,6 +690,7 @@ mod tests {
                         Signature::try_from_bytes(signature.payload())
                             .expect("checked identifier receipt fixture signature passes admission"),
                     ),
+                    phone_retail_canonicality: None,
                 };
                 let $payload = &mut receipt.payload;
                 $body
@@ -687,6 +756,7 @@ mod tests {
                 Signature::try_from_bytes(checked_signature(&signer, &payload).payload())
                     .expect("checked identifier receipt fixture signature passes admission"),
             ),
+            phone_retail_canonicality: None,
         };
         receipt
             .verify(wrong_signer.public_key())
@@ -697,6 +767,7 @@ mod tests {
         let receipt = IdentifierResolutionReceipt {
             payload: live_identifier_resolution_payload_fixture(),
             attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0u8; 64])),
+            phone_retail_canonicality: None,
         };
         let signer = checked_seed_keypair(0x41);
         assert_eq!(
@@ -720,6 +791,7 @@ mod tests {
                     &signature,
                     &replacement_r,
                 )),
+                phone_retail_canonicality: None,
             };
             assert_eq!(
                 receipt.verify(signer.public_key()).unwrap_err(),
@@ -736,6 +808,7 @@ mod tests {
                 "halo2/ipa".into(),
                 vec![1, 2, 3],
             )),
+            phone_retail_canonicality: None,
         };
         let resolver_key = checked_random_keypair();
         receipt
@@ -751,6 +824,7 @@ mod tests {
                 )
                 .expect("valid signature"),
             ),
+            phone_retail_canonicality: None,
         }
     }
     fn live_identifier_resolution_payload_fixture() -> IdentifierResolutionReceiptPayload {
@@ -876,6 +950,7 @@ mod tests {
         IdentifierResolutionReceipt {
             payload: payload_from_fixture(fixture_object(receipt, "payload")),
             attestation: attestation_from_fixture(fixture_object(receipt, "attestation")),
+            phone_retail_canonicality: None,
         }
     }
     fn payload_from_fixture(payload: &norito::json::Value) -> IdentifierResolutionReceiptPayload {

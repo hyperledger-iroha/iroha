@@ -1514,6 +1514,23 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
             backend.invoke_initial_enrollment(handle, &request_frame)
         } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
             backend.acknowledge_committed_app_attest(handle, &request_frame)
+        } else if method == KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof {
+            let fields = kagemusha_core_coordinator_decode_request_v1(&request_frame)
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+            let operation_id: [u8; 32] = fields[0]
+                .as_slice()
+                .try_into()
+                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
+            let pair = backend.export_outgoing_state_proof(handle, operation_id)?;
+            if pair.operation_id != operation_id {
+                return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
+            }
+            kagemusha_core_coordinator_encode_response_v1(&[
+                pair.operation_id.to_vec(),
+                pair.public_inputs_archive,
+                pair.paired_proof_archive,
+            ])
+            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
         } else {
             backend.invoke(handle, method, &request_frame)
         }
@@ -2693,9 +2710,16 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
             .get("attestation")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
+    let phone_retail_canonicality = object
+        .get("phone_retail_canonicality")
+        .filter(|value| !matches!(value, JsonValue::Null))
+        .map(|value| norito::json::from_value(value.clone()))
+        .transpose()
+        .map_err(|_| BridgeError::IdentifierReceipt)?;
     Ok(IdentifierResolutionReceipt {
         payload,
         attestation,
+        phone_retail_canonicality,
     })
 }
 fn validate_identifier_claim_account(
@@ -6162,7 +6186,7 @@ mod detached_transaction_scaffold_tests {
         }
         let wrong_kind = InstructionBox::from(iroha_data_model::isi::Log::new(
             iroha_data_model::Level::INFO,
-            "not a transfer",
+            "not a transfer".to_owned(),
         ));
         let invalid = scaffold_transaction(
             &keypair,
@@ -8511,7 +8535,8 @@ mod accel_tests {
             let Executable::Instructions(instructions) = signed.instructions() else {
                 panic!("permission transaction must be a native instruction");
             };
-            assert_eq!(instructions, &[expected]);
+            assert_eq!(instructions.len(), 1);
+            assert_eq!(instructions[0], expected);
             let expected_wire = bytes.to_vec();
             let mut payload_hash = [0_u8; 32];
             let prepared = unsafe {
@@ -14575,6 +14600,7 @@ mod tests {
                 Signature::try_from_hex(sample_identifier_signature_hex(&payload))
                     .expect("valid checked signature hex"),
             ),
+            phone_retail_canonicality: None,
         };
         let instruction = ClaimIdentifier {
             account: payload.account_id.clone(),

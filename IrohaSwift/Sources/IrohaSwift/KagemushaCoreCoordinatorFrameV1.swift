@@ -9,6 +9,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case beginObservation
   case initialEnrollment
   case acknowledgeCommittedAppAttest
+  case exportOutgoingStateProof
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -170,6 +171,8 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try bounded(fields, 3, 8 * 1024)
       try require(number(fields, 4) != UInt32.max, "App Attest counter exhausted")
       try digest(fields, 5); try digest(fields, 6)
+    case .exportOutgoingStateProof:
+      try count(fields, 1); try digest(fields, 0)
     }
   }
 
@@ -224,6 +227,9 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try require(number(response, 4) == number(request, 4) + 1,
         "App Attest acknowledgment skipped the committed counter")
       try equal(response, 5, request, 5); try equal(response, 6, request, 6)
+    case .exportOutgoingStateProof:
+      try count(response, 3); try equal(response, 0, request, 0)
+      try bounded(response, 1, 4096); try bounded(response, 2, 6528)
     }
   }
 
@@ -246,7 +252,7 @@ public enum KagemushaCoreCoordinatorFrameV1 {
 
   private static func bounded(_ fields: [Data], _ index: Int, _ maximum: Int) throws {
     let value = try field(fields, index)
-    try require(!value.isEmpty && value.count <= maximum, "invalid enrollment field size")
+    try require(!value.isEmpty && value.count <= maximum, "invalid coordinator field size")
   }
 
   private static func ticket(_ fields: [Data], _ index: Int) throws {

@@ -75,7 +75,11 @@ that workflow for local release verification.
    hashes they authenticate; the checker rejects every broader child as ordinary
    source. The hermetic Apple build binds that identity consistently through
    `CONNECT_NORITO_SOURCE_REVISION`, `IROHA_GIT_COMMIT_HASH`, and
-   `VERGEN_GIT_SHA`. Before publication the helper invokes
+   `VERGEN_GIT_SHA`. It replaces user Cargo compiler wrappers with the
+   source-sealed `scripts/apple_proc_macro_rustc_wrapper.sh`, which disables
+   debug-info stripping only for host proc-macro dylibs so they load under the
+   supported Xcode/Rust pair; target libraries retain their release settings.
+   Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The
    first-release builder has no skip-build, preserved-target, alternate-lock, or
@@ -255,8 +259,11 @@ consumer links, ABI-23 checks and atomic artifact exchange. It does not clean Ca
 Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
 for the builder, pin owner and artifact checker. This local-only route retains
 `--locked --offline` and the source/lock identity checks; it never changes the
-root lock or substitutes the release graph. Default privacy release builds still
-require their read-only external canonical graph snapshot. If source inputs are
+root lock or substitutes the release graph. External privacy-enabled builds
+require a read-only graph snapshot matching the signed root lock and the sole
+digest in `ci/privacy_sdk_cargo_lockfile.sh`; an older snapshot cannot authorize
+the current source. Apps requiring an external artifact cannot consume this
+checkout-local lane. If source inputs are
 dirty, also pass the existing `--allow-dirty-source`; scope and dirty admission
 are independent. Clean local builds retain their local-only scope.
 

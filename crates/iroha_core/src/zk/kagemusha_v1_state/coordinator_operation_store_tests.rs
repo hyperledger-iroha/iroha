@@ -326,9 +326,110 @@ fn outgoing_state_proof_archive_export_uses_only_retained_core_pair() {
         machine.export_outgoing_state_proof_archives(operation_id),
         Err(KagemushaStateErrorV1::InvalidCandidateStage)
     );
+    let prepared_stage = match machine.outgoing_candidate_journal.stage() {
+        KagemushaOutgoingJournalStageV1::Prepared(prepared) => prepared.clone(),
+        _ => panic!("indexed outgoing preparation must be retained"),
+    };
+    let verified = PersistedOutgoingCandidateV1::verify_and_persist_redemption(
+        prepared_stage,
+        proof.clone(),
+        artifacts,
+        &machine.recursive_verifier,
+    )
+    .expect("candidate proof must verify before persistence");
+    let mut checked_journal = machine.outgoing_candidate_journal.clone();
+    checked_journal
+        .persist_candidate(verified)
+        .expect("candidate journal transition must succeed");
+    machine
+        .state
+        .validate()
+        .expect("current State must be valid");
+    checked_journal
+        .operation_index()
+        .validate_recovered(&machine.state)
+        .expect("indexed candidate must match current State");
+    assert_eq!(
+        machine
+            .sender_outbox_capacity
+            .validate_recovered(&checked_journal),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        "the prior prepared-stage meters cannot describe the persisted candidate"
+    );
+    let mut checked_outbox = machine.sender_outbox_capacity.clone();
+    checked_outbox
+        .reconcile_capacity_meters(&checked_journal)
+        .expect("capacity meters must advance with the candidate journal");
+    checked_outbox
+        .validate_recovered(&checked_journal)
+        .expect("reconciled sender capacity meters must match candidate journal");
+    let KagemushaOutgoingJournalStageV1::Candidate(checked_candidate) = checked_journal.stage()
+    else {
+        panic!("candidate proof must be retained");
+    };
+    checked_candidate
+        .prepared
+        .validate_recovered()
+        .expect("prepared candidate must survive recovery");
+    checked_candidate
+        .prepared
+        .validate_recipient_against_release(&machine.proof_release)
+        .expect("candidate recipient must match release");
+    checked_journal
+        .validate_recovered(
+            &machine.state,
+            machine.journal_revision,
+            &checked_outbox,
+            &machine.proof_release,
+            artifacts,
+            &machine.recursive_verifier,
+        )
+        .expect("candidate journal must survive authenticated recovery");
     machine
         .persist_outgoing_redemption_candidate(&capability, proof.clone())
         .unwrap();
+    let record = machine
+        .outgoing_operation_index()
+        .lookup(operation_id)
+        .expect("retained operation");
+    assert_eq!(
+        record
+            .context
+            .validate_retained_against_state(&machine.state),
+        Ok(())
+    );
+    assert_eq!(
+        record.phase,
+        KagemushaOutgoingOperationPhaseV1::CandidatePersisted
+    );
+    let KagemushaOutgoingJournalStageV1::Candidate(retained) =
+        machine.outgoing_candidate_journal.stage()
+    else {
+        panic!("candidate stage must retain its original proof");
+    };
+    assert_eq!(retained.prepared.predecessor_state, machine.state);
+    assert_eq!(
+        retained.prepared.proof_statement.journal_revision_before,
+        machine.journal_revision
+    );
+    assert_eq!(record.validate_against_prepared(&retained.prepared), Ok(()));
+    retained
+        .prepared
+        .validate_recipient_against_release(&machine.proof_release)
+        .unwrap();
+    assert_eq!(
+        record.candidate_digest,
+        Some(retained.candidate_envelope_digest)
+    );
+    let retained_inputs = retained
+        .prepared
+        .candidate_public_inputs(artifacts, retained.recovery_view().unwrap().candidate_proof)
+        .unwrap();
+    assert_eq!(
+        crate::zk::kagemusha_v1_recursion::kagemusha_candidate_envelope_digest_v1(&retained_inputs)
+            .unwrap(),
+        retained.candidate_envelope_digest
+    );
     let archives = machine
         .export_outgoing_state_proof_archives(operation_id)
         .unwrap();
@@ -391,6 +492,21 @@ fn outgoing_state_proof_archive_export_uses_only_retained_core_pair() {
     let committed = recovered
         .commit_outgoing_candidate(recovered_capability, certificate)
         .unwrap();
+    recovered
+        .sender_outbox_capacity
+        .validate_recovered(&recovered.outgoing_candidate_journal)
+        .expect("committed candidate must retain exact outbox capacity meters");
+    recovered
+        .outgoing_candidate_journal
+        .validate_recovered(
+            &recovered.state,
+            recovered.journal_revision,
+            &recovered.sender_outbox_capacity,
+            &recovered.proof_release,
+            artifacts,
+            &recovered.recursive_verifier,
+        )
+        .expect("committed candidate must survive authenticated recovery");
     assert_eq!(
         recovered
             .export_outgoing_state_proof_archives(operation_id)

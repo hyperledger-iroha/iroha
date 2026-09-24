@@ -150,8 +150,10 @@ its full-width proof and recursive assertion binding remain unqualified.
 The staged Apple original-assertion relation now composes exact two-key CBOR,
 canonical DER, the signed `S` and authenticator bytes, the SHA-derived P-256
 equation, and copy constraints from both signed secure indices and the Apple
-counter to passed state cells. Paired-field valid and index/DER mutation tests
-are written but await compilation. This helper is not yet called by the live
+counter to passed state cells. The five-case original-assertion selection
+passes in both Pasta fields, including signed-index and DER mutations; the
+dedicated P-256 carry geometry now uses three 87-bit limbs. This helper is not
+yet called by the live
 monetary fold; complete Core subject, credential, issuer-policy, release and
 terminal links remain required before ordinary-app admission can open.
 A separate staged composition now feeds the same assigned signing subject and
@@ -506,10 +508,19 @@ unqualified observation. A Rust-only owner retains that concrete
 verifier and one process-local lane lineage. No app-facing native installation
 or durable monetary capability exists yet; the terminal hardware fold and
 monetary admission remain separate.
+Core now has a read-only projection of the original paired outgoing State
+proof and canonical public inputs from a retained, authenticated candidate.
+It re-verifies the pair and rejects released or stale operations. Method 14 of
+the native coordinator ABI now exports this projection by Core operation ID to
+Swift and Kotlin adapters, but stock builds have no installed qualified backend.
+The projection therefore does not make the phone observer or a testnet payment
+path operational by itself.
 On Pixel 6, a source-staged experimental collector binds a StrongBox signature,
 attestation challenge and app-private intent journal to the canonical selection
-frame and exact network, release, lane and counter inputs. Its latest source
-hardening still awaits the focused JVM and physical-device test rerun. This
+frame and exact network, release, lane and counter inputs. Its focused Android
+collector suite passes 15 JVM tests; the connected Android 17 Pixel 6 confirms
+StrongBox signing while placing the one-use limit only in software-enforced
+attestation. A source-matched JNI/app package and device run remain pending. This
 collector cannot yet authorize peer value exchange or redemption; a separate
 exact-network experimental coordinator and release are required. The software
 use limit leaves no-fork unproven. Its raw observation carries an experimental

@@ -11,6 +11,7 @@ use iroha_data_model::{
     identifier::{
         IdentifierClaimRecord, IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
         IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
+        PhoneRetailCanonicalityAttestationV1,
     },
     nexus::UniversalAccountId,
     prelude::*,
@@ -96,6 +97,7 @@ pub struct IdentifierResolutionDraft {
     pub evaluation_key_digest: Hash,
     pub verification_mode: RamLfeVerificationMode,
     pub opening: RamLfeOutputOpening,
+    pub phone_retail_canonicality: Option<PhoneRetailCanonicalityAttestationV1>,
 }
 #[derive(Debug, Error)]
 pub enum IdentifierResolutionError {
@@ -125,6 +127,8 @@ pub enum IdentifierResolutionError {
     Signing(String),
     #[error("Torii cannot issue proof-mode RAM-LFE receipts without prover runtime support")]
     ProofModeUnsupported,
+    #[error("phone#retail canonicality attestation is invalid: {0}")]
+    InvalidPhoneCanonicality(String),
 }
 fn sign_attestation_payload<T: norito::codec::Encode>(
     private_key: &iroha_crypto::PrivateKey,
@@ -258,6 +262,73 @@ impl IdentifierResolutionService {
             evaluation_key_digest: execution.evaluation_key_digest,
             verification_mode: execution.verification_mode,
             opening,
+            phone_retail_canonicality: None,
+        })
+    }
+    /// Derive the phone handle from a trusted canonical E.164 nullifier, never
+    /// from randomized BFV output bytes.
+    pub fn derive_phone_retail_encrypted(
+        &self,
+        policy: &IdentifierPolicy,
+        program_policy: &RamLfeProgramPolicy,
+        ciphertext: &BfvIdentifierCiphertext,
+        opening: RamLfeOutputOpening,
+        canonicality: PhoneRetailCanonicalityAttestationV1,
+        network_id: &iroha_data_model::NetworkId,
+    ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
+        if !policy.id.is_phone_retail()
+            || policy.normalization != IdentifierNormalization::PhoneE164
+            || policy.program_id.to_string() != "phone_retail"
+            || policy.program_id != program_policy.program_id
+        {
+            return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
+                "policy or program is not the pinned phone#retail contract".to_owned(),
+            ));
+        }
+        let execution = self.execute_encrypted(program_policy, ciphertext)?;
+        validate_output_opening(&opening, &execution, program_policy)?;
+        let statement = &canonicality.payload;
+        let pinned_key = policy.phone_retail_attestor_public_key.as_ref().ok_or_else(|| {
+            IdentifierResolutionError::InvalidPhoneCanonicality("attestor key is not pinned".to_owned())
+        })?;
+        let now = now_ms();
+        if statement.network_id != *network_id
+            || statement.policy_id != policy.id
+            || statement.program_id != program_policy.program_id
+            || statement.input_ciphertext_hash != execution.input_ciphertext_hash
+            || statement.output_ciphertext_hash != execution.output_ciphertext_hash
+            || statement.opened_output_hash != opening.payload.opened_output_hash
+            || statement.canonical_phone_nullifier == Hash::prehashed([0; Hash::LENGTH])
+            || statement.issued_at_ms > now
+            || statement.expires_at_ms <= now
+            || statement.expires_at_ms <= statement.issued_at_ms
+        {
+            return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
+                "network, commitment, nullifier, or validity window mismatch".to_owned(),
+            ));
+        }
+        canonicality.verify(pinned_key).map_err(|err| {
+            IdentifierResolutionError::InvalidPhoneCanonicality(err.to_string())
+        })?;
+        let (opaque_id, receipt_hash) = identifier_hashes_from_output_hash(
+            &program_id_bytes(&program_policy.program_id),
+            &statement.canonical_phone_nullifier,
+        );
+        Ok(IdentifierResolutionDraft {
+            opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            receipt_hash,
+            resolved_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+            backend: execution.backend,
+            output_hash: execution.output_hash,
+            input_ciphertext_hash: execution.input_ciphertext_hash,
+            output_ciphertext_hash: execution.output_ciphertext_hash,
+            program_digest: execution.program_digest,
+            parameter_digest: execution.parameter_digest,
+            evaluation_key_digest: execution.evaluation_key_digest,
+            verification_mode: execution.verification_mode,
+            opening,
+            phone_retail_canonicality: Some(canonicality),
         })
     }
     /// Sign a receipt binding a derived opaque identifier to the current ledger target.
@@ -351,6 +422,22 @@ impl IdentifierResolutionService {
         uaid: UniversalAccountId,
         account_id: AccountId,
     ) -> Result<IdentifierResolutionReceipt, IdentifierResolutionError> {
+        if policy.id.is_phone_retail() {
+            let statement = &draft.phone_retail_canonicality.as_ref().ok_or_else(|| {
+                IdentifierResolutionError::InvalidPhoneCanonicality(
+                    "attestation is required for phone#retail".to_owned(),
+                )
+            })?.payload;
+            if statement.uaid != uaid || statement.account_id != account_id {
+                return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
+                    "attestation beneficiary differs from resolved account".to_owned(),
+                ));
+            }
+        } else if draft.phone_retail_canonicality.is_some() {
+            return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
+                "phone attestation is only valid for phone#retail".to_owned(),
+            ));
+        }
         let runtime = self.runtime(program_policy)?;
         if runtime.signer.public_key() != &program_policy.resolver_public_key {
             return Err(IdentifierResolutionError::SignerMismatch);
@@ -385,6 +472,7 @@ impl IdentifierResolutionService {
         Ok(IdentifierResolutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(signature),
+            phone_retail_canonicality: draft.phone_retail_canonicality.clone(),
         })
     }
     fn runtime(
@@ -695,6 +783,7 @@ mod tests {
         IdentifierResolutionReceipt {
             payload: payload_from_fixture(fixture_object(receipt, "payload")),
             attestation: attestation_from_fixture(fixture_object(receipt, "attestation")),
+            phone_retail_canonicality: None,
         }
     }
     fn payload_from_fixture(payload: &norito::json::Value) -> IdentifierResolutionReceiptPayload {
@@ -1021,6 +1110,7 @@ mod tests {
             policy_id: policy_id.clone(),
             opaque_id: draft.opaque_id,
             receipt_hash: draft.receipt_hash,
+            phone_retail_nullifier: None,
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
             account_id: owner.clone(),
             verified_at_ms: draft.resolved_at_ms,

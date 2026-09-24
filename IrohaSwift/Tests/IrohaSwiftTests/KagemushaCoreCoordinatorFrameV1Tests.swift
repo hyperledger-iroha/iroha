@@ -6,8 +6,8 @@ import XCTest
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
   func testCoordinatorMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
-    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(13)))
-    XCTAssertEqual(cases.count, 20)
+    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(14)))
+    XCTAssertEqual(cases.count, 21)
     for item in cases {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       let response = try KagemushaCoreCoordinatorFrameV1.decodeResponse(item.method, requestFrame: item.request, responseFrame: item.response)
@@ -42,7 +42,7 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
   func testClosedFieldCountsAndAllCorrelatedOutputsRejectSubstitution() throws {
     let indexes = ["reserve": 0, "begin-send": 0, "begin-redeem": 0, "installed-terminal": 0,
       "recover-sender": 0, "recover-terminal": 1, "release-send": 3, "release-redeem": 3,
-      "app-attest-ack": 0]
+      "app-attest-ack": 0, "outgoing-state-proof-export": 0]
     for item in try fixtures() {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(item.method, fields: Array(request.dropLast())))
@@ -126,6 +126,27 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     var exhausted = request
     exhausted[4] = KagemushaCoreCoordinatorFrameV1.u32(UInt32.max)
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: exhausted))
+  }
+
+  func testOutgoingStateProofExportBindsOriginalOperationAndBoundsArchives() throws {
+    let method = KagemushaCoreCoordinatorMethodV1.exportOutgoingStateProof
+    let operationID = Data(repeating: 0x66, count: 32)
+    let request = try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: [operationID])
+    let fields = [operationID, Data([0x81]), Data([0x82])]
+    let response = try KagemushaCoreCoordinatorFrameV1.encodeResponse(method,
+      requestFrame: request, fields: fields)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(method,
+      requestFrame: request, responseFrame: response), fields)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+      fields: [Data(repeating: 0, count: 32)]))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(method,
+      requestFrame: request, fields: [Data(repeating: 0x67, count: 32), fields[1], fields[2]]))
+    for index in 1...2 {
+      var oversized = fields
+      oversized[index] = Data(repeating: 0x83, count: index == 1 ? 4097 : 6529)
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(method,
+        requestFrame: request, fields: oversized))
+    }
   }
 
   func testAuthenticatedReplyRequiresFullLowSAuthenticatorAndRetiresNineFields() throws {

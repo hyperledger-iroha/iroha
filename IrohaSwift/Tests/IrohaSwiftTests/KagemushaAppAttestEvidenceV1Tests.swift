@@ -122,7 +122,7 @@ private final class AppAttestCommitEndpoint: KagemushaCoreCoordinatorEndpointV1 
 
   func configure(_ newMode: Mode) { lock.lock(); mode = newMode; lock.unlock() }
   func calls() -> Int { lock.lock(); defer { lock.unlock() }; return invocationCount }
-  func contract() throws -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13] }
+  func contract() throws -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
   func open(storagePath: Data) throws -> UInt64 { 7 }
   func close(handle: UInt64) throws {}
 

@@ -5,6 +5,11 @@
 //! and canonical representations are available in every feature selection.
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
+// Rust 1.97 diagnoses the generated model and transparent API re-exports as
+// ambiguous visibility, although their resolved items and wire types are
+// unchanged. Keep this exception scoped to the data model while its generated
+// re-exports are made explicit.
+#![allow(ambiguous_import_visibilities)]
 #![cfg_attr(
     test,
     expect(
@@ -66,6 +71,8 @@ pub mod common;
 pub mod compute;
 /// Confidential registries and parameter descriptors.
 pub mod confidential;
+/// Accumulated exact-value contract-state commitments and inclusion proofs.
+pub mod contract_state_proof;
 /// Consensus-related messages and state representations.
 pub mod consensus;
 /// Static content hosting records.

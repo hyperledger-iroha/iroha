@@ -9,7 +9,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use p256::ecdsa::{SigningKey, signature::Signer as _};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
+use std::time::Duration;
 
 mod catalog;
 
@@ -495,7 +496,7 @@ fn expired_native_attempt_is_rejected_before_proof_parsing_or_clock_renewal() {
     let f = Fixture::new();
     let mut pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
-    pending.deadline = NativeDeadlineV1::expired_for_test();
+    pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         pending.client_nonce().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -615,7 +616,7 @@ fn transitioning_to_possession_does_not_restart_the_native_deadline() {
         .unwrap();
     // An actual short native clock interval catches an accidental new 120-second lease.
     let original = NativeDeadlineV1::start(Duration::from_millis(250)).unwrap();
-    admission.pending.deadline = original.clone();
+    admission.pending.deadline = Some(original.clone());
     let open = PendingEnrolledOpenV1::from_fresh_issuer_admission(admission).unwrap();
     while original.check().is_ok() {
         std::thread::sleep(Duration::from_millis(10));
@@ -642,7 +643,7 @@ fn admission_expiry_between_issuer_verification_and_possession_start_is_rejected
             &f.verified_app(&proof.challenge),
         )
         .unwrap();
-    admission.pending.deadline = NativeDeadlineV1::expired_for_test();
+    admission.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         PendingEnrolledOpenV1::from_fresh_issuer_admission(admission).err(),
         Some(EnrolledOpenErrorV1::Expired)

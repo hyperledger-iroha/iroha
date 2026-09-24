@@ -5,6 +5,7 @@ use super::super::super::signed_app_preparation::{
     SignedAppPreparationPinsV1, verify_signed_app_preparation_v1,
 };
 use super::*;
+use std::time::Duration;
 
 fn preparation_fixture() -> Fixture {
     let mut f = Fixture::new();
@@ -792,7 +793,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     let mut pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
     let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
-    pending.deadline = NativeDeadlineV1::expired_for_test();
+    pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         pending.canonical_qualification().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -811,7 +812,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
     let mut accepted = accept(&f, pending, &proof.challenge);
-    accepted.pending.deadline = NativeDeadlineV1::expired_for_test();
+    accepted.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         accepted.account_signing_message().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -830,7 +831,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     );
 
     let (mut prepared, _) = prepare(&f);
-    prepared.pending.deadline = NativeDeadlineV1::expired_for_test();
+    prepared.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         prepared.challenge_id().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -852,7 +853,7 @@ fn all_challenge_transitions_share_the_original_continuous_deadline() {
     let proof = f.proof(pending.client_nonce().unwrap());
     let certificate = f.certificate(&proof).canonical_bytes().unwrap();
     let original = NativeDeadlineV1::start(Duration::from_secs(2)).unwrap();
-    pending.deadline = original.clone();
+    pending.deadline = Some(original.clone());
     let prepared = accept(&f, pending, &proof.challenge)
         .prepare_proof(&account_signature(&proof), &proof.device_response)
         .unwrap();

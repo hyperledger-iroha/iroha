@@ -150,6 +150,15 @@ final class KagemushaWireV1Tests: XCTestCase {
       completeRawBytes)
   }
 
+  func testPaymentRequestTextAcceptsBoundedCanonicalSize() throws {
+    let request = Data((0..<1_024).map { UInt8(truncatingIfNeeded: $0) })
+    let text = try KagemushaWireV1.encodeText(request, kind: .paymentRequest)
+    XCTAssertEqual(text.utf8.count, 1_371)
+    XCTAssertEqual(try KagemushaWireV1.decodeText(text, kind: .paymentRequest), request)
+    XCTAssertThrowsError(
+      try KagemushaWireV1.encodeText(Data(repeating: 0, count: 1_025), kind: .paymentRequest))
+  }
+
   func testSoleTextPrefixAndCanonicalPayloadKinds() throws {
     XCTAssertEqual(KagemushaWireV1.textPrefix, "kgm1:")
     let expected: [KagemushaWirePayloadKindV1] = [

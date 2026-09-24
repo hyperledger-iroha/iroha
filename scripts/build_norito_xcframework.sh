@@ -1400,6 +1400,10 @@ run_hermetic_apple_cargo() {
       ;;
   esac
   assert_selected_cargo_lock "the $profile Cargo preflight"
+  # Cargo also reads the user's config.toml. Replace ambient wrappers with the
+  # source-sealed helper, which disables rustc's broken debug-info stripping
+  # for host proc-macro dylibs on macOS 27 (rust-lang/rust#157750). Ordinary
+  # target libraries retain their exact release compiler and linker settings.
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
       --set "CARGO=$CARGO_BINARY" \
@@ -1422,7 +1426,11 @@ run_hermetic_apple_cargo() {
       --set "TMPDIR=$MOBILE_TMPDIR" \
       --set "VERGEN_GIT_SHA=$EMBEDDED_SOURCE_COMMIT" \
       "${platform_environment[@]}" \
-      -- "$CARGO_BINARY" "$cargo_subcommand" \
+      -- "$CARGO_BINARY" \
+      -Z host-config -Z target-applies-to-host \
+      --config "build.rustc-wrapper=\"$ROOT_DIR/scripts/apple_proc_macro_rustc_wrapper.sh\"" \
+      --config 'build.rustc-workspace-wrapper=""' \
+      "$cargo_subcommand" \
       -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" \
       --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
     cargo_status=0

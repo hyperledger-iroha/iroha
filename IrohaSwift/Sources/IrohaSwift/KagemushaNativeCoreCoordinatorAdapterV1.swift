@@ -3,13 +3,39 @@
 
 import Foundation
 
+/// Detached, non-authorizing proof archives from one retained outgoing Core operation.
+public struct KagemushaOutgoingStateProofArchivesV1: Sendable {
+  public let operationID: Data
+  public let publicInputsArchive: Data
+  public let pairedProofArchive: Data
+
+  /// Admit the bounded read-only projection returned by a signed app's native Core owner.
+  /// Core's C boundary authenticates the canonical archives and retained operation separately.
+  public init(operationID: Data, publicInputsArchive: Data, pairedProofArchive: Data) throws {
+    guard operationID.count == 32, operationID.contains(where: { $0 != 0 }),
+      (1...4_096).contains(publicInputsArchive.count),
+      (1...6_528).contains(pairedProofArchive.count)
+    else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid outgoing State proof archive pair")
+    }
+    self.operationID = Data(operationID)
+    self.publicInputsArchive = Data(publicInputsArchive)
+    self.pairedProofArchive = Data(pairedProofArchive)
+  }
+}
+
+/// Read-only export available only from the native Core owner retained by a qualified provider.
+public protocol KagemushaOutgoingStateProofExportingCoreV1: KagemushaNativeCoreCoordinatorV1 {
+  func exportOutgoingStateProof(operationID: Data) throws -> KagemushaOutgoingStateProofArchivesV1
+}
+
 /// Typed wallet adapter over the exact native coordinator ABI.
 ///
 /// Canonical projections are selectors for the native durable journal, never recovered
 /// capabilities. Opening this adapter does not qualify a hardware provider or supply a
 /// software monetary backend. Missing native authority continues to fail closed.
 public final class KagemushaNativeCoreCoordinatorAdapterV1:
-  KagemushaNativeCoreCoordinatorV1, @unchecked Sendable {
+  KagemushaOutgoingStateProofExportingCoreV1, @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -40,6 +66,13 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1:
 
   public func beginObservation(operation: UInt8, canonicalCommand: Data) throws -> Data {
     try bridge.invoke(.beginObservation, fields: [u32(UInt32(operation)), canonicalCommand])[0]
+  }
+
+  /// Copy Core's original outgoing State proof for an independently pinned testnet observer.
+  public func exportOutgoingStateProof(operationID: Data) throws -> KagemushaOutgoingStateProofArchivesV1 {
+    let fields = try bridge.invoke(.exportOutgoingStateProof, fields: [operationID])
+    return try KagemushaOutgoingStateProofArchivesV1(
+      operationID: fields[0], publicInputsArchive: fields[1], pairedProofArchive: fields[2])
   }
 
   public func acceptQualification(

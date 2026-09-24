@@ -835,6 +835,20 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
 
   public var operationLock: NSRecursiveLock { client.intentOwner.exclusiveLock }
 
+  /// Export the original outgoing proof from this provider's retained native Core owner.
+  /// This read-only copy grants no monetary authority and cannot reopen another owner.
+  public func exportOutgoingStateProof(operationID: Data) throws -> KagemushaOutgoingStateProofArchivesV1 {
+    guard operationID.count == 32, operationID.contains(where: { $0 != 0 }) else {
+      throw KagemushaCoreCoordinatorErrorV1.invalidFrame("invalid outgoing operation ID")
+    }
+    return try locked {
+      guard let core = client.core as? any KagemushaOutgoingStateProofExportingCoreV1 else {
+        throw KagemushaCoreCoordinatorErrorV1.unavailable
+      }
+      return try core.exportOutgoingStateProof(operationID: operationID)
+    }
+  }
+
   public func acknowledgeDurableResult(operationID: Data, canonicalResult: Data) throws {
     try locked {
       try client.intentOwner.acknowledgeDurableResult(operationID: operationID, canonicalResult: canonicalResult)

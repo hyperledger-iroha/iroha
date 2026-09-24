@@ -52,6 +52,17 @@ _MODULE = importlib.import_module(f"{_PURE_PACKAGE}.kagemusha")
 Kagemusha = _MODULE.Kagemusha
 NetworkId = sys.modules[f"{_PURE_PACKAGE}.crypto"].NetworkId
 
+
+def test_payment_request_text_admits_full_first_release_wire_budget() -> None:
+    request = bytes([0x5A]) * 1024
+    text = Kagemusha.encode_text("request", request)
+    assert len(text) == 1371
+    assert Kagemusha.decode_text("request", text) == request
+    with pytest.raises(_MODULE.KagemushaError):
+        Kagemusha.encode_text("request", request + b"X")
+    with pytest.raises(_MODULE.KagemushaError):
+        Kagemusha.decode_text("request", text + "AA")
+
 _PUBLIC_KEY = bytes.fromhex(
     "04"
     "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"

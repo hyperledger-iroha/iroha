@@ -610,10 +610,12 @@ fn preparation_id_v1(
     name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalJournalCommitmentPreimageV1"
 )]
 struct TerminalJournalCommitmentPreimageV1 {
-    preparation_id: DigestV1,
-    candidate_envelope_digest: DigestV1,
-    state_transition_digest: DigestV1,
-    outbox_reservation_commitment: DigestV1,
+    // Spell the byte-array type explicitly: Norito's derive treats an opaque type alias as a
+    // generic array and otherwise emits two bytes per digest byte in this fixed-frame preimage.
+    preparation_id: [u8; 32],
+    candidate_envelope_digest: [u8; 32],
+    state_transition_digest: [u8; 32],
+    outbox_reservation_commitment: [u8; 32],
     journal_revision_after: u128,
 }
 
@@ -709,8 +711,9 @@ pub(crate) fn terminal_journal_canonical_layout_v1()
     name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalRecoveryCommitmentPreimageV1"
 )]
 struct TerminalRecoveryCommitmentPreimageV1 {
-    preparation_id: DigestV1,
-    prepared_one_use_authorization_digest: DigestV1,
+    // Keep the native recovery digest's fixed bytes identical to its recursive opening.
+    preparation_id: [u8; 32],
+    prepared_one_use_authorization_digest: [u8; 32],
     sealed_transition_inputs: Vec<u8>,
     sealed_recovery_seeds: Vec<u8>,
 }
@@ -2819,7 +2822,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(())
     }
 
-    fn reconcile_capacity_meters(
+    pub(super) fn reconcile_capacity_meters(
         &mut self,
         journal: &KagemushaOutgoingCandidateJournalV1,
     ) -> Result<(), KagemushaStateErrorV1> {
