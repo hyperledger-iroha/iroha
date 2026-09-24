@@ -4,7 +4,7 @@ use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
     beacon,
-    kura::{BlockIndex, BlockStore},
+    kura::{BlockIndex, BlockStore, Kura},
 };
 use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
@@ -1007,7 +1007,9 @@ fn verify_pulse(
         // All fixture children have stopped. This is a strict read-only native
         // journal reader, so validation cannot repair or rewrite the evidence.
         let native = config(config_path)?;
-        let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+        let mut store = BlockStore::open_read_only(
+            Kura::canonical_storage_paths(native.kura.store_dir.value()).0,
+        )?;
         ensure!(
             store.read_index_count()? >= epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
