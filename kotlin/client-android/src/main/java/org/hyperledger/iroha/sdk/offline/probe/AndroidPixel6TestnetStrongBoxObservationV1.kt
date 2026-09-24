@@ -256,12 +256,14 @@ internal class Pixel6TestnetObservationRunnerV1(
     }
 }
 
+/** Hardware codename is stable across localized marketing-model strings. */
+internal fun isPixel6HardwareV1(manufacturer: String, device: String): Boolean =
+    manufacturer.equals("Google", ignoreCase = true) && device == "oriole"
+
 private class AndroidPixel6StrongBoxDeviceV1(private val context: Context) :
     Pixel6TestnetObservationDeviceV1 {
     override val apiLevel: Int get() = Build.VERSION.SDK_INT
-    override fun isPixel6(): Boolean =
-        Build.MANUFACTURER.equals("Google", ignoreCase = true) &&
-            Build.DEVICE == "oriole" && Build.MODEL == "Pixel 6"
+    override fun isPixel6(): Boolean = isPixel6HardwareV1(Build.MANUFACTURER, Build.DEVICE)
     override fun hasStrongBox(): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
     override fun newNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)
@@ -378,6 +380,9 @@ internal class FilePixel6TestnetObservationStoreV1(
                 pixel6TestnetAttestationChallengeV1(digest, evidence.attestationNonce())) &&
             pixel6HexV1(pixel6Sha256V1(evidence.laneCommitment() +
                 evidence.secureIndexBeforeLittleEndian())) == slot)
+        // Reject a malformed local observation before it can be returned or recovered. This
+        // checks self-consistency only; an app-supplied certificate root is not monetary trust.
+        require(pixel6RecoveredEvidenceSignatureValidV1(evidence))
         io.writeNew(file(slot, ".evidence"), encode(evidence))
     }
 
@@ -467,7 +472,9 @@ private fun pixel6RecoveredEvidenceSignatureValidV1(
         certificate
     }
     val leaf = certificates.first()
+    require(leaf.basicConstraints < 0 && leaf.keyUsage?.firstOrNull() == true)
     require(uncompressedP256Sec1V1(leaf.publicKey).contentEquals(evidence.publicKey()))
+    require(pixel6StrongBoxAttestationMatchesChallengeV1(leaf, evidence.attestationChallenge()))
     certificates.zipWithNext().forEach { (child, issuer) ->
         require(child.issuerX500Principal == issuer.subjectX500Principal)
         child.verify(issuer.publicKey)
@@ -484,6 +491,47 @@ private fun pixel6RecoveredEvidenceSignatureValidV1(
         update(evidence.signedMessage())
         verify(signature)
     }
+}
+
+/** Check the raw StrongBox claim and exact challenge, without trusting the app-supplied root. */
+private fun pixel6StrongBoxAttestationMatchesChallengeV1(
+    certificate: X509Certificate,
+    expectedChallenge: ByteArray,
+): Boolean {
+    require(expectedChallenge.size == 32)
+    val extension = certificate.getExtensionValue("1.3.6.1.4.1.11129.2.1.17")
+        ?: return false
+    val (outerStart, outerEnd) = pixel6CanonicalDerHeaderV1(extension, 0, 0x04)
+    require(outerEnd == extension.size)
+    val description = extension.copyOfRange(outerStart, outerEnd)
+    val (sequenceStart, sequenceEnd) = pixel6CanonicalDerHeaderV1(description, 0, 0x30)
+    require(sequenceEnd == description.size)
+    var offset = sequenceStart
+    fun field(tag: Int): ByteArray {
+        val (start, end) = pixel6CanonicalDerHeaderV1(description, offset, tag)
+        offset = end
+        return description.copyOfRange(start, end)
+    }
+    fun positiveInteger(tag: Int): Int {
+        val bytes = field(tag)
+        require(bytes.size in 1..4 && bytes[0].toInt() >= 0)
+        require(bytes.size == 1 || bytes[0] != 0.toByte() ||
+            (bytes[1].toInt() and 0x80) != 0)
+        return bytes.fold(0) { value, byte -> (value shl 8) or (byte.toInt() and 0xff) }
+    }
+    val attestationVersion = positiveInteger(0x02)
+    val attestationLevel = positiveInteger(0x0a)
+    val keyMintVersion = positiveInteger(0x02)
+    val keyMintLevel = positiveInteger(0x0a)
+    val challenge = field(0x04)
+    field(0x04) // Unique ID is not part of this non-authorizing observation.
+    field(0x30) // Software authorization list.
+    field(0x30) // Hardware authorization list.
+    if (offset < sequenceEnd) field(0x30) // Optional StrongBox list on newer layouts.
+    require(offset == sequenceEnd)
+    return attestationVersion > 0 && keyMintVersion > 0 &&
+        attestationLevel == 2 && keyMintLevel == 2 &&
+        MessageDigest.isEqual(challenge, expectedChallenge)
 }
 
 /** Returns the content interval of a short, definite, minimally encoded DER element. */

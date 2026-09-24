@@ -37,7 +37,7 @@ fn validate_wrapper_projection<F: KagemushaPoseidonFieldV1>(
     ensure(
         terminal_column.len() == TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
             && wrapper_column.len() == TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
-        "wrapper projection requires both exact 81-cell columns",
+        "wrapper projection requires both exact 83-cell columns",
     )?;
     ensure(
         terminal_column[..public_instance::EQ_DEFERRED_AUDIT_LO]
@@ -366,6 +366,7 @@ pub(super) fn prove_sender_wrapper(
         ciphertext_commitment: original_core.ciphertext_commitment,
         amount: original_core.amount,
         terminal_output_binding: original_core.terminal_output_binding,
+        artifact_manifest_digest: [0; 32],
     };
     assert_eq!(terminal.public, original_public);
     assert_eq!(terminal.eq_keys.release_id, artifacts.release_id);

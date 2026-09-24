@@ -5,6 +5,14 @@
 //! histories, and constrain reciprocal audits; this module grants no proof or wallet authority.
 
 use super::*;
+use crate::zk::{
+    pasta_sha256::PastaSha256PlanMessageV1,
+    pasta_sha256_table8::{BLOCK_BYTE_SIZE, canonical_padding_suffix},
+};
+use iroha_data_model::kagemusha::{
+    KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1,
+    KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareTerminalBodyCommitmentLayoutV1,
+};
 
 /// Check both exact nested roles before assigning any shared semantic cell.
 pub(super) fn validate_terminal_nested_public_shape_v1<C: CurveAffineExt>(
@@ -440,19 +448,89 @@ pub(crate) struct TerminalSemanticPlanInputsV1<'a> {
     pub(crate) ep: TerminalSemanticPlanParityV1<'a, EpAffine>,
 }
 
-/// Ephemeral complete canonical queues; these messages have no proof or wallet authority.
+/// Ephemeral complete canonical queues and paired candidate carriers.
+/// These values have no proof or wallet authority.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TerminalSemanticShaPlanV1 {
     pub(crate) eq_messages: Vec<Vec<u8>>,
     pub(crate) ep_messages: Vec<Vec<u8>>,
     pub(crate) job_block_counts: Vec<u32>,
+    /// Same candidate carriers in both parity columns; the planner has not verified either proof.
+    pub(crate) prepared_candidate_bindings: TerminalPreparedCandidateBindingsV1,
+}
+
+/// Prepared-send commitments carried by each recursive State candidate column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalPreparedCandidateBindingsV1 {
+    pub(crate) preparation_id: DigestV1,
+    pub(crate) sealed_stream_digests: [DigestV1; 2],
+}
+
+/// Read only canonical 128-bit limbs from the candidate's fixed public column.
+fn terminal_prepared_candidate_bindings_v1<F: KagemushaPoseidonFieldV1>(
+    candidate: &[F],
+) -> Result<TerminalPreparedCandidateBindingsV1, String> {
+    if candidate.len()
+        != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
+    {
+        return Err("prepared send candidate has wrong fixed public shape".to_owned());
+    }
+    let digest = |offset: usize| -> Result<DigestV1, String> {
+        let mut bytes = [0_u8; 32];
+        let limbs = candidate
+            .get(offset..offset + 2)
+            .ok_or_else(|| "prepared send candidate digest offset is absent".to_owned())?;
+        for (index, limb) in limbs.iter().enumerate() {
+            let encoded = fe_to_biguint(limb).to_bytes_le();
+            if encoded.len() > 16 {
+                return Err("prepared send candidate digest limb exceeds u128".to_owned());
+            }
+            bytes[index * 16..index * 16 + encoded.len()].copy_from_slice(&encoded);
+        }
+        Ok(bytes)
+    };
+    Ok(TerminalPreparedCandidateBindingsV1 {
+        preparation_id: digest(state_relation::public_instance::PREPARATION_ID_LO)?,
+        sealed_stream_digests: [
+            digest(state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO)?,
+            digest(state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO)?,
+        ],
+    })
+}
+
+fn require_paired_prepared_candidate_bindings_v1(
+    eq: TerminalPreparedCandidateBindingsV1,
+    ep: TerminalPreparedCandidateBindingsV1,
+) -> Result<TerminalPreparedCandidateBindingsV1, String> {
+    if eq != ep {
+        return Err("terminal paired State candidates carry different prepared intents".to_owned());
+    }
+    Ok(eq)
+}
+
+/// Non-authorizing paired plan for the original Terminal queue plus all six send openings.
+///
+/// `active_job_block_counts` is the shard/claim work for the active logical messages;
+/// `capacity_job_block_counts` records the fixed bounded geometry the terminal consumer must
+/// constrain. The two may differ for short sealed streams. This plan grants no authority until
+/// the same assigned queue is bound to a recursively verified claim in both parities.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "full send claim is not installed")
+)]
+pub(crate) struct TerminalPreparedSendShaPlanV1 {
+    pub(crate) eq_messages: Vec<Vec<u8>>,
+    pub(crate) ep_messages: Vec<Vec<u8>>,
+    pub(crate) active_job_block_counts: Vec<u32>,
+    pub(crate) capacity_job_block_counts: Vec<u32>,
 }
 
 /// Capture both complete production semantic queues, dropping each graph before the next.
 ///
 /// The caller cannot choose role digests: they are derived from the actual compiled protocols.
-/// This produces only the typed claim's preimages; the Terminal consumer must authenticate the
-/// generated proof, both complete histories and the reciprocal carrier tail against its own queue.
+/// This produces the typed claim's preimages and prepared-intent carriers from both candidate
+/// columns. The Terminal consumer must authenticate the generated proof, both complete histories
+/// and the reciprocal carrier tail against its own queue.
 pub(crate) fn plan_terminal_semantic_sha_v1(
     inputs: TerminalSemanticPlanInputsV1<'_>,
 ) -> Result<TerminalSemanticShaPlanV1, String> {
@@ -501,7 +579,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         parity_inputs: &TerminalSemanticPlanParityV1<'_, C>,
         parity: KagemushaPastaParityV1,
         guard_protocols: [DigestV1; 2],
-    ) -> Result<(Vec<Vec<u8>>, Vec<u32>), String>
+    ) -> Result<(Vec<Vec<u8>>, Vec<u32>, TerminalPreparedCandidateBindingsV1), String>
     where
         C: CurveAffineExt,
         C::Base: BigPrimeField,
@@ -510,6 +588,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         let candidate_protocol_digest =
             native_parent_protocol_digest_v1(parity_inputs.candidate_protocol, parity)?;
         let candidate = &parity_inputs.candidate_instances[0];
+        let prepared_candidate_bindings = terminal_prepared_candidate_bindings_v1(candidate)?;
         let candidate_digest = canonical_terminal_authorization_candidate_digest_v1(&[candidate
             [..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT]
             .to_vec()])?;
@@ -594,20 +673,22 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
                 "terminal SHA compression inventory differs from its assigned queue".to_owned(),
             );
         }
-        Ok((messages, blocks))
+        Ok((messages, blocks, prepared_candidate_bindings))
     }
-    let (eq_messages, eq_blocks) = half(
+    let (eq_messages, eq_blocks, eq_prepared) = half(
         &inputs,
         &inputs.eq,
         KagemushaPastaParityV1::Eq,
         guard_protocols,
     )?;
-    let (ep_messages, ep_blocks) = half(
+    let (ep_messages, ep_blocks, ep_prepared) = half(
         &inputs,
         &inputs.ep,
         KagemushaPastaParityV1::Ep,
         guard_protocols,
     )?;
+    let prepared_candidate_bindings =
+        require_paired_prepared_candidate_bindings_v1(eq_prepared, ep_prepared)?;
     if eq_messages.len() != ep_messages.len()
         || eq_blocks != ep_blocks
         || eq_messages
@@ -623,9 +704,321 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         eq_messages,
         ep_messages,
         job_block_counts: eq_blocks,
+        prepared_candidate_bindings,
+    })
+}
+
+/// Validate the six send-opening jobs appended to the exact original Terminal SHA queues.
+///
+/// `eq_jobs` and `ep_jobs` must be exported from the respective assigned queues with
+/// `PastaSha256JobsV1::canonical_plan_messages`. This host plan checks ordering, active lengths,
+/// fixed capacities, selected final blocks, parity, and the three prepared-intent digests carried
+/// by the paired State candidates. It exports only active logical messages for the existing typed
+/// shard generator. It does not authenticate an assigned queue or enable
+/// the live 26-job consumer; that requires the same bounded cells to be constrained against the
+/// recursive claim after candidate and Guard verification. TODO: qualify that complete k=16
+/// relation and its release keys before any production use.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "full send claim is not installed")
+)]
+#[allow(clippy::too_many_lines)]
+pub(crate) fn plan_terminal_prepared_send_sha_v1(
+    semantic: &TerminalSemanticShaPlanV1,
+    eq_jobs: &[PastaSha256PlanMessageV1],
+    ep_jobs: &[PastaSha256PlanMessageV1],
+) -> Result<TerminalPreparedSendShaPlanV1, String> {
+    use super::super::{terminal_body_commitment, terminal_durable_commitments as durable};
+    use sha2::{Digest as _, Sha256};
+
+    const ORIGINAL_JOBS: usize = 26;
+    const OPENING_JOBS: usize = 6;
+    if semantic.eq_messages.len() != ORIGINAL_JOBS
+        || semantic.ep_messages.len() != ORIGINAL_JOBS
+        || semantic.job_block_counts.len() != ORIGINAL_JOBS
+        || eq_jobs.len() != ORIGINAL_JOBS + OPENING_JOBS
+        || ep_jobs.len() != eq_jobs.len()
+    {
+        return Err(
+            "prepared send SHA plan needs the original 26 jobs and six openings".to_owned(),
+        );
+    }
+
+    let blocks = |length: usize| -> Result<usize, String> {
+        let suffix = canonical_padding_suffix(length)
+            .ok_or_else(|| "prepared send SHA message length is not encodable".to_owned())?;
+        length
+            .checked_add(suffix.len())
+            .map(|padded| padded / BLOCK_BYTE_SIZE)
+            .ok_or_else(|| "prepared send SHA padded length overflow".to_owned())
+    };
+    let journal_frame = crate::zk::kagemusha_v1_state::terminal_journal_canonical_layout_v1()
+        .map_err(|_| "prepared send journal layout changed".to_owned())?
+        .0;
+    let recovery_frame_prefix =
+        crate::zk::kagemusha_v1_state::terminal_recovery_canonical_frame_prefix_v1()
+            .map_err(|_| "prepared send recovery frame prefix changed".to_owned())?;
+    let transition_capacity = durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1.len()
+        + 1
+        + 8
+        + KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize;
+    let seeds_capacity = durable::SEALED_RECOVERY_DIGEST_DOMAIN_V1.len()
+        + 1
+        + 8
+        + KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize;
+    let transcript_capacity =
+        durable::PREPARATION_ID_DOMAIN_V1.len() + 1 + 2 + 1 + 11 * 32 + 2 * (8 + 32);
+    let journal_length = 16 + durable::TERMINAL_JOURNAL_DOMAIN_V1.len() + journal_frame.len();
+    let recovery_payload_capacity = 1
+        + 32
+        + 1
+        + 32
+        + 2
+        + 8
+        + KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize
+        + 2
+        + 8
+        + KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize;
+    let recovery_capacity = 16
+        + durable::TERMINAL_RECOVERY_DOMAIN_V1.len()
+        + recovery_frame_prefix.len()
+        + recovery_payload_capacity;
+    let body_length = terminal_body_commitment::TERMINAL_BODY_DOMAIN_V1.len()
+        + 1
+        + 8
+        + KagemushaHardwareTerminalBodyCommitmentLayoutV1::BODY_BYTES;
+    let tail_capacities = [
+        transition_capacity,
+        seeds_capacity,
+        transcript_capacity,
+        journal_length,
+        recovery_capacity,
+        body_length,
+    ];
+    let bounded_roles = [true, true, true, false, true, false];
+
+    let mut eq_messages = Vec::with_capacity(eq_jobs.len());
+    let mut ep_messages = Vec::with_capacity(ep_jobs.len());
+    let mut active_job_block_counts = Vec::with_capacity(eq_jobs.len());
+    let mut capacity_job_block_counts = Vec::with_capacity(eq_jobs.len());
+    let mut sealed_stream_claims = [None; 2];
+    for (index, (eq, ep)) in eq_jobs.iter().zip(ep_jobs).enumerate() {
+        let [eq_result, ep_result] = [eq, ep].map(|job| -> Result<(&[u8], usize, usize), String> {
+            match job {
+                PastaSha256PlanMessageV1::Ordinary(message) => {
+                    let count = blocks(message.len())?;
+                    Ok((message, count, count))
+                }
+                PastaSha256PlanMessageV1::Bounded {
+                    logical_message,
+                    capacity,
+                    selected_block,
+                    max_blocks,
+                } => {
+                    if logical_message.len() > *capacity
+                        || *max_blocks != blocks(*capacity)?
+                        || selected_block.checked_add(1) != Some(blocks(logical_message.len())?)
+                    {
+                        return Err("prepared send bounded SHA block selection changed".to_owned());
+                    }
+                    Ok((logical_message, *selected_block + 1, *max_blocks))
+                }
+            }
+        });
+        let (eq_message, eq_active, eq_capacity) = eq_result?;
+        let (ep_message, ep_active, ep_capacity) = ep_result?;
+        if eq_active != ep_active || eq_capacity != ep_capacity {
+            return Err("prepared send Eq/Ep SHA block geometry differs".to_owned());
+        }
+        if index < ORIGINAL_JOBS {
+            if !matches!(eq, PastaSha256PlanMessageV1::Ordinary(_))
+                || !matches!(ep, PastaSha256PlanMessageV1::Ordinary(_))
+                || eq_message != semantic.eq_messages[index].as_slice()
+                || ep_message != semantic.ep_messages[index].as_slice()
+                || eq_message.len() != ep_message.len()
+                || eq_active != semantic.job_block_counts[index] as usize
+            {
+                return Err(
+                    "prepared send SHA prefix differs from the original terminal queue".to_owned(),
+                );
+            }
+        } else {
+            let role = index - ORIGINAL_JOBS;
+            let expect_bounded = bounded_roles[role];
+            if matches!(eq, PastaSha256PlanMessageV1::Bounded { .. }) != expect_bounded
+                || matches!(ep, PastaSha256PlanMessageV1::Bounded { .. }) != expect_bounded
+                || eq_capacity != blocks(tail_capacities[role])?
+                || (expect_bounded
+                    && (match eq {
+                        PastaSha256PlanMessageV1::Bounded { capacity, .. } => *capacity,
+                        _ => unreachable!("checked bounded role"),
+                    }) != tail_capacities[role])
+                || (!expect_bounded && eq_message.len() != tail_capacities[role])
+                || eq_message != ep_message
+            {
+                return Err("prepared send opening SHA role, capacity or parity changed".to_owned());
+            }
+            let domain = match role {
+                0 => durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1,
+                1 => durable::SEALED_RECOVERY_DIGEST_DOMAIN_V1,
+                2 => durable::PREPARATION_ID_DOMAIN_V1,
+                3 => durable::TERMINAL_JOURNAL_DOMAIN_V1,
+                4 => durable::TERMINAL_RECOVERY_DOMAIN_V1,
+                5 => terminal_body_commitment::TERMINAL_BODY_DOMAIN_V1,
+                _ => unreachable!("six prepared send opening jobs"),
+            };
+            let prefix = if role == 3 || role == 4 {
+                [(domain.len() as u64).to_be_bytes().as_slice(), domain].concat()
+            } else {
+                [domain, &[0]].concat()
+            };
+            if !eq_message.starts_with(&prefix) {
+                return Err("prepared send opening SHA domain changed".to_owned());
+            }
+            match role {
+                0 | 1 => {
+                    let count_start = prefix.len();
+                    let count_end = count_start + 8;
+                    let count = eq_message
+                        .get(count_start..count_end)
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .map(u64::from_le_bytes)
+                        .ok_or_else(|| {
+                            "prepared send sealed stream length is missing".to_owned()
+                        })?;
+                    if count == 0
+                        || usize::try_from(count).ok() != Some(eq_message.len() - count_end)
+                    {
+                        return Err(
+                            "prepared send sealed stream length disagrees with bytes".to_owned()
+                        );
+                    }
+                    let digest: [u8; 32] = Sha256::digest(eq_message).into();
+                    if digest != semantic.prepared_candidate_bindings.sealed_stream_digests[role] {
+                        return Err(
+                            "prepared send sealed stream differs from State candidate carrier"
+                                .to_owned(),
+                        );
+                    }
+                    sealed_stream_claims[role] = Some((count, digest));
+                }
+                2 => {
+                    if eq_message.len() != transcript_capacity
+                        || eq_message[prefix.len()..prefix.len() + 2]
+                            != KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes()
+                        || eq_message[prefix.len() + 2] != 2
+                    {
+                        return Err(
+                            "prepared send preparation transcript header changed".to_owned()
+                        );
+                    }
+                    // The native preparation ID commits to the active lengths and digests of the
+                    // same two sealed streams already queued above. Comparing those copied fields
+                    // rejects a locally well-shaped but inconsistent claim plan before proving.
+                    let lengths_start = prefix.len() + 2 + 1 + 11 * 32;
+                    for (stream, offset) in [lengths_start, lengths_start + 8 + 32]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let (expected_length, expected_digest) = sealed_stream_claims[stream]
+                            .ok_or_else(|| {
+                                "prepared send sealed stream claim is absent".to_owned()
+                            })?;
+                        let length = u64::from_le_bytes(
+                            eq_message[offset..offset + 8]
+                                .try_into()
+                                .expect("fixed preparation transcript length field"),
+                        );
+                        if length != expected_length
+                            || &eq_message[offset + 8..offset + 8 + 32]
+                                != expected_digest.as_slice()
+                        {
+                            return Err(
+                                "prepared send preparation transcript sealed claim differs from stream"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    let preparation_id: DigestV1 = Sha256::digest(eq_message).into();
+                    if preparation_id != semantic.prepared_candidate_bindings.preparation_id {
+                        return Err(
+                            "prepared send transcript differs from State candidate preparation ID"
+                                .to_owned(),
+                        );
+                    }
+                }
+                3 | 4 => {
+                    let length_start = prefix.len();
+                    let length_end = length_start + 8;
+                    let frame_len = eq_message
+                        .get(length_start..length_end)
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .map(u64::from_be_bytes)
+                        .ok_or_else(|| {
+                            "prepared send durable frame length is missing".to_owned()
+                        })?;
+                    if usize::try_from(frame_len).ok() != Some(eq_message.len() - length_end)
+                        || (role == 4 && frame_len < recovery_frame_prefix.len() as u64)
+                    {
+                        return Err(
+                            "prepared send durable frame length disagrees with bytes".to_owned()
+                        );
+                    }
+                    // The native Norito encoder owns these fixed header and field-width bytes.
+                    // Only its checksum, payload length, and semantic fields are witness holes.
+                    let frame = &eq_message[length_end..];
+                    let layout = if role == 3 {
+                        journal_frame.as_slice()
+                    } else {
+                        recovery_frame_prefix.as_slice()
+                    };
+                    if frame.len() < layout.len()
+                        || frame.iter().zip(layout).any(|(actual, expected)| {
+                            expected.is_some_and(|fixed| *actual != fixed)
+                        })
+                    {
+                        return Err(
+                            "prepared send durable frame differs from canonical Norito layout"
+                                .to_owned(),
+                        );
+                    }
+                }
+                5 => {
+                    let body_len =
+                        KagemushaHardwareTerminalBodyCommitmentLayoutV1::BODY_BYTES as u64;
+                    if eq_message[prefix.len()..prefix.len() + 8] != body_len.to_le_bytes()
+                        || eq_message[prefix.len() + 8..prefix.len() + 10]
+                            != KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes()
+                    {
+                        return Err("prepared send terminal body length changed".to_owned());
+                    }
+                }
+                _ => unreachable!("six prepared send opening jobs"),
+            }
+        }
+        eq_messages.push(eq_message.to_vec());
+        ep_messages.push(ep_message.to_vec());
+        active_job_block_counts.push(
+            u32::try_from(eq_active)
+                .map_err(|_| "prepared send active SHA block count exceeds u32".to_owned())?,
+        );
+        capacity_job_block_counts.push(
+            u32::try_from(eq_capacity)
+                .map_err(|_| "prepared send capacity SHA block count exceeds u32".to_owned())?,
+        );
+    }
+    Ok(TerminalPreparedSendShaPlanV1 {
+        eq_messages,
+        ep_messages,
+        active_job_block_counts,
+        capacity_job_block_counts,
     })
 }
 
 #[cfg(test)]
 #[path = "terminal_semantic_pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "terminal_prepared_send_sha_plan_tests.rs"]
+mod prepared_send_tests;

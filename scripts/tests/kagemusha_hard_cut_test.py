@@ -213,6 +213,10 @@ class KagemushaHardCutTests(unittest.TestCase):
         failures: list[str] = []
         for path in _repository_files():
             relative = path.relative_to(ROOT)
+            # Archived evidence preserves its original bytes by repository policy; the
+            # first-release product-name gate applies to active source and documentation.
+            if relative.parts[:2] == ("docs", "history"):
+                continue
             retired = _retired_identity(str(relative).encode())
             if retired is not None:
                 failures.append(f"retired path {relative}: {retired.decode()}")

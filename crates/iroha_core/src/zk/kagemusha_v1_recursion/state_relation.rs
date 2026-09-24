@@ -51,8 +51,9 @@ use crate::zk::{
 };
 
 pub(super) const PUBLIC_INSTANCE_COUNT: usize = 85;
-/// The recursive State proof additionally exposes the SHA-derived transition digest.
-pub(super) const RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT: usize = PUBLIC_INSTANCE_COUNT + 2;
+/// The recursive State proof additionally exposes the transition digest and three prepared-intent
+/// digests. Terminal use still requires opening the preparation transcript and both sealed streams.
+pub(super) const RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT: usize = PUBLIC_INSTANCE_COUNT + 8;
 pub(super) const KAGEMUSHA_RECEIVE_FOLD_ARITY_V1: usize = 1;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 
@@ -232,6 +233,18 @@ pub mod public_instance {
     pub const TRANSITION_STATEMENT_LO: usize = super::PUBLIC_INSTANCE_COUNT;
     /// High 128 bits of the canonical State transition statement digest in recursive proofs.
     pub const TRANSITION_STATEMENT_HI: usize = TRANSITION_STATEMENT_LO + 1;
+    /// Low 128 bits of the outgoing preparation ID; zero for all other operations.
+    pub const PREPARATION_ID_LO: usize = TRANSITION_STATEMENT_HI + 1;
+    /// High 128 bits of the outgoing preparation ID.
+    pub const PREPARATION_ID_HI: usize = PREPARATION_ID_LO + 1;
+    /// Low 128 bits of the sealed transition-input stream digest.
+    pub const SEALED_TRANSITION_INPUTS_LO: usize = PREPARATION_ID_HI + 1;
+    /// High 128 bits of the sealed transition-input stream digest.
+    pub const SEALED_TRANSITION_INPUTS_HI: usize = SEALED_TRANSITION_INPUTS_LO + 1;
+    /// Low 128 bits of the sealed recovery-seed stream digest.
+    pub const SEALED_RECOVERY_SEEDS_LO: usize = SEALED_TRANSITION_INPUTS_HI + 1;
+    /// High 128 bits of the sealed recovery-seed stream digest.
+    pub const SEALED_RECOVERY_SEEDS_HI: usize = SEALED_RECOVERY_SEEDS_LO + 1;
 }
 
 /// One private credit in the singular receive-fold relation.
@@ -263,6 +276,72 @@ pub struct KagemushaReceiveFoldCreditV1 {
     pub payment_output_digest: DigestV1,
     /// Exact empty-to-present replay insertion.
     pub replay_insert: KagemushaReplayInsertWitnessV1,
+}
+
+/// Three digest values carried by an outgoing State proof for later terminal opening.
+///
+/// A public carrier alone does not prove its preparation transcript or sealed byte streams.
+/// Terminal authorization must verify those openings against this exact candidate column before
+/// using the preparation ID for durable journal or recovery authority.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaPreparedIntentCommitmentsV1"
+)]
+pub struct KagemushaPreparedIntentCommitmentsV1 {
+    /// Native pre-proof commitment to the validated prepared intent.
+    pub preparation_id: DigestV1,
+    /// Domain-separated digest of the exact sealed transition-input stream and its length.
+    pub sealed_transition_inputs_digest: DigestV1,
+    /// Domain-separated digest of the exact sealed recovery-seed stream and its length.
+    pub sealed_recovery_seeds_digest: DigestV1,
+}
+
+impl KagemushaPreparedIntentCommitmentsV1 {
+    fn validate(self) -> Result<(), String> {
+        if self.preparation_id == [0; 32]
+            || self.sealed_transition_inputs_digest == [0; 32]
+            || self.sealed_recovery_seeds_digest == [0; 32]
+        {
+            return Err("outgoing prepared-intent commitments must be nonzero".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Assign the three carried digest pairs with an in-circuit outgoing-only presence rule.
+///
+/// This authenticates their public values in the State proof. It does not prove the native
+/// preparation transcript or either sealed stream; terminal authorization must open all three.
+pub(super) fn assign_prepared_intent_public_v1<F: KagemushaPoseidonFieldV1>(
+    builder: &mut BaseCircuitBuilder<F>,
+    operation: AssignedValue<F>,
+    prepared: Option<KagemushaPreparedIntentCommitmentsV1>,
+) -> [AssignedValue<F>; 6] {
+    let range = builder.range_chip();
+    let gate = range.gate();
+    let ctx = builder.main(0);
+    let send = gate.is_equal(ctx, operation, Constant(F::from(2)));
+    let redeem = gate.is_equal(ctx, operation, Constant(F::from(4)));
+    let outgoing = gate.or(ctx, send, redeem);
+    let mut assigned = Vec::with_capacity(6);
+    for digest in [
+        prepared.map_or([0; 32], |value| value.preparation_id),
+        prepared.map_or([0; 32], |value| value.sealed_transition_inputs_digest),
+        prepared.map_or([0; 32], |value| value.sealed_recovery_seeds_digest),
+    ] {
+        let limbs = assign_digest(ctx, &range, digest);
+        let low_zero = gate.is_zero(ctx, limbs[0]);
+        let high_zero = gate.is_zero(ctx, limbs[1]);
+        let zero = gate.and(ctx, low_zero, high_zero);
+        let nonzero = gate.not(ctx, zero);
+        ctx.constrain_equal(&nonzero, &outgoing);
+        assigned.extend(limbs);
+    }
+    assigned
+        .try_into()
+        .expect("three prepared digests have six limbs")
 }
 
 /// Public values reconstructed by a verifier for one aggregate-state proof.
@@ -299,6 +378,8 @@ pub struct KagemushaStateRelationPublicInputsV1 {
     pub lifecycle_binding_digest: DigestV1,
     /// Send/redemption prepared-transition binding.
     pub prepared_transition_binding_digest: DigestV1,
+    /// Outgoing preparation ID and sealed-stream commitments, absent outside send/redemption.
+    pub prepared_intent: Option<KagemushaPreparedIntentCommitmentsV1>,
     /// Common transport statement digest.
     pub transport_semantic_digest: DigestV1,
     /// Normalized GuardBundle statement digest.
@@ -368,6 +449,8 @@ pub struct KagemushaStateRelationWitnessV1 {
     /// Hiding binding of the request, sender states, and outbox reservation.
     /// Nonzero exactly for `SendSplit` and `RedeemSplit`.
     pub prepared_transition_binding_digest: DigestV1,
+    /// Outgoing preparation ID and sealed-stream commitments, absent outside send/redemption.
+    pub prepared_intent: Option<KagemushaPreparedIntentCommitmentsV1>,
     /// Exact common transport statement digest.
     pub transport_semantic_digest: DigestV1,
     /// Exact normalized hardware GuardBundle statement digest.
@@ -632,6 +715,15 @@ impl KagemushaStateRelationWitnessV1 {
                     .to_owned(),
             );
         }
+        if uses_outbox != self.prepared_intent.is_some() {
+            return Err(
+                "prepared-intent commitments must be present exactly for send and redemption"
+                    .to_owned(),
+            );
+        }
+        if let Some(prepared) = self.prepared_intent {
+            prepared.validate()?;
+        }
         Ok(())
     }
 
@@ -657,6 +749,7 @@ impl KagemushaStateRelationWitnessV1 {
             receive_credit_binding_digest: self.receive_credit_binding_digest,
             lifecycle_binding_digest: self.lifecycle_binding_digest,
             prepared_transition_binding_digest: self.prepared_transition_binding_digest,
+            prepared_intent: self.prepared_intent,
             transport_semantic_digest: self.transport_semantic_digest,
             guard_statement_digest: self.guard_statement_digest,
             eq_protocol_digest: self.eq_protocol_digest,
@@ -739,12 +832,33 @@ impl KagemushaStateRelationPublicInputsV1 {
         .map_err(|error| error.to_string())
     }
 
-    /// Return the recursive semantic prefix with the transition digest in both parities.
+    /// Return the recursive semantic prefix with transition and prepared-intent digests.
     pub(super) fn recursive_semantic_public_instances<F: KagemushaPoseidonFieldV1>(
         &self,
     ) -> Result<Vec<F>, String> {
+        let uses_outbox = matches!(
+            self.operation,
+            KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+        );
+        if uses_outbox != self.prepared_intent.is_some() {
+            return Err(
+                "prepared-intent commitments must be present exactly for send and redemption"
+                    .to_owned(),
+            );
+        }
+        if let Some(prepared) = self.prepared_intent {
+            prepared.validate()?;
+        }
         let mut public = self.public_instances::<F>()?;
         public.extend(digest_limbs::<F>(self.transition_statement_digest_v1()?));
+        let prepared = self.prepared_intent;
+        for digest in [
+            prepared.map_or([0; 32], |value| value.preparation_id),
+            prepared.map_or([0; 32], |value| value.sealed_transition_inputs_digest),
+            prepared.map_or([0; 32], |value| value.sealed_recovery_seeds_digest),
+        ] {
+            public.extend(digest_limbs::<F>(digest));
+        }
         debug_assert_eq!(public.len(), RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT);
         Ok(public)
     }
@@ -2367,6 +2481,7 @@ mod tests {
         DevicePolicyBindingV1, HardwareEpochV1, KagemushaLaneIdV1,
     };
     use ff::Field as _;
+    use halo2_proofs::dev::MockProver;
     use halo2_proofs::halo2curves::pasta::{Fp, Fq};
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -2456,6 +2571,11 @@ mod tests {
             receive_credit_binding_digest: projection_digest(30),
             lifecycle_binding_digest: projection_digest(31),
             prepared_transition_binding_digest: projection_digest(32),
+            prepared_intent: Some(KagemushaPreparedIntentCommitmentsV1 {
+                preparation_id: projection_digest(50),
+                sealed_transition_inputs_digest: projection_digest(51),
+                sealed_recovery_seeds_digest: projection_digest(52),
+            }),
             transport_semantic_digest: projection_digest(34),
             guard_statement_digest: projection_digest(35),
             eq_protocol_digest: projection_digest(36),
@@ -2512,13 +2632,30 @@ mod tests {
             public.public_instances::<Fq>().expect("Ep base projection")
         );
         assert_eq!(
-            &eq[public_instance::TRANSITION_STATEMENT_LO..],
+            &eq[public_instance::TRANSITION_STATEMENT_LO
+                ..=public_instance::TRANSITION_STATEMENT_HI],
             &digest_limbs::<Fp>(digest)
         );
         assert_eq!(
-            &ep[public_instance::TRANSITION_STATEMENT_LO..],
+            &ep[public_instance::TRANSITION_STATEMENT_LO
+                ..=public_instance::TRANSITION_STATEMENT_HI],
             &digest_limbs::<Fq>(digest)
         );
+        let prepared = public.prepared_intent.expect("outgoing digest carrier");
+        for (offset, digest) in [
+            (public_instance::PREPARATION_ID_LO, prepared.preparation_id),
+            (
+                public_instance::SEALED_TRANSITION_INPUTS_LO,
+                prepared.sealed_transition_inputs_digest,
+            ),
+            (
+                public_instance::SEALED_RECOVERY_SEEDS_LO,
+                prepared.sealed_recovery_seeds_digest,
+            ),
+        ] {
+            assert_eq!(&eq[offset..offset + 2], &digest_limbs::<Fp>(digest));
+            assert_eq!(&ep[offset..offset + 2], &digest_limbs::<Fq>(digest));
+        }
 
         let mut changed = public.clone();
         changed.journal_revision_after += 1;
@@ -2540,18 +2677,19 @@ mod tests {
         let mut bootstrap = public.clone();
         bootstrap.operation = KagemushaOperationV1::Bootstrap;
         bootstrap.predecessor = None;
+        bootstrap.prepared_intent = None;
         assert_eq!(bootstrap.transition_statement_digest_v1(), Ok([0; 32]));
         assert_eq!(
             &bootstrap
                 .recursive_semantic_public_instances::<Fp>()
                 .expect("Eq bootstrap projection")[public_instance::TRANSITION_STATEMENT_LO..],
-            &[Fp::ZERO; 2]
+            &[Fp::ZERO; 8]
         );
         assert_eq!(
             &bootstrap
                 .recursive_semantic_public_instances::<Fq>()
                 .expect("Ep bootstrap projection")[public_instance::TRANSITION_STATEMENT_LO..],
-            &[Fq::ZERO; 2]
+            &[Fq::ZERO; 8]
         );
         bootstrap.operation = KagemushaOperationV1::SendSplit;
         assert!(bootstrap.transition_statement_digest_v1().is_err());
@@ -2702,7 +2840,7 @@ mod tests {
     #[test]
     fn public_instance_abi_is_identical_across_parities() {
         assert_eq!(PUBLIC_INSTANCE_COUNT, 85);
-        assert_eq!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, 87);
+        assert_eq!(RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT, 93);
         assert_eq!(public_instance::OPERATION, 0);
         assert_eq!(public_instance::AMOUNT, 1);
         assert_eq!(public_instance::SUCCESSOR_STATE, 31);
@@ -2719,11 +2857,102 @@ mod tests {
         assert_eq!(public_instance::COMMIT_WRAPPER_EP_PROTOCOL_HI, 84);
         assert_eq!(public_instance::TRANSITION_STATEMENT_LO, 85);
         assert_eq!(public_instance::TRANSITION_STATEMENT_HI, 86);
+        assert_eq!(public_instance::PREPARATION_ID_LO, 87);
+        assert_eq!(public_instance::SEALED_TRANSITION_INPUTS_LO, 89);
+        assert_eq!(public_instance::SEALED_RECOVERY_SEEDS_LO, 91);
+        assert_eq!(public_instance::SEALED_RECOVERY_SEEDS_HI, 92);
         // Both fields use the same semantic ordering and injective u128 digest limbs.
         assert_eq!(
             digest_limbs::<Fp>([7; 32]).len(),
             digest_limbs::<Fq>([7; 32]).len()
         );
+    }
+
+    #[test]
+    fn prepared_carriers_are_public_and_outgoing_only_in_both_parities() {
+        fn check<F: KagemushaPoseidonFieldV1>(
+            operation: u64,
+            prepared: Option<KagemushaPreparedIntentCommitmentsV1>,
+            changed_public_limb: Option<usize>,
+        ) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(12)
+                .use_lookup_bits(11)
+                .use_instance_columns(1);
+            let operation = builder.main(0).load_witness(F::from(operation));
+            let assigned = assign_prepared_intent_public_v1(&mut builder, operation, prepared);
+            let mut expected = Vec::with_capacity(6);
+            for digest in [
+                prepared.map_or([0; 32], |value| value.preparation_id),
+                prepared.map_or([0; 32], |value| value.sealed_transition_inputs_digest),
+                prepared.map_or([0; 32], |value| value.sealed_recovery_seeds_digest),
+            ] {
+                expected.extend(digest_limbs::<F>(digest));
+            }
+            if let Some(index) = changed_public_limb {
+                expected[index] += F::ONE;
+            }
+            builder.assigned_instances = vec![assigned.to_vec()];
+            builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+            MockProver::run(12, &builder, vec![expected])
+                .expect("prepared-carrier circuit")
+                .verify()
+                .is_ok()
+        }
+
+        let prepared = Some(KagemushaPreparedIntentCommitmentsV1 {
+            preparation_id: [0x11; 32],
+            sealed_transition_inputs_digest: [0x22; 32],
+            sealed_recovery_seeds_digest: [0x33; 32],
+        });
+        for result in [
+            check::<Fp>(0, None, None),
+            check::<Fq>(0, None, None),
+            check::<Fp>(2, prepared, None),
+            check::<Fq>(2, prepared, None),
+            check::<Fp>(4, prepared, None),
+            check::<Fq>(4, prepared, None),
+        ] {
+            assert!(result, "valid prepared-carrier presence rule failed");
+        }
+        for result in [
+            check::<Fp>(2, None, None),
+            check::<Fq>(2, None, None),
+            check::<Fp>(1, prepared, None),
+            check::<Fq>(1, prepared, None),
+        ] {
+            assert!(!result, "invalid prepared-carrier presence rule passed");
+        }
+        for index in 0..6 {
+            assert!(!check::<Fp>(2, prepared, Some(index)), "Eq limb {index}");
+            assert!(!check::<Fq>(2, prepared, Some(index)), "Ep limb {index}");
+        }
+    }
+
+    #[test]
+    fn prepared_carrier_host_projection_rejects_absent_or_zero_outgoing_fields() {
+        let mut public = public_projection_fixture();
+        let prepared = public.prepared_intent.expect("outgoing fixture carrier");
+        prepared.validate().expect("three nonzero digests");
+        for index in 0..3 {
+            let mut changed = prepared;
+            match index {
+                0 => changed.preparation_id = [0; 32],
+                1 => changed.sealed_transition_inputs_digest = [0; 32],
+                2 => changed.sealed_recovery_seeds_digest = [0; 32],
+                _ => unreachable!(),
+            }
+            public.prepared_intent = Some(changed);
+            assert!(public.recursive_semantic_public_instances::<Fp>().is_err());
+            assert!(public.recursive_semantic_public_instances::<Fq>().is_err());
+        }
+        public.prepared_intent = None;
+        assert!(public.recursive_semantic_public_instances::<Fp>().is_err());
+        assert!(public.recursive_semantic_public_instances::<Fq>().is_err());
+        public.operation = KagemushaOperationV1::MintFold;
+        public.prepared_intent = Some(prepared);
+        assert!(public.recursive_semantic_public_instances::<Fp>().is_err());
+        assert!(public.recursive_semantic_public_instances::<Fq>().is_err());
     }
 
     #[test]

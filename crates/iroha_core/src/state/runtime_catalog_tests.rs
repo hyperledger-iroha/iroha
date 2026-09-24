@@ -114,7 +114,9 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
         if index == 0 && matches!(invalid, InvalidMember::MissingKey) {
             continue;
         }
-        let mut id = derive_validator_key_id(key.public_key());
+        // Runtime catalog additions activate a participant lane, whose peers
+        // must carry live Committee keys rather than global Validator keys.
+        let mut id = derive_committee_key_id(key.public_key());
         if index == 0 && matches!(invalid, InvalidMember::WrongRole) {
             id.role = ConsensusKeyRole::Endorsement;
         }

@@ -13079,7 +13079,7 @@ pub(crate) mod valid {
             let topology = test_topology_with_keys(&validator_keys);
             let mut world = World::new();
             for (index, key) in validator_keys.iter().enumerate() {
-                insert_consensus_key(
+                let validator_id = insert_consensus_key(
                     &mut world,
                     &format!("autonomous-anchor-validator-{index}"),
                     key,
@@ -13087,6 +13087,28 @@ pub(crate) mod valid {
                     None,
                     ConsensusKeyStatus::Active,
                 );
+                if replay_lane.is_some() {
+                    let committee_id = crate::state::derive_committee_key_id(key.public_key());
+                    let committee_record = ConsensusKeyRecord {
+                        id: committee_id.clone(),
+                        public_key: key.public_key().clone(),
+                        pop: Some(
+                            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                                .expect("replay lane committee proof of possession"),
+                        ),
+                        activation_height: 0,
+                        expiry_height: None,
+                        replaces: None,
+                        status: ConsensusKeyStatus::Active,
+                    };
+                    world
+                        .consensus_keys
+                        .insert(committee_id.clone(), committee_record);
+                    world.consensus_keys_by_pk.insert(
+                        key.public_key().to_string(),
+                        vec![validator_id, committee_id],
+                    );
+                }
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
             install_test_lane_manifests_for_keypairs(&state, &validator_keys);

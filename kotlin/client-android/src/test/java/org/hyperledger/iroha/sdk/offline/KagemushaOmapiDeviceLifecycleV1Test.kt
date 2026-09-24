@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -74,5 +76,29 @@ class KagemushaOmapiDeviceLifecycleV1Test {
             },
         )
         assertEquals(1, timeoutCallbacks)
+    }
+
+    @Test
+    fun `service cleanup runs after late completion without a caller executor`() {
+        val pending = CompletableFuture<Int>()
+        var closed: Int? = null
+        val firstCleanup = CountDownLatch(1)
+        KagemushaOmapiDeviceLifecycleV1.closeServiceWhenReady(pending) {
+            closed = it
+            firstCleanup.countDown()
+        }
+        assertEquals(null, closed)
+        pending.complete(7)
+        assertTrue(firstCleanup.await(5, TimeUnit.SECONDS))
+        assertEquals(7, closed)
+
+        val alreadyCompleted = CompletableFuture.completedFuture(9)
+        val secondCleanup = CountDownLatch(1)
+        KagemushaOmapiDeviceLifecycleV1.closeServiceWhenReady(alreadyCompleted) {
+            closed = it
+            secondCleanup.countDown()
+        }
+        assertTrue(secondCleanup.await(5, TimeUnit.SECONDS))
+        assertEquals(9, closed)
     }
 }

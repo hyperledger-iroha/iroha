@@ -630,6 +630,7 @@ CLIENT_STAGES += (("strict native parameters response", (
 
 CLIENT_STAGES += (("canonical executed block execution commitments", (
     "client::evidence_http_tests::canonical_executed_block_reader_binds_route_wire_and_committed_evidence",
+    "client::evidence_http_tests::canonical_executed_block_reader_retries_with_fresh_account_signature",
     "client::evidence_http_tests::canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash",
     "client::evidence_http_tests::canonical_executed_block_reader_requires_authenticated_execution_commitment",
 )),)
@@ -938,9 +939,10 @@ CORE_ADMISSION_STARTUP_STAGES += (("Proposal authority handoff and exact restart
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_waits_for_older_ready_output",
     "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_proposal_cancellation_fsync_failure_retains_ready_owner_without_output",
 )),)
-CORE_ADMISSION_STARTUP_STAGES += (("bounded fair-ingress ownership projection work", (
+CORE_ADMISSION_STARTUP_STAGES += (("bounded fair-ingress ownership projection and changed-cut retry", (
     "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::frozen_ownership_peer_encoding_work_is_bounded_by_distinct_peers",
     "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::cached_peer_encodings_preserve_forged_history_and_sender_rejection",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::captured_cut_classifies_valid_concurrent_coalescence_as_retryable",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("same-round timeout recovery and bounded frontier reads", (
@@ -1030,6 +1032,16 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay against isolated commit
     "state::replay_lane_drain::tests::replay_native_drain_frontier_binds_marker_prefix_and_certificate_evidence",
     "state::tests::pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_change",
     "state::tests::retired_lane_cleanup_preserves_frontier_for_historical_drain_recovery",
+)),)
+
+CORE_ADMISSION_STARTUP_STAGES += (("governed replay and signed snapshot restart", (
+    "state::canonical_runtime::tests::replay_probe_keeps_configured_governance_before_manifest_rebind",
+    "snapshot::tests::signed_snapshot_restore_keeps_configured_governance_catalog",
+    "snapshot::tests::signed_snapshot_restore_accepts_configured_governed_lane",
+)),)
+
+CORE_ADMISSION_STARTUP_STAGES += (("paired Commit signature completion", (
+    "sumeragi::v2_effects::tests::epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal",
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred startup writers", (
@@ -2941,6 +2953,12 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
             kinds = target.get("kind")
             if not isinstance(kinds, list):
                 continue
+            # Cargo can report a checked example as a test-profile artifact;
+            # only the normal Core library must have profile.test=False.
+            if (normal_core_library_probe
+                    and target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE
+                    and "example" in kinds):
+                observed_probe_example = True
             if normal_core_library_probe and profile.get("test") is False:
                 if target.get("name") == "iroha_core" and "lib" in kinds:
                     observed_normal_core_library = True
@@ -2948,8 +2966,6 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
                     if (isinstance(features, list)
                             and CORE_NORMAL_LIBRARY_PROBE_FEATURE_NAME in features):
                         observed_featured_normal_core_library = True
-                if target.get("name") == CORE_NORMAL_LIBRARY_PROBE_EXAMPLE and "example" in kinds:
-                    observed_probe_example = True
             if profile.get("test") is not True:
                 continue
             for harness in harnesses:

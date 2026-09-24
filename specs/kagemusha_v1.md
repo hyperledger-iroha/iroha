@@ -64,11 +64,68 @@ KAGEMUSHA uses fixed-shape paired-Pasta recursive relations:
 - `Rotate` carries the entire balance and replay root to the exact next hardware
   epoch without an online checkpoint.
 
+Wallet mint delivery authenticates an `Applied` top-up status against an independently
+pinned consensus finality anchor, matches its complete recipient authorization and
+operation ID to the pre-debit native inbox reservation, then verifies both
+release-authenticated mint proofs. This yields only a native staging capability;
+the credit still needs the qualified Guard staging certificate before `MintFold`.
+
 Internal terminal authorization proves the actual persisted state candidate and
 the normalized hardware guard. The compact outer wrapper recursively consumes
 that relation. A peer payment or redemption carries one constant-size paired
 proof; no branch path, note inventory, provenance array, hop counter, input
 maximum, ancestry witness, or proof-step admission maximum exists.
+
+The recursive State semantic column has 93 cells: the 85 base cells, the
+two-limb canonical transition-statement digest, and three two-limb outgoing
+carriers. The latter are the preparation ID and the sealed transition-input
+and recovery-seed stream digests; non-outgoing operations expose six zero
+cells. Its history tail has 34 limbs, giving a 127-cell recursive column.
+The State relation constrains the presence and public values of the three
+carriers, but a carrier alone does not prove the prepared-intent opening.
+
+The native pre-proof preparation ID is SHA-256 of the domain
+`iroha:kagemusha:v1:outgoing-preparation`, one NUL byte, wire version as
+u16-LE, operation tag, then the 11 ordered 32-byte commitments to predecessor
+and successor states, state transition, prepared transition, public projection,
+lifecycle, request, artifact manifest, normalized Guard statement, outbox
+reservation, and one-use authorization. Each sealed stream follows as its
+u64-LE byte length and 32-byte digest. The transition and recovery stream
+digests respectively hash their distinct `iroha:kagemusha:v1:sealed-*` domains,
+one NUL byte, u64-LE byte length, and exact bytes. Their maximum byte lengths
+are 2,048 and 512. The later candidate-envelope digest is excluded to avoid
+a circular commitment.
+
+Terminal authorization must open both streams and recompute that exact
+preparation transcript from authenticated State and Guard sources before the
+ID can authorize a durable journal or recovery commitment. The terminal
+relation retains all three candidate carriers after recursive proof and
+history verification. Its isolated opening hashes both exact sealed streams
+against those carriers, hashes the exact 475-byte preparation transcript from
+candidate and terminal source cells, and then binds the journal ID to the
+computed ID and candidate carrier. Send uses a constrained zero artifact
+manifest. Redemption uses a nonzero manifest in the 83-cell terminal public
+column. The native verifier reconstructs that field from its authenticated
+release artifacts, and the recursive wrapper constrains the nested field to
+the outer public instance; the wallet cannot choose it. The source is available
+to the isolated preparation opening, but that opening is not installed in the live terminal
+claim. The exact prepared send record now supplies both private sealed streams
+to the diagnostic generation witness; the dormant relation assigns their
+fixed-capacity bytes and SHA-opens them against the State carriers. The live
+claim does not consume that witness, and the production SHA claim is fixed at
+26 jobs.
+An opt-in paired send planner now checks the original 26-job prefix and the
+six required opening jobs in order: two bounded stream digests, the bounded
+preparation transcript, journal, bounded recovery, and terminal body. It
+checks Eq/Ep active lengths, fixed capacities, selected final blocks, domains,
+and frame lengths. Its active logical messages can feed the existing typed
+claim planner. The six jobs have 105 maximum compression blocks at the
+2,048/512-byte stream capacities. This host plan does not bind the assigned
+terminal queue to a recursive claim; no live circuit consumes the 32-job plan.
+The live preparation ID therefore remains unverified;
+carrier-only testnet proofs do not establish production offline monetary
+authority. The complete job plan and fixed k=16 circuit must be qualified in
+both parities before the durable opening can use that ID.
 
 Incoming credits fold continuously in the background. Before a send or
 redemption, the wallet synchronously folds as many pending credits as necessary

@@ -1,10 +1,11 @@
 //! Non-authorizing testnet observations of actual paired KAGEMUSHA State proofs.
 //!
 //! This boundary is for a wallet to inspect experimental State lineage on a specifically
-//! configured network and authenticated release. It does not issue a monetary admission token,
+//! configured network, asset reserve, and authenticated release. It does not issue a monetary
+//! admission token,
 //! attest an app or device, authorize a terminal transition, or qualify hardware custody.
 
-use iroha_data_model::kagemusha::KagemushaPairedProofV1;
+use iroha_data_model::kagemusha::{KAGEMUSHA_ASSET_SCALE_MAX_V1, KagemushaPairedProofV1};
 
 use super::{
     DigestV1, KagemushaAuthenticatedRecursiveVerifierV1, KagemushaOperationV1,
@@ -13,40 +14,59 @@ use super::{
 };
 use crate::zk::kagemusha_v1_state::KagemushaStateV1;
 
-/// Trusted, exact testnet scope supplied by the operator rather than the wallet proof.
+/// Trusted, exact testnet network, asset, reserve, and release supplied by the operator.
 ///
 /// The authenticated release manifest does not carry a network ID. An application must obtain
-/// this network ID from its independently trusted testnet configuration. A self-declared network
-/// or release copied from the submitted proof provides no pinning.
+/// the network and asset/reserve pins from its independently trusted testnet configuration.
+/// Self-declared identifiers copied from the submitted proof provide no pinning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaTestnetStateObservationScopeV1 {
     network_id: DigestV1,
+    asset_identity_digest: DigestV1,
+    asset_incarnation: DigestV1,
+    asset_scale: u32,
+    liability_pool_id: DigestV1,
     release_id: DigestV1,
     release_attestation_digest: DigestV1,
 }
 
 impl KagemushaTestnetStateObservationScopeV1 {
-    /// Pin the network and complete authenticated release before inspecting a proof.
+    /// Pin the exact testnet liability pool and authenticated release before proof inspection.
     ///
     /// # Errors
     ///
-    /// Rejects zero or aliased identifiers, which cannot identify an operator-approved scope.
+    /// Rejects absent, aliased, or out-of-range pins. The operator must derive the asset
+    /// identity and liability pool from its trusted asset registration, not from a submitted
+    /// proof. The native verifier checks their exact equality to each proved State.
     pub fn new(
         network_id: DigestV1,
+        asset_identity_digest: DigestV1,
+        asset_incarnation: DigestV1,
+        asset_scale: u32,
+        liability_pool_id: DigestV1,
         release_id: DigestV1,
         release_attestation_digest: DigestV1,
     ) -> Result<Self, KagemushaRecursionErrorV1> {
         if network_id == [0; 32]
+            || asset_identity_digest == [0; 32]
+            || asset_incarnation == [0; 32]
+            || asset_scale > KAGEMUSHA_ASSET_SCALE_MAX_V1
+            || liability_pool_id == [0; 32]
             || release_id == [0; 32]
             || release_attestation_digest == [0; 32]
             || network_id == release_id
             || network_id == release_attestation_digest
             || release_id == release_attestation_digest
+            || asset_identity_digest == liability_pool_id
         {
             return Err(KagemushaRecursionErrorV1::InvalidArtifacts);
         }
         Ok(Self {
             network_id,
+            asset_identity_digest,
+            asset_incarnation,
+            asset_scale,
+            liability_pool_id,
             release_id,
             release_attestation_digest,
         })
@@ -56,6 +76,30 @@ impl KagemushaTestnetStateObservationScopeV1 {
     #[must_use]
     pub const fn network_id(&self) -> DigestV1 {
         self.network_id
+    }
+
+    /// Return the operator-pinned normalized asset identity.
+    #[must_use]
+    pub const fn asset_identity_digest(&self) -> DigestV1 {
+        self.asset_identity_digest
+    }
+
+    /// Return the operator-pinned exact asset incarnation.
+    #[must_use]
+    pub const fn asset_incarnation(&self) -> DigestV1 {
+        self.asset_incarnation
+    }
+
+    /// Return the operator-pinned decimal asset scale.
+    #[must_use]
+    pub const fn asset_scale(&self) -> u32 {
+        self.asset_scale
+    }
+
+    /// Return the operator-pinned asset reserve-liability pool.
+    #[must_use]
+    pub const fn liability_pool_id(&self) -> DigestV1 {
+        self.liability_pool_id
     }
 
     /// Return the authenticated proof-release identifier.
@@ -70,27 +114,43 @@ impl KagemushaTestnetStateObservationScopeV1 {
         self.release_attestation_digest
     }
 
-    fn check_bindings(
+    fn check_release_bindings(
         self,
         authenticated_release_id: DigestV1,
         authenticated_release_attestation_digest: DigestV1,
-        successor_release_id: DigestV1,
-        successor_network_id: DigestV1,
-        predecessor: Option<(DigestV1, DigestV1)>,
     ) -> Result<(), KagemushaRecursionErrorV1> {
         if authenticated_release_id != self.release_id
             || authenticated_release_attestation_digest != self.release_attestation_digest
-            || successor_release_id != self.release_id
-            || predecessor.is_some_and(|(release_id, _)| release_id != self.release_id)
         {
             return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
         }
-        if successor_network_id != self.network_id
-            || predecessor.is_some_and(|(_, network_id)| network_id != self.network_id)
-        {
-            return Err(KagemushaRecursionErrorV1::StateStatement(
-                "KAGEMUSHA State proof is outside the operator-pinned testnet".to_owned(),
-            ));
+        Ok(())
+    }
+
+    fn check_state_bindings(
+        self,
+        successor: &KagemushaStateV1,
+        predecessor: Option<&KagemushaStateV1>,
+    ) -> Result<(), KagemushaRecursionErrorV1> {
+        for state in core::iter::once(successor).chain(predecessor) {
+            if state.release_id != self.release_id {
+                return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
+            }
+            let asset_identity = state
+                .lane
+                .normalized_asset_id()
+                .map_err(|error| KagemushaRecursionErrorV1::StateStatement(error.to_string()))?;
+            if state.lane.normalized_network_id() != self.network_id
+                || asset_identity != self.asset_identity_digest
+                || state.asset_incarnation.as_bytes() != &self.asset_incarnation
+                || state.lane.scale != self.asset_scale
+                || state.liability_pool_id != self.liability_pool_id
+            {
+                return Err(KagemushaRecursionErrorV1::StateStatement(
+                    "KAGEMUSHA State proof is outside the operator-pinned testnet asset and reserve"
+                        .to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -110,7 +170,7 @@ pub struct KagemushaTestnetStateProofObservationV1 {
 }
 
 impl KagemushaTestnetStateProofObservationV1 {
-    /// Return the operator-pinned network and release used for this observation.
+    /// Return the complete operator-pinned network, asset reserve, and release scope.
     #[must_use]
     pub const fn scope(&self) -> KagemushaTestnetStateObservationScopeV1 {
         self.scope
@@ -160,7 +220,8 @@ pub struct KagemushaTestnetLineageTrialV1 {
 ///
 /// Construction requires an already release-authorized concrete verifier; a caller cannot
 /// install a callback that claims proof success. The operator's network/release pins are checked
-/// against that verifier before the owner can be used. No method grants a hardware qualification
+/// against that verifier before the owner can be used. State asset and reserve pins are checked
+/// for every observation. No method grants a hardware qualification
 /// or returns a spend/redemption capability.
 pub struct KagemushaTestnetProofObservationOwnerV1 {
     verifier: KagemushaAuthenticatedRecursiveVerifierV1,
@@ -229,13 +290,7 @@ fn require_owner_release_pins(
 ) -> Result<(), KagemushaRecursionErrorV1> {
     let (release_id, attestation_digest) =
         authenticated_release_identity.map_err(KagemushaRecursionErrorV1::StateProofRejected)?;
-    scope.check_bindings(
-        release_id,
-        attestation_digest,
-        scope.release_id,
-        scope.network_id,
-        None,
-    )
+    scope.check_release_bindings(release_id, attestation_digest)
 }
 
 impl KagemushaTestnetLineageTrialV1 {
@@ -249,7 +304,7 @@ impl KagemushaTestnetLineageTrialV1 {
         }
     }
 
-    /// Return the exact network and authenticated release pinned to this trial.
+    /// Return the exact network, asset reserve, and authenticated release pinned to this trial.
     #[must_use]
     pub const fn scope(&self) -> KagemushaTestnetStateObservationScopeV1 {
         self.scope
@@ -276,8 +331,8 @@ impl KagemushaTestnetLineageTrialV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a missing or forked predecessor, a changed lane, a different network or release,
-    /// counter overflow, or failure of the native paired-proof verifier.
+    /// Rejects a missing or forked predecessor, a changed lane, a different network, asset,
+    /// reserve or release, counter overflow, or failure of the native paired-proof verifier.
     pub fn observe_and_advance(
         &mut self,
         verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
@@ -321,16 +376,8 @@ impl KagemushaTestnetLineageTrialV1 {
         observation: KagemushaTestnetStateProofObservationV1,
     ) -> Result<(), KagemushaRecursionErrorV1> {
         self.check_next(public_inputs)?;
-        self.scope.check_bindings(
-            self.scope.release_id,
-            self.scope.release_attestation_digest,
-            public_inputs.successor.release_id,
-            public_inputs.successor.lane.normalized_network_id(),
-            public_inputs
-                .predecessor
-                .as_ref()
-                .map(|state| (state.release_id, state.lane.normalized_network_id())),
-        )?;
+        self.scope
+            .check_state_bindings(&public_inputs.successor, public_inputs.predecessor.as_ref())?;
         if observation.scope != self.scope
             || observation.operation != public_inputs.operation
             || observation.successor_state_commitment != public_inputs.successor.state_commitment
@@ -346,7 +393,7 @@ impl KagemushaTestnetLineageTrialV1 {
     }
 }
 
-/// Observe an actual paired State proof under an operator-pinned testnet and signed release.
+/// Observe an actual paired State proof under an operator-pinned testnet asset and signed release.
 ///
 /// This uses the native authenticated verifier to check and decide both Pasta proofs and their
 /// histories. The State relation checks its finalized mint, value conservation and replay
@@ -355,7 +402,7 @@ impl KagemushaTestnetLineageTrialV1 {
 ///
 /// # Errors
 ///
-/// Rejects a missing authenticated release, wrong network or release pin, malformed public
+/// Rejects a missing authenticated release, wrong network, asset, reserve, or release pin, malformed public
 /// candidate projection, substituted proof artifact, or any native paired-proof failure.
 pub fn observe_kagemusha_testnet_state_proof_v1(
     verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
@@ -369,16 +416,8 @@ pub fn observe_kagemusha_testnet_state_proof_v1(
     let release = verifier
         .monetary_release()
         .map_err(KagemushaRecursionErrorV1::StateProofRejected)?;
-    scope.check_bindings(
-        release.release_id(),
-        release.attestation_digest(),
-        public_inputs.successor.release_id,
-        public_inputs.successor.lane.normalized_network_id(),
-        public_inputs
-            .predecessor
-            .as_ref()
-            .map(|state| (state.release_id, state.lane.normalized_network_id())),
-    )?;
+    scope.check_release_bindings(release.release_id(), release.attestation_digest())?;
+    scope.check_state_bindings(&public_inputs.successor, public_inputs.predecessor.as_ref())?;
     let artifacts = verifier.state_checkpoint_material().artifacts;
     verify_kagemusha_state_proof_v1(verifier, artifacts, public_inputs, proof)?;
     let candidate_envelope_digest = kagemusha_candidate_envelope_digest_v1(public_inputs)
@@ -393,20 +432,37 @@ pub fn observe_kagemusha_testnet_state_proof_v1(
 
 #[cfg(test)]
 mod tests {
+    use super::super::KagemushaPreparedIntentCommitmentsV1;
     use super::*;
 
     const NETWORK: DigestV1 = [1; 32];
     const RELEASE: DigestV1 = [2; 32];
     const ATTESTATION: DigestV1 = [3; 32];
+    const ASSET: DigestV1 = [4; 32];
+    const INCARNATION: DigestV1 = [5; 32];
+    const POOL: DigestV1 = [6; 32];
+    const SCALE: u32 = 2;
 
     fn scope() -> KagemushaTestnetStateObservationScopeV1 {
-        KagemushaTestnetStateObservationScopeV1::new(NETWORK, RELEASE, ATTESTATION)
-            .expect("distinct operator pins")
+        KagemushaTestnetStateObservationScopeV1::new(
+            NETWORK,
+            ASSET,
+            INCARNATION,
+            SCALE,
+            POOL,
+            RELEASE,
+            ATTESTATION,
+        )
+        .expect("distinct operator pins")
     }
 
     #[test]
     fn scope_rejects_missing_and_aliased_pins() {
         assert_eq!(scope().network_id(), NETWORK);
+        assert_eq!(scope().asset_identity_digest(), ASSET);
+        assert_eq!(scope().asset_incarnation(), INCARNATION);
+        assert_eq!(scope().asset_scale(), SCALE);
+        assert_eq!(scope().liability_pool_id(), POOL);
         assert_eq!(scope().release_id(), RELEASE);
         assert_eq!(scope().release_attestation_digest(), ATTESTATION);
         for pins in [
@@ -418,56 +474,133 @@ mod tests {
             (NETWORK, RELEASE, RELEASE),
         ] {
             assert!(matches!(
-                KagemushaTestnetStateObservationScopeV1::new(pins.0, pins.1, pins.2),
+                KagemushaTestnetStateObservationScopeV1::new(
+                    pins.0,
+                    ASSET,
+                    INCARNATION,
+                    SCALE,
+                    POOL,
+                    pins.1,
+                    pins.2,
+                ),
+                Err(KagemushaRecursionErrorV1::InvalidArtifacts)
+            ));
+        }
+        for (asset, incarnation, scale, pool) in [
+            ([0; 32], INCARNATION, SCALE, POOL),
+            (ASSET, [0; 32], SCALE, POOL),
+            (ASSET, INCARNATION, KAGEMUSHA_ASSET_SCALE_MAX_V1 + 1, POOL),
+            (ASSET, INCARNATION, SCALE, [0; 32]),
+            (ASSET, INCARNATION, SCALE, ASSET),
+        ] {
+            assert!(matches!(
+                KagemushaTestnetStateObservationScopeV1::new(
+                    NETWORK,
+                    asset,
+                    incarnation,
+                    scale,
+                    pool,
+                    RELEASE,
+                    ATTESTATION,
+                ),
                 Err(KagemushaRecursionErrorV1::InvalidArtifacts)
             ));
         }
     }
 
     #[test]
-    fn scope_checks_signed_release_and_both_state_networks() {
-        let scope = scope();
+    fn scope_checks_signed_release_and_exact_state_asset_pool() {
+        let (trial, public) = trial_fixture();
+        let scope = trial.scope();
+        let state = &public.successor;
         assert_eq!(
-            scope.check_bindings(
-                RELEASE,
-                ATTESTATION,
-                RELEASE,
-                NETWORK,
-                Some((RELEASE, NETWORK))
-            ),
-            Ok(())
+            scope.check_release_bindings(scope.release_id(), scope.release_attestation_digest()),
+            Ok(()),
         );
-        for (release_id, attestation, successor_release, predecessor) in [
-            ([4; 32], ATTESTATION, RELEASE, None),
-            (RELEASE, [4; 32], RELEASE, None),
-            (RELEASE, ATTESTATION, [4; 32], None),
-            (RELEASE, ATTESTATION, RELEASE, Some(([4; 32], NETWORK))),
-        ] {
-            assert_eq!(
-                scope.check_bindings(
-                    release_id,
-                    attestation,
-                    successor_release,
-                    NETWORK,
-                    predecessor,
-                ),
-                Err(KagemushaRecursionErrorV1::ArtifactSubstitution)
-            );
-        }
+        assert_eq!(scope.check_state_bindings(state, Some(state)), Ok(()));
+        let mut changed = state.clone();
+        changed.release_id = [0xA1; 32];
+        assert_eq!(
+            scope.check_state_bindings(state, Some(&changed)),
+            Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
+        );
+        assert_eq!(
+            scope.check_release_bindings([0xA2; 32], scope.release_attestation_digest()),
+            Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
+        );
+        assert_eq!(
+            scope.check_release_bindings(scope.release_id(), [0xA3; 32]),
+            Err(KagemushaRecursionErrorV1::ArtifactSubstitution),
+        );
+        let mut changed = state.clone();
+        changed.liability_pool_id = [0xA4; 32];
         assert!(matches!(
-            scope.check_bindings(RELEASE, ATTESTATION, RELEASE, [4; 32], None),
+            scope.check_state_bindings(&changed, None),
             Err(KagemushaRecursionErrorV1::StateStatement(_))
         ));
+        // The predecessor is checked as well as the successor.
+        changed = state.clone();
+        changed.liability_pool_id = [0xA5; 32];
         assert!(matches!(
-            scope.check_bindings(
-                RELEASE,
-                ATTESTATION,
-                RELEASE,
-                NETWORK,
-                Some((RELEASE, [4; 32]))
+            scope.check_state_bindings(state, Some(&changed)),
+            Err(KagemushaRecursionErrorV1::StateStatement(_))
+        ));
+        let mut changed = state.clone();
+        changed.lane.scale = changed.lane.scale.saturating_add(1);
+        assert!(scope.check_state_bindings(&changed, None).is_err());
+        for (network, asset, incarnation, scale, pool) in [
+            (
+                [0xA9; 32],
+                scope.asset_identity_digest(),
+                scope.asset_incarnation(),
+                scope.asset_scale(),
+                scope.liability_pool_id(),
             ),
-            Err(KagemushaRecursionErrorV1::StateStatement(_))
-        ));
+            (
+                scope.network_id(),
+                [0xA6; 32],
+                scope.asset_incarnation(),
+                scope.asset_scale(),
+                scope.liability_pool_id(),
+            ),
+            (
+                scope.network_id(),
+                scope.asset_identity_digest(),
+                [0xA7; 32],
+                scope.asset_scale(),
+                scope.liability_pool_id(),
+            ),
+            (
+                scope.network_id(),
+                scope.asset_identity_digest(),
+                scope.asset_incarnation(),
+                scope.asset_scale() + 1,
+                scope.liability_pool_id(),
+            ),
+            (
+                scope.network_id(),
+                scope.asset_identity_digest(),
+                scope.asset_incarnation(),
+                scope.asset_scale(),
+                [0xA8; 32],
+            ),
+        ] {
+            let wrong_scope = KagemushaTestnetStateObservationScopeV1::new(
+                network,
+                asset,
+                incarnation,
+                scale,
+                pool,
+                scope.release_id(),
+                scope.release_attestation_digest(),
+            )
+            .expect("distinct but wrong operator asset pin");
+            assert!(wrong_scope.check_state_bindings(state, None).is_err());
+        }
+        let mut changed = state.clone();
+        changed.lane.device_lane_id[0] ^= 1;
+        assert_eq!(scope.check_state_bindings(&changed, None), Ok(()));
+        // Lane continuity belongs to the lineage trial, while scope fixes the asset reserve.
     }
 
     #[test]
@@ -521,6 +654,14 @@ mod tests {
         let (public, _) = super::super::tests::state_verification_fixture();
         let scope = KagemushaTestnetStateObservationScopeV1::new(
             public.successor.lane.normalized_network_id(),
+            public
+                .successor
+                .lane
+                .normalized_asset_id()
+                .expect("fixture asset identity"),
+            *public.successor.asset_incarnation.as_bytes(),
+            public.successor.lane.scale,
+            public.successor.liability_pool_id,
             public.successor.release_id,
             [0xD1; 32],
         )
@@ -556,6 +697,15 @@ mod tests {
         next.successor.secure_index += 1;
         next.journal_revision_before = previous.journal_revision_after;
         next.journal_revision_after += 1;
+        next.prepared_intent = matches!(
+            operation,
+            KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+        )
+        .then_some(KagemushaPreparedIntentCommitmentsV1 {
+            preparation_id: [tag; 32],
+            sealed_transition_inputs_digest: [tag.wrapping_add(1); 32],
+            sealed_recovery_seeds_digest: [tag.wrapping_add(2); 32],
+        });
         next
     }
 
@@ -619,6 +769,10 @@ mod tests {
         let before = trial.head_commitment();
         let wrong_scope = KagemushaTestnetStateObservationScopeV1::new(
             trial_scope.network_id(),
+            trial_scope.asset_identity_digest(),
+            trial_scope.asset_incarnation(),
+            trial_scope.asset_scale(),
+            trial_scope.liability_pool_id(),
             [0xE6; 32],
             trial_scope.release_attestation_digest(),
         )

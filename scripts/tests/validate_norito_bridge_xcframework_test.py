@@ -339,6 +339,20 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
             self.validate()
 
+    def test_rejects_manifest_missing_iphone_coordinator_close_or_state_observer(self) -> None:
+        for missing in (
+            "connect_norito_kagemusha_core_coordinator_close_v1",
+            "connect_norito_kagemusha_testnet_state_proof_observe_v1",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
+
     def test_rejects_manifests_missing_either_reserve_finality_export(self) -> None:
         for missing in (
             "connect_norito_kagemusha_reserve_finality_hint_v1",

@@ -10,7 +10,8 @@
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_CREDIT_ID_DOMAIN_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
-    KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+    KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
     KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1,
     KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
     KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaPaymentOutputV1,
@@ -79,7 +80,10 @@ use crate::zk::pasta_sha256::PastaSha256ConfigV1;
 #[cfg(feature = "zk-halo2-ipa")]
 use crate::zk::{
     kagemusha_v1_poseidon::KagemushaPoseidonFieldV1,
-    pasta_dense_msm::{PastaDenseMsmConfigV1, PastaDenseMsmJobsV1},
+    pasta_dense_msm::{
+        K16_MAX_DENSE_SOURCES_V1, PastaDenseMsmConfigV1, PastaDenseMsmJobsV1,
+        preflight_k16_dense_single_job_source_count_v1,
+    },
     pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1},
 };
 #[cfg(feature = "zk-halo2-ipa")]
@@ -127,9 +131,9 @@ const COMMIT_CERTIFICATE_CANONICAL_BYTES_V1: usize = 270;
 pub(crate) const TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1: usize = 64;
 
 /// Number of public field elements in one terminal-authorization parity, including history.
-pub(crate) const TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize = 81;
+pub(crate) const TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1: usize = 83;
 /// Number of non-history public field elements in one terminal-authorization parity.
-pub(crate) const TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 47;
+pub(crate) const TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 49;
 
 /// Public-instance offsets shared by both terminal-authorization parities.
 pub(crate) mod public_instance {
@@ -155,11 +159,12 @@ pub(crate) mod public_instance {
     pub(crate) const CIPHERTEXT_LO: usize = 34;
     pub(crate) const AMOUNT: usize = 36;
     pub(crate) const OUTPUT_BINDING_LO: usize = 37;
-    pub(crate) const EQ_DEFERRED_AUDIT_LO: usize = 39;
-    pub(crate) const EP_DEFERRED_AUDIT_LO: usize = 41;
-    pub(crate) const EQ_PROTOCOL_LO: usize = 43;
-    pub(crate) const EP_PROTOCOL_LO: usize = 45;
-    pub(crate) const HISTORY_START: usize = 47;
+    pub(crate) const ARTIFACT_MANIFEST_LO: usize = 39;
+    pub(crate) const EQ_DEFERRED_AUDIT_LO: usize = 41;
+    pub(crate) const EP_DEFERRED_AUDIT_LO: usize = 43;
+    pub(crate) const EQ_PROTOCOL_LO: usize = 45;
+    pub(crate) const EP_PROTOCOL_LO: usize = 47;
+    pub(crate) const HISTORY_START: usize = 49;
 }
 
 /// Unlinkable public values shared by both terminal-authorization parities.
@@ -194,6 +199,8 @@ pub(crate) struct KagemushaTerminalAuthorizationPublicInputsV1 {
     /// recipient lane, request, ciphertext, and amount; for a redemption this is the
     /// terminal redemption commitment.
     pub(crate) terminal_output_binding: DigestV1,
+    /// Zero for send; release-authenticated manifest digest for redemption.
+    pub(crate) artifact_manifest_digest: DigestV1,
     pub(crate) eq_deferred_audit: DigestV1,
     pub(crate) ep_deferred_audit: DigestV1,
     pub(crate) eq_protocol_digest: DigestV1,
@@ -213,6 +220,7 @@ impl KagemushaTerminalAuthorizationPublicInputsV1 {
         ciphertext_commitment: DigestV1,
         amount: u128,
         terminal_output_binding: DigestV1,
+        artifact_manifest_digest: DigestV1,
         eq_deferred_audit: DigestV1,
         ep_deferred_audit: DigestV1,
         eq_protocol_digest: DigestV1,
@@ -246,6 +254,7 @@ impl KagemushaTerminalAuthorizationPublicInputsV1 {
             ciphertext_commitment,
             amount,
             terminal_output_binding,
+            artifact_manifest_digest,
             eq_deferred_audit,
             ep_deferred_audit,
             eq_protocol_digest,
@@ -314,6 +323,11 @@ impl KagemushaTerminalAuthorizationPublicInputsV1 {
                 "terminal authorization has noncanonical operation-specific bindings".to_owned(),
             );
         }
+        if (self.artifact_manifest_digest == [0; 32]) != send {
+            return Err(
+                "terminal authorization has noncanonical artifact manifest binding".to_owned(),
+            );
+        }
         Ok(())
     }
 
@@ -359,6 +373,7 @@ impl KagemushaTerminalAuthorizationPublicInputsV1 {
         output.push(from_u128(self.amount));
         for digest in [
             self.terminal_output_binding,
+            self.artifact_manifest_digest,
             self.eq_deferred_audit,
             self.ep_deferred_audit,
             self.eq_protocol_digest,
@@ -435,6 +450,9 @@ pub(crate) struct KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) terminal_payload_digest: DigestV1,
     /// Exact receiver opening for SendSplit; absent for redemption.
     pub(crate) send: Option<KagemushaTerminalSendPrivateV1>,
+    /// Exact prepared send streams retained by the producer. These are private witness bytes,
+    /// not hardware attestation or proof authority until opened against State's SHA carriers.
+    pub(crate) send_sealed_streams: Option<[Vec<u8>; 2]>,
     pub(crate) journal_revision_before: u128,
     pub(crate) journal_revision_after: u128,
     pub(crate) authorization_counter_before: u128,
@@ -452,12 +470,39 @@ pub(crate) struct KagemushaTerminalSendPrivateV1 {
     pub(crate) encrypted_credit_digest: DigestV1,
 }
 
+/// Reject malformed optional producer bytes without granting them proof authority.
+///
+/// Existing testnet admission may omit this witness. When supplied, the dormant terminal SHA
+/// opening must still authenticate every active byte and length against the verified State
+/// carriers before it can be used for outgoing monetary authorization.
+fn validate_send_sealed_stream_witness_shape_v1(
+    send: bool,
+    streams: Option<&[Vec<u8>; 2]>,
+) -> Result<(), String> {
+    let Some(streams) = streams else {
+        return Ok(());
+    };
+    if !send
+        || streams[0].is_empty()
+        || streams[0].len() > KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize
+        || streams[1].is_empty()
+        || streams[1].len() > KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize
+    {
+        return Err("terminal send sealed-byte producer witness has invalid shape".to_owned());
+    }
+    Ok(())
+}
+
 impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) fn validate_against(
         &self,
         public: &KagemushaTerminalAuthorizationPublicInputsV1,
     ) -> Result<(), String> {
         public.validate()?;
+        validate_send_sealed_stream_witness_shape_v1(
+            self.send.is_some(),
+            self.send_sealed_streams.as_ref(),
+        )?;
         self.lifecycle
             .validate()
             .map_err(|error| error.to_string())?;
@@ -1126,12 +1171,12 @@ const CANDIDATE_BINDING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:terminal-authori
 
 /// Hash the parity-invariant candidate semantic cells bound by terminal authorization.
 ///
-/// The 87-cell recursive State semantic prefix contains two redundant parity-native state components at indices 30 and
+/// The 93-cell recursive State semantic prefix contains two redundant parity-native state components at indices 30 and
 /// 31. Their complete paired Eq/Ep values already occur as four canonical digest-limb pairs at
 /// indices 22 through 29. This transcript writes fixed zero markers for the two redundant cells
-/// so Eq and Ep derive one candidate identity, while retaining every one of the other 85 semantic
-/// cells, including the SHA-derived transition-statement digest. Every retained cell must have
-/// the ABI's canonical unsigned-128 representation.
+/// so Eq and Ep derive one candidate identity, while retaining every one of the other 91 semantic
+/// cells, including the SHA-derived transition statement and the prepared-intent carriers.
+/// Every retained cell must have the ABI's canonical unsigned-128 representation.
 /// This native helper accepts only that semantic column; recursive proof columns additionally
 /// contain history-accumulator limbs, whose shape and binding are checked by the recursive circuit.
 pub(crate) fn canonical_terminal_authorization_candidate_digest_v1<F: BigPrimeField>(
@@ -1185,7 +1230,7 @@ pub(crate) fn kagemusha_candidate_envelope_digest_v1(
 
 /// Hash the exact candidate envelope from already assigned state public cells.
 ///
-/// The caller must pass the recursive state relation's authenticated 87-cell semantic prefix.
+/// The caller must pass the recursive state relation's authenticated 93-cell semantic prefix.
 /// Each retained field is constrained to its canonical little-endian `u128` bytes before it
 /// enters the ordinary Pasta SHA job queue. The two parity-native state components use the
 /// same fixed zero markers as [`canonical_terminal_authorization_candidate_digest_v1`]. The
@@ -1990,6 +2035,10 @@ pub(crate) fn derive_kagemusha_terminal_authorization_deferred_audits_v1(
     drop(eq_builder);
     drop(eq_claim_tail);
     halo2_proofs::release_allocator_slack();
+    preflight_terminal_reciprocal_dense_source_indices_v1(
+        eq_output.audit.sources.len(),
+        &eq_output.audit.equations,
+    )?;
 
     let (ep_builder, ep_output, ep_claim_tail) =
         build_terminal_authorization_ep_scalar_from_witness_v1(
@@ -2002,6 +2051,10 @@ pub(crate) fn derive_kagemusha_terminal_authorization_deferred_audits_v1(
     drop(ep_builder);
     drop(ep_claim_tail);
     halo2_proofs::release_allocator_slack();
+    preflight_terminal_reciprocal_dense_source_indices_v1(
+        ep_output.audit.sources.len(),
+        &ep_output.audit.equations,
+    )?;
 
     if eq_output.bound_u128_values.len() != KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1
         || eq_output.bound_u128_values != ep_output.bound_u128_values
@@ -2023,6 +2076,10 @@ pub(crate) fn build_kagemusha_terminal_authorization_eq_v1(
     witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
     audits: &KagemushaTerminalAuthorizationDeferredAuditsV1,
 ) -> Result<(KagemushaTerminalAuthorizationEqCircuitV1, Vec<Fp>), String> {
+    preflight_terminal_reciprocal_dense_source_indices_v1(
+        audits.ep.audit.sources.len(),
+        &audits.ep.audit.equations,
+    )?;
     let (terminal_guard_eq_protocol_digest, terminal_guard_ep_protocol_digest) =
         validate_terminal_authorization_pair_witness_v1(witness)?;
     if witness.public.eq_deferred_audit != audits.eq_digest
@@ -2074,6 +2131,10 @@ pub(crate) fn build_kagemusha_terminal_authorization_ep_v1(
     witness: &KagemushaTerminalAuthorizationWitnessV1<'_>,
     audits: &KagemushaTerminalAuthorizationDeferredAuditsV1,
 ) -> Result<(KagemushaTerminalAuthorizationEpCircuitV1, Vec<Fq>), String> {
+    preflight_terminal_reciprocal_dense_source_indices_v1(
+        audits.eq.audit.sources.len(),
+        &audits.eq.audit.equations,
+    )?;
     let (terminal_guard_eq_protocol_digest, terminal_guard_ep_protocol_digest) =
         validate_terminal_authorization_pair_witness_v1(witness)?;
     if witness.public.eq_deferred_audit != audits.eq_digest
@@ -2118,6 +2179,34 @@ pub(crate) fn build_kagemusha_terminal_authorization_ep_v1(
     ))
 }
 
+/// Reject an impossible reciprocal dense batch before allocating the Terminal Base graph.
+/// The dense scheduler receives the distinct source indices appearing in all equations, not the
+/// entire source namespace. The later circuit still authenticates every source and coefficient.
+#[cfg(feature = "zk-halo2-ipa")]
+fn preflight_terminal_reciprocal_dense_source_indices_v1<T>(
+    source_namespace_len: usize,
+    equations: &[Vec<(usize, T)>],
+) -> Result<(), String> {
+    let mut used = std::collections::BTreeSet::new();
+    for equation in equations {
+        for (index, _) in equation {
+            if *index >= source_namespace_len {
+                return Err("terminal reciprocal audit source index is invalid".to_owned());
+            }
+            used.insert(*index);
+            // The exact scheduler can reject an impossible batch as soon as this monotone
+            // lower bound exceeds its capacity; no more indices need to be retained.
+            if used.len() > K16_MAX_DENSE_SOURCES_V1 {
+                return preflight_k16_dense_single_job_source_count_v1(used.len()).map_err(
+                    |error| format!("terminal reciprocal audit source geometry: {error}"),
+                );
+            }
+        }
+    }
+    preflight_k16_dense_single_job_source_count_v1(used.len())
+        .map_err(|error| format!("terminal reciprocal audit source geometry: {error}"))
+}
+
 /// Complete the opposite curve's audit using Terminal's own public-column layout.
 #[cfg(feature = "zk-halo2-ipa")]
 fn constrain_terminal_reciprocal_audit_v1<C>(
@@ -2136,7 +2225,7 @@ where
         return Err("terminal reciprocal audit requires one public column".to_owned());
     };
     if column.len() != TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1 {
-        return Err("terminal reciprocal audit requires exactly 81 public cells".to_owned());
+        return Err("terminal reciprocal audit requires exactly 83 public cells".to_owned());
     }
     // `parity` names the curve whose equations are consumed: Eq's audit is checked in Fq,
     // and Ep's audit in Fp. State's 48/50 offsets are history cells in this relation.
@@ -2678,10 +2767,10 @@ where
     if candidate_end == 0 {
         return Err("terminal authorization candidate verifier emitted no equations".to_owned());
     }
-    // These two cells come from the authenticated State proof, not a terminal host witness.
-    // The remaining prepared-intent ID and sealed streams are still unavailable, so this
-    // retained source cannot open the outgoing durable journal on its own.
-    install_verified_candidate_transition_digest_v1(
+    // These cells come from the authenticated State proof, not a terminal host witness. The
+    // carried preparation ID and stream digests still require exact SHA openings before they
+    // can authorize an outgoing durable journal.
+    install_verified_candidate_semantic_carriers_v1(
         &mut prepared_source_cells,
         assigned_candidate_instances
             .first()
@@ -2804,6 +2893,10 @@ where
 
     // Authenticate the entire original queue before consuming it. Fixed-shape inactive
     // transcripts remain part of all 26 jobs; there is no optional inline-SHA fallback.
+    // TODO: consume the prepared send sealed-byte witness and release-pinned redemption
+    // manifest source, then replan the claim and generator as one fixed-shape change for the two
+    // bounded stream hashes, preparation-ID transcript, and durable journal/recovery/body
+    // openings. Qualify full 2048/512-byte capacities at k=16 in both parities first.
     if sha_jobs.claim_jobs()?.len() != 26 {
         return Err("terminal authorization requires the complete 26-job SHA queue".to_owned());
     }
@@ -2970,6 +3063,15 @@ fn assign_public_prefix_v1<F: KagemushaPoseidonFieldV1>(
             assigned_digest_nonzero_v1(builder, range, [cells[offset], cells[offset + 1]]);
         builder.main(0).constrain_equal(&nonzero, &send);
     }
+    let manifest_nonzero = assigned_digest_nonzero_v1(
+        builder,
+        range,
+        [
+            cells[public_instance::ARTIFACT_MANIFEST_LO],
+            cells[public_instance::ARTIFACT_MANIFEST_LO + 1],
+        ],
+    );
+    builder.main(0).constrain_equal(&manifest_nonzero, &redeem);
     for (left, right) in [
         (
             public_instance::CANDIDATE_LO,
@@ -3857,29 +3959,60 @@ fn constrain_terminal_send_opening_v1<F: KagemushaPoseidonFieldV1>(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+/// Pre-proof transcript cells taken directly from the recursively verified State candidate.
+///
+/// The request, reservation and one-use authorization are derived separately by the terminal
+/// relation. The redemption manifest comes from a release-pinned terminal public instance.
+#[derive(Clone, Copy)]
+pub(super) struct KagemushaCandidatePreparationTranscriptCellsV1<F: KagemushaPoseidonFieldV1> {
+    pub(super) operation_tag: AssignedValue<F>,
+    pub(super) predecessor_state_commitment: [AssignedValue<F>; 2],
+    pub(super) successor_state_commitment: [AssignedValue<F>; 2],
+    pub(super) prepared_transition_binding_digest: [AssignedValue<F>; 2],
+    pub(super) projection_semantic_digest: [AssignedValue<F>; 2],
+    pub(super) lifecycle_binding_digest: [AssignedValue<F>; 2],
+    pub(super) normalized_guard_statement_digest: [AssignedValue<F>; 2],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 /// Existing terminal relation cells available to a future prepared-intent opening.
 ///
 /// These are derived in the circuit and linked to the recursively verified candidate and Guard
-/// on the terminal branch. The current candidate/Guard proof schema authenticates neither the
-/// canonical preparation ID nor sealed recovery bytes, so the ID remains absent.
+/// on the terminal branch. The State candidate authenticates only the carried preparation ID
+/// value; it does not open the canonical transcript or sealed bytes, so a verified ID is absent.
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) terminal_branch: AssignedValue<F>,
-    /// Only a future recursively verified prepared-intent relation may populate this field.
+    /// Only a complete in-circuit opening of the carried pre-proof transcript may populate this.
     pub(super) verified_preparation_id: Option<[AssignedValue<F>; 2]>,
     /// State's SHA-derived transition digest, installed only after the candidate proof and
     /// its complete history have been recursively verified.
     pub(super) verified_state_transition_digest: Option<[AssignedValue<F>; 2]>,
+    /// State's carried preparation ID after proof and history verification. This is not an
+    /// opened or verified preparation ID and cannot authorize a durable journal on its own.
+    pub(super) candidate_preparation_id_carrier: Option<[AssignedValue<F>; 2]>,
+    /// State's sealed-stream digest carriers after proof and history verification. Exact bytes
+    /// must still open these values under the terminal SHA claim.
+    pub(super) candidate_stream_digest_carriers: Option<[[AssignedValue<F>; 2]; 2]>,
+    /// Transcript fields exported from the same verified candidate column as the carriers.
+    pub(super) candidate_preparation_transcript:
+        Option<KagemushaCandidatePreparationTranscriptCellsV1<F>>,
+    /// Terminal request digest, constrained by the send opening and zero on redemption.
+    pub(super) request_digest: [AssignedValue<F>; 2],
+    /// Zero for send; for redemption the terminal public instance is fixed by the verifier's
+    /// independently authenticated release rather than by the wallet's private witness.
+    pub(super) verified_artifact_manifest_digest: Option<[AssignedValue<F>; 2]>,
     pub(super) candidate_envelope_digest: [AssignedValue<F>; 2],
     pub(super) outbox_reservation_commitment: [AssignedValue<F>; 2],
     pub(super) prepared_one_use_authorization_digest: [PastaSha256ByteV1<F>; 32],
     pub(super) journal_revision_after: AssignedValue<F>,
 }
 
-/// Retain State's transition digest from the exact candidate column accepted by the recursive
-/// verifier. Call this only after verifying the candidate proof and binding its history.
+/// Retain State's transition and prepared-intent carriers from the exact candidate column.
+/// Call this only after verifying the candidate proof and binding its complete history. The
+/// carried preparation ID is intentionally not installed as a verified opening.
 #[cfg(feature = "zk-halo2-ipa")]
-fn install_verified_candidate_transition_digest_v1<F: KagemushaPoseidonFieldV1>(
+fn install_verified_candidate_semantic_carriers_v1<F: KagemushaPoseidonFieldV1>(
     sources: &mut KagemushaTerminalPreparedSourceCellsV1<F>,
     candidate: &[AssignedValue<F>],
 ) -> Result<(), String> {
@@ -3888,13 +4021,47 @@ fn install_verified_candidate_transition_digest_v1<F: KagemushaPoseidonFieldV1>(
     {
         return Err("verified State candidate has wrong fixed public shape".to_owned());
     }
-    if sources.verified_state_transition_digest.is_some() {
-        return Err("verified State transition digest is already installed".to_owned());
+    if sources.verified_preparation_id.is_some()
+        || sources.verified_state_transition_digest.is_some()
+        || sources.candidate_preparation_id_carrier.is_some()
+        || sources.candidate_stream_digest_carriers.is_some()
+        || sources.candidate_preparation_transcript.is_some()
+    {
+        return Err("verified State semantic carriers are already installed".to_owned());
     }
     sources.verified_state_transition_digest = Some([
         candidate[state_relation::public_instance::TRANSITION_STATEMENT_LO],
         candidate[state_relation::public_instance::TRANSITION_STATEMENT_HI],
     ]);
+    sources.candidate_preparation_id_carrier = Some([
+        candidate[state_relation::public_instance::PREPARATION_ID_LO],
+        candidate[state_relation::public_instance::PREPARATION_ID_HI],
+    ]);
+    sources.candidate_stream_digest_carriers = Some([
+        [
+            candidate[state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO],
+            candidate[state_relation::public_instance::SEALED_TRANSITION_INPUTS_HI],
+        ],
+        [
+            candidate[state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO],
+            candidate[state_relation::public_instance::SEALED_RECOVERY_SEEDS_HI],
+        ],
+    ]);
+    let digest = |low| [candidate[low], candidate[low + 1]];
+    sources.candidate_preparation_transcript =
+        Some(KagemushaCandidatePreparationTranscriptCellsV1 {
+            operation_tag: candidate[state_relation::public_instance::OPERATION],
+            predecessor_state_commitment: digest(
+                state_relation::public_instance::PREDECESSOR_OUTER_LO,
+            ),
+            successor_state_commitment: digest(state_relation::public_instance::SUCCESSOR_OUTER_LO),
+            prepared_transition_binding_digest: digest(
+                state_relation::public_instance::PREPARED_TRANSITION_LO,
+            ),
+            projection_semantic_digest: digest(state_relation::public_instance::TRANSPORT_LO),
+            lifecycle_binding_digest: digest(state_relation::public_instance::LIFECYCLE_LO),
+            normalized_guard_statement_digest: digest(state_relation::public_instance::GUARD_LO),
+        });
     Ok(())
 }
 
@@ -4608,13 +4775,23 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     }
     Ok(KagemushaTerminalPreparedSourceCellsV1 {
         terminal_branch,
-        // TODO: a release-pinned prepared-intent proof must constrain the canonical preparation
-        // SHA over both private states, the transition digest and statement, operation projection,
-        // reservation, this one-use authorization, both sealed streams, and the Guard digest.
-        // Its exported ID must be linked to this verified candidate/Guard pair before `Some` is
-        // allowed. The current 87-cell recursive State prefix and terminal witness expose no ID.
+        // TODO: consume the prepared send sealed-byte witness and install the dormant exact
+        // preparation transcript and two stream SHA
+        // openings in the complete typed claim. The 93-cell State prefix only carries an ID;
+        // the live fold cannot promote it to a verified opening.
         verified_preparation_id: None,
         verified_state_transition_digest: None,
+        candidate_preparation_id_carrier: None,
+        candidate_stream_digest_carriers: None,
+        candidate_preparation_transcript: None,
+        request_digest: [
+            public[public_instance::REQUEST_LO],
+            public[public_instance::REQUEST_LO + 1],
+        ],
+        verified_artifact_manifest_digest: Some([
+            public[public_instance::ARTIFACT_MANIFEST_LO],
+            public[public_instance::ARTIFACT_MANIFEST_LO + 1],
+        ]),
         candidate_envelope_digest: [
             public[public_instance::CANDIDATE_LO],
             public[public_instance::CANDIDATE_LO + 1],
@@ -4680,6 +4857,59 @@ mod tests {
         canonical_terminal_authorization_candidate_digest_v1,
         canonical_terminal_send_output_binding_v1, validate_enabled_hardware_profiles_v1,
     };
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_reciprocal_source_preflight_matches_k16_dense_scheduler() {
+        let preflight = |namespace: usize, equations: &[Vec<(usize, u8)>]| {
+            super::preflight_terminal_reciprocal_dense_source_indices_v1(namespace, equations)
+        };
+        let referenced = |count: usize| vec![(0..count).map(|index| (index, 0_u8)).collect()];
+        // Unreferenced namespace entries do not enter the dense batch.
+        assert!(preflight(3_000, &referenced(749)).is_ok());
+        assert!(preflight(2_016, &referenced(2_016)).is_ok());
+        let empty =
+            preflight(0, &referenced(0)).expect_err("empty reciprocal audit cannot be scheduled");
+        assert!(empty.contains("terminal reciprocal audit source geometry"));
+        let oversized = preflight(2_017, &referenced(2_017))
+            .expect_err("five physical lanes cannot fit the Terminal key");
+        assert!(oversized.contains("only 4 are configured"));
+        assert!(
+            preflight(749, &referenced(750))
+                .expect_err("out-of-range source index cannot enter the audit")
+                .contains("source index is invalid")
+        );
+    }
+
+    #[test]
+    fn optional_send_sealed_byte_witness_rejects_bad_shape_without_changing_admission() {
+        let valid = [vec![0x11], vec![0x22]];
+        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, None).is_ok());
+        assert!(super::validate_send_sealed_stream_witness_shape_v1(false, None).is_ok());
+        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, Some(&valid)).is_ok());
+        let invalid = [
+            [Vec::new(), vec![0x22]],
+            [vec![0x11], Vec::new()],
+            [
+                vec![0x11; super::KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize + 1],
+                vec![0x22],
+            ],
+            [
+                vec![0x11],
+                vec![0x22; super::KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize + 1],
+            ],
+        ];
+        for streams in &invalid {
+            assert_eq!(
+                super::validate_send_sealed_stream_witness_shape_v1(true, Some(streams)),
+                Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
+            );
+        }
+        assert_eq!(
+            super::validate_send_sealed_stream_witness_shape_v1(false, Some(&valid)),
+            Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
+        );
+    }
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
@@ -4765,6 +4995,7 @@ mod tests {
             ciphertext_commitment: [15; 32],
             amount: 17,
             terminal_output_binding: [16; 32],
+            artifact_manifest_digest: [0; 32],
             eq_deferred_audit: [17; 32],
             ep_deferred_audit: [18; 32],
             eq_protocol_digest: crate::zk::kagemusha_v1_poseidon::encode(Fp::from(101)),
@@ -4795,11 +5026,63 @@ mod tests {
         redemption.request_digest = [0; 32];
         redemption.receiver_binding_digest = [0; 32];
         redemption.ciphertext_commitment = [0; 32];
+        redemption.artifact_manifest_digest = [19; 32];
         redemption
             .validate()
             .expect("canonical redemption projection");
+        let mut missing_manifest = redemption.clone();
+        missing_manifest.artifact_manifest_digest = [0; 32];
+        assert!(missing_manifest.validate().is_err());
         redemption.receiver_binding_digest = [14; 32];
         assert!(redemption.validate().is_err());
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn release_manifest_is_an_operation_scoped_terminal_instance_in_both_parities() {
+        use crate::zk::kagemusha_v1_poseidon::digest_limbs;
+        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
+
+        // CommitWrapper equates every nested cell before deferred audits with its outer
+        // public instance; keep the manifest inside that recursively bound prefix.
+        assert_eq!(
+            super::public_instance::ARTIFACT_MANIFEST_LO + 2,
+            super::public_instance::EQ_DEFERRED_AUDIT_LO
+        );
+        fn check<F: super::KagemushaPoseidonFieldV1>() {
+            let send = terminal_public();
+            let send_prefix = send.public_prefix::<F>().expect("canonical send prefix");
+            assert_eq!(
+                &send_prefix[super::public_instance::ARTIFACT_MANIFEST_LO..][..2],
+                &digest_limbs::<F>([0; 32]),
+            );
+            let mut substituted_send = send.clone();
+            substituted_send.artifact_manifest_digest = [19; 32];
+            assert!(substituted_send.validate().is_err());
+
+            let mut redeem = send;
+            redeem.operation = super::KagemushaOperationV1::RedeemSplit;
+            redeem.request_digest = [0; 32];
+            redeem.receiver_binding_digest = [0; 32];
+            redeem.ciphertext_commitment = [0; 32];
+            redeem.artifact_manifest_digest = [19; 32];
+            let redeem_prefix = redeem
+                .public_prefix::<F>()
+                .expect("canonical redemption prefix");
+            assert_eq!(
+                &redeem_prefix[super::public_instance::ARTIFACT_MANIFEST_LO..][..2],
+                &digest_limbs::<F>([19; 32]),
+            );
+            assert_eq!(
+                redeem_prefix.len(),
+                super::TERMINAL_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1
+            );
+            let mut absent = redeem;
+            absent.artifact_manifest_digest = [0; 32];
+            assert!(absent.validate().is_err());
+        }
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]
@@ -4835,6 +5118,7 @@ mod tests {
                 public.request_digest = [0; 32];
                 public.receiver_binding_digest = [0; 32];
                 public.ciphertext_commitment = [0; 32];
+                public.artifact_manifest_digest = [19; 32];
             }
             let instances = public.public_prefix::<Fp>().expect("valid terminal prefix");
             let mut builder = BaseCircuitBuilder::<Fp>::new(false)
@@ -4846,9 +5130,18 @@ mod tests {
                 .expect("fixed terminal prefix");
             builder.assigned_instances = vec![cells];
             builder.calculate_params(Some(super::MINIMUM_UNUSABLE_ROWS));
-            MockProver::run(12, &builder, vec![instances])
+            MockProver::run(12, &builder, vec![instances.clone()])
                 .expect("terminal prefix circuit")
                 .assert_satisfied();
+            let mut substituted = instances;
+            substituted[super::public_instance::ARTIFACT_MANIFEST_LO] += Fp::from(1);
+            assert!(
+                MockProver::run(12, &builder, vec![substituted])
+                    .expect("substituted terminal prefix circuit")
+                    .verify()
+                    .is_err(),
+                "the public manifest cell must remain bound to its assigned proof instance"
+            );
         }
     }
 
@@ -4867,6 +5160,11 @@ mod tests {
                 terminal_branch: zero,
                 verified_preparation_id: None,
                 verified_state_transition_digest: None,
+                candidate_preparation_id_carrier: None,
+                candidate_stream_digest_carriers: None,
+                candidate_preparation_transcript: None,
+                request_digest: digest,
+                verified_artifact_manifest_digest: None,
                 candidate_envelope_digest: digest,
                 outbox_reservation_commitment: digest,
                 prepared_one_use_authorization_digest: super::constant_bytes(&[0; 32])
@@ -4880,15 +5178,27 @@ mod tests {
                 .map(|index| ctx.load_witness(F::from(index as u64 + 1)))
                 .collect::<Vec<_>>();
             assert!(
-                super::install_verified_candidate_transition_digest_v1(
+                super::install_verified_candidate_semantic_carriers_v1(
                     &mut sources,
                     &candidate[..width - 1],
                 )
                 .is_err()
             );
             assert!(sources.verified_state_transition_digest.is_none());
-            super::install_verified_candidate_transition_digest_v1(&mut sources, &candidate)
+            sources.verified_preparation_id = Some(digest);
+            assert!(
+                super::install_verified_candidate_semantic_carriers_v1(&mut sources, &candidate)
+                    .is_err(),
+                "preinstalled ID cannot be treated as a verified candidate opening"
+            );
+            assert!(sources.candidate_preparation_id_carrier.is_none());
+            sources.verified_preparation_id = None;
+            super::install_verified_candidate_semantic_carriers_v1(&mut sources, &candidate)
                 .expect("exact recursively verified candidate shape");
+            assert!(
+                sources.verified_preparation_id.is_none(),
+                "candidate carrier alone cannot verify the preparation transcript"
+            );
             let installed = sources
                 .verified_state_transition_digest
                 .expect("State digest");
@@ -4900,10 +5210,71 @@ mod tests {
                 *installed[1].value(),
                 F::from((state_relation::public_instance::TRANSITION_STATEMENT_HI + 1) as u64)
             );
+            let preparation_carrier = sources
+                .candidate_preparation_id_carrier
+                .expect("candidate preparation ID carrier");
+            let stream_carriers = sources
+                .candidate_stream_digest_carriers
+                .expect("candidate sealed-stream carriers");
+            for (actual, offset) in [
+                (
+                    preparation_carrier,
+                    state_relation::public_instance::PREPARATION_ID_LO,
+                ),
+                (
+                    stream_carriers[0],
+                    state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO,
+                ),
+                (
+                    stream_carriers[1],
+                    state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO,
+                ),
+            ] {
+                for (limb, cell) in actual.into_iter().enumerate() {
+                    assert_eq!(*cell.value(), F::from((offset + limb + 1) as u64));
+                }
+            }
+            let transcript = sources
+                .candidate_preparation_transcript
+                .expect("candidate preparation transcript cells");
+            assert_eq!(
+                *transcript.operation_tag.value(),
+                F::from((state_relation::public_instance::OPERATION + 1) as u64)
+            );
+            for (actual, offset) in [
+                (
+                    transcript.predecessor_state_commitment,
+                    state_relation::public_instance::PREDECESSOR_OUTER_LO,
+                ),
+                (
+                    transcript.successor_state_commitment,
+                    state_relation::public_instance::SUCCESSOR_OUTER_LO,
+                ),
+                (
+                    transcript.prepared_transition_binding_digest,
+                    state_relation::public_instance::PREPARED_TRANSITION_LO,
+                ),
+                (
+                    transcript.projection_semantic_digest,
+                    state_relation::public_instance::TRANSPORT_LO,
+                ),
+                (
+                    transcript.lifecycle_binding_digest,
+                    state_relation::public_instance::LIFECYCLE_LO,
+                ),
+                (
+                    transcript.normalized_guard_statement_digest,
+                    state_relation::public_instance::GUARD_LO,
+                ),
+            ] {
+                for (limb, cell) in actual.into_iter().enumerate() {
+                    assert_eq!(*cell.value(), F::from((offset + limb + 1) as u64));
+                }
+            }
             assert!(
-                super::install_verified_candidate_transition_digest_v1(&mut sources, &candidate)
+                super::install_verified_candidate_semantic_carriers_v1(&mut sources, &candidate)
                     .is_err(),
-                "a second candidate may not replace an installed verified digest"
+                "a second candidate may not replace installed semantic carriers"
             );
         }
         check::<Fp>();
@@ -5195,6 +5566,12 @@ mod tests {
             for transition_index in [
                 state_relation::public_instance::TRANSITION_STATEMENT_LO,
                 state_relation::public_instance::TRANSITION_STATEMENT_HI,
+                state_relation::public_instance::PREPARATION_ID_LO,
+                state_relation::public_instance::PREPARATION_ID_HI,
+                state_relation::public_instance::SEALED_TRANSITION_INPUTS_LO,
+                state_relation::public_instance::SEALED_TRANSITION_INPUTS_HI,
+                state_relation::public_instance::SEALED_RECOVERY_SEEDS_LO,
+                state_relation::public_instance::SEALED_RECOVERY_SEEDS_HI,
             ] {
                 let mut changed = baseline.clone();
                 changed[transition_index] += F::from(1);
@@ -5204,7 +5581,7 @@ mod tests {
                         .expect("changed State transition digest circuit")
                         .verify()
                         .is_err(),
-                    "changed recursively verified transition digest preserved signed candidate"
+                    "changed recursively verified transition or prepared carrier cell {transition_index} preserved signed candidate"
                 );
             }
 

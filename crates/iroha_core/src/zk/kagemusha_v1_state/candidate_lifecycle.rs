@@ -36,15 +36,17 @@ use super::{
     TransitionProofStatementV1, VerifiedKagemushaRedemptionReleaseV1, canonical_sha256_digest,
 };
 use crate::zk::kagemusha_v1_recursion::{
-    KagemushaPastaParityV1, KagemushaRecursionArtifactsV1, KagemushaRecursivePublicOutputV1,
-    KagemushaRecursiveVerifierV1, KagemushaStateRelationPublicInputsV1,
-    canonical_incoming_payment_claims_binding_v1, canonical_prepared_transition_binding_digest_v1,
-    canonical_sender_state_pair_digest_v1, canonical_terminal_send_output_binding_v1,
-    kagemusha_candidate_envelope_digest_v1, verify_kagemusha_recursive_proof_v1,
-    verify_kagemusha_state_proof_v1,
+    KagemushaPastaParityV1, KagemushaPreparedIntentCommitmentsV1, KagemushaRecursionArtifactsV1,
+    KagemushaRecursivePublicOutputV1, KagemushaRecursiveVerifierV1,
+    KagemushaStateRelationPublicInputsV1, canonical_incoming_payment_claims_binding_v1,
+    canonical_prepared_transition_binding_digest_v1, canonical_sender_state_pair_digest_v1,
+    canonical_terminal_send_output_binding_v1, kagemusha_candidate_envelope_digest_v1,
+    verify_kagemusha_recursive_proof_v1, verify_kagemusha_state_proof_v1,
 };
 
 const PREPARATION_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:outgoing-preparation";
+const SEALED_TRANSITION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:sealed-transition-inputs";
+const SEALED_RECOVERY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:sealed-recovery-seeds";
 const OUTGOING_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:terminal-envelope";
 const TERMINAL_JOURNAL_COMMITMENT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:terminal-private-journal";
 const TERMINAL_RECOVERY_COMMITMENT_DOMAIN_V1: &[u8] =
@@ -478,21 +480,129 @@ impl PreparedPublicProjectionV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1"
-)]
-struct PreparationIdPreimageV1 {
-    predecessor_state: KagemushaStateV1,
-    successor_state: KagemushaStateV1,
+// Every field has a fixed width. The byte order below is also the future recursive SHA
+// transcript: the candidate envelope cannot be included because it is computed after this ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparationIdCommitmentsV1 {
+    operation_tag: u8,
+    predecessor_state_commitment: DigestV1,
+    successor_state_commitment: DigestV1,
     state_transition_digest: DigestV1,
-    proof_statement: TransitionProofStatementV1,
-    projection: PreparedPublicProjectionV1,
+    prepared_transition_binding_digest: DigestV1,
+    projection_semantic_digest: DigestV1,
+    lifecycle_binding_digest: DigestV1,
+    request_digest: DigestV1,
+    artifact_manifest_digest: DigestV1,
+    normalized_guard_statement_digest: DigestV1,
+    outbox_reservation_commitment: DigestV1,
+    prepared_one_use_authorization_digest: DigestV1,
+    sealed_transition_inputs_len: u64,
+    sealed_transition_inputs_digest: DigestV1,
+    sealed_recovery_seeds_len: u64,
+    sealed_recovery_seeds_digest: DigestV1,
+}
+
+/// Hash the fixed, domain-separated pre-proof transcript selected by an outgoing preparation.
+///
+/// A later circuit must derive these fields from its State/Guard relation and verify openings of
+/// both length-prefixed sealed-stream digests before this ID can grant terminal authority.
+/// TODO: recompute this transcript from authenticated State/Guard sources in both terminal
+/// parities and link both sealed-stream openings to the carried candidate digests.
+fn hash_preparation_id_commitments_v1(fields: PreparationIdCommitmentsV1) -> DigestV1 {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(PREPARATION_ID_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes());
+    hasher.update([fields.operation_tag]);
+    for digest in [
+        fields.predecessor_state_commitment,
+        fields.successor_state_commitment,
+        fields.state_transition_digest,
+        fields.prepared_transition_binding_digest,
+        fields.projection_semantic_digest,
+        fields.lifecycle_binding_digest,
+        fields.request_digest,
+        fields.artifact_manifest_digest,
+        fields.normalized_guard_statement_digest,
+        fields.outbox_reservation_commitment,
+        fields.prepared_one_use_authorization_digest,
+    ] {
+        hasher.update(digest);
+    }
+    hasher.update(fields.sealed_transition_inputs_len.to_le_bytes());
+    hasher.update(fields.sealed_transition_inputs_digest);
+    hasher.update(fields.sealed_recovery_seeds_len.to_le_bytes());
+    hasher.update(fields.sealed_recovery_seeds_digest);
+    hasher.finalize().into()
+}
+
+/// Reduce the validated prepared record to a fixed-width pre-proof commitment.
+#[allow(clippy::too_many_arguments)]
+fn preparation_id_v1(
+    predecessor_state: &KagemushaStateV1,
+    successor_state: &KagemushaStateV1,
+    state_transition_digest: DigestV1,
+    proof_statement: &TransitionProofStatementV1,
+    projection: &PreparedPublicProjectionV1,
     outbox_reservation: KagemushaOutboxReservationV1,
     prepared_one_use_authorization_digest: DigestV1,
-    sealed_transition_inputs: Vec<u8>,
-    sealed_recovery_seeds: Vec<u8>,
+    sealed_transition_inputs: &[u8],
+    sealed_recovery_seeds: &[u8],
     normalized_guard_statement_digest: DigestV1,
+) -> Result<DigestV1, KagemushaStateErrorV1> {
+    validate_recovery_material(
+        sealed_transition_inputs,
+        sealed_recovery_seeds,
+        normalized_guard_statement_digest,
+    )?;
+    let (operation_tag, request_digest, artifact_manifest_digest) = match projection {
+        PreparedPublicProjectionV1::Send(projection) => (
+            2,
+            projection
+                .request
+                .canonical_digest()
+                .map_err(|_| KagemushaStateErrorV1::InvalidPaymentRequest)?,
+            [0; 32],
+        ),
+        PreparedPublicProjectionV1::Redemption(projection) => {
+            (4, [0; 32], projection.artifact_manifest_digest)
+        }
+    };
+    let sealed_transition_inputs_len = u64::try_from(sealed_transition_inputs.len())
+        .map_err(|_| KagemushaStateErrorV1::InvalidRecoveryMaterial)?;
+    let sealed_recovery_seeds_len = u64::try_from(sealed_recovery_seeds.len())
+        .map_err(|_| KagemushaStateErrorV1::InvalidRecoveryMaterial)?;
+    Ok(hash_preparation_id_commitments_v1(
+        PreparationIdCommitmentsV1 {
+            operation_tag,
+            predecessor_state_commitment: predecessor_state.state_commitment,
+            successor_state_commitment: successor_state.state_commitment,
+            state_transition_digest,
+            prepared_transition_binding_digest: proof_statement.prepared_transition_binding_digest,
+            projection_semantic_digest: projection.semantic_digest()?,
+            lifecycle_binding_digest: projection
+                .lifecycle()
+                .canonical_digest()
+                .map_err(|_| KagemushaStateErrorV1::InvalidCandidateStage)?,
+            request_digest,
+            artifact_manifest_digest,
+            normalized_guard_statement_digest,
+            outbox_reservation_commitment: validate_outbox_reservation(outbox_reservation)?,
+            prepared_one_use_authorization_digest,
+            sealed_transition_inputs_len,
+            sealed_transition_inputs_digest: digest_raw_bytes(
+                SEALED_TRANSITION_DIGEST_DOMAIN_V1,
+                sealed_transition_inputs,
+            ),
+            sealed_recovery_seeds_len,
+            sealed_recovery_seeds_digest: digest_raw_bytes(
+                SEALED_RECOVERY_DIGEST_DOMAIN_V1,
+                sealed_recovery_seeds,
+            ),
+        },
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
@@ -940,20 +1050,17 @@ impl PreparedOutgoingCandidateV1 {
             prepared_one_use_authorization_digest,
             normalized_guard_statement_digest,
         )?;
-        let preparation_id = canonical_sha256_digest(
-            PREPARATION_ID_DOMAIN_V1,
-            &PreparationIdPreimageV1 {
-                predecessor_state: predecessor_state.clone(),
-                successor_state: successor_state.clone(),
-                state_transition_digest,
-                proof_statement: proof_statement.clone(),
-                projection: projection.clone(),
-                outbox_reservation,
-                prepared_one_use_authorization_digest,
-                sealed_transition_inputs: sealed_transition_inputs.clone(),
-                sealed_recovery_seeds: sealed_recovery_seeds.clone(),
-                normalized_guard_statement_digest,
-            },
+        let preparation_id = preparation_id_v1(
+            &predecessor_state,
+            &successor_state,
+            state_transition_digest,
+            &proof_statement,
+            &projection,
+            outbox_reservation,
+            prepared_one_use_authorization_digest,
+            &sealed_transition_inputs,
+            &sealed_recovery_seeds,
+            normalized_guard_statement_digest,
         )?;
         let prepared = Self {
             version: KAGEMUSHA_STATE_VERSION_V1,
@@ -987,6 +1094,25 @@ impl PreparedOutgoingCandidateV1 {
     /// Return the semantic digest shared by the state candidate and final commit proof.
     pub fn semantic_digest(&self) -> Result<DigestV1, KagemushaStateErrorV1> {
         self.projection.semantic_digest()
+    }
+
+    /// Return the three digest carriers selected before either candidate proof is generated.
+    ///
+    /// The carrier gains authority only after the terminal proof opens its pre-proof transcript
+    /// and exact sealed streams against the recursively verified State candidate.
+    #[must_use]
+    pub(crate) fn prepared_intent_commitments(&self) -> KagemushaPreparedIntentCommitmentsV1 {
+        KagemushaPreparedIntentCommitmentsV1 {
+            preparation_id: self.preparation_id,
+            sealed_transition_inputs_digest: digest_raw_bytes(
+                SEALED_TRANSITION_DIGEST_DOMAIN_V1,
+                &self.sealed_transition_inputs,
+            ),
+            sealed_recovery_seeds_digest: digest_raw_bytes(
+                SEALED_RECOVERY_DIGEST_DOMAIN_V1,
+                &self.sealed_recovery_seeds,
+            ),
+        }
     }
 
     /// Borrow the derived compact payment output when this is a `SendSplit` candidate.
@@ -1073,6 +1199,7 @@ impl PreparedOutgoingCandidateV1 {
             recipient_encryption_key_binding: statement.recipient_encryption_key_binding,
             lifecycle_binding_digest: statement.lifecycle_binding_digest,
             prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+            prepared_intent: Some(self.prepared_intent_commitments()),
             receive_credit_binding_digest: statement.receive_credit_binding_digest,
             transport_semantic_digest: self.semantic_digest().map_err(|error| error.to_string())?,
             guard_statement_digest: self.normalized_guard_statement_digest,
@@ -1109,6 +1236,16 @@ impl PreparedOutgoingCandidateV1 {
         if self.version != KAGEMUSHA_STATE_VERSION_V1 {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
+        let amount = match &self.projection {
+            PreparedPublicProjectionV1::Send(projection) => projection.request.amount,
+            PreparedPublicProjectionV1::Redemption(projection) => projection.statement.amount,
+        };
+        validate_private_state_link(
+            &self.predecessor_state,
+            &self.successor_state,
+            amount,
+            self.projection.operation(),
+        )?;
         let reconstructed = Self::new(
             self.predecessor_state.clone(),
             self.successor_state.clone(),
@@ -1521,6 +1658,173 @@ impl CommittedOutgoingCandidateV1 {
             commit_certificate,
             commit_certificate_digest,
         })
+    }
+
+    /// Return the six exact SHA messages needed to open a retained sender preparation.
+    ///
+    /// This is producer material only. The terminal circuit must assign these bytes, SHA-open
+    /// them against the recursively verified State carriers, and prove the complete 32-job Eq/Ep
+    /// claim before they can authorize an outgoing payment. In particular, this method does not
+    /// verify the persisted candidate proof or grant a hardware commitment.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the complete terminal SHA claim is not installed")
+    )]
+    pub(crate) fn canonical_send_opening_sha_messages_v1(
+        &self,
+    ) -> Result<[Vec<u8>; 6], KagemushaStateErrorV1> {
+        use sha2::{Digest as _, Sha256};
+
+        let prepared = &self.candidate.prepared;
+        prepared.validate_recovered()?;
+        let _ = self.candidate.recovery_view()?;
+        if Self::from_hardware_commit(self.candidate.clone(), self.commit_certificate.clone())?
+            != *self
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let PreparedPublicProjectionV1::Send(projection) = &prepared.projection else {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        };
+        let body = self.candidate.hardware_terminal_body()?;
+        let digest = |message: &[u8]| -> DigestV1 { Sha256::digest(message).into() };
+        let sealed_message =
+            |domain: &[u8], bytes: &[u8]| -> Result<Vec<u8>, KagemushaStateErrorV1> {
+                let length = u64::try_from(bytes.len())
+                    .map_err(|_| KagemushaStateErrorV1::InvalidRecoveryMaterial)?;
+                let mut message = Vec::with_capacity(domain.len() + 1 + 8 + bytes.len());
+                message.extend_from_slice(domain);
+                message.push(0);
+                message.extend_from_slice(&length.to_le_bytes());
+                message.extend_from_slice(bytes);
+                Ok(message)
+            };
+        let transition = sealed_message(
+            SEALED_TRANSITION_DIGEST_DOMAIN_V1,
+            &prepared.sealed_transition_inputs,
+        )?;
+        let seeds = sealed_message(
+            SEALED_RECOVERY_DIGEST_DOMAIN_V1,
+            &prepared.sealed_recovery_seeds,
+        )?;
+        let transition_digest = digest(&transition);
+        let seeds_digest = digest(&seeds);
+        let request_digest = projection
+            .request
+            .canonical_digest()
+            .map_err(|_| KagemushaStateErrorV1::InvalidPaymentRequest)?;
+        let lifecycle_digest = projection
+            .lifecycle
+            .canonical_digest()
+            .map_err(|_| KagemushaStateErrorV1::InvalidCandidateStage)?;
+        let reservation_digest = validate_outbox_reservation(prepared.outbox_reservation)?;
+        let fields = PreparationIdCommitmentsV1 {
+            operation_tag: 2,
+            predecessor_state_commitment: prepared.predecessor_state.state_commitment,
+            successor_state_commitment: prepared.successor_state.state_commitment,
+            state_transition_digest: prepared.state_transition_digest,
+            prepared_transition_binding_digest: prepared
+                .proof_statement
+                .prepared_transition_binding_digest,
+            projection_semantic_digest: prepared.projection.semantic_digest()?,
+            lifecycle_binding_digest: lifecycle_digest,
+            request_digest,
+            artifact_manifest_digest: [0; 32],
+            normalized_guard_statement_digest: prepared.normalized_guard_statement_digest,
+            outbox_reservation_commitment: reservation_digest,
+            prepared_one_use_authorization_digest: prepared.prepared_one_use_authorization_digest,
+            sealed_transition_inputs_len: u64::try_from(prepared.sealed_transition_inputs.len())
+                .map_err(|_| KagemushaStateErrorV1::InvalidRecoveryMaterial)?,
+            sealed_transition_inputs_digest: transition_digest,
+            sealed_recovery_seeds_len: u64::try_from(prepared.sealed_recovery_seeds.len())
+                .map_err(|_| KagemushaStateErrorV1::InvalidRecoveryMaterial)?,
+            sealed_recovery_seeds_digest: seeds_digest,
+        };
+        let mut preparation = Vec::with_capacity(475);
+        preparation.extend_from_slice(PREPARATION_ID_DOMAIN_V1);
+        preparation.push(0);
+        preparation.extend_from_slice(&KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes());
+        preparation.push(fields.operation_tag);
+        for value in [
+            fields.predecessor_state_commitment,
+            fields.successor_state_commitment,
+            fields.state_transition_digest,
+            fields.prepared_transition_binding_digest,
+            fields.projection_semantic_digest,
+            fields.lifecycle_binding_digest,
+            fields.request_digest,
+            fields.artifact_manifest_digest,
+            fields.normalized_guard_statement_digest,
+            fields.outbox_reservation_commitment,
+            fields.prepared_one_use_authorization_digest,
+        ] {
+            preparation.extend_from_slice(&value);
+        }
+        preparation.extend_from_slice(&fields.sealed_transition_inputs_len.to_le_bytes());
+        preparation.extend_from_slice(&fields.sealed_transition_inputs_digest);
+        preparation.extend_from_slice(&fields.sealed_recovery_seeds_len.to_le_bytes());
+        preparation.extend_from_slice(&fields.sealed_recovery_seeds_digest);
+        if preparation.len() != 475
+            || digest(&preparation) != prepared.preparation_id
+            || hash_preparation_id_commitments_v1(fields) != prepared.preparation_id
+        {
+            return Err(KagemushaStateErrorV1::SnapshotIntegrity);
+        }
+        let framed = |domain: &[u8], frame: &[u8]| -> Result<Vec<u8>, KagemushaStateErrorV1> {
+            let domain_len = u64::try_from(domain.len())
+                .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
+            let frame_len =
+                u64::try_from(frame.len()).map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
+            let mut message = Vec::with_capacity(16 + domain.len() + frame.len());
+            message.extend_from_slice(&domain_len.to_be_bytes());
+            message.extend_from_slice(domain);
+            message.extend_from_slice(&frame_len.to_be_bytes());
+            message.extend_from_slice(frame);
+            Ok(message)
+        };
+        let journal_frame = norito::encode_canonical(&TerminalJournalCommitmentPreimageV1 {
+            preparation_id: prepared.preparation_id,
+            candidate_envelope_digest: self.candidate.candidate_envelope_digest,
+            state_transition_digest: prepared.state_transition_digest,
+            outbox_reservation_commitment: reservation_digest,
+            journal_revision_after: prepared.proof_statement.journal_revision_after,
+        })
+        .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
+        let journal = framed(TERMINAL_JOURNAL_COMMITMENT_DOMAIN_V1, &journal_frame)?;
+        let recovery_frame = norito::encode_canonical(&TerminalRecoveryCommitmentPreimageV1 {
+            preparation_id: prepared.preparation_id,
+            prepared_one_use_authorization_digest: prepared.prepared_one_use_authorization_digest,
+            sealed_transition_inputs: prepared.sealed_transition_inputs.clone(),
+            sealed_recovery_seeds: prepared.sealed_recovery_seeds.clone(),
+        })
+        .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
+        let recovery = framed(TERMINAL_RECOVERY_COMMITMENT_DOMAIN_V1, &recovery_frame)?;
+        let terminal_body_domain = b"iroha:kagemusha:v1:hardware-terminal-body";
+        let body_bytes = body.commitment_preimage_bytes();
+        let mut terminal_body =
+            Vec::with_capacity(terminal_body_domain.len() + 1 + 8 + body_bytes.len());
+        terminal_body.extend_from_slice(terminal_body_domain);
+        terminal_body.push(0);
+        terminal_body.extend_from_slice(
+            &u64::try_from(body_bytes.len())
+                .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?
+                .to_le_bytes(),
+        );
+        terminal_body.extend_from_slice(&body_bytes);
+        if digest(&journal) != body.private_journal_commitment
+            || digest(&recovery) != body.private_recovery_commitment
+            || digest(&terminal_body) != self.commit_certificate.hardware_terminal_commitment
+        {
+            return Err(KagemushaStateErrorV1::HardwareCertificateMismatch);
+        }
+        Ok([
+            transition,
+            seeds,
+            preparation,
+            journal,
+            recovery,
+            terminal_body,
+        ])
     }
 
     /// Return the exact unlinkable terminal output bound by the hardware certificate.
@@ -2908,6 +3212,124 @@ fn digest_raw_bytes(domain: &[u8], bytes: &[u8]) -> DigestV1 {
 }
 
 #[cfg(test)]
+mod preparation_id_tests {
+    use super::*;
+
+    fn vector_fields() -> PreparationIdCommitmentsV1 {
+        let transition = [0x11, 0x22, 0x33];
+        let recovery = [0x44, 0x55];
+        PreparationIdCommitmentsV1 {
+            operation_tag: 2,
+            predecessor_state_commitment: [1; 32],
+            successor_state_commitment: [2; 32],
+            state_transition_digest: [3; 32],
+            prepared_transition_binding_digest: [4; 32],
+            projection_semantic_digest: [5; 32],
+            lifecycle_binding_digest: [6; 32],
+            request_digest: [7; 32],
+            artifact_manifest_digest: [0; 32],
+            normalized_guard_statement_digest: [8; 32],
+            outbox_reservation_commitment: [9; 32],
+            prepared_one_use_authorization_digest: [10; 32],
+            sealed_transition_inputs_len: transition.len() as u64,
+            sealed_transition_inputs_digest: digest_raw_bytes(
+                SEALED_TRANSITION_DIGEST_DOMAIN_V1,
+                &transition,
+            ),
+            sealed_recovery_seeds_len: recovery.len() as u64,
+            sealed_recovery_seeds_digest: digest_raw_bytes(
+                SEALED_RECOVERY_DIGEST_DOMAIN_V1,
+                &recovery,
+            ),
+        }
+    }
+
+    #[test]
+    fn sealed_stream_digests_use_distinct_domains_and_exact_lengths() {
+        let fields = vector_fields();
+        assert_eq!(
+            fields.sealed_transition_inputs_digest,
+            [
+                0x72, 0x0e, 0x23, 0x12, 0x88, 0xab, 0x5c, 0xf4, 0xd4, 0xfc, 0x02, 0xc5, 0xc2, 0xf3,
+                0x21, 0x2e, 0xd1, 0x6a, 0x93, 0x9d, 0x11, 0xb1, 0xa3, 0x6c, 0x37, 0x3f, 0xc9, 0x24,
+                0x6d, 0xc2, 0xea, 0xbe,
+            ]
+        );
+        assert_eq!(
+            fields.sealed_recovery_seeds_digest,
+            [
+                0x66, 0x3f, 0x71, 0x16, 0x93, 0x8b, 0x6d, 0xc9, 0xfa, 0xea, 0x77, 0x74, 0xd6, 0xaa,
+                0xd9, 0xc0, 0x07, 0xbe, 0x12, 0x97, 0x1e, 0x42, 0x4b, 0xef, 0xf0, 0x53, 0x7e, 0xe9,
+                0xa4, 0xde, 0xdc, 0xf8,
+            ]
+        );
+        let same_bytes = [0x11, 0x22, 0x33];
+        assert_ne!(
+            digest_raw_bytes(SEALED_TRANSITION_DIGEST_DOMAIN_V1, &same_bytes),
+            digest_raw_bytes(SEALED_RECOVERY_DIGEST_DOMAIN_V1, &same_bytes)
+        );
+        assert_ne!(
+            digest_raw_bytes(SEALED_TRANSITION_DIGEST_DOMAIN_V1, &same_bytes),
+            digest_raw_bytes(SEALED_TRANSITION_DIGEST_DOMAIN_V1, &[0x11, 0x22, 0x33, 0])
+        );
+        let max_transition = vec![0x11; KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize];
+        let max_recovery = vec![0x44; KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize];
+        validate_recovery_material(&max_transition, &max_recovery, [1; 32])
+            .expect("the fixed 2048/512 capacities are accepted");
+        let mut too_long_transition = max_transition.clone();
+        too_long_transition.push(0);
+        assert_eq!(
+            validate_recovery_material(&too_long_transition, &max_recovery, [1; 32]),
+            Err(KagemushaStateErrorV1::InvalidRecoveryMaterial)
+        );
+        let mut too_long_recovery = max_recovery.clone();
+        too_long_recovery.push(0);
+        assert_eq!(
+            validate_recovery_material(&max_transition, &too_long_recovery, [1; 32]),
+            Err(KagemushaStateErrorV1::InvalidRecoveryMaterial)
+        );
+    }
+
+    #[test]
+    fn preparation_id_fixed_vector_binds_every_preproof_field() {
+        let fields = vector_fields();
+        let expected = [
+            0xe4, 0xc4, 0xd7, 0xd7, 0x55, 0xb8, 0x67, 0xf7, 0xb7, 0x09, 0x3c, 0x33, 0xfb, 0xaa,
+            0x6c, 0x57, 0x72, 0xbf, 0x9d, 0x9b, 0x1b, 0x04, 0x8b, 0x54, 0xe1, 0x0e, 0x4d, 0x38,
+            0xec, 0xf1, 0xdd, 0x4a,
+        ];
+        assert_eq!(hash_preparation_id_commitments_v1(fields), expected);
+        for mutation in 0..16 {
+            let mut changed = fields;
+            match mutation {
+                0 => changed.operation_tag ^= 1,
+                1 => changed.predecessor_state_commitment[0] ^= 1,
+                2 => changed.successor_state_commitment[0] ^= 1,
+                3 => changed.state_transition_digest[0] ^= 1,
+                4 => changed.prepared_transition_binding_digest[0] ^= 1,
+                5 => changed.projection_semantic_digest[0] ^= 1,
+                6 => changed.lifecycle_binding_digest[0] ^= 1,
+                7 => changed.request_digest[0] ^= 1,
+                8 => changed.artifact_manifest_digest[0] ^= 1,
+                9 => changed.normalized_guard_statement_digest[0] ^= 1,
+                10 => changed.outbox_reservation_commitment[0] ^= 1,
+                11 => changed.prepared_one_use_authorization_digest[0] ^= 1,
+                12 => changed.sealed_transition_inputs_len += 1,
+                13 => changed.sealed_transition_inputs_digest[0] ^= 1,
+                14 => changed.sealed_recovery_seeds_len += 1,
+                15 => changed.sealed_recovery_seeds_digest[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert_ne!(
+                hash_preparation_id_commitments_v1(changed),
+                expected,
+                "mutation {mutation} preserved the preparation ID"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod sender_capacity_tests {
     use super::*;
 
@@ -2989,9 +3411,6 @@ fn captured_state_frame_owners() {
     crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
         PreparedOutgoingCandidateV1,
     >("iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedOutgoingCandidateV1");
-    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<PreparationIdPreimageV1>(
-        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1",
-    );
     crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
         PersistedOutgoingCandidateV1,
     >("iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PersistedOutgoingCandidateV1");

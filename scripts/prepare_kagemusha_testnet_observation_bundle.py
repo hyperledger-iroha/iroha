@@ -2,9 +2,11 @@
 
 This command does not create proof keys, validation evidence, or release signatures.
 Its input must already satisfy the complete first-release Kagami verifier. The
-separate operator-pin file is a review candidate; apps must obtain their trust
-anchors through an independent operator-controlled channel and must not load
-this output automatically. No monetary or hardware qualification is produced.
+bundle retains the review projection and ABI23 native evidence for a replay of
+that verification from copied bytes. The separate operator-pin file is a review
+candidate; apps must obtain their trust anchors through an independent
+operator-controlled channel and must not load this output automatically. No
+monetary or hardware qualification is produced.
 """
 
 from __future__ import annotations
@@ -114,6 +116,16 @@ def verify_report(report: Any, args: argparse.Namespace) -> list[tuple[str, int]
         or len(signers) < threshold
     ):
         raise BundleError("release lacks a threshold of independent approvals")
+    if report.get("native_sdk") != "c-jni" or report.get("native_bridge_abi_version") != 23:
+        raise BundleError("Kagami report lacks the authenticated ABI23 c-jni loader")
+    digest_arg(report.get("native_artifact_sha256"), "native artifact SHA-256")
+    native_size = report.get("native_artifact_size")
+    if (
+        not isinstance(native_size, int)
+        or isinstance(native_size, bool)
+        or not 0 < native_size <= MAX_ARTIFACT_BYTES
+    ):
+        raise BundleError("native artifact byte length is invalid")
     rows = report.get("artifacts")
     if not isinstance(rows, list) or len(rows) != 50:
         raise BundleError("Kagami report lacks the exact 50 release artifacts")
@@ -136,6 +148,10 @@ def run_kagami(args: argparse.Namespace, bundle: Path | None = None) -> dict[str
 
     executable = read_control(args.kagami, "Kagami executable", args.kagami_sha256)
     root = bundle / "proof" if bundle is not None else None
+    native = root / "native" if root is not None else None
+    projection_path = native / "authority-review-projection.json" if native else args.authority_review_projection
+    native_manifest_path = native / "native-artifact-manifest.json" if native else args.native_artifact_manifest
+    native_artifact_path = native / "native-artifact.bin" if native else args.native_artifact
     argv = [
         "", "kagemusha", "authenticate-release-v1",
         "--manifest", str(root / "manifest.norito" if root else args.manifest),
@@ -144,11 +160,11 @@ def run_kagami(args: argparse.Namespace, bundle: Path | None = None) -> dict[str
         "--attestation", str(root / "release-attestation.norito" if root else args.attestation),
         "--recursive-profile", str(root / "recursive-profile.json" if root else args.recursive_profile),
         "--artifact-root", str(root / "artifacts" if root else args.artifact_root),
-        "--authority-review-projection", str(args.authority_review_projection),
+        "--authority-review-projection", str(projection_path),
         "--authority-review-projection-sha256", args.authority_review_projection_sha256,
-        "--native-artifact-manifest", str(args.native_artifact_manifest),
+        "--native-artifact-manifest", str(native_manifest_path),
         "--native-artifact-manifest-sha256", args.native_artifact_manifest_sha256,
-        "--native-artifact", str(args.native_artifact),
+        "--native-artifact", str(native_artifact_path),
     ]
     with tempfile.TemporaryDirectory(prefix="kagemusha-pinned-kagami-") as private_directory:
         private_executable = Path(private_directory).resolve() / "kagami"
@@ -250,24 +266,39 @@ def prepare(args: argparse.Namespace) -> None:
     }
     source_report = run_kagami(args)
     artifacts = verify_report(source_report, args)
+    native_controls = {
+        "authority-review-projection.json": read_control(
+            args.authority_review_projection,
+            "authority review projection",
+            args.authority_review_projection_sha256,
+        ),
+        "native-artifact-manifest.json": read_control(
+            args.native_artifact_manifest,
+            "native artifact manifest",
+            args.native_artifact_manifest_sha256,
+        ),
+    }
     args.output.mkdir(mode=0o700)
     try:
         proof = args.output / "proof"
         operator = args.output / "operator"
         artifact_output = proof / "artifacts"
+        native_output = proof / "native"
         proof.mkdir(mode=0o700)
         operator.mkdir(mode=0o700)
         artifact_output.mkdir(mode=0o700)
-        for name, payload in controls.items():
-            destination = proof / name
-            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                with os.fdopen(descriptor, "wb", closefd=False) as output:
-                    output.write(payload)
-                    output.flush()
-                    os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+        native_output.mkdir(mode=0o700)
+        for directory, files in ((proof, controls), (native_output, native_controls)):
+            for name, payload in files.items():
+                destination = directory / name
+                descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    with os.fdopen(descriptor, "wb", closefd=False) as output:
+                        output.write(payload)
+                        output.flush()
+                        os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
         authority = operator / "authority-policy.norito"
         descriptor = os.open(authority, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -279,6 +310,12 @@ def prepare(args: argparse.Namespace) -> None:
             os.close(descriptor)
         for digest, size in artifacts:
             copy_artifact(args.artifact_root / digest, artifact_output / digest, digest, size)
+        copy_artifact(
+            args.native_artifact,
+            native_output / "native-artifact.bin",
+            source_report["native_artifact_sha256"],
+            source_report["native_artifact_size"],
+        )
         copied_report = run_kagami(args, args.output)
         if copied_report != source_report:
             raise BundleError("copied release differs from authenticated source report")
@@ -297,6 +334,10 @@ def prepare(args: argparse.Namespace) -> None:
             "receipt_sha256": hashlib.sha256(controls["validation-receipt.norito"]).hexdigest(),
             "release_attestation_sha256": hashlib.sha256(controls["release-attestation.norito"]).hexdigest(),
             "recursive_profile_sha256": hashlib.sha256(controls["recursive-profile.json"]).hexdigest(),
+            "authority_review_projection_sha256": args.authority_review_projection_sha256,
+            "native_artifact_manifest_sha256": args.native_artifact_manifest_sha256,
+            "native_artifact_sha256": copied_report["native_artifact_sha256"],
+            "native_artifact_size": copied_report["native_artifact_size"],
             "artifact_set_digest": copied_report["artifact_set_digest"],
             "artifact_count": len(artifacts),
             "hardware_qualified": False,

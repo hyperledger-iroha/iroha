@@ -1793,6 +1793,7 @@ fn configured_two_lane_merge_state_with_participant_dataspace(
     let kura = Arc::clone(&state.kura);
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    seed_committee_consensus_keys_with_pops(&state, &validator_keypairs);
     install_lane_manifest_registry(
         &state,
         &[

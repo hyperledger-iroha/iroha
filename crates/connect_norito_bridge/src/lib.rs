@@ -1384,7 +1384,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_contract_vector_v1(
     0
 }
 
-/// Copy the exact eleven-word KAGEMUSHA Core coordinator contract.
+/// Copy the exact twelve-word KAGEMUSHA Core coordinator contract.
 ///
 /// Success returns the written word count, not a generic zero status. The
 /// vector is an ABI compatibility probe and grants no monetary authority.
@@ -1512,6 +1512,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
             backend.invoke_initial_enrollment(handle, &request_frame)
+        } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
+            backend.acknowledge_committed_app_attest(handle, &request_frame)
         } else {
             backend.invoke(handle, method, &request_frame)
         }

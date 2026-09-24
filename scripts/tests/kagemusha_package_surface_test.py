@@ -50,8 +50,27 @@ def coordinator_method_inventory(source: str, language: str) -> list[tuple[str, 
 class KagemushaPackageSurfaceTests(unittest.TestCase):
     """Pin the unversioned product facade without removing V1 wire types."""
 
+    def test_app_attest_commit_acknowledgment_has_no_public_transport_injection(self) -> None:
+        """Only the native coordinator handle may authorize journal advancement."""
+        swift = ROOT / "IrohaSwift/Sources/IrohaSwift"
+        evidence = (swift / "KagemushaAppAttestEvidenceV1.swift").read_text(encoding="utf-8")
+        bridge = (swift / "KagemushaCoreCoordinatorBridgeV1.swift").read_text(encoding="utf-8")
+        adapter = (swift / "KagemushaNativeCoreCoordinatorAdapterV1.swift").read_text(encoding="utf-8")
+        self.assertRegex(
+            evidence,
+            r"public func acknowledgeCommittedTransition\([\s\S]*?"
+            r"coordinator: KagemushaNativeCoreCoordinatorAdapterV1\s*\)",
+        )
+        self.assertIn("try coordinator.acknowledgeCommittedAppAttest(", evidence)
+        self.assertNotIn("KagemushaAppAttestCommitAcknowledgingV1", bridge + adapter + evidence)
+        self.assertNotIn("acknowledgeCommittedAppAttest(requestFields:", adapter)
+        self.assertRegex(adapter, r"public final class KagemushaNativeCoreCoordinatorAdapterV1")
+        self.assertIn("public static func open(storagePath:", adapter)
+        self.assertNotRegex(adapter, r"public (?:convenience )?init\(")
+        self.assertIn("try bridge.acknowledgeCommittedAppAttest(", adapter)
+
     def test_coordinator_methods_match_exact_c_rust_swift_kotlin_and_fixture_inventory(self) -> None:
-        # The probe's ten output words are independent of the eleven method codes.
+        # The probe's ten output words are independent of the thirteen method codes.
         # Preserve each language's exact public spelling, including Swift's ID.
         names = (
             ("RESERVE_OPERATION_ID", "ReserveOperationId", "reserveOperationID"),
@@ -65,6 +84,8 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             ("RECOVER_TERMINAL_ENVELOPE", "RecoverTerminalEnvelope", "recoverTerminalEnvelope"),
             ("RELEASE_OUTBOX", "ReleaseOutbox", "releaseOutbox"),
             ("BEGIN_OBSERVATION", "BeginObservation", "beginObservation"),
+            ("INITIAL_ENROLLMENT", "InitialEnrollment", "initialEnrollment"),
+            ("ACKNOWLEDGE_COMMITTED_APP_ATTEST", "AcknowledgeCommittedAppAttest", "acknowledgeCommittedAppAttest"),
         )
         contracts = {
             "c": "crates/connect_norito_bridge/include/connect_norito_bridge.h",
@@ -87,7 +108,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             int(line.split("\t")[1]) for line in fixture.read_text().splitlines()
             if line and not line.startswith("#")
         }
-        self.assertEqual(methods, set(range(1, 12)))
+        self.assertEqual(methods, set(range(1, 14)))
 
     def test_coordinator_frame_schema_matches_c_rust_swift_and_shared_fixtures(self) -> None:
         contracts = (
@@ -107,14 +128,14 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             if not line or line.startswith("#"):
                 continue
             name, method, request, response = line.split("\t")
-            self.assertIn(int(method), range(1, 12))
+            self.assertIn(int(method), range(1, 14))
             for direction, encoded in (("request", request), ("response", response)):
                 with self.subTest(name=name, direction=direction):
                     frame = bytes.fromhex(encoded)
                     self.assertEqual(frame[:8], b"IKGMCOR1")
                     self.assertEqual(int.from_bytes(frame[8:10], "little"), 2)
             rows += 1
-        self.assertGreaterEqual(rows, 11)
+        self.assertGreaterEqual(rows, 13)
 
     def test_superseded_facade_files_are_absent(self) -> None:
         pairs = (

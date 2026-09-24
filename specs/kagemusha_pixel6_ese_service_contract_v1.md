@@ -55,6 +55,30 @@ certificate bytes independently of the applet's status codes. The package must
 identify the device model, build fingerprint, SE firmware/applet versions,
 provisioning authority, and exact APK signing certificate used for ARA-M.
 
+`KagemushaOmapiDiscoveryDeviceTest` has a stock-phone diagnostic mode with no
+instrumentation arguments. It completes after bounded OMAPI discovery and may
+report `ONLINE_ONLY`; that is the expected result when the project applet or
+access rule has not been provisioned. To require the provisioned Pixel 6
+profile, run that test with these exact instrumentation arguments:
+
+| Argument | Required value |
+| --- | --- |
+| `kagemusha.requireProvisionedPixel6Ese` | `true` |
+| `kagemusha.pixel6EseReader` | The exact embedded reader name, such as `eSE1` |
+| `kagemusha.pixel6EseAid` | The 5–16-byte release-policy applet AID as ASCII hexadecimal |
+| `kagemusha.pixel6EseHardwarePolicyId` | The expected 32-byte hardware-policy ID as ASCII hexadecimal |
+| `kagemusha.pixel6EseQualificationReportDigest` | The expected 32-byte qualification-report digest as ASCII hexadecimal |
+
+The gate fails on non-Google/oriole hardware, a malformed or missing pin, a
+removable or different reader, denied or absent AID, incomplete ABI-23
+capabilities, or a policy/report digest mismatch. The exact reader and AID are
+passed to OMAPI discovery; `AVAILABLE` is returned only after the full
+capability frame is structurally admitted. Pin values must come from the
+approved provisioning record, not from values observed in an untrusted
+discovery run. This gate checks access and capability admission only; the
+operation-5/7/8 physical no-fork and attestation evidence above remain required
+before monetary qualification.
+
 `KagemushaProvisionedEseTransportContractV1Test` exercises the loss/recovery
 APDU seam against a deterministic test-only model. Its synthetic payloads and
 authenticator are deliberately not valid monetary material; passing it does

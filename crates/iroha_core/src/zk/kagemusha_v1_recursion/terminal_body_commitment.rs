@@ -18,7 +18,7 @@ use super::{
 };
 use crate::zk::pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1};
 
-const TERMINAL_BODY_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:hardware-terminal-body";
+pub(super) const TERMINAL_BODY_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:hardware-terminal-body";
 
 /// Assigned body fields. The State and Guard pairs are equality-constrained here.
 ///
@@ -26,7 +26,7 @@ const TERMINAL_BODY_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:hardware-terminal-bo
 /// `private_journal_commitment`, and `private_recovery_commitment` still require
 /// independently authenticated source cells before this hash can authorize money.
 pub(super) struct KagemushaAssignedTerminalBodyFieldsV1<F: KagemushaPoseidonFieldV1> {
-    /// Candidate digest from the authenticated 87-cell recursive State semantic prefix.
+    /// Candidate digest from the authenticated 93-cell recursive State semantic prefix.
     pub candidate_envelope_digest: [PastaSha256ByteV1<F>; 32],
     /// Released lifecycle digest in the State relation.
     pub state_lifecycle_binding_digest: [AssignedValue<F>; 2],

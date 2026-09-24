@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Closed native coordinator methods; schema 2 is the sole V1 protocol frame.
@@ -7,6 +8,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case acceptInstalledTerminal, recoverSender, recoverTerminalEnvelope, releaseOutbox
   case beginObservation
   case initialEnrollment
+  case acknowledgeCommittedAppAttest
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -159,6 +161,15 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       default:
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
       }
+    case .acknowledgeCommittedAppAttest:
+      try count(fields, 7); try digest(fields, 0)
+      let keyID = try field(fields, 1)
+      try require((1...512).contains(keyID.count) && !keyID.contains(0)
+        && String(data: keyID, encoding: .utf8) != nil, "invalid App Attest key ID")
+      _ = try KagemushaAppAttestTransitionBindingV1(coreSelectionSigningBytes: field(fields, 2))
+      try bounded(fields, 3, 8 * 1024)
+      try require(number(fields, 4) != UInt32.max, "App Attest counter exhausted")
+      try digest(fields, 5); try digest(fields, 6)
     }
   }
 
@@ -203,6 +214,16 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       default:
         throw KagemushaCoreCoordinatorErrorV1.invalidFrame("unknown enrollment phase")
       }
+    case .acknowledgeCommittedAppAttest:
+      try count(response, 7)
+      try equal(response, 0, request, 0)
+      for index in 1...3 {
+        try require(response[index] == Data(SHA256.hash(data: request[index])),
+          "App Attest acknowledgment substituted original bytes")
+      }
+      try require(number(response, 4) == number(request, 4) + 1,
+        "App Attest acknowledgment skipped the committed counter")
+      try equal(response, 5, request, 5); try equal(response, 6, request, 6)
     }
   }
 

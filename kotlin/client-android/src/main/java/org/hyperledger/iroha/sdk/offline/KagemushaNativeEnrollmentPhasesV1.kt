@@ -230,10 +230,12 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         }
         val issued = ByteBuffer.wrap(bytes, 1, 8).order(ByteOrder.LITTLE_ENDIAN).long
         val expiry = ByteBuffer.wrap(bytes, 9, 8).order(ByteOrder.LITTLE_ENDIAN).long
-        require(issued > 0 && issued < expiry && expiry - issued <= 120_000 && expiry == expiresAtMs &&
+        // KeyMint selects its attested key after this issuer challenge; the signed key ID is zero.
+        require(issued > 0 && issued < expiry && expiry - issued == 120_000L && expiry == expiresAtMs &&
             bytes.copyOfRange(17, 49).contentEquals(selection.clientNonce()) &&
             bytes.copyOfRange(81, 113).contentEquals(selection.releaseId()) &&
             bytes.copyOfRange(113, 145).contentEquals(selection.profileId()) &&
+            bytes.copyOfRange(145, 177).all { it == 0.toByte() } &&
             bytes.copyOfRange(177, 209).contentEquals(selection.laneId()) &&
             bytes.copyOfRange(49, 81).any { it != 0.toByte() } &&
             !bytes.copyOfRange(49, 81).contentEquals(selection.clientNonce()) &&

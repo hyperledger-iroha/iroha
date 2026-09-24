@@ -10847,6 +10847,7 @@ fn seed_autoscale_transport_peers_for_test(state: &State, peer_count: usize) -> 
 }
 fn seed_governed_autoscale_committee_for_test(state: &State, peer_count: usize) -> Vec<KeyPair> {
     let keypairs = seed_autoscale_transport_peers_for_test(state, peer_count);
+    seed_committee_consensus_keys_with_pops(state, &keypairs);
     let nexus = state.nexus_snapshot();
     install_lane_manifest_registry(
         state,

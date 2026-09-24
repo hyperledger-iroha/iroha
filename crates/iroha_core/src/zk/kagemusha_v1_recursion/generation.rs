@@ -258,7 +258,7 @@ use super::{
         verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding,
         verify_eq_succinct_protocol, verify_eq_succinct_protocol_with_transcript_binding,
     },
-    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
+    state_relation,
     transport_decider::{
         KagemushaTransportDeciderCapacityProfileV1, KagemushaTransportDeciderEpCircuitV1,
         KagemushaTransportDeciderEqCircuitV1, KagemushaTransportDeciderParityWitnessV1,
@@ -841,6 +841,8 @@ pub struct KagemushaTerminalAuthorizationTerminalGenerationPublicV1 {
     pub amount: u128,
     /// Send recipient/credit binding or redemption commitment.
     pub terminal_output_binding: [u8; 32],
+    /// Zero for send; exact release-authenticated artifact manifest for redemption.
+    pub artifact_manifest_digest: [u8; 32],
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -863,6 +865,7 @@ impl KagemushaTerminalAuthorizationTerminalGenerationPublicV1 {
             self.ciphertext_commitment,
             self.amount,
             self.terminal_output_binding,
+            self.artifact_manifest_digest,
             eq_deferred_audit,
             ep_deferred_audit,
             eq_protocol_digest,
@@ -945,6 +948,11 @@ pub struct KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     pub terminal_payload_digest: [u8; 32],
     /// Exact request and output openings; present only for SendSplit.
     pub send: Option<KagemushaTerminalSendGenerationWitnessV1>,
+    /// Exact sealed bytes from the prepared SendSplit candidate, ordered as transition inputs
+    /// then recovery seeds. The terminal circuit must SHA-open both against its verified State
+    /// candidate before these host-supplied bytes gain proof authority.
+    /// TODO: consume this witness in the qualified terminal typed SHA claim.
+    pub send_sealed_streams: Option<[Vec<u8>; 2]>,
     /// Consumed rollback-resistant journal revision.
     pub journal_revision_before: u128,
     /// Exact-next rollback-resistant journal revision.
@@ -974,6 +982,7 @@ impl KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
             send: self
                 .send
                 .map(KagemushaTerminalSendGenerationWitnessV1::into_internal),
+            send_sealed_streams: self.send_sealed_streams,
             journal_revision_before: self.journal_revision_before,
             journal_revision_after: self.journal_revision_after,
             authorization_counter_before: self.authorization_counter_before,
@@ -1212,9 +1221,9 @@ pub struct KagemushaLoadedEpTerminalAuthorizationArtifactsV1 {
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGeneratedRedemptionProofV1 {
-    /// Exact Eq public column (81 field elements).
+    /// Exact Eq public column (83 field elements).
     pub eq_public_instances: Vec<Fp>,
-    /// Exact Ep public column (81 field elements).
+    /// Exact Ep public column (83 field elements).
     pub ep_public_instances: Vec<Fq>,
     /// Final redemption proof.
     pub proof: KagemushaRedemptionProofV1,
@@ -1231,9 +1240,9 @@ pub struct KagemushaGeneratedRedemptionProofV1 {
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGeneratedTerminalAuthorizationProofV1 {
-    /// Exact Eq public column (81 field elements).
+    /// Exact Eq public column (83 field elements).
     pub eq_public_instances: Vec<Fp>,
-    /// Exact Ep public column (81 field elements).
+    /// Exact Ep public column (83 field elements).
     pub ep_public_instances: Vec<Fq>,
     /// Internal Eq terminal-authorization proof.
     pub eq_proof: Vec<u8>,
@@ -1482,9 +1491,9 @@ pub struct KagemushaLoadedEpCommitWrapperArtifactsV1 {
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGeneratedCommitWrapperProofV1 {
-    /// Exact Eq public column (81 field elements).
+    /// Exact Eq public column (83 field elements).
     pub eq_public_instances: Vec<Fp>,
-    /// Exact Ep public column (81 field elements).
+    /// Exact Ep public column (83 field elements).
     pub ep_public_instances: Vec<Fq>,
     /// Eq current opening claim extracted for the next history fold.
     pub eq_current_accumulator: KagemushaEqAccumulatorV1,
@@ -1501,9 +1510,9 @@ pub struct KagemushaGeneratedCommitWrapperProofV1 {
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGeneratedPaymentProofV1 {
-    /// Exact Eq public column (81 field elements).
+    /// Exact Eq public column (83 field elements).
     pub eq_public_instances: Vec<Fp>,
-    /// Exact Ep public column (81 field elements).
+    /// Exact Ep public column (83 field elements).
     pub ep_public_instances: Vec<Fq>,
     /// Final post-commit payment proof.
     pub proof: KagemushaPaymentProofV1,
@@ -7141,7 +7150,7 @@ where
 /// Produce the internal candidate-plus-certificate proof after the hardware terminal commit.
 ///
 /// This non-Norito carrier is recursively consumed by CommitWrapper; it is never transported.
-/// Deferred audits are derived and rebound into exact 81-instance columns before proving.
+/// Deferred audits are derived and rebound into exact 83-instance columns before proving.
 /// The original operation's hardware-unsealed secret seed is mandatory after a crash; all
 /// candidate, Guard, and history witnesses must be retained or deterministically reconstructed.
 ///
@@ -7185,6 +7194,7 @@ pub fn prove_kagemusha_terminal_authorization_v1(
     validate_terminal_authorization_profile(KagemushaPastaParityV1::Ep, &ep.circuit_params)?;
     if eq.release_id != ep.release_id
         || eq.profile_digest != ep.profile_digest
+        || eq.artifact_manifest_digest == [0; 32]
         || eq.artifact_manifest_digest != ep.artifact_manifest_digest
         || eq.suite_id != ep.suite_id
         || eq.vk_digest != ep.vk_digest
@@ -7193,6 +7203,14 @@ pub fn prove_kagemusha_terminal_authorization_v1(
         || generation_public.lifecycle.release_id != eq.release_id
         || generation_public.lifecycle.suite_id != eq.suite_id
         || generation_public.lifecycle.vk_digest != eq.vk_digest
+        || generation_public.artifact_manifest_digest
+            != if KagemushaOperationV1::from(generation_public.lifecycle.operation_kind)
+                == KagemushaOperationV1::RedeemSplit
+            {
+                eq.artifact_manifest_digest
+            } else {
+                [0; 32]
+            }
         || !eq
             .enabled_hardware_profiles
             .iter()
@@ -7348,7 +7366,8 @@ pub fn prove_kagemusha_terminal_authorization_v1(
 
 /// Produce the sole transported CommitWrapper pair from the genuine post-commit inner proof.
 ///
-/// Its exact 81-cell projection preserves the body, candidate, certificate, and full lifecycle.
+/// Its exact 83-cell projection preserves the body, candidate, certificate, authenticated
+/// artifact manifest, and full lifecycle.
 /// Internal TerminalAuthorization and aggregate-state keys cannot be substituted.
 ///
 /// # Errors
@@ -7367,6 +7386,7 @@ pub fn prove_kagemusha_commit_wrapper_v1(
     validate_terminal_authorization_profile(KagemushaPastaParityV1::Ep, &ep.circuit_params)?;
     if eq.release_id != ep.release_id
         || eq.profile_digest != ep.profile_digest
+        || eq.artifact_manifest_digest == [0; 32]
         || eq.artifact_manifest_digest != ep.artifact_manifest_digest
         || eq.suite_id != ep.suite_id
         || eq.vk_digest != ep.vk_digest
@@ -7375,6 +7395,14 @@ pub fn prove_kagemusha_commit_wrapper_v1(
         || generation_public.lifecycle.release_id != eq.release_id
         || generation_public.lifecycle.suite_id != eq.suite_id
         || generation_public.lifecycle.vk_digest != eq.vk_digest
+        || generation_public.artifact_manifest_digest
+            != if KagemushaOperationV1::from(generation_public.lifecycle.operation_kind)
+                == KagemushaOperationV1::RedeemSplit
+            {
+                eq.artifact_manifest_digest
+            } else {
+                [0; 32]
+            }
         || !eq
             .enabled_hardware_profiles
             .iter()
@@ -10627,7 +10655,8 @@ fn validate_transport_proof_profile(
 
 #[cfg(feature = "zk-halo2-ipa")]
 const fn recursive_public_instance_count() -> usize {
-    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
+    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
+        + super::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16
 }
 
 fn ensure_embedded_vk<C>(
@@ -11066,10 +11095,10 @@ mod tests {
         macro_rules! check {
             ($curve:ty, $field:ty, $parity:expr) => {{
                 // Compiling an ordinary IPA protocol commits every public instance using a
-                // domain basis point. The recursive column has 87 semantic plus 34 history
+                // domain basis point. The recursive column has 93 semantic plus 34 history
                 // cells, so the unrelated k=6 recovery fixture's 64-point basis is too short.
                 const TEST_K: u32 = 8;
-                assert_eq!(recursive_public_instance_count(), 121);
+                assert_eq!(recursive_public_instance_count(), 127);
                 assert!(recursive_public_instance_count() <= (1_usize << TEST_K));
                 let parameters = ParamsIPA::<$curve>::new(TEST_K);
                 let circuit =
@@ -11771,6 +11800,7 @@ mod tests {
             ciphertext_commitment: if send { [15; 32] } else { [0; 32] },
             amount: 17,
             terminal_output_binding: [16; 32],
+            artifact_manifest_digest: if send { [0; 32] } else { [19; 32] },
             eq_deferred_audit: [17; 32],
             ep_deferred_audit: [18; 32],
             eq_protocol_digest: encode(Fp::from(101)),
@@ -11800,7 +11830,7 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn shape_only_commit_wrapper_conversion_preserves_exact_bindings_and_hard_size() {
-        assert_eq!(TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, 81);
+        assert_eq!(TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, 83);
         assert_eq!(KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, 2_495);
         assert_eq!(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, 6_528);
         let send = shape_only_terminal_material(true);
@@ -11815,12 +11845,18 @@ mod tests {
             payment.proof.commit_certificate_digest,
             expected.commit_certificate_digest
         );
-        assert_eq!(payment.eq_public_instances.len(), 81);
-        assert_eq!(payment.ep_public_instances.len(), 81);
+        assert_eq!(payment.eq_public_instances.len(), 83);
+        assert_eq!(payment.ep_public_instances.len(), 83);
+        assert_eq!(expected.artifact_manifest_digest, [0; 32]);
         let payment_bytes = norito::encode_canonical(&payment.proof).expect("payment encoding");
         assert!(payment_bytes.len() <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
 
-        let redemption = shape_only_terminal_material(false)
+        let redemption_material = shape_only_terminal_material(false);
+        assert_eq!(
+            redemption_material.public.artifact_manifest_digest,
+            [19; 32]
+        );
+        let redemption = redemption_material
             .into_redemption()
             .expect("shape-only redemption conversion");
         assert_eq!(redemption.proof.semantic_digest, expected.semantic_digest);
@@ -11847,7 +11883,7 @@ mod tests {
                 .is_err()
         );
         assert!(shape_only_terminal_material(false).into_payment().is_err());
-        for field in 0..8 {
+        for field in 0..9 {
             let mut material = shape_only_terminal_material(true);
             match field {
                 0 => material.public.semantic_digest[0] ^= 1,
@@ -11858,6 +11894,7 @@ mod tests {
                 5 => material.ep_public_instances[0] += Fq::from(1),
                 6 => material.eq_proof.push(0),
                 7 => material.ep_proof.clear(),
+                8 => material.public.artifact_manifest_digest = [19; 32],
                 _ => unreachable!(),
             }
             assert!(material.into_payment().is_err(), "mutation {field}");
@@ -11893,8 +11930,8 @@ mod tests {
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn recursive_public_shape_and_transport_bound_are_fixed() {
-        assert_eq!(super::super::state_relation::PUBLIC_INSTANCE_COUNT, 85);
-        assert_eq!(recursive_public_instance_count(), 121);
+        assert_eq!(state_relation::PUBLIC_INSTANCE_COUNT, 85);
+        assert_eq!(recursive_public_instance_count(), 127);
         assert!(
             validate_recursive_proof_length(
                 KagemushaPastaParityV1::Eq,

@@ -552,7 +552,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     func expect(_ method: KagemushaCoreCoordinatorMethodV1, _ request: [Data]?, _ response: [Data]) {
       self.method = method; expected = request; self.response = response
     }
-    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 12] }
+    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13] }
     func open(storagePath: Data) -> UInt64 { 1 }
     func close(handle: UInt64) { XCTAssertEqual(handle, 1); closeCalls += 1 }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {

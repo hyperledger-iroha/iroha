@@ -8,7 +8,8 @@ import Foundation
 /// Canonical projections are selectors for the native durable journal, never recovered
 /// capabilities. Opening this adapter does not qualify a hardware provider or supply a
 /// software monetary backend. Missing native authority continues to fail closed.
-public final class KagemushaNativeCoreCoordinatorAdapterV1: KagemushaNativeCoreCoordinatorV1 {
+public final class KagemushaNativeCoreCoordinatorAdapterV1:
+  KagemushaNativeCoreCoordinatorV1, @unchecked Sendable {
   private let bridge: KagemushaCoreCoordinatorBridgeV1
 
   init(bridge: KagemushaCoreCoordinatorBridgeV1) { self.bridge = bridge }
@@ -20,6 +21,18 @@ public final class KagemushaNativeCoreCoordinatorAdapterV1: KagemushaNativeCoreC
 
   /// Revoke this wallet's native handle on logout or account switch.
   public func close() throws { try bridge.close() }
+
+  /// Ask the installed native owner to authenticate the original committed App Attest assertion.
+  public func acknowledgeCommittedAppAttest(
+    operationID: Data, keyID: String, binding: KagemushaAppAttestTransitionBindingV1,
+    rawAssertion: Data, previousCounter: UInt32,
+    terminalCertificateDigest: Data, installedEnvelopeDigest: Data
+  ) throws -> KagemushaAppAttestCoreCommitAcknowledgmentV1 {
+    try bridge.acknowledgeCommittedAppAttest(
+      operationID: operationID, keyID: keyID, binding: binding, rawAssertion: rawAssertion,
+      previousCounter: previousCounter, terminalCertificateDigest: terminalCertificateDigest,
+      installedEnvelopeDigest: installedEnvelopeDigest)
+  }
 
   public func reserveOperationID(operation: UInt8, operationID: Data, publicBinding: Data) throws -> Data {
     try bridge.invoke(.reserveOperationID, fields: [u32(UInt32(operation)), operationID, publicBinding])[0]

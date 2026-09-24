@@ -906,6 +906,40 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         reserved_inbox_bytes,
     )
     .expect("snapshot-test mint reservation");
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            Some(&mint_authorization),
+        ),
+        Ok(()),
+    );
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            snapshot_digest(b"different-top-up-operation", 12),
+            Some(&mint_authorization),
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
+    let mut substituted_authorization = mint_authorization.clone();
+    substituted_authorization.proof.eq_proof[0] ^= 1;
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            Some(&substituted_authorization),
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
+    assert_eq!(
+        super::mint_inbox::require_exact_top_up_reservation_v1(
+            &mint_reservation,
+            mint_reservation.operation_id(),
+            None,
+        ),
+        Err(KagemushaStateErrorV1::MintFinalityMismatch),
+    );
     let reservation_statement = machine
         .preview_mint_reservation(&mint_reservation)
         .expect("preview old-epoch mint reservation");
@@ -1401,6 +1435,21 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         .expect("derive one ordinary full-balance send");
     assert_eq!(full_send.private_state_link().0.balance, 1_000);
     assert_eq!(full_send.private_state_link().1.balance, 0);
+    full_send
+        .validate_recovered()
+        .expect("send preparation ID matches its exact sealed streams");
+    let mut changed_send = full_send.clone();
+    changed_send.sealed_transition_inputs[0] ^= 1;
+    assert_eq!(
+        changed_send.validate_recovered(),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity)
+    );
+    let mut changed_send_state = full_send.clone();
+    changed_send_state.successor_state.balance = 1;
+    assert_eq!(
+        changed_send_state.validate_recovered(),
+        Err(KagemushaStateErrorV1::StateCommitmentMismatch)
+    );
 
     let restored = KagemushaStateMachineV1::restore(
         decoded,
@@ -1441,6 +1490,21 @@ fn mock_recursive_verifier_one_thousand_credits_form_one_sendable_redeemable_agg
         .expect("derive a partial aggregate redemption");
     assert_eq!(partial_redemption.private_state_link().0.balance, 1_000);
     assert_eq!(partial_redemption.private_state_link().1.balance, 600);
+    partial_redemption
+        .validate_recovered()
+        .expect("redemption preparation ID matches its exact sealed streams");
+    let mut changed_redemption = partial_redemption.clone();
+    changed_redemption.sealed_recovery_seeds[0] ^= 1;
+    assert_eq!(
+        changed_redemption.validate_recovered(),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity)
+    );
+    let mut changed_redemption_state = partial_redemption.clone();
+    changed_redemption_state.predecessor_state.balance = 999;
+    assert_eq!(
+        changed_redemption_state.validate_recovered(),
+        Err(KagemushaStateErrorV1::StateCommitmentMismatch)
+    );
     let full_redemption = restored
         .prepare_redeem_split(redeem_preparation(1_000, 16))
         .expect("derive a full aggregate redemption");

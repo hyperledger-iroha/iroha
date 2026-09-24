@@ -176,6 +176,8 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_core_coordinator_contract_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
+    "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",

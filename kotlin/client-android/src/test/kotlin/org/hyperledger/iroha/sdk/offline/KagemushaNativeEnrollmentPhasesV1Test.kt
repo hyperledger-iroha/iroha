@@ -44,7 +44,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertFailsWith<IllegalStateException> {
             phases.acceptQualifiedChallenge(selected, preparation(selected), byteArrayOf(3), byteArrayOf(9),
                 byteArrayOf(5), ByteArray(32) { 7 }, ByteArray(32) { 8 }, ByteArray(32) { 7 },
-                byteArrayOf(6), 120_000)
+                byteArrayOf(6), 121_000)
         }
         assertEquals(calls, endpoint.calls)
 
@@ -69,6 +69,29 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         assertNull(phases.recoverExactSelection(account))
         assertFailsWith<IllegalStateException> { phases.begin(account) }
         assertEquals(1, endpoint.calls)
+    }
+
+    @Test
+    fun `android preparation shape rejects wrong lifetime and preselected key before dispatch`() {
+        val endpoint = Endpoint()
+        val phases = KagemushaNativeCoreCoordinatorAdapterV1.openEndpoint("/durable/preparation", endpoint)
+            .initialEnrollment()
+        val selected = phases.begin(account)
+        val shortLived = preparation(selected).also { putU64(it, 1, 1_001) }
+        assertFailsWith<IllegalArgumentException> {
+            phases.acceptQualifiedChallenge(selected, shortLived, byteArrayOf(3), byteArrayOf(4),
+                byteArrayOf(5), ByteArray(32) { 7 }, ByteArray(32) { 8 }, ByteArray(32) { 7 },
+                byteArrayOf(6), 121_000)
+        }
+        val preselectedKey = preparation(selected).also { it[145] = 1 }
+        assertFailsWith<IllegalArgumentException> {
+            phases.acceptQualifiedChallenge(selected, preselectedKey, byteArrayOf(3), byteArrayOf(4),
+                byteArrayOf(5), ByteArray(32) { 7 }, ByteArray(32) { 8 }, ByteArray(32) { 7 },
+                byteArrayOf(6), 121_000)
+        }
+        assertEquals(1, endpoint.calls)
+        accept(phases, selected)
+        assertEquals(2, endpoint.calls)
     }
 
     @Test
@@ -135,13 +158,13 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         selection: KagemushaNativeEnrollmentPhasesV1.Selection): KagemushaNativeEnrollmentPhasesV1.AcceptedChallenge =
         phases.acceptQualifiedChallenge(selection, preparation(selection), byteArrayOf(3), byteArrayOf(4),
             byteArrayOf(5), ByteArray(32) { 7 }, ByteArray(32) { 8 }, ByteArray(32) { 7 },
-            byteArrayOf(6), 120_000)
+            byteArrayOf(6), 121_000)
 
     private fun preparation(selection: KagemushaNativeEnrollmentPhasesV1.Selection): ByteArray =
         ByteArray(273).also { bytes ->
             bytes[0] = 1
             putU64(bytes, 1, 1_000)
-            putU64(bytes, 9, 120_000)
+            putU64(bytes, 9, 121_000)
             selection.clientNonce().copyInto(bytes, 17)
             ByteArray(32) { 2 }.copyInto(bytes, 49)
             selection.releaseId().copyInto(bytes, 81)
@@ -157,7 +180,7 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         var loseProof = false
         var wrongProofChallenge = false
         private var challengeId = ByteArray(32) { 7 }
-        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 12)
+        override fun contract() = intArrayOf(2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13)
         override fun open(storagePath: String) = 31L
         override fun close(handle: Long) = 0
         override fun invoke(handle: Long, method: Int, fields: Array<ByteArray>): Array<ByteArray>? {

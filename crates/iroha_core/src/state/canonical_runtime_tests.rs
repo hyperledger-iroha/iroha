@@ -11,6 +11,96 @@ fn state() -> State {
     )
 }
 
+#[test]
+fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
+    let manifest_dir = tempfile::tempdir().expect("governed lane manifest directory");
+    std::fs::write(
+        manifest_dir.path().join("default.manifest.json"),
+        r#"{"lane":"default","governance":"parliament","version":1}"#,
+    )
+    .expect("write governed primary lane manifest");
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    let mut lane = nexus.lane_catalog.lanes()[0].clone();
+    lane.governance = Some("parliament".to_owned());
+    let catalog = iroha_data_model::nexus::LaneCatalog::new(
+        std::num::NonZeroU32::new(1).unwrap(),
+        vec![lane],
+    )
+    .expect("one governed primary lane");
+    nexus.lane_catalog = catalog.clone();
+    nexus.configured_lane_catalog = catalog.clone();
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+    nexus.governance.modules.insert(
+        "parliament".to_owned(),
+        iroha_config::parameters::actual::GovernanceModule::default(),
+    );
+    nexus.registry.manifest_directory = Some(manifest_dir.path().to_path_buf());
+    let manifests = std::sync::Arc::new(
+        crate::governance::manifest::LaneManifestRegistry::from_config(
+            &catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ),
+    );
+    manifests
+        .validate_active_coverage_for_catalog(&catalog)
+        .expect("configured governance authenticates active manifest");
+    let kura_config = iroha_config::parameters::actual::Kura {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes:
+            iroha_config::parameters::defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: iroha_config::parameters::defaults::kura::MEMBERSHIP_STORAGE_POLICY,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity:
+            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: iroha_config::kura::FsyncMode::Batched,
+        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+    };
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &nexus.lane_config,
+        &catalog,
+    )
+    .expect("bind governed configured catalog before startup");
+    let mut live = State::new_for_testing(
+        World::default(),
+        std::sync::Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    live.install_lane_manifests(&manifests);
+    live.prepare_configured_primary_geometry_anchor(&catalog)
+        .expect("bind configured primary before replay");
+    live.restore_kura_lane_segments_before_startup_replay()
+        .expect("restore governed lane geometry");
+    live.set_nexus_from_config(nexus)
+        .expect("install governed local Nexus configuration");
+    assert_eq!(live.committed_height(), 0);
+
+    let captured = crate::snapshot::CapturedStateSnapshot::capture(&live)
+        .expect("capture exact pre-replay State");
+    let unseeded = super::deserialize::KuraSeed {
+        kura: std::sync::Arc::clone(&kura),
+        lane_manifests: live.lane_manifests.read().clone(),
+        query_handle: live.query_handle.clone(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_str_without_durable_recovery(captured.as_json());
+    assert!(unseeded.is_err(), "default Nexus loses the required module");
+    let isolated = super::isolated_state_for_replay_prevalidation(&live, &kura)
+        .expect("configured Nexus survives strict isolated replay construction");
+    assert_eq!(isolated.nexus_snapshot().governance.modules.len(), 1);
+    assert_eq!(isolated.committed_height(), 0);
+}
+
 fn header() -> BlockHeader {
     BlockHeader::new(std::num::NonZeroU64::MIN, None, None, 1, 0)
 }

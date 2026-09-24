@@ -300,6 +300,39 @@ fn exact_height_reached(
         .all(|status| status.blocks == expected && status.queue_size == 0))
 }
 
+fn exact_meshed_height_reached(
+    statuses: &[iroha_torii_shared::status::Status],
+    expected: u64,
+) -> Result<bool> {
+    Ok(exact_height_reached(statuses, expected)?
+        && statuses.iter().all(|status| status.peers == 3))
+}
+
+async fn wait_for_exact_meshed_height(
+    clients: &[iroha::client::Client],
+    expected: u64,
+    deadline: Instant,
+) -> Result<()> {
+    let mut last = Vec::new();
+    timeout_at(deadline, async {
+        loop {
+            let statuses = try_join_all(
+                clients.iter().map(|client| validator_status_until(client, deadline)),
+            ).await?;
+            last = statuses
+                .iter()
+                .map(|status| (status.blocks, status.queue_size, status.peers))
+                .collect::<Vec<_>>();
+            if exact_meshed_height_reached(&statuses, expected)? {
+                return Ok::<_, eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.wrap_err_with(|| format!(
+        "four validators did not form a drained full mesh at exact height {expected}; last (height, queue, connected peers) observations={last:?}"
+    ))?
+}
+
 async fn wait_for_exact_height(
     clients: &[iroha::client::Client],
     expected: u64,
@@ -1614,6 +1647,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         listeners_started(&mut peers, api, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
+        wait_for_exact_meshed_height(&clients, install_height, restart).await?;
         let mut doctor = command(&cli, directory);
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
         let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
@@ -1694,6 +1728,28 @@ fn production_beacon_exact_height_wait_preserves_retained_tip() -> Result<()> {
     assert!(exact_height_reached(&statuses, 7).is_err());
     assert!(exact_height_reached(&statuses[..3], 7).is_err());
     assert!(exact_height_reached(&statuses, 0).is_err());
+    Ok(())
+}
+
+#[test]
+fn production_beacon_paid_deployment_waits_for_full_mesh_at_exact_height() -> Result<()> {
+    use iroha_torii_shared::status::Status;
+    let mut statuses: [Status; 4] = std::array::from_fn(|_| Status {
+        blocks: 8,
+        peers: 3,
+        ..Status::default()
+    });
+    assert!(exact_meshed_height_reached(&statuses, 8)?);
+    statuses[0].peers = 0;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[0].peers = 3;
+    statuses[1].queue_size = 1;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[1].queue_size = 0;
+    statuses[2].blocks = 7;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[2].blocks = 9;
+    assert!(exact_meshed_height_reached(&statuses, 8).is_err());
     Ok(())
 }
 

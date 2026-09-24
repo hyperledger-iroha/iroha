@@ -25,6 +25,20 @@ class KagemushaSecureElementApduV1Test {
     }
 
     @Test
+    fun `malformed capability reply poisons the selected channel`() {
+        val channel = ScriptedChannel(
+            response = ByteArray(116),
+            capabilities = ByteArray(95),
+        )
+        val endpoint = KagemushaSecureElementApduEndpointV1(channel)
+        assertFailsWith<IllegalArgumentException> { endpoint.capabilities() }
+        assertEquals(1, channel.closeCount)
+        val transmitted = channel.commands.size
+        assertFailsWith<IllegalStateException> { endpoint.capabilities() }
+        assertEquals(transmitted, channel.commands.size)
+    }
+
+    @Test
     fun `command and response are chunked deterministically and digest bound`() {
         val command = ByteArray(80 + 500) { (it * 17).toByte() }
         val response = ByteArray(116 + 509) { (it * 29).toByte() }
@@ -49,6 +63,25 @@ class KagemushaSecureElementApduV1Test {
             endpoint.execute(ByteArray(80) { 3 })
         }
         assertEquals(1, channel.abortCount)
+        assertEquals(1, channel.closeCount)
+        val transmitted = channel.commands.size
+        assertFailsWith<IllegalStateException> { endpoint.execute(ByteArray(80) { 3 }) }
+        assertEquals(transmitted, channel.commands.size)
+    }
+
+    @Test
+    fun `lost commit reply poisons channel before another command`() {
+        val channel = ScriptedChannel(response = ByteArray(116) { 7 })
+        channel.failCommitAfterReceipt = true
+        val endpoint = KagemushaSecureElementApduEndpointV1(channel)
+        assertFailsWith<IllegalStateException> {
+            endpoint.execute(ByteArray(80) { 3 })
+        }
+        assertEquals(1, channel.abortCount)
+        assertEquals(1, channel.closeCount)
+        val transmitted = channel.commands.size
+        assertFailsWith<IllegalStateException> { endpoint.execute(ByteArray(80) { 3 }) }
+        assertEquals(transmitted, channel.commands.size)
     }
 
     @Test
@@ -120,7 +153,9 @@ class KagemushaSecureElementApduV1Test {
         val readIndexes = mutableListOf<Int>()
         var receivedCommand = ByteArray(0)
         var corruptResponseDigest = false
+        var failCommitAfterReceipt = false
         var abortCount = 0
+        var closeCount = 0
         private var declaredLength = 0
         private var expectedCommandDigest = ByteArray(0)
 
@@ -146,6 +181,7 @@ class KagemushaSecureElementApduV1Test {
                 0x14 -> {
                     assertEquals(declaredLength, receivedCommand.size)
                     assertContentEquals(expectedCommandDigest, sha256(receivedCommand))
+                    if (failCommitAfterReceipt) throw IllegalStateException("commit reply lost")
                     val digest = sha256(response)
                     if (corruptResponseDigest) digest[0] = (digest[0].toInt() xor 1).toByte()
                     success(u32Le(response.size) + digest)
@@ -166,6 +202,10 @@ class KagemushaSecureElementApduV1Test {
                 }
                 else -> error("unexpected instruction %02x".format(instruction))
             }
+        }
+
+        override fun close() {
+            closeCount += 1
         }
 
         private fun index(command: ByteArray): Int =

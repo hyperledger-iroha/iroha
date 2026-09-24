@@ -19,14 +19,12 @@ fn autonomous_gas_budget_fixture() -> (State, Vec<KeyPair>, SignedBlock) {
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
     nexus.fees.per_gas_unit_fee = Quantity::zero();
-    let state = State::new_with_nexus_for_testing(
-        World::default(),
-        nexus,
-        LiveQueryStore::start_test(),
-    );
+    let state =
+        State::new_with_nexus_for_testing(World::default(), nexus, LiveQueryStore::start_test());
     let kura = Arc::clone(&state.kura);
     let (validator_ids, keys) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &keys);
+    seed_committee_consensus_keys_with_pops(&state, &keys);
     install_lane_manifest_registry(
         &state,
         &[
@@ -225,7 +223,8 @@ fn autonomous_merge_gas_priority_preserves_old_source_and_canonical_order_on_con
                 1,
                 empty_global_block_after(Some(&parent)).header(),
                 selected,
-            ).expect("fixture hash admission")
+            )
+            .expect("fixture hash admission")
             .expect("selected sources are restored to canonical execution order");
         assert_eq!(
             batch

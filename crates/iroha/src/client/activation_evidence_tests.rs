@@ -244,6 +244,8 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
     assert_eq!(snapshot.method, HttpMethod::GET);
     assert_eq!(snapshot.url.path(), "/v1/ledger/block/1");
     assert!(snapshot.url.query().is_none());
+    assert!(snapshot.body.is_empty());
+    super::tests::assert_canonical_account_signed_request(&client, &snapshot);
     assert_eq!(
         snapshot.max_response_bytes,
         AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
@@ -257,6 +259,67 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
         "GET must not carry Content-Type: {:?}",
         snapshot.headers
     );
+}
+
+#[test]
+fn canonical_executed_block_reader_retries_with_fresh_account_signature() {
+    let client = client_with_base_url(base_url());
+    let (height, block, committed) = canonical_executed_block_fixture();
+    let commitment = synthetic_executed_commitment(&block);
+    let wire = block.encode_wire().expect("canonical executed block wire");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&requests);
+    let result = with_mock_http(
+        move |request| {
+            let mut requests = observed.lock().expect("captured requests");
+            requests.push(request);
+            if requests.len() == 1 {
+                let mut response = empty_response(StatusCode::TOO_MANY_REQUESTS);
+                response
+                    .headers_mut()
+                    .insert("retry-after", "0".parse().unwrap());
+                Ok(response)
+            } else {
+                Ok(mk_response(
+                    StatusCode::OK,
+                    wire.clone(),
+                    Some(APPLICATION_NORITO),
+                ))
+            }
+        },
+        |transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(transport)
+                .with_request_deadline(std::time::Instant::now() + Duration::from_secs(5));
+            mark_data_model_compatible(&client);
+            client.get_canonical_executed_block_wire(height, &committed, &commitment)
+        },
+    );
+    assert_eq!(
+        result.expect("signed retry verifies canonical wire"),
+        block.encode_wire().unwrap()
+    );
+    let requests = requests.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        super::tests::assert_canonical_account_signed_request(&client, request);
+        assert_single_accept_header(request, APPLICATION_NORITO);
+        assert_eq!(
+            request.max_response_bytes,
+            AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
+        );
+    }
+    let nonce = |request: &RequestSnapshot| {
+        request
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(HEADER_NONCE))
+            .expect("canonical request nonce")
+            .1
+            .clone()
+    };
+    assert_ne!(nonce(&requests[0]), nonce(&requests[1]));
 }
 
 #[test]
@@ -1968,6 +2031,7 @@ fn activation_evidence_backpressure_preserves_challenge_and_response_bounds() {
                         "/v1/bridge/finality/2/attestation",
                         2048,
                         Some(challenge),
+                        ActivationEvidenceReadAuth::Public,
                     )
                     .expect("read-only retry");
                 assert_eq!(result.status(), StatusCode::CONFLICT);

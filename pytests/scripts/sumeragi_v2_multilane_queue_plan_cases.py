@@ -1098,6 +1098,7 @@ def queue_plan_publication_source_contract_errors(module, sources: dict[str, str
         "PublicationGuard",
         "PhysicalPublicationGuard",
         "PublicationMutex::wrap",
+        "PublicationMutex::wrap_read_only",
         "PublicationMutex::lock",
         "PublicationGuard<'_, T>::unlock_fair",
         "PhysicalPublicationGuard<'_, T>::drop",
@@ -1375,8 +1376,8 @@ def test_queue_plan_autonomous_only_rejects_binding_in_reexport_module(tmp_path:
 
 @pytest.mark.parametrize(("kind", "symbol", "old", "new"), [
     ("method", "PublicationMutex::lock", "self.wrap(self.inner.lock())", "self.inner.lock()"),
-    ("method", "PublicationMutex::wrap", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
-    ("method", "PublicationMutex::wrap", "guard: Some(guard),", "guard: None,"),
+    ("method", "PublicationMutex::wrap_read_only", "self.released.guard(PhysicalPublicationGuard {", "self.released.poisoning_guard(PhysicalPublicationGuard {"),
+    ("method", "PublicationMutex::wrap_read_only", "guard: Some(guard),", "guard: None,"),
     ("method", "PublicationGuard<'_, T>::unlock_fair", "self.inner.fair = true;", "self.inner.fair = false;"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "if self.fair {", "if !self.fair {"),
     ("method", "PhysicalPublicationGuard<'_, T>::drop", "parking_lot::MutexGuard::unlock_fair(guard);", "drop(guard);"),

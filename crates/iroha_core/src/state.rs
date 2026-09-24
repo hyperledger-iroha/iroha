@@ -63073,7 +63073,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
         #[cfg(feature = "telemetry")]
         telemetry: crate::telemetry::StateTelemetry::default(),
     }
-    .into_state_from_json_str_without_durable_recovery(captured.as_json())
+    .into_state_for_replay_prevalidation(captured.as_json(), state.nexus_snapshot())
     .map_err(|error| eyre!(error))
     .wrap_err("failed to deserialize State for atomic replay prevalidation")?;
     // A replay probe must not reconfigure process-global IVM cache/prover

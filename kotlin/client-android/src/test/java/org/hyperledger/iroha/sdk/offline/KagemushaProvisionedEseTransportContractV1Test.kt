@@ -27,7 +27,7 @@ class KagemushaProvisionedEseTransportContractV1Test {
         val firstId = ByteArray(32) { 0x41 }
         val secondId = ByteArray(32) { 0x42 }
         val model = AtomicSuccessorAppletModel(predecessor, firstId)
-        val endpoint = KagemushaSecureElementApduEndpointV1(model)
+        val endpoint = KagemushaSecureElementApduEndpointV1(model.openChannel())
         val codec = KagemushaDeviceLifecycleBridgeV1.Codec
 
         val firstPreparation = codec.encodeCommand(
@@ -71,8 +71,10 @@ class KagemushaProvisionedEseTransportContractV1Test {
             firstId,
             predecessor,
         )
+        assertFailsWith<IllegalStateException> { endpoint.execute(recovery) }
+        val recoveryEndpoint = KagemushaSecureElementApduEndpointV1(model.openChannel())
         val recovered = codec.decodeResponse(
-            endpoint.execute(recovery),
+            recoveryEndpoint.execute(recovery),
             Operation.RECOVER_TERMINAL_OUTCOME,
             firstId,
         )
@@ -80,7 +82,7 @@ class KagemushaProvisionedEseTransportContractV1Test {
         assertContentEquals(model.originalOutcome, recovered.payload())
 
         val retry = codec.decodeResponse(
-            endpoint.execute(commit),
+            recoveryEndpoint.execute(commit),
             Operation.COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL,
             firstId,
         )
@@ -94,7 +96,7 @@ class KagemushaProvisionedEseTransportContractV1Test {
             predecessor + byteArrayOf(4),
         )
         val changedResult = codec.decodeResponse(
-            endpoint.execute(changedCandidate),
+            recoveryEndpoint.execute(changedCandidate),
             Operation.COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL,
             firstId,
         )
@@ -103,7 +105,7 @@ class KagemushaProvisionedEseTransportContractV1Test {
         assertTrue(changedResult.authenticator().isEmpty())
 
         val refused = codec.decodeResponse(
-            endpoint.execute(competingPreparation),
+            recoveryEndpoint.execute(competingPreparation),
             Operation.PREPARE_EXACT_NEXT_TRANSITION,
             secondId,
         )
@@ -116,7 +118,7 @@ class KagemushaProvisionedEseTransportContractV1Test {
     private class AtomicSuccessorAppletModel(
         private val predecessor: ByteArray,
         private val firstId: ByteArray,
-    ) : KagemushaSecureElementApduEndpointV1.Channel {
+    ) {
         var originalOutcome = ByteArray(0)
             private set
         var dropNextCommitMetadata = false
@@ -133,7 +135,21 @@ class KagemushaProvisionedEseTransportContractV1Test {
         private var committed = false
         private var originalCommitDigest = ByteArray(0)
 
-        override fun transmit(command: ByteArray): ByteArray {
+        fun openChannel(): KagemushaSecureElementApduEndpointV1.Channel =
+            object : KagemushaSecureElementApduEndpointV1.Channel {
+                private var closed = false
+
+                override fun transmit(command: ByteArray): ByteArray {
+                    check(!closed) { "selected applet channel is closed" }
+                    return this@AtomicSuccessorAppletModel.transmit(command)
+                }
+
+                override fun close() {
+                    closed = true
+                }
+            }
+
+        private fun transmit(command: ByteArray): ByteArray {
             require(command.size >= 4 && command[0] == 0x80.toByte())
             return when (command[1].toInt() and 0xff) {
                 0x12 -> {
