@@ -57,6 +57,7 @@ from iroha_torii_client.canonical_transport import (
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
+    ElectionTally,
     GovernanceProposalDraft,
     GovernanceTally,
     MultisigResponse,

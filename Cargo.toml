@@ -187,6 +187,8 @@ concread = { version = "=0.5.10", default-features = false }
 [patch.crates-io]
 # Allocation custody must follow actual epoch reclamation in the locked EBR owner.
 concread = { path = "vendor/concread" }
+# Quantity admission requires exact fallible native-digit handoff without repacking.
+num-bigint = { path = "vendor/num-bigint-0.4.6" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }

@@ -6,6 +6,9 @@ Starting checkout: `f11eed2d6c7113163295e65703d9c206a5ce07d9` (`optimizations`).
 Required working directory: `/Users/takemiyamakoto/devstuff/iroha`.
 Required branch: `optimizations`. Perform all further implementation and
 validation here; do not create or use another checkout, worktree or branch.
+The [September 23 merge transition](../docs/history/2026-09-23/optimizations-merge-transition.md)
+records the concurrent source reconciliation; its unsigned merge commit is not
+a frozen release candidate.
 The [integration checkpoint](../docs/history/2026-09-20/first-release-integration.md)
 records preservation, implementation boundaries and scoped validation failures.
 The [September 21 runtime checkpoint](../docs/history/2026-09-21/runtime-and-governance-integration.md)
@@ -19,6 +22,10 @@ The [qPCS geometry review](../docs/history/2026-09-23/mkhe-native40-qpcs-geometr
 reconciles the repeated-payload diagnostic with the larger full-tree charge and
 records a nonconforming research hypothesis, without work or soundness
 qualification under the fixed six-lane contract.
+The [indexed-leaf and node work floor](../docs/history/2026-09-23/mkhe-qpcs-index-node-six-lane-floor.md)
+shows that the present qPCS tree exceeds the 128-billion-work limit even with
+payload hashing excluded; it is a lower bound for that construction, not a
+qualified redesign.
 The [X509 proof-geometry audit](../docs/history/2026-09-23/zk-x509-proof-geometry-audit.md)
 quantifies the complete maximum relation above the fixed 9 MiB ceiling;
 the proof redesign and soundness evidence remain open.
@@ -48,6 +55,9 @@ The [deferred-handoff record](../docs/history/2026-09-21/deferred-handoff-carrie
 records passing component controls and the remaining failed full liveness run.
 The [18-step Apalache diagnostic](../docs/history/2026-09-23/multilane-apalache-vc-diagnostic.md)
 identifies the timed-out verification conditions; it does not close the formal gate.
+The [runtime VC mapping correction](../docs/history/2026-09-23/multilane-apalache-runtime-vc-mapping-correction.md)
+locates the actual slow predicates, records two unsuccessful exact rewrites and
+leaves the canonical model unchanged.
 The [retained-source and qualification record](../docs/history/2026-09-21/retained-source-and-qualification-integration.md)
 records first-mask ownership tests, fixture migration and published-schema work.
 The [SCCP Java consumer record](../docs/history/2026-09-21/sccp-java-source-consumer-integration.md)
@@ -122,6 +132,27 @@ funds the retained shell and key backing and avoids a second set at State
 staging. The fresh `storage_transactions::tests::` Core selector passes 22/22;
 upstream carrier/merge allocations,
 aggregate retry custody and snapshot scratch keep F02 open.
+The [ordinary carrier source slice](../docs/history/2026-09-23/ordinary-carrier-membership-source-admission.md)
+pre-funds signed ordinary replay-hash backing on the original State owner; the
+post-merge `ordinary_signed_carrier_` Core selector passes 2/2. Producer, merge,
+Native, alias scratch and aggregate admission still keep F02 open.
+The [funded evidence-prune slice](../docs/history/2026-09-23/sumeragi-f02-funded-prune-path.md)
+reserves fixed keys before a borrowed State scan and routes exact pool refusals
+locally; a later borrowed admission scan removes the whole-table proof clone.
+The latest combined Core evidence suite passes 38/38, the penalty selector
+passes 24/24, and config integration passes 243/243. The
+[borrowed penalty planner](../docs/history/2026-09-23/sumeragi-f02-borrowed-penalty-planning.md)
+removes whole-proof and locator-list clones. Its
+[single stake-share owner cut](../docs/history/2026-09-24/sumeragi-f02-single-stake-share-owner.md)
+also removes the second full key inventory. Its focused test passes 1/1, and
+the rebuilt penalty and evidence suites pass 24/24 and 38/38. The
+[stake-index boundary](../docs/history/2026-09-23/sumeragi-f02-stake-index-original-owner-boundary.md)
+records the still-unfunded shared State and local-retry owners. Full
+proposal-snapshot, remaining admission and penalty funding from the
+[design](../docs/history/2026-09-23/sumeragi-f02-evidence-preparation-admission-design.md)
+remains open.
+The [non-Copy charged-buffer foundation](../docs/history/2026-09-24/sumeragi-f02-noncopy-charged-buffer-foundation.md)
+passes its focused MV target 30/30; nested stake-index and State custody remain open.
 The [membership local-refusal classification](../docs/history/2026-09-23/transaction-membership-local-refusal-classification.md)
 keeps ordinary and Native carrier staging capacity errors out of deterministic
 block rejection; it does not fund upstream sources or snapshot scratch.
@@ -129,8 +160,10 @@ The [combined-source Core type repair](../docs/history/2026-09-23/combined-sourc
 rejoins transaction append preparation identity and typed reserve restore tests
 after the concurrent source merge; focused and full qualification remain open.
 The [combined-source file-budget diagnostic](../docs/history/2026-09-23/combined-source-file-budget-gate.md)
-records 278 current findings; no budget baseline was raised and the release
-tooling gate remains open.
+records 235 current findings after exact downward ratchets and mechanical
+test splits, including the
+[Sumeragi release-bootstrap test split](../docs/history/2026-09-23/sumeragi-release-bootstrap-test-budget-split.md).
+No budget baseline was raised; the release tooling gate remains open.
 The [Sumeragi relay ingress fail-close](../docs/history/2026-09-23/sumeragi-relay-ingress-fail-closed.md)
 returns unowned relay variants before enqueue while preserving QueuePlan
 transfer. Network rejection is terminal and the finalized Nexus record may be
@@ -178,6 +211,9 @@ bindings; finalized custody and native completion are still absent.
 The [provider-ingest G06 authority audit](../docs/history/2026-09-23/sorafs-provider-ingest-g06-authority-audit.md)
 separates finalized assignment lookup from the still-missing finalized
 admission, advert, revocation and governed grant source.
+The [read-only current source-assignment service](../docs/history/2026-09-23/sorafs-provider-ingest-g06-current-source-assignment-service.md)
+exposes a committed-head-bound canonical request and recheck to a separate
+resolver; it does not provide those missing governance and grant authorities.
 
 The component ledgers remain the detailed acceptance authorities:
 [privacy](privacy_first_release_closure.md),
@@ -223,19 +259,19 @@ release goal.
 | ID | State | Outcome and owner | Completion criteria |
 | --- | --- | --- | --- |
 | F01 | Active | Source reconciliation — integration owner | Preserve SoraFS tracked/untracked source and original Git identity; reconcile onto current source without overwriting newer owners; integrate software-custody changes and regenerate combined-source artifacts. |
-| F02 | Active | Resource admission and retained execution — Core/storage owners | Reserve actual allocations and side effects before work; retain original State/Queue, journals and resource owners from validation to publication, refusal and restart; execute each accepted subject once. |
-| F03 | Queued after F02 | Native lane cutover and lifecycle — consensus owner | Shared reducer, pre-payload timeout/replacement, exact frozen contexts, durable votes and RS16 availability; complete original Apply consumer and remove old signer together; evidence-aware drain/archive/recreation. |
-| F04 | Active | Software signing and promotion authority — SoraFS/daemon owners | Production providers/state sources and all four operation purposes; exact role authorization, reservation/completion/recovery; independently verified topology, inventory, resilience and foundational inner approvals. |
-| F05 | Queued after F01 | SoraFS service backends — service owners | Finalized-ledger ingest/reputation, quarantine, PoP, moderation/viewer/appeal, PoTR, DAG and transparency; concrete supervised backends, bounded outboxes and crash/rotation recovery. |
-| F06 | Active | Native40/MKHE/Vega — proof owners | Authenticated source replay, sole commitment/opening inventory, complete delta producers, consuming composite admission, governed full-shape keys and qPCS redesign inside unchanged whole-proof limits. |
-| F07 | Open | FASTPQ/AXT/X509 — proof and Core owners | Bounded compact proof admission, complete successful-execution and authoritative-state binding, durable spend nonces, and full X509 coverage within existing ceilings. |
-| F08 | Open | BFV qualification — crypto and independent reviewers | Full BFV-RNS relation, full-size/eight-party adversaries and measured bounds; real governed parameter/lattice/noise/qROM evidence before production qualification can accept. The separate 40-limb replay belongs to F06's MKHE composite. |
+| F02 | Active | Resource admission and retained execution — Core/storage owners | Reserve actual allocations and side effects before work; retain original State/Queue, journals and resource owners from validation to publication, refusal and restart; execute each accepted subject once. The [borrowed indexed-exposure cut](../docs/history/2026-09-24/sumeragi-f02-borrowed-indexed-exposure.md) passes 1/1; [pending-penalty backing](../docs/history/2026-09-24/sumeragi-f02-pending-penalty-backing.md) passed Config 2/2 and Core 7/7; [nested peer-key charging](../docs/history/2026-09-24/sumeragi-f02-pending-peer-key-charge.md) passes Config 2/2 and Core 4/4. The [stake-index original-owner cut](../docs/history/2026-09-24/sumeragi-f02-stake-index-demand-design.md) removes its B-tree and funds two flat backings plus exact nested single/multisig AccountId clones from the original State pool; DataModel 1/1, Config 1/1 and corrected same-source Core 18/18 pass, including capacity refusal, partial-clone refund, exposure, retry and local DecodeScope classification. The pinned native-digit Quantity clone prerequisite passes vendor 1/1 and Primitives 2/2; borrowed validator-total comparisons pass same-source Core 10/10. State-pool charge integration, Quantity addition scratch, 32-bit and full-workspace checks, source lookup, per-member work admission, maximum-shape runtime bounds, scratch State, action vectors and aggregate admission remain open. |
+| F03 | Active | Native lane cutover and lifecycle — consensus owner | Shared reducer, pre-payload timeout/replacement, exact frozen contexts, durable votes and RS16 availability; complete original Apply consumer and remove old signer together; evidence-aware drain/archive/recreation. The [runner/source audit and bounded canonical worker](../docs/history/2026-09-23/sumeragi-f03-native-runner-source-and-evidence-audit.md) separate connected production code from prior four-peer evidence; worker tests pass 2/2 and four adjacent recovery consumers pass 1/1 each, while live ingress/output remains closed. The [canonical recovery output allowlist](../docs/history/2026-09-24/sumeragi-f03-canonical-recovery-output-allowlist.md) passes its focused selector 1/1 and five adjacent selectors 5/5. Full lifecycle qualification depends on F02 ownership and admission. |
+| F04 | Active | Software signing and promotion authority — SoraFS/daemon owners | Production providers/state sources and all four operation purposes; exact role authorization, reservation/completion/recovery; independently verified topology, inventory, resilience and foundational inner approvals. The [role-15 one-use software key](../docs/history/2026-09-24/sorafs-final-promotion-role15-software-key.md) passes 4/4 focused and 24/24 adjacent daemon account tests. The [operation-source cut](../docs/history/2026-09-24/sorafs-final-promotion-operation-source-audit.md) binds Reserve/Complete rows to direct signed-entry origins and verifies the original signed Reserve against the same finalized Check cut; DataModel tests pass 25/25, Core same-block 1/1, current finalized observation 41/41 including missing-membership/finality rejection, and native operation 47/47. The daemon Current/Reserved source and exact-height pre-submit State/Kura/QC floor check pass 16/16 focused tests, including wrong-context refusal; an independent floor issuer and full successor provenance, the unimplemented restart-safe [two-floor proof and journal design](../docs/history/2026-09-24/sorafs-final-promotion-two-floor-recovery-design.md), funded replay, Complete source, production providers, and [interface regeneration](../docs/history/2026-09-24/sorafs-final-promotion-f04-interface-regeneration-inventory.md) remain open. The [topology source audit](../docs/history/2026-09-24/sorafs-topology-inner-approval-native-source-audit.md) records missing role-16 native authority and seven negative cases; promotion remains blocked. |
+| F05 | Active; production grant blocked | SoraFS service backends — service owners | Finalized-ledger ingest/reputation, quarantine, PoP, moderation/viewer/appeal, PoTR, DAG and transparency; concrete supervised backends, bounded outboxes and crash/rotation recovery. The [provider-ingest sealed restart replay](../docs/history/2026-09-24/sorafs-provider-ingest-sealed-restart-owner-replay.md) passes 1/1 focused outbox test, and the [retained admission-cursor ancestry check](../docs/history/2026-09-24/sorafs-provider-ingest-retained-admission-ancestry.md) passes its full 12/12 daemon module after the fixture correction. The finalized assignment-to-outbox source is connected; the [native council producer design](../docs/history/2026-09-24/sorafs-provider-ingest-native-council-producer-design.md) fixes the next V1 authority cut. Governed admission/renewal/revocation lineage, exact grant authority and distributed qualification remain open. |
+| F06 | Active | Native40/MKHE/Vega — proof owners | Authenticated source replay, sole commitment/opening inventory, complete delta producers, consuming composite admission, governed full-shape keys and qPCS redesign inside unchanged whole-proof limits. The [qPCS source-bound redesign prerequisite](../docs/history/2026-09-24/mkhe-f06-qpcs-source-bound-redesign-prerequisite.md) records that each current initial-tree component exceeds the whole-proof tracked-work ceiling and identifies the required source/opening relation; production composite admission stays closed. |
+| F07 | Open | FASTPQ/AXT/X509 — proof and Core owners | Bounded compact proof admission, complete successful-execution and authoritative-state binding, durable spend nonces, and full X509 coverage within existing ceilings. The [fixed-row budget audit](../docs/history/2026-09-23/fastpq-f07-fixed-row-opening-budget-audit.md) and [source-derived size screen](../docs/history/2026-09-24/fastpq-source-budget-and-deep-admission-boundary.md) record the hard opening gap. The [checked source projection](../docs/history/2026-09-24/fastpq-f07-source-projection-and-prover-blocker.md) passes 1/1 focused test; the [base-field hiding and degree screen](../docs/history/2026-09-24/fastpq-f07-basefield-hiding-degree-screen.md) is an unimplemented 508,399-byte candidate with soundness, privacy, resource and AXT-fit gates open. The [AXT nonce cutover record](../docs/history/2026-09-24/axt-f07-durable-spend-nonce-cutover-blocker.md) identifies the missing authoritative signed-spend carrier. The [all-P-256 X509 bound](../docs/history/2026-09-24/zk-x509-all-p256-opening-bound.md) proves that removing those openings alone still exceeds 9 MiB; the [P-256/SHA recursive size contract](../docs/history/2026-09-24/zk-x509-p256-sha-recursive-size-contract.md) is an unimplemented full-coverage candidate with a 737,430-byte receipt allowance under fixed-cost accounting. |
+| F08 | Open | BFV qualification — crypto and independent reviewers | Full BFV-RNS relation, full-size/eight-party adversaries and measured bounds; real governed parameter/lattice/noise/qROM evidence before production qualification can accept. The [registered eighth-limb source adversary](../docs/history/2026-09-24/bfv-registered-operand-eighth-limb-mismatch.md) passes 1/1 focused test; it is neither the full relation nor an eight-party transcript. The [eight-party source audit](../docs/history/2026-09-24/bfv-eight-party-verification-prerequisite.md) records that participant-share and combiner interfaces do not yet exist. The separate 40-limb replay belongs to F06's MKHE composite. |
 | F09 | Open | Exact12 completion — engine owners | Complete engine-specific soundness/key/provenance work and every adversarial, maximum-shape, resource, native/SDK/hardware and deployment requirement in the privacy ledger. |
-| F10 | Open | Product privacy integration — product/Core owners | Confidential authority/conservation; Kaigi proof/relay/lifecycle; Parliament ballot/deadline/beacon/restart and independent protocol review. |
-| F11 | Active; private protocol unresolved | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. Public conviction arithmetic and real bond conservation are prerequisites, not anonymous-election completion. |
-| F12 | Active; final regeneration after interfaces settle | Canonical APIs and SDK/native packages — SDK/release owners | One typed V1 surface; double regeneration; matching Rust, Kotlin/Java consumers, Swift, JS, Python and C# execution; complete five-target native artifacts and installation checks. |
-| F13 | Active; final runs after implementation | Formal/runtime/hardware qualification — validation owners | Required formal bounds, all current-Native four-validator scenarios, larger-network resilience/scaling, full-proof hardware parity/fault quarantine and unchanged-candidate resource evidence. |
-| F14 | Queued after F01–F13 | Audit, candidate sealing and promotion — release/operators/reviewers | Resolve required audit findings; exact-source complete validation; genuine signed release and promotion evidence, authenticated publication/readback, and rollback qualification. |
+| F10 | Open | Product privacy integration — product/Core owners | Confidential authority/conservation; Kaigi proof/relay/lifecycle; Parliament ballot/deadline/beacon/restart and independent protocol review. The [relay lifecycle guard](../docs/history/2026-09-24/kaigi-relay-route-lifecycle-guard.md), [restore key check](../docs/history/2026-09-24/kaigi-active-relay-restore-key-binding.md), and [feedback source/lifecycle cut](../docs/history/2026-09-24/kaigi-relay-feedback-source-lifecycle.md) pass 13/13 combined focused Core selectors. Historical reporter authorization across rekeys, relay deployment, multi-validator restart, and independent review remain open. |
+| F11 | Active; private protocol unresolved | Standalone elections — protocol and product owners | Reviewed construction satisfying every fixed election requirement, then dedicated credential/ballot/tally circuits, confidential bond positions, exact closed-corpus state, SDKs and dropout/restart/resource qualification. The [late-dropout aggregate-opening review](../docs/history/2026-09-23/standalone-election-dropout-aggregate-blocker.md), [fault matrix](../docs/history/2026-09-24/standalone-election-dropout-fault-matrix.md), [primary-source functional-opening review](../docs/history/2026-09-24/standalone-election-primary-source-functional-opening-review.md), and [NARAD subset-opening review](../docs/history/2026-09-24/standalone-election-narad-subset-opening-review.md) record the scoped completion and leakage gaps. [Smallest-unit arithmetic](../docs/history/2026-09-24/standalone-conviction-smallest-unit-boundary.md) passes focused public tests. The [exact u128 tally representation](../docs/history/2026-09-24/standalone-election-u128-tally-representation.md) passes DataModel 1/1, Core 8/8 including atomic restore, Torii 3/3, IVM ABI 11/11 and mock 1/1, isolated JavaScript builder/reader tests 16/16, Kotlin/Java-source consumer tests 5/5, Python source with an existing native wheel 135/135, and C# 5,788/5,788. Swift passes actual-source parser typecheck and scanner smoke; full Swift tests await a same-source native bridge. Full-host IVM, same-source native and complete SDK parity remain open. Public conviction arithmetic and real bond conservation are prerequisites, not anonymous-election completion. |
+| F12 | Active; final regeneration after interfaces settle | Canonical APIs and SDK/native packages — SDK/release owners | One typed V1 surface; double regeneration; matching Rust, Kotlin/Java consumers, Swift, JS, Python and C# execution; complete five-target native artifacts and installation checks. The [current Swift attempt](../docs/history/2026-09-23/swift-current-checkout-build-prerequisite.md) stopped at package resolution because the same-source ABI-23 bridge has not yet been built. |
+| F13 | Active; final runs after implementation | Formal/runtime/hardware qualification — validation owners | Required formal bounds, all current-Native four-validator scenarios, larger-network resilience/scaling, full-proof hardware parity/fault quarantine and unchanged-candidate resource evidence. The [current script-suite collection boundary](../docs/history/2026-09-24/multilane-script-suite-collection-boundary.md) and [retired-validator assertion map](../docs/history/2026-09-24/multilane-retired-validator-assertion-map.md) record the V1 migration. The canonical descriptor runner, archive schema, control binding and journal owners pass scoped Python suites (31, 35, 143, 326, 527, 333 cases respectively); native-facts and completed-owner modules pass together 135/135, including duplicate-account and equal-valued lag type refusal; runner-result selection passes 168 with one pre-existing stale source-digest assertion deselected. The remaining native proof/receipt consumer and source-pinned candidate inventory prevent release qualification. |
+| F14 | Queued after F01–F13 | Audit, candidate sealing and promotion — release/operators/reviewers | Resolve required audit findings; exact-source complete validation; genuine signed release and promotion evidence, authenticated publication/readback, and rollback qualification. The [interim source-file budget diagnostic](../docs/history/2026-09-24/source-file-budget-interim-diagnostic.md) reports 239 current-source violations; it is not a frozen-candidate receipt. |
 
 Work on independent owners proceeds concurrently. Shared Core/State/Queue/Kura
 changes are reconciled by one integration owner. Do not turn on Native ingress

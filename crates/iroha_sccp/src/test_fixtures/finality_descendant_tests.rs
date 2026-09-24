@@ -91,6 +91,33 @@ fn exact_same_epoch_descendants_authenticate_through_the_last_nonboundary_height
 }
 
 #[test]
+fn exact_epoch_one_successor_inherits_certified_boundary_and_parent_commit() {
+    let parent = sccp_finalize_taira_epoch_boundary_test_fixture_v1(&block(1, None));
+    let parent_context = &parent.proof().finality_artifact.height_context;
+    let snapshot = parent_context
+        .next_epoch_snapshot
+        .as_ref()
+        .expect("height-one boundary certifies the next epoch");
+    assert_eq!(parent_context.epoch, 0);
+    assert_eq!(snapshot.epoch, 1);
+    assert_eq!(snapshot.epoch_end_height, 10);
+
+    let child = sccp_finalize_taira_block_test_fixture_v1(&block(2, Some(&parent)), Some(&parent));
+    let context = &child.proof().finality_artifact.height_context;
+    assert_eq!(context.epoch, snapshot.epoch);
+    assert_eq!(context.epoch_end_height, snapshot.epoch_end_height);
+    assert_eq!(
+        context.kagemusha_mint_finality_authorization,
+        snapshot.kagemusha_mint_finality_authorization
+    );
+    assert_eq!(
+        context.parent_commit_qc.as_ref(),
+        Some(&parent.proof().finality_artifact.commit_qc)
+    );
+    assert_exact_finalized_block_fixture(&child);
+}
+
+#[test]
 fn genesis_mint_authority_is_network_bound_and_rejects_schedule_or_key_substitution() {
     use iroha_data_model::isi::kagemusha_v1::{
         BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1,

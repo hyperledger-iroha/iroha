@@ -11,7 +11,7 @@ import {
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
-import { _createNoritoInstructionApi } from "./norito.js";
+import { _createNoritoInstructionApi, exactFinalizeElectionTallyJson } from "./norito.js";
 import { networkIdBytes } from "./networkId.js";
 import {
   defaultNativeRuntime,
@@ -208,7 +208,7 @@ function serializeInstructionPayloads(instructions, context) {
       return instruction;
     }
     if (instruction && typeof instruction === "object") {
-      return JSON.stringify(instruction);
+      return exactFinalizeElectionTallyJson(instruction) ?? JSON.stringify(instruction);
     }
     throw new TypeError(
       `${context ?? "instructions"}[${index}] must be an object or JSON string`,

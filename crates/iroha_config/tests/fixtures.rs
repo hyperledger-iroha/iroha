@@ -2427,3 +2427,112 @@ fn nexus_carrier_shell_pool_preserves_zero_and_explicit_limit() {
         assert_eq!(actual.storage.retained_carrier_shell_bytes, limit);
     }
 }
+
+#[test]
+fn nexus_evidence_preparation_pool_admits_one_plan_and_defaults_to_eight() {
+    use iroha_config::parameters::{
+        defaults,
+        user::{Nexus, NexusStorage},
+    };
+    use iroha_config_base::util::Emitter;
+
+    let prune_plan = defaults::nexus::storage::CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES;
+    let pending_plan = defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES;
+    let pending_peer_keys =
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES;
+    let one_plan = defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES;
+    assert_eq!(prune_plan, 3_968);
+    assert_eq!(
+        pending_plan,
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * std::mem::size_of::<defaults::nexus::storage::ConsensusPenaltyPendingEntry>()
+    );
+    assert_eq!(
+        pending_peer_keys,
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES)
+    );
+    assert_eq!(one_plan, prune_plan + pending_plan + pending_peer_keys);
+    assert_eq!(
+        NexusStorage::default().consensus_evidence_preparation_bytes,
+        8 * one_plan
+    );
+    for bytes in [one_plan, 8 * one_plan] {
+        let mut emitter = Emitter::<ParseError>::new();
+        let nexus = Nexus {
+            storage: NexusStorage {
+                consensus_evidence_preparation_bytes: bytes,
+                ..NexusStorage::default()
+            },
+            ..Nexus::default()
+        };
+        let actual = nexus
+            .parse(&mut emitter)
+            .expect("one or more complete plans");
+        emitter.into_result().expect("valid finite pool");
+        assert_eq!(actual.storage.consensus_evidence_preparation_bytes, bytes);
+    }
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        storage: NexusStorage {
+            consensus_evidence_preparation_bytes: one_plan - 1,
+            ..NexusStorage::default()
+        },
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = emitter.into_result().expect_err("partial plan must fail");
+    let expected = format!(
+        "nexus.storage.consensus_evidence_preparation_bytes must be at least {one_plan} bytes"
+    );
+    assert_contains!(strip_ansi_codes(&format!("{error:?}")), expected.as_str());
+}
+
+#[test]
+fn nexus_stake_index_pool_is_finite_and_admits_one_share_group_and_account_keys() {
+    use iroha_config::parameters::{
+        defaults,
+        user::{Nexus, NexusStorage},
+    };
+    use iroha_config_base::util::Emitter;
+
+    let minimum = defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES;
+    assert_eq!(
+        NexusStorage::default().consensus_stake_index_bytes,
+        defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES
+    );
+    for bytes in [
+        minimum,
+        defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
+    ] {
+        let mut emitter = Emitter::<ParseError>::new();
+        let nexus = Nexus {
+            storage: NexusStorage {
+                consensus_stake_index_bytes: bytes,
+                ..NexusStorage::default()
+            },
+            ..Nexus::default()
+        };
+        let actual = nexus
+            .parse(&mut emitter)
+            .expect("one share, group and three Ed25519 key copies fit");
+        emitter.into_result().expect("valid finite index pool");
+        assert_eq!(actual.storage.consensus_stake_index_bytes, bytes);
+    }
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        storage: NexusStorage {
+            consensus_stake_index_bytes: minimum - 1,
+            ..NexusStorage::default()
+        },
+        ..Nexus::default()
+    };
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = emitter
+        .into_result()
+        .expect_err("partial nested-and-flat backing must fail");
+    let expected =
+        format!("nexus.storage.consensus_stake_index_bytes must be at least {minimum} bytes");
+    assert_contains!(strip_ansi_codes(&format!("{error:?}")), expected.as_str());
+}

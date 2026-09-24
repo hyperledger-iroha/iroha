@@ -289,6 +289,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(sorafs::SubmitSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::SubmitSorafsOrderbookOrder"),
     built_in_wire_id!(sorafs::CancelSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::CancelSorafsOrderbookOrder"),
     built_in_wire_id!(sorafs::MutateSorafsStreamTokenCustody => "iroha.instruction.v1::sorafs::MutateSorafsStreamTokenCustody"),
+    built_in_wire_id!(sorafs::MutateSorafsStreamTokenAuthority => "iroha.instruction.v1::sorafs::MutateSorafsStreamTokenAuthority"),
     built_in_wire_id!(sorafs::MutateSorafsFinalPromotionAuthority => "iroha.instruction.v1::sorafs::MutateSorafsFinalPromotionAuthority"),
     built_in_wire_id!(sorafs::MutateSorafsFinalPromotionAccountCustody => "iroha.instruction.v1::sorafs::MutateSorafsFinalPromotionAccountCustody"),
     built_in_wire_id!(sorafs::MutateSorafsReleaseManifestAuthority => "iroha.instruction.v1::sorafs::MutateSorafsReleaseManifestAuthority"),

@@ -101,6 +101,21 @@ def test_plan_rejects_bad_pairing_and_late_native_preconditions(case):
     with pytest.raises((ExperimentPlanError,ValueError)):admit_plan(plan,budget)
 
 
+def test_last_pair_cannot_change_original_chain_or_lane_geometry():
+    """A late pair cannot substitute another generated chain or lane count."""
+    original=fixed_plan()
+    for index, generator in (
+        (8, replace(original.trials[8].generator,
+                    chain_id=original.trials[8].generator.chain_id+'-other')),
+        (9, replace(original.trials[9].generator,lane_count=1)),
+    ):
+        trials=list(original.trials)
+        trials[index]=replace(trials[index],generator=generator)
+        changed=replace(original,trials=tuple(trials))
+        with pytest.raises(ExperimentPlanError):
+            admit_plan(changed,budget_for(changed))
+
+
 def test_plan_rejects_hostile_copy_before_calling_it():
     class Hostile:
         def __deepcopy__(self,memo):raise AssertionError('must not invoke caller copy')

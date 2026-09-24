@@ -14,7 +14,7 @@ use halo2_base::{
     QuantumCell::Constant,
     gates::GateInstructions as _,
     gates::RangeInstructions as _,
-    utils::{BigPrimeField, modulus, power_of_two},
+    utils::{BigPrimeField, CurveAffineExt as _, modulus, power_of_two},
 };
 use halo2_ecc::{
     bigint::{FixedOverflowInteger, ProperCrtUint, big_less_than},

@@ -272,8 +272,8 @@ isi! {
     pub struct FinalizeElection {
         /// Canonical V1 election selector.
         pub election_id: String,
-        /// Public tally per option.
-        pub tally: Vec<u64>,
+        /// Exact public conviction weight per option in the frozen asset's smallest units.
+        pub tally: Vec<u128>,
         /// ZK proof that `tally` is consistent with submitted ballots.
         pub tally_proof: crate::proof::ProofAttachment,
     }
@@ -361,7 +361,7 @@ impl_zk_decode_from_slice!(SubmitBallot {
 });
 impl_zk_decode_from_slice!(FinalizeElection {
     election_id: String,
-    tally: Vec<u64>,
+    tally: Vec<u128>,
     tally_proof: crate::proof::ProofAttachment,
 });
 #[cfg(test)]
@@ -499,7 +499,7 @@ mod tests {
         });
         assert_slice_roundtrip(FinalizeElection {
             election_id: "election-1".to_owned(),
-            tally: vec![1, 2, 3],
+            tally: vec![1, u128::from(u64::MAX) + 1, 3],
             tally_proof: proof,
         });
     }

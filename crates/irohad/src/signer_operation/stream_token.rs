@@ -13,7 +13,10 @@
 //! reservation interface currently exposes the bound intent digest, not a separately authenticated
 //! prepared time window; caller-supplied times alone cannot authorize retention or provider use.
 
-use super::journal::{SignerReceiptJournalErrorV1, SignerReceiptJournalV1, SignerReceiptPurposeV1};
+use super::journal::{
+    SignerReceiptJournalErrorV1, SignerReceiptJournalReaderV1, SignerReceiptJournalV1,
+    SignerReceiptPurposeV1,
+};
 use super::*;
 use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenV1,
@@ -90,6 +93,82 @@ impl fmt::Debug for SignerStreamTokenReceiptBytesV1 {
     }
 }
 
+/// Provider-free read capability for one purpose-bound private receipt journal.
+///
+/// This retains only configured public custody, a read-only journal lease and an independently
+/// supplied finalized read source. It cannot reserve, complete, sign or renew an operation.
+/// Receipt bytes are released only after exact completed-row observations at both recovery phases
+/// and a final journal identity check. The source is responsible for proving actual native
+/// execution and finality; injected sources do not qualify a deployment.
+pub struct SignerStreamTokenCompletedReceiptCheckV1 {
+    binding: SignerCustodyBindingV1,
+    record: Vec<u8>,
+    trust: SignerCustodyTrustV1,
+    source: Arc<dyn SignerOperationFinalizedReadSourceV1>,
+    journal: SignerReceiptJournalReaderV1,
+}
+impl fmt::Debug for SignerStreamTokenCompletedReceiptCheckV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerStreamTokenCompletedReceiptCheckV1")
+            .finish_non_exhaustive()
+    }
+}
+impl SignerStreamTokenCompletedReceiptCheckV1 {
+    /// Pin exact configured role-11 custody and the original journal's read-only lease.
+    ///
+    /// # Errors
+    /// Rejects a wrong journal family, malformed binding or unavailable current custody before
+    /// retaining a checker. This does not itself establish a completed operation.
+    pub fn new(
+        binding: SignerCustodyBindingV1,
+        record: Vec<u8>,
+        trust: SignerCustodyTrustV1,
+        source: Arc<dyn SignerOperationFinalizedReadSourceV1>,
+        journal: &SignerReceiptJournalV1,
+    ) -> Result<Self, SignerStreamTokenErrorV1> {
+        if journal.purpose() != SignerReceiptPurposeV1::StreamToken {
+            return Err(SignerStreamTokenErrorV1::Journal);
+        }
+        stream_token_binding_digest_v1(&binding)?;
+        let authority = SignerOperationAuthorityV1 {
+            binding: &binding,
+            record: &record,
+            trust: &trust,
+            source: source.as_ref(),
+        };
+        authority.verify(&source.observe(&binding)?)?;
+        Ok(Self {
+            binding,
+            record,
+            trust,
+            source,
+            journal: journal.reader(),
+        })
+    }
+
+    /// Verify and release only the original, finalized, completed receipt for this exact body.
+    ///
+    /// # Errors
+    /// Rejects a missing or changed private receipt, invalid signatures or token times, a
+    /// non-finalized or substituted completion, and stale or revoked original custody.
+    pub fn check(
+        &self,
+        payload: &[u8],
+    ) -> Result<SignerStreamTokenReceiptBytesV1, SignerStreamTokenErrorV1> {
+        recover_completed_receipt(
+            payload,
+            &SignerOperationAuthorityV1 {
+                binding: &self.binding,
+                record: &self.record,
+                trust: &self.trust,
+                source: self.source.as_ref(),
+            },
+            &self.journal,
+        )
+    }
+}
+
 /// Long-lived exact provider/key/policy signer with a single bounded private receipt journal.
 ///
 /// It never retains a caller or constructor audit predecessor. Each new body obtains a fresh
@@ -107,6 +186,27 @@ impl fmt::Debug for SignerStreamTokenServiceV1 {
     }
 }
 impl SignerStreamTokenServiceV1 {
+    /// Split off a provider-free completed-receipt checker over this exact journal lease.
+    ///
+    /// The returned capability can outlive the signer and has no Reserve, Complete or key method.
+    /// Its source still must authenticate native finality for every completed observation.
+    ///
+    /// # Errors
+    /// Rejects a changed or unavailable current custody before retaining the read capability.
+    pub fn completed_receipt_check(
+        &self,
+    ) -> Result<SignerStreamTokenCompletedReceiptCheckV1, SignerStreamTokenErrorV1> {
+        let read_source: Arc<dyn SignerOperationFinalizedReadSourceV1> =
+            Arc::new(Arc::clone(&self.coordinator.source));
+        SignerStreamTokenCompletedReceiptCheckV1::new(
+            self.coordinator.binding.clone(),
+            self.coordinator.record.clone(),
+            self.coordinator.trust.clone(),
+            read_source,
+            &self.journal,
+        )
+    }
+
     /// Bind one exact configured provider to an already independently qualified coordinator.
     ///
     /// # Errors
@@ -230,7 +330,8 @@ impl SignerStreamTokenServiceV1 {
             return Err(SignerStreamTokenReceiptErrorV1::InvalidSignature.into());
         }
         staged.recheck()?;
-        let final_custody = self.revalidate_completed(&intent, &completed)?;
+        let final_custody =
+            revalidate_completed(&self.coordinator.authority(), &intent, &completed)?;
         validate_token_time(&expected, &final_custody)?;
         staged.recheck()?;
         Ok(SignerStreamTokenReceiptBytesV1(Zeroizing::new(
@@ -247,113 +348,119 @@ impl SignerStreamTokenServiceV1 {
         &self,
         payload: &[u8],
     ) -> Result<SignerStreamTokenReceiptBytesV1, SignerStreamTokenErrorV1> {
-        let (body, expected) =
-            prepare_stream_token_signing_payload_v1(payload, &self.coordinator.binding)?;
-        let custody = self
-            .coordinator
-            .verify(&self.coordinator.source.observe(&self.coordinator.binding)?)?;
-        validate_token_time(&expected, &custody)?;
-        let request = SignerStreamTokenRequestV1::new(&custody, &expected, &body)?;
-        let staged = self.journal.recover(expected.operation_id())?;
-        let candidate = PendingReceipt(SignerStreamTokenReceiptV1::decode_canonical(
-            staged.bytes(),
-        )?);
-        let receipt = &candidate.0;
-        if receipt.custody_record != self.coordinator.record || receipt.request != request {
-            return Err(SignerStreamTokenReceiptErrorV1::TokenMismatch.into());
-        }
-        let token = PendingToken(token_for(&body, receipt)?);
-        let signatures_digest =
-            validate_stream_token_signatures_v1(receipt, &token.0, &expected, &custody)?;
-        drop(token);
-        let audit_message = receipt.commitment.audit.signing_message();
-        let provenance_message = receipt
-            .provenance
-            .signing_message()
-            .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidReceipt)?;
-        let response_message = receipt.commitment.response_signing_message();
-        let mut recovered = Vec::with_capacity(4);
-        for (signature, (purpose, message)) in receipt.signatures.iter().zip([
-            (SignerKeyOperationPurposeV1::RolePayload, payload),
-            (
-                SignerKeyOperationPurposeV1::AuditRecord,
-                audit_message.as_slice(),
-            ),
-            (
-                SignerKeyOperationPurposeV1::Provenance,
-                provenance_message.as_slice(),
-            ),
-            (
-                SignerKeyOperationPurposeV1::Response,
-                response_message.as_slice(),
-            ),
-        ]) {
-            // The shared validator already established exactly four ordered signatures.
-            if signature.purpose != purpose
-                || signature.message_digest != signer_operation_message_digest_v1(message)
-            {
-                return Err(SignerStreamTokenReceiptErrorV1::InvalidSignature.into());
-            }
-            recovered.push(RecoveredSignerSignatureV1 {
-                purpose,
-                message: Zeroizing::new(message.to_vec()),
-                signature: Zeroizing::new(signature.signature.clone()),
-            });
-        }
-        let completed = self
-            .coordinator
-            .recover_completed(RecoveredSignerOperationV1 {
-                original_custody: receipt.request.original_custody,
-                intent: receipt.intent,
-                reservation: receipt.reservation,
-                commitment: receipt.commitment,
-                signatures: recovered,
-            })?;
-        if signatures_digest != completed.signatures_digest()
-            || signer_operation_signatures_digest_v1(&receipt.signatures)
-                .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidSignature)?
-                != signatures_digest
+        recover_completed_receipt(
+            payload,
+            &self.coordinator.authority(),
+            &self.journal.reader(),
+        )
+    }
+}
+
+fn recover_completed_receipt(
+    payload: &[u8],
+    authority: &SignerOperationAuthorityV1<'_>,
+    journal: &SignerReceiptJournalReaderV1,
+) -> Result<SignerStreamTokenReceiptBytesV1, SignerStreamTokenErrorV1> {
+    let (body, expected) = prepare_stream_token_signing_payload_v1(payload, authority.binding)?;
+    let custody = authority.verify(&authority.source.observe(authority.binding)?)?;
+    validate_token_time(&expected, &custody)?;
+    let request = SignerStreamTokenRequestV1::new(&custody, &expected, &body)?;
+    let staged = journal.recover(expected.operation_id())?;
+    let candidate = PendingReceipt(SignerStreamTokenReceiptV1::decode_canonical(
+        staged.bytes(),
+    )?);
+    let receipt = &candidate.0;
+    if receipt.custody_record.as_slice() != authority.record || receipt.request != request {
+        return Err(SignerStreamTokenReceiptErrorV1::TokenMismatch.into());
+    }
+    let token = PendingToken(token_for(&body, receipt)?);
+    let signatures_digest =
+        validate_stream_token_signatures_v1(receipt, &token.0, &expected, &custody)?;
+    drop(token);
+    let audit_message = receipt.commitment.audit.signing_message();
+    let provenance_message = receipt
+        .provenance
+        .signing_message()
+        .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidReceipt)?;
+    let response_message = receipt.commitment.response_signing_message();
+    let mut recovered = Vec::with_capacity(4);
+    for (signature, (purpose, message)) in receipt.signatures.iter().zip([
+        (SignerKeyOperationPurposeV1::RolePayload, payload),
+        (
+            SignerKeyOperationPurposeV1::AuditRecord,
+            audit_message.as_slice(),
+        ),
+        (
+            SignerKeyOperationPurposeV1::Provenance,
+            provenance_message.as_slice(),
+        ),
+        (
+            SignerKeyOperationPurposeV1::Response,
+            response_message.as_slice(),
+        ),
+    ]) {
+        // The shared validator already established exactly four ordered signatures.
+        if signature.purpose != purpose
+            || signature.message_digest != signer_operation_message_digest_v1(message)
         {
             return Err(SignerStreamTokenReceiptErrorV1::InvalidSignature.into());
         }
-        staged.recheck()?;
-        let final_custody = self.revalidate_completed(&receipt.intent, &completed)?;
-        validate_token_time(&expected, &final_custody)?;
-        staged.recheck()?;
-        Ok(SignerStreamTokenReceiptBytesV1(Zeroizing::new(
-            staged.bytes().to_vec(),
-        )))
+        recovered.push(RecoveredSignerSignatureV1 {
+            purpose,
+            message: Zeroizing::new(message.to_vec()),
+            signature: Zeroizing::new(signature.signature.clone()),
+        });
     }
+    let completed = authority.recover_completed(RecoveredSignerOperationV1 {
+        original_custody: receipt.request.original_custody,
+        intent: receipt.intent,
+        reservation: receipt.reservation,
+        commitment: receipt.commitment,
+        signatures: recovered,
+    })?;
+    if signatures_digest != completed.signatures_digest()
+        || signer_operation_signatures_digest_v1(&receipt.signatures)
+            .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidSignature)?
+            != signatures_digest
+    {
+        return Err(SignerStreamTokenReceiptErrorV1::InvalidSignature.into());
+    }
+    staged.recheck()?;
+    let final_custody = revalidate_completed(authority, &receipt.intent, &completed)?;
+    validate_token_time(&expected, &final_custody)?;
+    staged.recheck()?;
+    Ok(SignerStreamTokenReceiptBytesV1(Zeroizing::new(
+        staged.bytes().to_vec(),
+    )))
+}
 
-    fn revalidate_completed(
-        &self,
-        intent: &SignerOperationIntentV1,
-        completed: &CompletedSignerOperationV1,
-    ) -> Result<VerifiedSignerCustodyV1, SignerStreamTokenErrorV1> {
-        let commit = SignerOperationCommitRequestV1 {
-            check: SignerOperationReservationCheckV1 {
-                request: SignerOperationReservationRequestV1 {
-                    intent,
-                    intent_digest: completed.intent_digest,
-                    custody: &completed.custody,
-                },
-                reservation: completed.reservation,
+fn revalidate_completed(
+    authority: &SignerOperationAuthorityV1<'_>,
+    intent: &SignerOperationIntentV1,
+    completed: &CompletedSignerOperationV1,
+) -> Result<VerifiedSignerCustodyV1, SignerStreamTokenErrorV1> {
+    let commit = SignerOperationCommitRequestV1 {
+        check: SignerOperationReservationCheckV1 {
+            request: SignerOperationReservationRequestV1 {
+                intent,
+                intent_digest: completed.intent_digest,
+                custody: &completed.custody,
             },
-            commitment: completed.commitment,
-            signatures_digest: completed.signatures_digest,
-            original_custody: completed.original_custody,
-        };
-        let current = self.coordinator.verify(
-            &self
-                .coordinator
-                .source
-                .observe_committed(&commit, SignerCommittedObservationPhaseV1::BeforeRelease)?,
-        )?;
-        if !current.continues_active_state(&completed.custody) {
-            return Err(SignerOperationErrorV1::CustodyChanged.into());
-        }
-        Ok(current)
+            reservation: completed.reservation,
+        },
+        commitment: completed.commitment,
+        signatures_digest: completed.signatures_digest,
+        original_custody: completed.original_custody,
+    };
+    let current = authority.verify(
+        &authority
+            .source
+            .observe_committed(&commit, SignerCommittedObservationPhaseV1::BeforeRelease)?,
+    )?;
+    if !current.continues_active_state(&completed.custody) {
+        return Err(SignerOperationErrorV1::CustodyChanged.into());
     }
+    Ok(current)
 }
 
 fn validate_token_time(

@@ -4,7 +4,7 @@
 //! Closed native custody instructions execute through Core's initial executor; results are never
 //! forged. Ordinary admission, fee settlement and genesis authentication are outside this fixture.
 use crate::{smartcontracts::isi::triggers::set::SetReadOnly, state::State};
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::Account,
     block::{
@@ -124,14 +124,29 @@ pub(crate) fn commit(
     let mut state_block = state.block(header);
     let mut outcomes = Vec::new();
     let mut outputs = Vec::new();
-    for transaction in transactions {
+    for (entry_index, transaction) in transactions.into_iter().enumerate() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             panic!("native fixture");
         };
         let mut tx = state_block.transaction();
+        let outer = transaction.hash_as_entrypoint();
+        tx.current_network_entrypoint_hash = Some(outer);
+        tx.tx_call_hash = Some(Hash::from(outer));
+        tx.current_tx_hash = Some(transaction.hash());
+        tx.current_entrypoint_index = Some(entry_index as u64);
         let executor = tx.world.executor.clone();
         let result = instructions.iter().try_for_each(|instruction| {
-            executor.execute_instruction(&mut tx, transaction.authority(), instruction.clone())
+            tx.current_direct_final_promotion_operation_origin =
+                crate::executor::Executor::direct_final_promotion_operation_origin(
+                    &tx,
+                    &transaction,
+                    instruction,
+                    true,
+                );
+            let result =
+                executor.execute_instruction(&mut tx, transaction.authority(), instruction.clone());
+            tx.current_direct_final_promotion_operation_origin = None;
+            result
         });
         outcomes.push(result.is_ok());
         let result = match result {

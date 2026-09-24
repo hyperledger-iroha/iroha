@@ -56,6 +56,22 @@ fn election_request(options: u32) -> CreateElection {
 }
 
 #[test]
+fn retained_election_tally_roundtrips_exact_u128_weight() {
+    let large_weight = u128::from(u64::MAX) + 1;
+    let original = ElectionState {
+        options: 2,
+        tally: vec![large_weight, 1],
+        ..ElectionState::default()
+    };
+    let encoded = norito::encode_canonical(&original).expect("encode retained election");
+    let decoded: ElectionState =
+        norito::decode_canonical(&encoded).expect("decode exact retained election");
+    assert_eq!(decoded.options, original.options);
+    assert_eq!(decoded.tally, original.tally);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), encoded);
+}
+
+#[test]
 fn election_option_bounds_and_failed_key_lookup_preserve_state() {
     let state = election_state();
     let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));

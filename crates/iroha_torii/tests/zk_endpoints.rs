@@ -6,7 +6,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State as CoreState, World, WorldReadOnly},
+    state::{ElectionState, State as CoreState, StateReadOnly, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
@@ -25,6 +25,49 @@ fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
             },
         ),
     )
+}
+fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u64, String) {
+    // Seed the test-only World before signed genesis execution. This exercises
+    // retained readback without substituting for private ballot or tally proof
+    // admission.
+    let state = CoreState::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    transaction
+        .world
+        .elections_mut()
+        .insert("election-fixture".to_owned(), election);
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("seed pre-genesis election read fixture");
+    let genesis_signer =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("deterministic fixture genesis signer");
+    let signed_genesis = state
+        .seed_signed_genesis_for_testing(&genesis_signer)
+        .expect("publish signed fixture genesis");
+    let view = state.view();
+    let height = u64::try_from(view.height()).expect("fixture height fits u64");
+    assert_eq!(height, 1);
+    let hash = view
+        .latest_block_hash()
+        .map(|hash| hex::encode(hash.as_ref()))
+        .expect("fixture block hash");
+    assert_eq!(hash, hex::encode(signed_genesis.hash().as_ref()));
+    assert_eq!(
+        view.latest_block()
+            .expect("fixture signed block body")
+            .hash(),
+        signed_genesis.hash()
+    );
+    drop(view);
+    (Arc::new(state), height, hash)
 }
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     let kura = Kura::blank_kura_for_testing();
@@ -309,5 +352,126 @@ async fn zk_vote_tally_endpoint_enforces_canonical_selector_for_json_and_norito(
             .expect("build valid tally request");
         let response = app.clone().oneshot(request).await.expect("route response");
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn zk_vote_tally_endpoint_preserves_exact_u128_and_committed_identity() {
+    let exact_weight = u128::MAX;
+    let (state, height, hash) = state_with_tally_read_fixture(ElectionState {
+        options: 2,
+        finalized: true,
+        tally: vec![exact_weight, 0],
+        ..ElectionState::default()
+    });
+    let app = zk_vote_tally_app(state.clone());
+    let body = norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "election_id",
+        "election-fixture",
+    )]))
+    .expect("serialize tally request");
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/vote/tally")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("build tally request");
+    let response = app.oneshot(request).await.expect("route response");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read response")
+        .to_bytes();
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let json = std::str::from_utf8(&bytes).expect("UTF-8 tally response");
+    assert!(json.contains(&exact_weight.to_string()));
+    let decoded: iroha_torii::ZkVoteGetTallyResponseDto =
+        norito::json::from_slice(&bytes).expect("decode exact tally JSON");
+    assert!(decoded.finalized);
+    assert_eq!(decoded.tally, vec![exact_weight, 0]);
+    assert_eq!(decoded.evaluated_block_height, height);
+    assert_eq!(decoded.evaluated_block_hash, hash);
+
+    let norito = iroha_torii::handle_v1_zk_vote_tally(
+        State(state),
+        Some(http::HeaderValue::from_static("application/x-norito")),
+        iroha_torii::NoritoJson(iroha_torii::ZkVoteGetTallyRequestDto {
+            election_id: "election-fixture".to_owned(),
+        }),
+    )
+    .await
+    .expect("Norito tally handler response");
+    assert_eq!(
+        norito.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/x-norito"))
+    );
+    let bytes = norito
+        .into_body()
+        .collect()
+        .await
+        .expect("read Norito response")
+        .to_bytes();
+    let decoded_norito: iroha_torii::ZkVoteGetTallyResponseDto =
+        norito::decode_from_bytes(&bytes).expect("decode Norito tally response");
+    assert_eq!(decoded_norito.tally, decoded.tally);
+    assert_eq!(decoded_norito.evaluated_block_height, height);
+    assert_eq!(decoded_norito.evaluated_block_hash, hash);
+}
+
+#[tokio::test]
+async fn zk_vote_tally_endpoint_rejects_malformed_or_partial_retained_results() {
+    for election in [
+        ElectionState {
+            options: 1,
+            tally: vec![0],
+            ..ElectionState::default()
+        },
+        ElectionState {
+            options: 2,
+            tally: vec![0],
+            ..ElectionState::default()
+        },
+        ElectionState {
+            options: 2,
+            finalized: true,
+            tally: vec![u128::MAX, 1],
+            ..ElectionState::default()
+        },
+        ElectionState {
+            options: 2,
+            start_ts: 10,
+            end_ts: 9,
+            tally: vec![0, 0],
+            ..ElectionState::default()
+        },
+        ElectionState {
+            options: 2,
+            tally: vec![1, 0],
+            ..ElectionState::default()
+        },
+    ] {
+        let (state, _, _) = state_with_tally_read_fixture(election);
+        let app = zk_vote_tally_app(state);
+        let body =
+            norito::json::to_string(&iroha_torii::json_object(vec![iroha_torii::json_entry(
+                "election_id",
+                "election-fixture",
+            )]))
+            .expect("serialize tally request");
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/v1/zk/vote/tally")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .expect("build tally request");
+        let response = app.oneshot(request).await.expect("route response");
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
     }
 }

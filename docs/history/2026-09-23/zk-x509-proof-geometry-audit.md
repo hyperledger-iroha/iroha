@@ -31,3 +31,26 @@ If every non-trace byte stayed fixed, it would consume 6,920,426 bytes, leaving 
 A plausible *argument redesign to investigate* is recursive composition: keep complete, verifier-fixed child relations for DER/RFC/CRL, 29 SHA calls, five P-256 equations, byte memory, projections and compact CA; commit all child base traces before deriving the existing joint X5B1 challenge family; make a privacy-preserving outer proof verify every child proof, shared challenge chronology, all cross-trace grand-product terminals, the CA root/SPKI channel, and the same public statement. The outer verifier must check child verifier keys/profile digests and all equality links itself. The current joint schedule derives 272 fields only after six MAIN plus one CA base root, and binds them into both subproofs before auxiliary commitments (`credential_pre_aux.rs:1-8,53-85`); independently proving children without this schedule would be unsound. The exact X5S1 public binding and terminal checks are in `credential_stark.rs:1-7,70-118,344-365`.
 
 This is **not** yet a defensible under-9-MiB implementation. There is no instantiated recursive verifier, bound on the outer proof's worst-case encoded size, composed 128-bit soundness/privacy analysis, or measured 300-second/12-GiB prover evidence in the audited source. A narrower microcoded AIR that serializes the five P-256 lanes and SHA slices is another representation research path, but it must demonstrate a complete byte-memory/cross-family relation, deterministic new trace/FRI geometry and a whole-proof bound; moving work into more rows alone does not establish that bound. The compiled KAT and soundness/resource pins are still zero and readiness remains closed (`profile.rs:330-346,541-581`). Neither lowering the 136 queries, omitting certificate/CRL cases, compressing masked field openings as if they were small integers, nor raising the 9-MiB cap follows from the current evidence.
+
+## Follow-up executable sizing screen
+
+`python3 scripts/check_zk_x509_proof_geometry.py` reads the pinned Rust profile,
+the log-19/P-256 width assertions, the X5S1 framing, the compact-CA section
+cap, and the independent Rust MAIN-width test. It checks their arithmetic and
+prints `production_qualified: false`. The source-drift tests are in
+`scripts/tests/check_zk_x509_proof_geometry_test.py`; all four passed with
+`python3 -m pytest -q scripts/tests/check_zk_x509_proof_geometry_test.py`.
+No Cargo build or proof generation was used for this follow-up.
+
+The 9 MiB X5S1 envelope reserves 2,696,222 bytes for the complete CA section
+and 92 bytes for outer framing, leaving **6,740,870 bytes** for MAIN including
+its claim frame. With every non-trace byte of the present maximum held fixed,
+only 1,156 of the present 5,623 current/next eight-byte trace columns could
+remain: **at least 4,467 columns** must disappear or be represented by a
+different argument. Removing all five P-256 log-19 signatures' 2,395 sampled
+columns alone removes 5,211,520 bytes, yet the unchanged remainder is
+**13,944,554 bytes**, still **4,507,370 bytes above** the complete 9 MiB cap.
+This rejects a P-256-only opening-width fix under unchanged other costs. It is
+not a lower bound against a redesigned AIR, commitment argument, recursion,
+or altered FRI schedule; each such construction needs a fresh exact bound and
+independent soundness/resource review before the release gate can move.

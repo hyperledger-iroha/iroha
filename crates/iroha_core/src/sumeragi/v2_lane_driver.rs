@@ -369,15 +369,6 @@ impl NativeLaneDriver {
         Arc::ptr_eq(&self.guard, guard)
     }
 
-    /// Match actual runner resources before it transfers ingress or publication custody.
-    pub(crate) fn matches_dependencies(
-        &self,
-        state: &Arc<State>,
-        guard: &Arc<ConsensusOutputGuard>,
-    ) -> bool {
-        Arc::ptr_eq(&self.state, state) && Arc::ptr_eq(&self.guard, guard)
-    }
-
     /// One bounded fair turn: completion, opening, one instance's timer/control,
     /// one ingress occurrence, and one dispatch per independent physical class.
     /// Slow body work never owns the timeout/WAL queue or the control thread.

@@ -57,6 +57,9 @@ fn local_storage_recovery_emits_no_block_rejection() {
                 AllocationRefusal::DemandOverflow,
             )),
         ),
+        BlockValidationError::EvidencePreparation(
+            crate::state::EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow),
+        ),
     ];
     let mut events = Vec::new();
     for error in local_errors {

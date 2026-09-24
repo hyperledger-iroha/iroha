@@ -1,9 +1,9 @@
 //! Role-13 release-manifest authority claims for one canonical native operation.
 //!
-//! These bounded Norito values are input to a future native State-owned authority. Decoding or
-//! validating a claim does not establish custody, permission, execution, finality, or a right to
-//! sign. Core must derive execution coordinates, authenticate the independent reviewed manifest
-//! and current custody, and atomically retain reservation, completion, audit and ID tombstones.
+//! These bounded Norito values include claims and a distinct immutable custody record schema.
+//! Decoding either does not establish custody, permission, execution, finality, or a right to sign.
+//! Core must derive execution coordinates, authenticate the independent reviewed manifest and
+//! current custody, and atomically retain reservation, completion, audit and ID tombstones.
 //! The shared Manifest request and these native claims retain one strict canonical JSON/schema
 //! representation alongside their Norito wire frames. The registered ISI is closed in Core:
 //! neither decoding nor successful claim preflight grants signing or mutation authority.
@@ -30,11 +30,31 @@ pub const RELEASE_MANIFEST_ACTION_MAX_BYTES_V1: usize = 48 * 1024;
 pub const RELEASE_MANIFEST_OPERATION_LIMIT_V1: u64 = 65_536;
 /// Maximum exclusive reservation lifetime, further capped by governed custody.
 pub const RELEASE_MANIFEST_RESERVATION_MS_V1: u64 = 60_000;
+/// Total retained custody revisions, including two emergency revocations.
+pub const RELEASE_MANIFEST_CUSTODY_MAX_REVISIONS_V1: u64 = 8_194;
+/// Configure/enroll ceiling, reserving two revisions for emergency revocation.
+pub const RELEASE_MANIFEST_CUSTODY_NORMAL_REVISIONS_V1: u64 = 8_192;
+/// Maximum complete canonical native custody record, including its Norito header.
+pub const RELEASE_MANIFEST_CUSTODY_MAX_RECORD_BYTES_V1: usize = 32 * 1024;
+/// Purpose-owned immutable custody commitment domain, distinct from all other signer roles.
+pub const RELEASE_MANIFEST_CUSTODY_RECORD_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.release-manifest.custody-control.v1\0";
 
 /// Exact reviewed manifest request and audit predecessor to reserve before provider I/O.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestReserveV1"
@@ -49,8 +69,19 @@ pub struct ReleaseManifestReserveV1 {
 
 /// Completion claims the original reservation and commits privately staged signatures.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCompleteV1"
@@ -72,8 +103,19 @@ pub struct ReleaseManifestCompleteV1 {
 
 /// Explicit terminalization without deleting the operation-ID tombstone.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestExpireV1"
@@ -89,13 +131,29 @@ pub struct ReleaseManifestExpireV1 {
 
 /// Claimed immutable operation outcome; the native reader must authenticate the retained row.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestOutcomeV1"
 )]
-#[norito(tag = "state", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "state",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestOutcomeV1 {
     /// Exclusive slot remains open, with no signature released.
     #[codec(index = 0)]
@@ -110,8 +168,19 @@ pub enum ReleaseManifestOutcomeV1 {
 
 /// Claimed native indexed row, never proof of its own execution or finality.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestOperationV1"
@@ -126,10 +195,93 @@ pub struct ReleaseManifestOperationV1 {
     pub outcome: ReleaseManifestOutcomeV1,
 }
 
+/// Actual deterministic role-13 custody execution, never a submitted finality assertion.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestExecutionV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestExecutionV1 {
+    /// Actual executing block height.
+    pub height: u64,
+    /// Zero-based transition ordinal within this deployment's custody history and block.
+    pub ordinal: u32,
+    /// Executing block's logical timestamp in Unix milliseconds.
+    pub recorded_at_unix_ms: u64,
+    /// Registered universal account that submitted this custody transition.
+    pub authority: AccountId,
+}
+
+/// Immutable role-13 custody transition, independent of operation and audit progress.
+///
+/// Native storage also retains permanent first-use indexes for signer and attester keys.
+/// A decoded record alone proves neither successful execution nor consensus finality.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCustodyRecordV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestCustodyRecordV1 {
+    /// Stable role-13 deployment identity across key and policy rotation.
+    pub deployment_id: String,
+    /// Strictly one-based custody revision.
+    pub revision: u64,
+    /// Previous role-13 custody digest; zero only at initial configuration.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub predecessor_digest: [u8; 32],
+    /// Canonical mutation and submitting authority commitment.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub request_digest: [u8; 32],
+    /// Native execution coordinates, derived by Core from the actual transaction.
+    pub execution: ReleaseManifestExecutionV1,
+    /// Canonical Manifest `SignerCustodyControlStateV1` frame.
+    #[norito(json = "crate::json_helpers::base64_vec")]
+    pub control_state: Vec<u8>,
+    /// Exact admitted signed custody frame, cleared by reconfiguration.
+    pub enrollment: Option<Vec<u8>>,
+}
+
 /// Independently retained finalized floor requested for a fresh Check.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestFloorV1"
@@ -145,13 +297,29 @@ pub struct ReleaseManifestFloorV1 {
 
 /// Closed phase set; every invocation requires a separately retained fresh challenge.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCheckPhaseV1"
 )]
-#[norito(tag = "phase", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "phase",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestCheckPhaseV1 {
     /// Current eligible custody and exact audit predecessor, before reservation.
     #[codec(index = 0)]
@@ -175,8 +343,18 @@ pub enum ReleaseManifestCheckPhaseV1 {
 
 /// No-write Check claim; only a native exact transaction/result reader can authenticate it.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestCheckV1"
@@ -199,15 +377,57 @@ pub struct ReleaseManifestCheckV1 {
     pub phase: ReleaseManifestCheckPhaseV1,
 }
 
-/// Closed action surface, not yet an InstructionBox or production authorization path.
+/// Governed emergency revocation of the current role-13 signer or attester generation.
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
-    DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestRevocationV1 {
+    /// Revoke the current protected signer generation.
+    pub signer: bool,
+    /// Revoke the independent attester generation.
+    pub attester: bool,
+}
+
+/// Closed native action surface; its registered instruction has no production execution path.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
 #[norito_schema(
     name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestActionV1"
 )]
-#[norito(tag = "action", content = "value", rename_all = "snake_case", deny_unknown_fields)]
+#[norito(
+    tag = "action",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ReleaseManifestActionV1 {
     /// Canonical role-13 custody policy, admitted only by future native permission checks.
     #[codec(index = 0)]
@@ -217,12 +437,7 @@ pub enum ReleaseManifestActionV1 {
     Enroll(Vec<u8>),
     /// Governed emergency revocation invalidates the active operation.
     #[codec(index = 2)]
-    Revoke {
-        /// Revoke the current signer key generation.
-        signer: bool,
-        /// Revoke the current independent attester generation.
-        attester: bool,
-    },
+    Revoke(ReleaseManifestRevocationV1),
     /// Reserve one exact original operation before key I/O.
     #[codec(index = 3)]
     Reserve(ReleaseManifestReserveV1),

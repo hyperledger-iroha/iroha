@@ -105,6 +105,7 @@ fn observe_next(size: usize, fail: bool, budget: &AllocationBudget) {
 struct AfterFree {
     budget: AllocationBudget,
     expected: usize,
+    expected_align: usize,
     wakes: AtomicUsize,
 }
 
@@ -119,7 +120,7 @@ impl Wake for AfterFree {
             "refund woke before System.dealloc returned"
         );
         assert_eq!(FREED_SIZE.load(SeqCst), self.expected);
-        assert_eq!(FREED_ALIGN.load(SeqCst), 1);
+        assert_eq!(FREED_ALIGN.load(SeqCst), self.expected_align);
         assert_eq!(self.budget.reserved_bytes(), 0);
         self.wakes.fetch_add(1, SeqCst);
     }
@@ -149,6 +150,7 @@ fn exact_backing_layout_and_charge_survive_fill_until_actual_deallocation() {
     let observed = Arc::new(AfterFree {
         budget: budget.clone(),
         expected: 257,
+        expected_align: 1,
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&observed));
@@ -448,6 +450,130 @@ fn appending_copy_elements_never_invokes_payload_clone() {
     entries.append(&[Entry(9)]).unwrap();
     assert_eq!(entries.as_slice(), &[Entry(4), Entry(9)]);
     drop(entries);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn non_copy_elements_move_into_exact_backing_and_drop_before_refund() {
+    #[repr(align(128))]
+    struct DropEntry<'a> {
+        id: usize,
+        drops: &'a [AtomicUsize; 5],
+        budget: &'a AllocationBudget,
+        backing_bytes: usize,
+    }
+
+    impl Drop for DropEntry<'_> {
+        fn drop(&mut self) {
+            assert!(!FREED.load(SeqCst), "element dropped after backing free");
+            assert_eq!(self.budget.reserved_bytes(), self.backing_bytes);
+            self.drops[self.id].fetch_add(1, SeqCst);
+        }
+    }
+
+    let _serial = SERIAL.lock().unwrap();
+    let layout = Layout::array::<DropEntry<'_>>(3).unwrap();
+    let budget = AllocationBudget::new(layout.size());
+    let drops = std::array::from_fn(|_| AtomicUsize::new(0));
+    let observer = Arc::new(AfterFree {
+        budget: budget.clone(),
+        expected: layout.size(),
+        expected_align: layout.align(),
+        wakes: AtomicUsize::new(0),
+    });
+    let original = budget
+        .try_reserve(layout)
+        .unwrap()
+        .try_split(layout)
+        .unwrap();
+    observe_next(layout.size(), false, &budget);
+    let mut entries = ChargedBuffer::<DropEntry<'_>>::try_from_charge(3, original).unwrap();
+    assert_eq!(REQUESTED_SIZE.load(SeqCst), layout.size());
+    assert_eq!(REQUESTED_ALIGN.load(SeqCst), layout.align());
+    assert_eq!(RESERVED_AT_ALLOCATION.load(SeqCst), layout.size());
+    let pointer = entries.as_slice().as_ptr();
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    let entry = |id| DropEntry {
+        id,
+        drops: &drops,
+        budget: &budget,
+        backing_bytes: layout.size(),
+    };
+    assert!(entries.try_push(entry(0)).is_ok());
+    assert!(entries.try_push(entry(1)).is_ok());
+    assert!(entries.try_push(entry(2)).is_ok());
+    let rejected = entries.try_push(entry(3)).err().unwrap();
+    assert_eq!(entries.as_slice().len(), 3);
+    assert_eq!(drops[3].load(SeqCst), 0, "refusal retains the input owner");
+    drop(rejected);
+    assert_eq!(drops[3].load(SeqCst), 1);
+    entries.truncate(1);
+    assert_eq!(drops[1].load(SeqCst), 1);
+    assert_eq!(drops[2].load(SeqCst), 1);
+    assert_eq!(budget.reserved_bytes(), layout.size());
+    assert!(entries.try_push(entry(4)).is_ok());
+    assert_eq!(entries.as_slice().as_ptr(), pointer);
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
+
+    let Err(AllocationRefusal::Capacity { release, .. }) = budget.try_reserve_bytes(1) else {
+        panic!("the original backing charge must remain occupied");
+    };
+    let waker = Waker::from(Arc::clone(&observer));
+    let mut released = pin!(release.wait_for_release());
+    assert!(
+        released
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    drop(entries);
+    assert_eq!(observer.wakes.load(SeqCst), 1);
+    assert!(
+        released
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_ready()
+    );
+    assert_eq!(FREED_SIZE.load(SeqCst), layout.size());
+    assert_eq!(FREED_ALIGN.load(SeqCst), layout.align());
+    assert!(drops.iter().all(|count| count.load(SeqCst) == 1));
+}
+
+#[test]
+fn non_copy_zero_sized_elements_keep_logical_capacity_and_drop_once() {
+    #[repr(align(256))]
+    struct DropZst;
+
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    impl Drop for DropZst {
+        fn drop(&mut self) {
+            DROPS.fetch_add(1, SeqCst);
+        }
+    }
+
+    let _serial = SERIAL.lock().unwrap();
+    DROPS.store(0, SeqCst);
+    let budget = AllocationBudget::new(0);
+    observe_next(0, false, &budget);
+    let allocations = OBSERVED_COUNT.load(SeqCst);
+    let mut entries = ChargedBuffer::<DropZst>::new(2, &budget).unwrap();
+    assert_eq!(entries.capacity(), 2);
+    assert_eq!(entries.as_slice().as_ptr() as usize % 256, 0);
+    assert!(entries.try_push(DropZst).is_ok());
+    assert!(entries.try_push(DropZst).is_ok());
+    let rejected = entries.try_push(DropZst).err().unwrap();
+    assert_eq!(entries.as_slice().len(), 2);
+    assert_eq!(DROPS.load(SeqCst), 0);
+    drop(rejected);
+    assert_eq!(DROPS.load(SeqCst), 1);
+    entries.truncate(1);
+    assert_eq!(DROPS.load(SeqCst), 2);
+    assert!(entries.try_push(DropZst).is_ok());
+    drop(entries);
+    assert_eq!(DROPS.load(SeqCst), 4);
+    assert_eq!(NEXT_SIZE.load(SeqCst), 0);
+    assert_eq!(OBSERVED_COUNT.load(SeqCst), allocations);
     assert_eq!(budget.reserved_bytes(), 0);
 }
 

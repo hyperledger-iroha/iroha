@@ -2,6 +2,7 @@
 
 use crate::{
     kura::Kura,
+    privacy_state::PrivacyPublicReserveOwnerV1,
     query::store::LiveQueryStore,
     state::{State, StateTransaction, World},
 };
@@ -65,6 +66,99 @@ fn asset_balance_or_zero(tx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantit
         .get(id)
         .map(|asset| asset.as_ref().clone())
         .unwrap_or_else(Quantity::zero)
+}
+
+fn seed_prepared_test_orchard_reserve(tx: &mut StateTransaction<'_, '_>, id: &AssetId) {
+    use iroha_data_model::privacy::{
+        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+    };
+
+    let owner = PrivacyPublicReserveOwnerV1::Orchard {
+        namespace: PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
+            }),
+        ),
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
+    };
+    tx.world.privacy_commitments.insert(
+        crate::privacy_state::PrivacyCommitmentKeyV1::public_reserve_custody(
+            owner.protocol_id(),
+            id,
+        )
+        .expect("reserve custody key"),
+        crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(id.clone(), owner)
+            .expect("reserve custody row"),
+    );
+}
+
+#[test]
+fn prepared_user_transfer_rechecks_new_privacy_reserve_custody_at_apply() {
+    let (state, definition_id, source_id) = build_asset_transfer_control_test_state(10);
+    let destination_id = AssetId::new(definition_id, BOB_ID.clone());
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    let plan = PreparedNumericTransferPlan::prepare_user(
+        &mut transaction,
+        &ALICE_ID,
+        source_id.clone(),
+        destination_id.clone(),
+        Quantity::one(),
+    )
+    .expect("ungoverned source can be prepared");
+    seed_prepared_test_orchard_reserve(&mut transaction, &source_id);
+
+    let error = plan
+        .apply(&mut transaction)
+        .err()
+        .expect("prepared user transfer cannot debit new governed custody");
+    assert!(error.to_string().contains("exact verified pool bridge"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &source_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_id),
+        Quantity::zero()
+    );
+}
+
+#[test]
+fn prepared_batch_transfer_rechecks_new_privacy_reserve_custody_at_apply() {
+    let (state, definition_id, source_id) = build_asset_transfer_control_test_state(10);
+    let destination_id = AssetId::new(definition_id, BOB_ID.clone());
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    let plan = PreparedNumericTransferPlan::prepare(
+        &mut transaction,
+        &ALICE_ID,
+        source_id.clone(),
+        destination_id.clone(),
+        Quantity::one(),
+        NumericAssetTransferScopePolicy::Ambient,
+        NumericAssetTransferAuthorityPolicy::UserSource,
+        NumericAssetTransferSourcePolicy::User,
+        NumericAssetTransferControlPolicy::StakingUnbond,
+        NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+    )
+    .expect("ungoverned source can be prepared without a control update");
+    seed_prepared_test_orchard_reserve(&mut transaction, &source_id);
+
+    let error = plan
+        .apply_after_batch_preflight(&mut transaction)
+        .err()
+        .expect("prepared batch transfer cannot debit new governed custody");
+    assert!(error.to_string().contains("exact verified pool bridge"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &source_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_id),
+        Quantity::zero()
+    );
 }
 
 fn occurrence_header() -> BlockHeader {

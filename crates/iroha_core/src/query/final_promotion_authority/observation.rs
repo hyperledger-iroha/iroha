@@ -4,7 +4,9 @@
 //! explicitly. This consumer owns the actual State and reuses canonical consensus continuity;
 //! a decoded Check, isolated QC or successful submission acknowledgement cannot mint authority.
 //! TODO: wire the production purpose-bound source, separate transaction signer and qualified
-//! clock to this consumer, and qualify live phase latency and physical custody independently.
+//! clock to this consumer, and qualify live phase latency and software custody independently.
+
+mod reserved_source;
 
 use std::{sync::Arc, time::Duration};
 
@@ -135,6 +137,18 @@ pub struct PreparedFinalPromotionCheckV1 {
 pub struct PendingFinalPromotionCheckV1 {
     prepared: PreparedFinalPromotionCheckV1,
     bound: BoundNativeCheckV1,
+}
+
+/// Original signed operation source required by the exact Check phase.
+///
+/// The original Reserve envelope must be retained by the caller from ordinary submission or
+/// ambiguous-result reconciliation. A decoded operation row or the Check envelope itself cannot
+/// replace it. Completed phases have no admitted source variant until their distinct proof exists.
+pub enum FinalPromotionCheckSourceV1<'a> {
+    /// The custody and audit-head Check has no prior operation source.
+    Current,
+    /// A Reserved phase must prove this original signed role-15 Reserve against the native row.
+    Reserved(&'a SignedTransaction),
 }
 
 /// Move-only success scoped to one exact native Check and one authenticated applied cut.
@@ -271,6 +285,7 @@ fn validate_expected_subject(
         || row.revision > 2 * FINAL_PROMOTION_MAX_OPERATIONS_V1
         || (row.revision == 1) != (row.predecessor_digest == [0; 32])
         || row.request_digest == [0; 32]
+        || row.reserved_origin.entry_hash == [0; 32]
         || !super::valid_execution(&row.reserved)
         || !super::valid_execution(&row.execution)
         || u64::from(row.reserved.ordinal) >= row.revision
@@ -299,6 +314,7 @@ fn validate_expected_subject(
     if reserved {
         if row.outcome != FinalPromotionOperationOutcomeV1::Reserved
             || row.reserved != row.execution
+            || row.execution_origin != Some(row.reserved_origin)
         {
             return Err(Error::Invalid);
         }
@@ -307,6 +323,9 @@ fn validate_expected_subject(
             return Err(Error::Invalid);
         };
         if row.execution.height <= row.reserved.height
+            || row
+                .execution_origin
+                .is_none_or(|origin| origin.entry_hash == [0; 32])
             || super::adjacent_execution(&row.reserved, &row.execution).is_err()
             || row.execution.recorded_at_unix_ms >= row.reservation.expires_at_unix_ms
             || row.intent.previous_audit.sequence.checked_add(1)
@@ -398,6 +417,8 @@ impl PendingFinalPromotionCheckV1 {
 
     /// Consume the attempt against its retained actual State, after native application is observed.
     ///
+    /// `source` must match the Check phase. Reserved phases require the original signed Reserve
+    /// and a floor pinned before it; completed phases remain closed until Complete source proof.
     /// The callback supplies one independently established UTC interval after expensive proof work.
     /// Both endpoints must satisfy the shared custody and phase predicates at this same applied cut;
     /// this consumer does not qualify the clock source or derive its uncertainty from the candidate.
@@ -409,10 +430,23 @@ impl PendingFinalPromotionCheckV1 {
     /// signed envelope, rejected or misaligned result, unavailable clock, or current ineligibility.
     pub fn verify_finalized(
         self,
+        source: FinalPromotionCheckSourceV1<'_>,
         sample_eligibility_time: impl FnOnce() -> Result<FinalPromotionEligibilityTimeIntervalV1, Error>,
     ) -> Result<VerifiedFinalPromotionCheckV1, Error> {
         self.ensure_live()?;
         let p = &self.prepared;
+        let reserved_source = match (&p.expected.subject, source) {
+            (FinalPromotionCheckSubjectV1::Current(_), FinalPromotionCheckSourceV1::Current) => {
+                None
+            }
+            (
+                FinalPromotionCheckSubjectV1::BeforeProvider(row)
+                | FinalPromotionCheckSubjectV1::AfterProvider(row)
+                | FinalPromotionCheckSubjectV1::BeforeCommit(row),
+                FinalPromotionCheckSourceV1::Reserved(signed),
+            ) => Some((row, signed)),
+            _ => return Err(Error::Execution),
+        };
         let cut = authenticate_applied_check_v1(
             &p.state,
             NativeCustodyCheckPurposeV1::FinalPromotion,
@@ -420,6 +454,16 @@ impl PendingFinalPromotionCheckV1 {
             &p.round,
         )?;
         let view = cut.view();
+        if let Some((row, signed)) = reserved_source {
+            reserved_source::authenticate_reserved_source(
+                view,
+                p.expected.floor,
+                cut.applied_floor(),
+                row,
+                signed,
+                &p.round,
+            )?;
+        }
         let eligibility_time_interval = sample_eligibility_time().map_err(|_| Error::Clock)?;
         let FinalPromotionEligibilityTimeIntervalV1 {
             earliest_unix_ms,

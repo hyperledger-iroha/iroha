@@ -4090,6 +4090,11 @@ impl V2ApplyService {
         error: &BlockValidationError,
     ) -> V2ApplyError {
         let local = match error {
+            BlockValidationError::EvidencePreparation(error) => Some((
+                "consensus_penalty_preparation",
+                error.release_wait(),
+                error.to_string(),
+            )),
             BlockValidationError::BlockHashAdmission(error) => Some((
                 "block_hash_history",
                 error.release_wait(),
@@ -4118,6 +4123,11 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::EvidencePreparation(reason) = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
+            );
+        }
         if let BlockValidationError::BlockHashAdmission(reason) = error {
             return V2ApplyError::LocalValidation(
                 super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),

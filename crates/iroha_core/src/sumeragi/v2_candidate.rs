@@ -1991,6 +1991,9 @@ pub(crate) enum CandidateError {
     LocalStateAdmission(
         crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
     ),
+    /// Local evidence or stake-index penalty preparation could not fund a candidate plan.
+    #[error("local evidence preparation: {0}")]
+    LocalEvidencePreparation(crate::state::EvidencePreparationError),
     /// A prior fatal consensus operation requires process restart.
     #[error("Sumeragi v2 candidate signing requires process restart")]
     RestartRequired,

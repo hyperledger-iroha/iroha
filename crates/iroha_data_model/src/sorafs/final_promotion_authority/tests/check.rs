@@ -35,10 +35,18 @@ fn operation(completed: bool) -> FinalPromotionOperationRecordV1 {
         predecessor_digest: if completed { [15; 32] } else { [0; 32] },
         request_digest: [16; 32],
         execution: executed,
+        execution_origin: Some(FinalPromotionOperationOriginV1 {
+            entry_hash: if completed { [20; 32] } else { [19; 32] },
+            entry_index: 0,
+        }),
         intent,
         custody: custody(),
         reservation: reservation(),
         reserved: execution(),
+        reserved_origin: FinalPromotionOperationOriginV1 {
+            entry_hash: [19; 32],
+            entry_index: 0,
+        },
         outcome: if completed {
             FinalPromotionOperationOutcomeV1::Completed(FinalPromotionCompletedV1 {
                 commitment: commitment(),

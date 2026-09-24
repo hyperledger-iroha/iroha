@@ -729,8 +729,72 @@ mod tests {
 
     #[test]
     fn nonce_bound_issuer_evidence_requires_all_three_signatures_and_exact_commitment() {
-        let f = Fixture::new(1);
-        let c = challenge(&f);
+        let mut f = Fixture::new(1);
+        let app_authority = KeyPair::from_seed(vec![74; 32], Algorithm::Ed25519);
+        let app_policy = KagemushaAppAttestationAuthorityPolicyV1 {
+            authority_key: app_authority.public_key().clone(),
+            platform_class: f.profile.platform_class,
+            app_signing_identity_digest: [95; 32],
+            app_release_digest: [96; 32],
+            maximum_lifetime_ms: 1_000,
+        };
+        f.profile.app_attestation_authority_policy_digest = app_policy.canonical_digest().unwrap();
+        f.profile = f.profile.seal_hardware_profile_id().unwrap();
+        let mut credential = f.selection.issuance.credential;
+        credential.hardware_profile_id = f.profile.hardware_profile_id;
+        credential.app_policy_binding_digest = KagemushaAppDevicePolicyBindingV1 {
+            app_signing_identity_digest: app_policy.app_signing_identity_digest,
+            app_release_digest: app_policy.app_release_digest,
+            release_id: f.selection.issuance.release_id,
+            hardware_profile_id: f.profile.hardware_profile_id,
+            device_key_reference: credential.device_key_reference,
+            lane_id: credential.lane_commitment,
+        }
+        .canonical_digest()
+        .unwrap();
+        credential = credential.seal_credential_id().unwrap();
+        let governance_signature: p256::ecdsa::Signature =
+            p256_key(2).sign(&credential.canonical_signing_bytes().unwrap());
+        credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+            &governance_signature
+                .normalize_s()
+                .unwrap_or(governance_signature)
+                .to_bytes(),
+        )
+        .unwrap();
+        f.selection.issuance.credential = credential;
+        f.certificate.subject.issuance = f.selection.issuance.clone();
+        let mut c = challenge(&f);
+        let app_selection = KagemushaAppEnrollmentSelectionV1::for_credential(
+            c.client_nonce,
+            c.server_nonce,
+            c.issuance.release_id,
+            &credential,
+        );
+        let app_assertion = KagemushaAppEnrollmentAssertionV1 {
+            version: 1,
+            domain: "iroha:kagemusha:v1:app-device-enrollment".to_owned(),
+            client_nonce: app_selection.client_nonce,
+            server_nonce: app_selection.server_nonce,
+            app_signing_identity_digest: app_policy.app_signing_identity_digest,
+            app_release_digest: app_policy.app_release_digest,
+            platform_evidence_digest: [97; 32],
+            release_id: app_selection.release_id,
+            hardware_profile_id: app_selection.hardware_profile_id,
+            device_key_reference: app_selection.device_key_reference,
+            lane_id: app_selection.lane_id,
+            issued_at_ms: 900,
+            expires_at_ms: 1_900,
+        };
+        let app_certificate = KagemushaAppEnrollmentCertificateV1 {
+            signature: SignatureOf::try_new(app_authority.private_key(), &app_assertion).unwrap(),
+            assertion: app_assertion,
+        };
+        let verified_app = app_certificate
+            .authenticate(&app_policy, app_selection, 1_000)
+            .unwrap();
+        c.app_attestation_digest = verified_app.digest();
+        f.certificate.subject.app_attestation_digest = verified_app.digest();
         let p = proof(&f, &c);
         let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
             let mut certificate = f.certificate.clone();
@@ -757,6 +821,7 @@ mod tests {
                 },
                 &f.selection,
                 nonce,
+                &verified_app,
             )
         };
         let certificate = seal(&p, 1000);
@@ -813,7 +878,7 @@ mod tests {
         let fresh_proof = proof(&f, &fresh_challenge);
         assert_eq!(
             verify_issuer(&fresh_proof, &certificate, fresh_challenge.client_nonce).unwrap_err(),
-            KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
+            KagemushaRetailEnrollmentChallengeErrorV1::Binding
         );
     }
 

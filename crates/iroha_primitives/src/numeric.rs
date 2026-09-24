@@ -7,7 +7,7 @@
 //! Encoding note: `Numeric` serializes as a helper carrying `(mantissa, scale)`.
 //! The mantissa is a raw [`crate::bigint::BigInt`] integer (no decimal scale
 //! is embedded in the integer), and the scale is stored separately as a `u32`.
-use crate::bigint::BigInt;
+use crate::bigint::{BigInt, BigIntAdmissionCloneError};
 use core::{cmp::Ordering, str::FromStr};
 pub use iroha_primitives_derive::numeric;
 use norito::{
@@ -17,6 +17,7 @@ use norito::{
 use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
 use num_traits::{One as _, Signed as _, Zero as _};
 use std::{
+    alloc::Layout,
     string::{String, ToString},
     vec::Vec,
 };
@@ -1433,6 +1434,29 @@ impl Quantity {
     #[must_use]
     pub fn one() -> Self {
         Self(Numeric::one())
+    }
+    /// Exact native-digit backing layout of one cloned quantity.
+    ///
+    /// The caller can reserve this layout from its original allocation pool
+    /// before cloning. A zero quantity needs no heap allocation.
+    ///
+    /// # Errors
+    /// Rejects an unrepresentable native-digit layout.
+    pub fn admission_clone_layout(&self) -> Result<Layout, BigIntAdmissionCloneError> {
+        self.mantissa().admission_clone_layout()
+    }
+    /// Fallibly clone this quantity through one exact native-digit allocation.
+    ///
+    /// The caller retains the original-pool charge until the clone drops;
+    /// this method does not acquire or transfer a pool charge.
+    ///
+    /// # Errors
+    /// Rejects an unrepresentable layout or physical allocator refusal.
+    pub fn try_clone_for_admission(&self) -> Result<Self, BigIntAdmissionCloneError> {
+        Ok(Self(Numeric {
+            mantissa: self.mantissa().try_clone_for_admission()?,
+            scale: self.scale(),
+        }))
     }
     /// Canonicalize and validate a decimal as a non-negative quantity.
     ///
@@ -3056,6 +3080,32 @@ mod tests {
     use super::*;
     use core::cmp::Ordering;
     use num_bigint::BigInt as ReferenceInt;
+    #[test]
+    fn quantity_admission_clone_preserves_canonical_value_with_exact_digit_layout() {
+        let zero = Quantity::zero();
+        assert_eq!(zero.admission_clone_layout().unwrap().size(), 0);
+        assert_eq!(zero.try_clone_for_admission().unwrap(), zero);
+
+        let fractional = Quantity::from_canonical_numeric(Numeric::new(123, 2)).unwrap();
+        let mut maximum_bytes = [0xff_u8; MAX_MANTISSA_BYTES];
+        maximum_bytes[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        let maximum = Quantity::from_canonical_numeric(Numeric::new(
+            BigInt::from_twos_bytes(&maximum_bytes).unwrap(),
+            0,
+        ))
+        .unwrap();
+        for value in [fractional, maximum] {
+            let expected = value
+                .mantissa()
+                .bit_len()
+                .div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES * 8)
+                * UNBOUNDED_BIGINT_DIGIT_BYTES;
+            assert_eq!(value.admission_clone_layout().unwrap().size(), expected);
+            let cloned = value.try_clone_for_admission().unwrap();
+            assert_eq!(cloned, value);
+            assert_eq!(cloned.scale(), value.scale());
+        }
+    }
     #[test]
     fn check_add() {
         let a = Numeric::new(10, 0);

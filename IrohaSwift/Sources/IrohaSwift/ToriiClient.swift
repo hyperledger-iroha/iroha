@@ -18151,16 +18151,8 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
     }
 
     private static func exactNumberLexeme(from decoder: Decoder) -> String? {
-        if let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
-            as? [String: String],
-           let lexeme = lexemes[exactJSONNumberCodingPathKey(decoder.codingPath)] {
-            return lexeme
-        }
-        if let lexemes = decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
-            as? [String: String] {
-            return lexemes[legacyExactJSONIntegerCodingPathKey(decoder.codingPath)]
-        }
-        return nil
+        let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey] as? [String: String]
+        return lexemes?[exactJSONNumberCodingPathKey(decoder.codingPath)]
     }
 }
 
@@ -18900,7 +18892,7 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
             payloadWire,
             codingPath: container.codingPath + [CodingKeys.payload],
             context: "governance proposal payload",
-            exactIntegerLexemes: decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+            exactIntegerLexemes: decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
                 as? [String: String]
         )
         switch tag {
@@ -25780,6 +25772,45 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try await getGovernanceJSON(path: "/v1/gov/tally/\(encoded)",
                                            canonicalAuth: canonicalAuth,
                                            responseType: ToriiGovernanceTallyResponse.self)
+    }
+
+    /// Query the exact, committed standalone-election tally using a signed V1 request.
+    public func getElectionTally(
+        id: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiElectionTallyResponseV1? {
+        let electionId = try ToriiRequestValidation.governanceSelector(id, field: "electionId")
+        let body = try JSONEncoder().encode(ToriiElectionTallyRequestV1(electionId: electionId))
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/zk/vote/tally",
+            method: .post,
+            body: body,
+            headers: ["Accept": "application/json", "Content-Type": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "election tally",
+            maximumBytes: ToriiElectionTallyResponseV1.maximumResponseBytes
+        )
+        let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard encoding == nil || encoding == "" || encoding == "identity" else {
+            throw ToriiClientError.invalidPayload("election tally response must use identity encoding")
+        }
+        if response.statusCode == 404 {
+            guard data.isEmpty else {
+                throw ToriiClientError.invalidPayload("election tally 404 response must have no body")
+            }
+            return nil
+        }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        do {
+            return try ToriiElectionTallyResponseV1.decodeExact(from: data)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
     }
 
     public func getGovernanceUnlockStats(height: UInt64? = nil,

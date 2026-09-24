@@ -135,6 +135,13 @@ arithmetic and radix-2/4/8/16 folding now pass 21 new real-crate tests, alongsid
 37 existing framing/profile/codec/API regressions. These private test-registered
 owners are not yet a complete smaller proof format or production verifier. The
 September 22 record binds the executable and subsequent registration correction.
+The September 24 [source-projection record](../docs/history/2026-09-24/fastpq-f07-source-projection-and-prover-blocker.md)
+adds a borrowed exact 342-to-301 physical-source bridge with focused Cargo
+validation pending. The test-only 506,351-byte DEEP DTO still lacks a genuine
+producer. Its degree-`<N` base-field row openings cannot directly consume the
+existing nonzero Fp4 vanishing masks: those raise trace degree to at least `N`,
+and opening 64 complete masked Fp4 rows would already exceed 512 KiB. A reviewed
+hiding/opening redesign and bounded prover remain prerequisites.
 
 ## Completion goals
 

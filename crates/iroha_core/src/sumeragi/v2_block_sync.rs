@@ -16,6 +16,8 @@
 //! depends on a second mutable-or-missing copy of the same authority. Their
 //! response signature uses their current P2P identity, so validator key
 //! rotation does not make a retired height unservable.
+#[path = "v2_canonical_executed_body_serve.rs"]
+mod canonical_executed_body_serve;
 #[path = "v2_historical_body_serve.rs"]
 mod historical_body_serve;
 #[cfg(test)]
@@ -31,6 +33,7 @@ use super::v2_transport::{
     authenticate_certified_body_request, authenticate_certified_body_request_identity,
 };
 use super::{
+    InboundBlockMessage,
     v2_chunks::encode_payload,
     v2_core::{
         CanonicalIdentityProjection, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_PAYLOAD,
@@ -40,14 +43,20 @@ use super::{
         check_production_historical_certificate_transition,
     },
     v2_effects::CommitCertificateReducerAdmission,
+    v2_lane_work::{CanonicalRecoveryReadError, V2LaneWorkLimits},
 };
-use crate::kura::Kura;
+use crate::{kura::Kura, state::State};
+#[allow(unused_imports)] // TODO: Move into the typed canonical output handoff.
+pub(crate) use canonical_executed_body_serve::{
+    CanonicalExecutedBodyDurableSourceProof, CanonicalExecutedBodyServeCompletion,
+    CanonicalExecutedBodyServeTask, PreparedCanonicalExecutedBodyOutput,
+};
 use core::fmt;
 use historical_body_serve::HistoricalBodyServeService;
 pub(crate) use historical_body_serve::{
-    HistoricalBodyDurableSourceProof, HistoricalBodyServeAdmission, HistoricalBodyServeCompletion,
-    HistoricalBodyServeLimits, HistoricalBodyServeTask, PreparedHistoricalBodyOutput,
-    PreparedHistoricalBodyPostOutcome,
+    CanonicalExecutedBodyServeAdmission, HistoricalBodyDurableSourceProof,
+    HistoricalBodyServeAdmission, HistoricalBodyServeCompletion, HistoricalBodyServeLimits,
+    HistoricalBodyServeTask, PreparedHistoricalBodyOutput, PreparedHistoricalBodyPostOutcome,
 };
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{NetworkId, block::consensus_v2 as wire};
@@ -198,6 +207,44 @@ impl V2BlockSyncServer {
             })?
             .try_enqueue(task)
     }
+    /// Reserve the chain-scoped worker for one canonical executed-body source.
+    #[allow(dead_code)] // TODO: Connect the dedicated V1 canonical ingress cut.
+    pub(crate) fn try_enqueue_canonical_executed_body(
+        &mut self,
+        task: CanonicalExecutedBodyServeTask,
+    ) -> CanonicalExecutedBodyServeAdmission {
+        let Some(service) = self.historical_body_service.as_mut() else {
+            return CanonicalExecutedBodyServeAdmission::Failed {
+                task,
+                error: V2BlockSyncError::HistoricalBodyService(
+                    "historical-body worker is not installed".into(),
+                ),
+            };
+        };
+        service.try_enqueue_canonical_executed(task)
+    }
+    /// Bind and admit the original authenticated canonical request occurrence.
+    ///
+    /// Shape or ownership refusal returns the unchanged inbound carrier. Once
+    /// bound, worker pressure returns its exact task through
+    /// [`CanonicalExecutedBodyServeAdmission`]. A production ingress caller
+    /// needs a bounded owner for that retry before this method may be wired.
+    #[allow(dead_code)] // TODO: Add funded retry ownership before live V1 routing.
+    pub(crate) fn try_enqueue_canonical_executed_body_ingress(
+        &mut self,
+        inbound: InboundBlockMessage,
+        context: wire::HeightContext,
+        state: std::sync::Arc<State>,
+        limits: V2LaneWorkLimits,
+    ) -> Result<
+        CanonicalExecutedBodyServeAdmission,
+        (InboundBlockMessage, CanonicalRecoveryReadError),
+    > {
+        let task = CanonicalExecutedBodyServeTask::from_authenticated_inbound(
+            inbound, context, state, limits,
+        )?;
+        Ok(self.try_enqueue_canonical_executed_body(task))
+    }
     /// Take at most one prepared historical-body completion.
     pub(crate) fn try_recv_historical_body_completion(
         &mut self,
@@ -206,6 +253,16 @@ impl V2BlockSyncServer {
             return Ok(None);
         };
         service.try_recv()
+    }
+    /// Take one canonical source completion while retaining its ingress owner.
+    #[allow(dead_code)] // TODO: Connect the typed exact-output post and SourceRetained retry.
+    pub(crate) fn try_recv_canonical_executed_body_completion(
+        &mut self,
+    ) -> Result<Option<CanonicalExecutedBodyServeCompletion>, V2BlockSyncError> {
+        let Some(service) = self.historical_body_service.as_mut() else {
+            return Ok(None);
+        };
+        service.try_recv_canonical_executed()
     }
     /// Retain one exact-output-rejected body for the next serialized actor turn.
     pub(crate) fn defer_prepared_historical_body_output(

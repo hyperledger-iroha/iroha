@@ -678,8 +678,8 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let wrappedSupply = "18446744073709551616000000000"
         let destinationData = sccpEvmDestinationJSON(maxWrappedSupply: wrappedSupply)
         let destinationDecoder = JSONDecoder()
-        destinationDecoder.userInfo[governanceExactIntegerLexemesUserInfoKey] =
-            try governanceExactJSONIntegerLexemes(destinationData)
+        destinationDecoder.userInfo[exactJSONNumberLexemesUserInfoKey] =
+            try governanceValidatedProposalJSON(destinationData).numberLexemes
         let destination = try destinationDecoder.decode(
             ToriiGovernanceSccpDestination.self,
             from: destinationData
@@ -712,6 +712,28 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         XCTAssertEqual(governedDestination.maxWrappedSupply, wrappedSupply)
         XCTAssertEqual(register.route.settlement.maxOutstandingLiability, liability)
 
+        let unscannedWideDestination = sccpEvmDestinationJSON(
+            maxWrappedSupply: "9007199254740992"
+        )
+        let scannedWideDecoder = JSONDecoder()
+        scannedWideDecoder.userInfo[exactJSONNumberLexemesUserInfoKey] =
+            try governanceValidatedProposalJSON(unscannedWideDestination).numberLexemes
+        let scannedWideDestination = try scannedWideDecoder.decode(
+            ToriiGovernanceSccpDestination.self,
+            from: unscannedWideDestination
+        )
+        guard case let .evm(scannedEvm) = scannedWideDestination else {
+            return XCTFail("expected SCCP EVM destination with canonical wide cap")
+        }
+        XCTAssertEqual(scannedEvm.maxWrappedSupply, "9007199254740992")
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiGovernanceSccpDestination.self,
+                from: unscannedWideDestination
+            ),
+            "wide cap integers require their canonical source lexeme"
+        )
+
         let draft = try ToriiParliamentAPIV1.attemptDraftRequestData(
             proposal: proposal,
             attemptSequence: 1
@@ -725,6 +747,9 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         for invalidCap in [
             "340282366920938463463374607431768211456",
             "18446744073709551616000000000.0",
+            "18446744073709551616000000000e0",
+            "\"18446744073709551616000000000\"",
+            "-0",
             "018446744073709551616000000000",
         ] {
             let invalidRoute = sccpGovernedRouteJSON(

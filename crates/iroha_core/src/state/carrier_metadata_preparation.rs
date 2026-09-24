@@ -60,13 +60,7 @@ impl StateBlock<'_> {
         let transitions = signed_block
             .axt_transitioned_dataspaces()
             .ok_or_else(|| invalid("missing AXT transition set"))?;
-        self.stage_canonical_carrier_membership(
-            crate::tx::canonical_carrier_membership_hashes(
-                self,
-                signed_block.external_entrypoints_slice(),
-            ),
-            block_height,
-        )?;
+        self.stage_prepaid_ordinary_carrier_membership(signed_block, block_height)?;
         if self
             .canonical_wsv_merge_commit_authorization
             .as_ref()

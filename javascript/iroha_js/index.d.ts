@@ -5341,6 +5341,14 @@ export interface ToriiGovernanceTallyResult {
   tally: ToriiGovernanceTally | null;
 }
 
+/** Exact standalone-election weights at one committed block. */
+export interface ToriiElectionTally {
+  evaluated_block_height: number | bigint;
+  evaluated_block_hash: string;
+  finalized: boolean;
+  tally: Array<number | bigint>;
+}
+
 export interface ToriiGovernanceLockCustody {
   escrowed: boolean;
   asset_definition_id: string;
@@ -8336,6 +8344,7 @@ export interface SubmitBallotInstructionInput {
 
 export interface FinalizeElectionInstructionInput {
   electionId: string;
+  /** Exact unsigned 128-bit weights; use bigint or canonical decimal text above JS safe integers. */
   tally: ReadonlyArray<NumericLike>;
   tallyProof: ProofAttachmentInput;
 }
@@ -11944,6 +11953,10 @@ export declare class ToriiClient {
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceReferendumResult>;
+  getElectionTally(
+    electionId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ToriiElectionTally | null>;
   getGovernanceTally(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,

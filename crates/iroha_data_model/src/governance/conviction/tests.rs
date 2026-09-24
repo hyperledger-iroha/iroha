@@ -60,6 +60,36 @@ fn units_use_frozen_scale_and_never_round_or_overflow() {
 }
 
 #[test]
+fn smallest_unit_weight_and_u128_boundary_are_exact_at_maximum_asset_scale() {
+    let smallest: Quantity = "0.0000000000000000000000000001".parse().unwrap();
+    let mut p = policy(MAX_DECIMAL_SCALE);
+    assert_eq!(p.units(&smallest), Ok(1));
+    assert_eq!(p.weight(&smallest, p.conviction_step_blocks), Ok(2));
+    assert_eq!(
+        policy(MAX_DECIMAL_SCALE - 1).weight(&smallest, 100),
+        Err(ConvictionErrorV1::FractionalUnits)
+    );
+
+    let unit_divisor = 10_u128.pow(MAX_DECIMAL_SCALE);
+    let maximum = u128::MAX;
+    let maximum_amount: Quantity =
+        format!("{}.{:028}", maximum / unit_divisor, maximum % unit_divisor)
+            .parse()
+            .unwrap();
+    assert_eq!(p.units(&maximum_amount), Ok(maximum));
+    let beyond_maximum = maximum_amount.try_add(&smallest).unwrap();
+    assert_eq!(p.units(&beyond_maximum), Err(ConvictionErrorV1::Overflow));
+
+    p.conviction_step_blocks = 1;
+    p.max_conviction = u64::MAX;
+    assert_eq!(
+        p.weight(&maximum_amount, u64::MAX),
+        Ok(u128::from(u64::MAX) * u128::from(u64::MAX))
+    );
+    assert_eq!(p.decide([maximum, 1, 0]), Err(ConvictionErrorV1::Overflow));
+}
+
+#[test]
 fn exact_weight_uses_floor_sqrt_and_wide_capped_factor() {
     let p = policy(2);
     assert_eq!(p.weight(&"1.25".parse().unwrap(), 200), Ok(33));
@@ -95,6 +125,17 @@ fn policy_rejects_invalid_scale_factor_and_minimum() {
     let mut p = policy(2);
     p.minimum_bond = "0.001".parse().unwrap();
     assert_eq!(p.validate(), Err(ConvictionErrorV1::FractionalUnits));
+    let mut p = policy(2);
+    p.approval_threshold_numerator = 0;
+    assert_eq!(p.validate(), Err(ConvictionErrorV1::InvalidPolicy));
+}
+
+#[test]
+fn zero_threshold_cannot_approve_nay_only_tally() {
+    let mut p = policy(0);
+    assert!(!p.decide([0, 1, 0]).unwrap().approved);
+    p.approval_threshold_numerator = 0;
+    assert_eq!(p.decide([0, 1, 0]), Err(ConvictionErrorV1::InvalidPolicy));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Exact signed native custody Check execution and same-State finalized lineage.
 //!
-//! This crate-private owner authenticates only the two closed native Check purposes. It never
+//! This crate-private owner authenticates closed native Check purposes. It never
 //! accepts an eligibility callback, supplies a clock, or turns a caller-provided history into
 //! authority. Purpose-owned wrappers must check current custody and both UTC endpoints before
 //! producing their distinct successes. Historical finality alone is not a current-authority read.
@@ -20,11 +20,15 @@ use iroha_data_model::{
     },
     isi::{
         InstructionBox,
-        sorafs::{MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority},
+        sorafs::{
+            MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
+            MutateSorafsStreamTokenAuthority,
+        },
     },
     sorafs::{
         final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
         final_promotion_authority::FinalPromotionAuthorityActionV1,
+        stream_token_authority::StreamTokenAuthorityActionV1,
     },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -125,16 +129,18 @@ impl NativeCheckRoundV1 {
     }
 }
 
-/// Closed native purpose; neither can substitute for the other's proof consumer.
+/// Closed native purposes; none can substitute for another's proof consumer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeCustodyCheckPurposeV1 {
     FinalPromotion,
     FinalPromotionAccount,
+    StreamToken,
 }
-/// Only the two native instruction owners can enter the common proof path.
+/// Only the three native instruction owners can enter the common proof path.
 pub(crate) enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
+    StreamToken(&'a MutateSorafsStreamTokenAuthority),
 }
 impl NativeCustodyCheckRefV1<'_> {
     fn coordinates(
@@ -146,6 +152,7 @@ impl NativeCustodyCheckRefV1<'_> {
             [u8; 32],
             u64,
             [u8; 32],
+            Option<HeightContextId>,
         ),
         Error,
     > {
@@ -160,6 +167,7 @@ impl NativeCustodyCheckRefV1<'_> {
                     check.network_id,
                     check.minimum_height,
                     check.minimum_block_hash,
+                    None,
                 ))
             }
             Self::FinalPromotionAccount(instruction) => {
@@ -172,6 +180,20 @@ impl NativeCustodyCheckRefV1<'_> {
                     check.network_id,
                     check.minimum_height,
                     check.minimum_block_hash,
+                    None,
+                ))
+            }
+            Self::StreamToken(instruction) => {
+                let StreamTokenAuthorityActionV1::Check(check) = &instruction.request.action else {
+                    return Err(Error::Transaction);
+                };
+                Ok((
+                    NativeCustodyCheckPurposeV1::StreamToken,
+                    check.challenge,
+                    instruction.request.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    Some(check.floor.context_id),
                 ))
             }
         }
@@ -180,6 +202,7 @@ impl NativeCustodyCheckRefV1<'_> {
         match self {
             Self::FinalPromotion(instruction) => (*instruction).clone().into(),
             Self::FinalPromotionAccount(instruction) => (*instruction).clone().into(),
+            Self::StreamToken(instruction) => (*instruction).clone().into(),
         }
     }
 }
@@ -218,7 +241,7 @@ pub(crate) fn bind_signed_check_v1(
     }
     round.bound = true;
     floor.validate()?;
-    let (purpose, challenge, check_network, minimum_height, minimum_block_hash) =
+    let (purpose, challenge, check_network, minimum_height, minimum_block_hash, check_context_id) =
         instruction.coordinates()?;
     if round.challenge != Some(challenge)
         || challenge == [0; 32]
@@ -227,6 +250,7 @@ pub(crate) fn bind_signed_check_v1(
         || check_network != network_id
         || minimum_height != floor.height
         || minimum_block_hash != floor.block_hash
+        || check_context_id.is_some_and(|context_id| context_id != floor.context_id)
     {
         return Err(Error::Transaction);
     }

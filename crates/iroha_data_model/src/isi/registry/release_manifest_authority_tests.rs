@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     isi::sorafs::MutateSorafsReleaseManifestAuthority,
-    sorafs::release_manifest_authority::ReleaseManifestActionV1,
+    sorafs::release_manifest_authority::{ReleaseManifestActionV1, ReleaseManifestRevocationV1},
 };
 
 #[test]
@@ -11,10 +11,10 @@ fn release_manifest_authority_instruction_has_one_canonical_wire_identity() {
         deployment_id: "release-primary".into(),
         expected_control_revision: 7,
         expected_control_digest: [9; 32],
-        action: ReleaseManifestActionV1::Revoke {
+        action: ReleaseManifestActionV1::Revoke(ReleaseManifestRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
     };
     let boxed: InstructionBox = instruction.clone().into();
     let expected = "iroha.instruction.v1::sorafs::MutateSorafsReleaseManifestAuthority";
@@ -67,5 +67,16 @@ fn release_manifest_authority_instruction_has_one_canonical_wire_identity() {
             .decode(expected, &frame[..frame.len() - 1])
             .unwrap()
             .is_err()
+    );
+    let json = norito::json::to_json(&instruction).expect("one instruction JSON shape");
+    assert_eq!(
+        norito::json::from_str::<MutateSorafsReleaseManifestAuthority>(&json)
+            .expect("strict instruction JSON"),
+        instruction
+    );
+    let foreign_field = json.replacen("\"deployment_id\":", "\"extra\":1,\"deployment_id\":", 1);
+    assert_ne!(foreign_field, json);
+    assert!(
+        norito::json::from_str::<MutateSorafsReleaseManifestAuthority>(&foreign_field).is_err()
     );
 }

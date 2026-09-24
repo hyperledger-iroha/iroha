@@ -4,6 +4,42 @@ use super::*;
 use crate::signer::custody::*;
 use iroha_crypto::{Algorithm, KeyPair};
 
+#[test]
+fn release_manifest_request_has_one_strict_json_and_norito_shape() {
+    let request = SignerReleaseManifestRequestV1 {
+        operation_id: [1; 32],
+        binding_digest: [2; 32],
+        original_custody: SignerOperationCustodyV1 {
+            record_digest: [3; 32],
+            control_state_digest: [4; 32],
+        },
+        manifest_digest: [5; 32],
+        manifest_size: 1024,
+    };
+    let json = norito::json::to_json(&request).expect("canonical request JSON");
+    assert_eq!(
+        norito::json::from_str::<SignerReleaseManifestRequestV1>(&json)
+            .expect("strict JSON decode"),
+        request
+    );
+    let frame = norito::encode_canonical(&request).expect("canonical request frame");
+    assert_eq!(
+        norito::decode_canonical::<SignerReleaseManifestRequestV1>(&frame)
+            .expect("canonical request decode"),
+        request
+    );
+    let foreign_field = json.replacen("\"manifest_size\":", "\"extra\":0,\"manifest_size\":", 1);
+    assert_ne!(foreign_field, json);
+    assert!(norito::json::from_str::<SignerReleaseManifestRequestV1>(&foreign_field).is_err());
+    let duplicate = json.replacen(
+        "\"manifest_size\":1024",
+        "\"manifest_size\":1024,\"manifest_size\":2048",
+        1,
+    );
+    assert_ne!(duplicate, json);
+    assert!(norito::json::from_str::<SignerReleaseManifestRequestV1>(&duplicate).is_err());
+}
+
 pub(crate) struct Fixture {
     pub(crate) signer: KeyPair,
     pub(crate) attester: KeyPair,

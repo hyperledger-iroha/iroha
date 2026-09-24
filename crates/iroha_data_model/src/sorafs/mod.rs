@@ -247,6 +247,8 @@ pub mod prelude {
     };
 }
 
+/// Bounded role-11 stream-token operation claims; native operation admission remains closed.
+pub mod stream_token_authority;
 /// Canonical bounded native StreamToken custody control records.
 pub mod stream_token_custody;
 

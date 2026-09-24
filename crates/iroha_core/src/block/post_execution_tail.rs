@@ -51,12 +51,8 @@ impl ValidBlock {
             .ok_or_else(|| {
                 Self::execution_context_error("carrier height exceeds host membership width")
             })?;
-        let membership = crate::tx::canonical_carrier_membership_hashes(
-            state,
-            block.external_entrypoints_slice(),
-        );
         state
-            .stage_canonical_carrier_membership(membership, height)
+            .stage_prepaid_ordinary_carrier_membership(block, height)
             .map_err(BlockValidationError::from_certified_merge_stage_error)?;
         state
             .resolve_queue_plan_pending_obligations_from_block(block)

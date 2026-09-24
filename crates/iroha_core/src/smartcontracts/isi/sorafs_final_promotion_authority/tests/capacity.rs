@@ -31,6 +31,7 @@ fn final_admission_suffix() -> (
         predecessor_digest: [11; 32],
         request_digest: [12; 32],
         execution: old_execution.clone(),
+        execution_origin: None,
         intent: SignerOperationIntentV1 {
             action: SignerOperationActionV1::Sign,
             operation_id: [30; 32],
@@ -51,6 +52,10 @@ fn final_admission_suffix() -> (
             ordinal: 0,
             recorded_at_unix_ms: 500,
             authority: f.operator.clone(),
+        },
+        reserved_origin: FinalPromotionOperationOriginV1 {
+            entry_hash: [24; 32],
+            entry_index: 0,
         },
         outcome: FinalPromotionOperationOutcomeV1::Expired,
     };
@@ -81,6 +86,11 @@ fn final_admission_suffix() -> (
         expires_at_unix_ms: 2_000 + FINAL_PROMOTION_RESERVATION_MS_V1,
     };
     reserved.reserved = execution;
+    reserved.reserved_origin = FinalPromotionOperationOriginV1 {
+        entry_hash: [25; 32],
+        entry_index: 0,
+    };
+    reserved.execution_origin = Some(reserved.reserved_origin);
     reserved.outcome = FinalPromotionOperationOutcomeV1::Reserved;
     (old, head, reserved)
 }
@@ -116,6 +126,13 @@ fn last_operation_admission_retains_both_completion_and_expiration_capacity() {
                 3_000
             };
         terminal.outcome = outcome;
+        terminal.execution_origin =
+            matches!(outcome, FinalPromotionOperationOutcomeV1::Completed(_)).then_some(
+                FinalPromotionOperationOriginV1 {
+                    entry_hash: [26; 32],
+                    entry_index: 0,
+                },
+            );
         let completed = successor_head(admitted, Some(&reserved), &terminal).unwrap();
         assert_eq!(completed.revision, 2 * FINAL_PROMOTION_MAX_OPERATIONS_V1);
         assert_eq!(completed.active_operation, None);
@@ -136,6 +153,11 @@ fn last_operation_admission_retains_both_completion_and_expiration_capacity() {
         next.execution.height = terminal.execution.height + 1;
         next.execution.recorded_at_unix_ms = terminal.execution.recorded_at_unix_ms + 1;
         next.reserved = next.execution.clone();
+        next.reserved_origin = FinalPromotionOperationOriginV1 {
+            entry_hash: [27; 32],
+            entry_index: 0,
+        };
+        next.execution_origin = Some(next.reserved_origin);
         next.reservation.fence = completed.fence + 1;
         next.reservation.expires_at_unix_ms =
             next.execution.recorded_at_unix_ms + FINAL_PROMOTION_RESERVATION_MS_V1;
@@ -191,6 +213,10 @@ fn operation_revision_fence_admission_and_audit_overflow_cannot_wrap() {
             response_digest: [42; 32],
         },
         signatures_digest: [43; 32],
+    });
+    terminal.execution_origin = Some(FinalPromotionOperationOriginV1 {
+        entry_hash: [28; 32],
+        entry_index: 0,
     });
     assert_eq!(
         successor_head(audit_overflow, Some(&reserved), &terminal),

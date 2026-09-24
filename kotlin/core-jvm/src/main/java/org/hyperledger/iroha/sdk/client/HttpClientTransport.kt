@@ -58,6 +58,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
+import org.hyperledger.iroha.sdk.core.model.instructions.GovernanceInstructionUtils
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.alias.AliasSetupPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AliasAutoRenewPlanRequestV1
@@ -253,6 +254,33 @@ class HttpClientTransport private constructor(
         .defaultHeaders(config.defaultHeaders())
         .observers(config.observers())
         .build()
+
+    /** Fetch one election's exact public u128 tally from a committed state snapshot. */
+    fun getElectionTally(
+        electionId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ElectionTallyV1> {
+        val selector = GovernanceInstructionUtils.requireGovernanceSelectorV1(
+            electionId,
+            "election_id",
+        )
+        require(config.baseUri().scheme.equals("https", ignoreCase = true)) {
+            "election tally requests require an HTTPS Torii endpoint"
+        }
+        require(config.defaultHeaders().keys.none { name ->
+            name.equals("Accept", ignoreCase = true) ||
+                name.equals("Content-Type", ignoreCase = true)
+        }) { "election tally JSON headers must not be overridden" }
+        val body = encodeJsonBody(linkedMapOf("election_id" to selector))
+        val request = buildVpnRequest(
+            "POST",
+            "/v1/zk/vote/tally",
+            body,
+            canonicalAuth,
+            ElectionTallyV1.MAX_RESPONSE_BYTES.toLong(),
+        )
+        return fetchExactJson(request, ElectionTallyV1::parse, "election tally")
+    }
     /**
      * Create the exact-route private-settlement client without inheriting request observers.
      *

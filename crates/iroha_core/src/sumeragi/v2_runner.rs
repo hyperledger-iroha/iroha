@@ -109,7 +109,7 @@ use crate::{
     },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
-    state::{PendingCertifiedMergeSelection, State},
+    state::State,
 };
 #[cfg(test)]
 use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
@@ -752,6 +752,21 @@ impl LocalProposalState {
         &mut self,
         owner: LocalProposalOwner,
         error: &crate::state::StateBlockStartError<E>,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let Some(wait) = error.release_wait() else {
+            return false;
+        };
+        self.history_wait = Some((
+            owner,
+            super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), wake),
+        ));
+        true
+    }
+    fn defer_evidence_preparation(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &crate::state::EvidencePreparationError,
         wake: &std::task::Waker,
     ) -> bool {
         let Some(wait) = error.release_wait() else {
@@ -1668,6 +1683,16 @@ fn schedule_local_proposal(
             Err(V2RunnerError::CandidateBuild(
                 super::v2_candidate::CandidateError::LocalStateAdmission(error),
             )) if proposal_state.defer_history_admission(
+                owner,
+                &error,
+                &queue.sumeragi_waker(),
+            ) =>
+            {
+                return Ok(());
+            }
+            Err(V2RunnerError::CandidateBuild(
+                super::v2_candidate::CandidateError::LocalEvidencePreparation(error),
+            )) if proposal_state.defer_evidence_preparation(
                 owner,
                 &error,
                 &queue.sumeragi_waker(),
@@ -2928,17 +2953,7 @@ fn candidate_attachments(
             None,
         )
         .derive_npos_consensus_effects(round_header)
-        .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
-                V2RunnerError::CandidateBuild(
-                    super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::from(refusal.clone()),
-                    ),
-                )
-            } else {
-                V2RunnerError::Candidate(error.to_string())
-            }
-        })?
+        .map_err(classify_penalty_derivation_failure)?
     } else {
         Default::default()
     };
@@ -2967,13 +2982,17 @@ fn candidate_attachments(
         ..CandidateAttachments::default()
     })
 }
-const fn certified_merge_selection_for_npos(
-    has_npos_effects: bool,
-) -> PendingCertifiedMergeSelection {
-    if has_npos_effects {
-        PendingCertifiedMergeSelection::ControlOnly
+fn classify_penalty_derivation_failure(error: eyre::Report) -> V2RunnerError {
+    if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::from(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+        V2RunnerError::CandidateBuild(
+            super::v2_candidate::CandidateError::LocalEvidencePreparation(refusal.clone()),
+        )
     } else {
-        PendingCertifiedMergeSelection::Any
+        V2RunnerError::Candidate(error.to_string())
     }
 }
 fn adapter_fingerprints(

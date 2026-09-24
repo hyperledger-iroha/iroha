@@ -789,7 +789,7 @@ mod tests {
         changed_subject.subject.transition_statement_digest = [42; 32];
         assert!(verify(&changed_subject).is_err());
 
-        let mut wrong_policy = policy;
+        let mut wrong_policy = policy.clone();
         wrong_policy.app_release_digest[0] ^= 1;
         assert!(
             evidence

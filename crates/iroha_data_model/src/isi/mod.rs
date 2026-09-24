@@ -355,6 +355,7 @@ impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsOrderbookPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenCustody);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
@@ -2775,7 +2776,7 @@ pub mod prelude {
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
             MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsReleaseManifestAuthority,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
             MutateSorafsStreamTokenCustody, PublishSorafsPopRevocationList,
             RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
             RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,

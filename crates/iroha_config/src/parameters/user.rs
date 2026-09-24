@@ -9720,6 +9720,14 @@ pub struct NexusStorage {
     /// Zero is a closed pool, never an unlimited setting.
     #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
     pub retained_carrier_shell_bytes: usize,
+    /// Finite process-local pool for committed-evidence preparation. At least one
+    /// maximum prune-key and pending-penalty backing plan must fit.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES")]
+    pub consensus_evidence_preparation_bytes: usize,
+    /// Finite process-local pool for flat consensus stake-index share keys.
+    /// A capacity refusal remains a local retry, not an invalid block.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES")]
+    pub consensus_stake_index_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -9729,6 +9737,9 @@ impl_default!(NexusStorage {
     budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
     retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
+    consensus_evidence_preparation_bytes:
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+    consensus_stake_index_bytes: defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
     disk_budget_weights: NexusStorageWeights::default(),
 });
 impl NexusStorage {
@@ -9741,6 +9752,24 @@ impl NexusStorage {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                 "nexus.storage.local_budget_bytes must be greater than zero when configured",
             ));
+            return None;
+        }
+        if self.consensus_evidence_preparation_bytes
+            < defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_evidence_preparation_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+            )));
+            return None;
+        }
+        if self.consensus_stake_index_bytes
+            < defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_stake_index_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+            )));
             return None;
         }
         if let Some(local_budget_bytes) = self.local_budget_bytes {
@@ -9774,6 +9803,8 @@ impl NexusStorage {
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
+            consensus_evidence_preparation_bytes: self.consensus_evidence_preparation_bytes,
+            consensus_stake_index_bytes: self.consensus_stake_index_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
         })

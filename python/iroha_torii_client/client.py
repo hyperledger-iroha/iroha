@@ -133,6 +133,7 @@ from .client_status_models import (
     SumeragiV2TimeoutReference,
     parse_sumeragi_json_object,
 )
+from .election_tally import ElectionTally
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
@@ -731,6 +732,7 @@ __all__ = [
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
     "GovernanceReferendumStatus",
+    "ElectionTally",
     "GovernanceTally",
     "GovernanceUnlockStats",
     "TransactionInstruction",

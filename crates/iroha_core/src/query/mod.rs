@@ -17,6 +17,8 @@ pub mod projection_checkpoint_journal;
 pub mod projection_rowset;
 pub mod projection_shard;
 pub mod provider_ingest_finalized;
+/// Raw committed-height role-13 custody history; signing still requires finalized Check.
+pub mod release_manifest_authority;
 pub mod reputation_finalized;
 pub(crate) mod signer_check;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -29,6 +31,7 @@ pub mod snapshot;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub mod standalone_plain_test_fixture;
 pub mod store;
+pub mod stream_token_authority;
 /// Same-State historical native StreamToken custody control reader.
 pub mod stream_token_custody;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};

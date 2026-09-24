@@ -678,9 +678,58 @@ function rejectRetiredGenericZkInstruction(instruction) {
 function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
+  const exactElectionJson = exactFinalizeElectionTallyJson(normalized);
+  if (exactElectionJson !== null) {
+    const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
+    return toBuffer(native.noritoEncodeInstruction(exactElectionJson, networkPrefix));
+  }
   validateInstructionObjectNumbers(normalized);
   const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
   return toBuffer(native.noritoEncodeInstruction(JSON.stringify(normalized), networkPrefix));
+}
+
+export function exactFinalizeElectionTallyJson(normalized) {
+  const tally = normalized?.zk?.FinalizeElection?.tally;
+  if (!Array.isArray(tally) || !tally.some((weight) => typeof weight === "bigint")) {
+    return null;
+  }
+  if (tally.length < 2 || tally.length > 64) {
+    rejectRange("FinalizeElection tally must contain 2–64 weights");
+  }
+  const maxU128 = (1n << 128n) - 1n;
+  const exact = tally.map((weight, index) => {
+    if (typeof weight === "number") {
+      if (!Number.isSafeInteger(weight) || weight < 0) {
+        rejectRange(`FinalizeElection tally[${index}] must be a lossless unsigned integer`);
+      }
+      return BigInt(weight);
+    }
+    if (typeof weight !== "bigint" || weight < 0n || weight > maxU128) {
+      rejectRange(`FinalizeElection tally[${index}] must fit in unsigned 128 bits`);
+    }
+    return weight;
+  });
+  const markers = exact.map((_, index) => `__iroha-v1-u128-tally-${index}__`);
+  const payload = { ...normalized.zk.FinalizeElection, tally: markers };
+  const zk = { ...normalized.zk, FinalizeElection: payload };
+  const withMarkers = { ...normalized, zk };
+  validateInstructionObjectNumbers(withMarkers);
+  const seen = new Uint8Array(markers.length);
+  const json = JSON.stringify(withMarkers).replace(
+    /"__iroha-v1-u128-tally-(\d+)__"/gu,
+    (_token, indexText) => {
+      const index = Number(indexText);
+      if (!Number.isSafeInteger(index) || index >= exact.length || seen[index] !== 0) {
+        rejectType("FinalizeElection tally exact-number marker collision");
+      }
+      seen[index] = 1;
+      return exact[index].toString(10);
+    },
+  );
+  if (seen.some((count) => count !== 1)) {
+    rejectType("FinalizeElection tally exact-number marker collision");
+  }
+  return json;
 }
 
 function validateInstructionObjectNumbers(value) {
@@ -4658,4 +4707,3 @@ function tryDecodeBase64(value) {
     return null;
   }
 }
-

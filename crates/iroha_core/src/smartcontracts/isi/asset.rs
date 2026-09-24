@@ -272,7 +272,15 @@ pub mod isi {
             source_id: &AssetId,
             destination_id: &AssetId,
             delta: &TransferDeltaTranscript,
+            source_policy: NumericAssetTransferSourcePolicy,
         ) -> Result<(), Error> {
+            // Custody may change after preparation. Check the original typed purpose
+            // again before either balance is mutated.
+            let reserve_owner =
+                privacy_public_reserve_owner_v1(&self.privacy_commitments, source_id).map_err(
+                    |message| InstructionExecutionError::InvariantViolation(message.into()),
+                )?;
+            ensure_privacy_public_reserve_source_policy_for_owner(reserve_owner, source_policy)?;
             // Reservation-only instructions can change a source's available funds
             // without changing its balance. Recheck at consumption as well as preparation.
             let balance_after = if source_id == destination_id {
@@ -4705,6 +4713,7 @@ pub mod isi {
     struct PreparedNumericTransferPlan {
         source_id: AssetId,
         destination_id: AssetId,
+        source_policy: NumericAssetTransferSourcePolicy,
         event_source_id: AssetId,
         event_destination_id: AssetId,
         amount: Quantity,
@@ -4909,6 +4918,7 @@ pub mod isi {
             Ok(Self {
                 source_id,
                 destination_id,
+                source_policy,
                 event_source_id,
                 event_destination_id,
                 amount,
@@ -4940,6 +4950,7 @@ pub mod isi {
                     &self.source_id,
                     &self.destination_id,
                     &self.prechecked_delta,
+                    self.source_policy,
                 )?;
             if let Some(record) = self.control_update {
                 update_control_record(state_transaction, self.source_id.account(), record)?;
@@ -4975,6 +4986,7 @@ pub mod isi {
                     &self.source_id,
                     &self.destination_id,
                     &self.prechecked_delta,
+                    self.source_policy,
                 )?;
             Ok(AppliedNumericTransfer {
                 source_id: self.event_source_id,
@@ -5850,6 +5862,12 @@ pub mod isi {
             source_id,
         )
         .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        ensure_privacy_public_reserve_source_policy_for_owner(reserve_owner, source_policy)
+    }
+    fn ensure_privacy_public_reserve_source_policy_for_owner(
+        reserve_owner: Option<PrivacyPublicReserveOwnerV1>,
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(), Error> {
         match (reserve_owner, source_policy) {
             (Some(actual), NumericAssetTransferSourcePolicy::PrivacyPoolBridge(expected))
                 if actual == expected =>
@@ -7027,6 +7045,7 @@ pub mod isi {
                             &prepared.source_id,
                             &prepared.destination_id,
                             &prepared.delta,
+                            NumericAssetTransferSourcePolicy::SccpEscrowRelease,
                         )?;
                     let PreparedSccpInboundNumericAssetRelease {
                         route_key,
@@ -7611,6 +7630,7 @@ pub mod isi {
                         &source,
                         &destination,
                         &delta,
+                        NumericAssetTransferSourcePolicy::User,
                     )
                     .unwrap_err()
                     .to_string()
@@ -7627,7 +7647,12 @@ pub mod isi {
                 .insert(source.clone(), Quantity::from(30_u64));
             transaction
                 .world
-                .apply_prechecked_numeric_asset_transfer_delta_exact(&source, &destination, &delta)
+                .apply_prechecked_numeric_asset_transfer_delta_exact(
+                    &source,
+                    &destination,
+                    &delta,
+                    NumericAssetTransferSourcePolicy::User,
+                )
                 .unwrap();
             assert_eq!(
                 transaction.world.assets.get(&source).unwrap().as_ref(),

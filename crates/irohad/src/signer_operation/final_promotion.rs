@@ -90,6 +90,8 @@ pub mod current_observation;
 /// Exact observer Check signing with retained native challenges and independent fee approval.
 pub mod observer_transaction;
 mod receipt_core;
+/// BeforeProvider source owner retaining the original signed Reserve and independent floor.
+pub mod reserved_observation;
 
 /// Receipt-only recovery capability sharing the exact journal lease and lifecycle gate.
 /// It exposes no signing method or protected provider. Native standalone recovery assembly

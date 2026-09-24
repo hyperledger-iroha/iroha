@@ -20,8 +20,9 @@ use iroha_data_model::{
         native_amx_application_manifest_empty_root,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
-        KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityValidatorKeysV1,
+        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
 };

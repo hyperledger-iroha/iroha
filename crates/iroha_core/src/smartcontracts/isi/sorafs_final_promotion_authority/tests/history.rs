@@ -72,9 +72,11 @@ fn completed_retry_after_later_audit_cannot_rewind_the_journal() {
     assert_eq!(latest.audit.sequence, 2);
     transact(&mut f.state, 6_000, |tx| {
         let before = retained(tx);
-        instruction(tx, Action::Complete(first_request))
-            .execute(&f.operator, tx)
-            .unwrap();
+        assert!(
+            instruction(tx, Action::Complete(first_request))
+                .execute(&f.operator, tx)
+                .is_err()
+        );
         assert_eq!(retained(tx), before);
     });
     assert_eq!(snapshot(&f, None).operations, latest);

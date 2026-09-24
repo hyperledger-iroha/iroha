@@ -1,6 +1,8 @@
 use super::*;
 use crate::sha256;
 
+mod registered_full_shape_source_bounds;
+
 fn generated_body_digest_for_test(bytes: impl AsRef<[u8]>) -> BfvGoldilocksDigest384V1 {
     bfv_native_stark_generated_circuit_body_digest_v1(bytes.as_ref())
         .expect("test generated-body digest")

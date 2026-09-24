@@ -15,8 +15,13 @@ use norito::{
     core::{self as ncore, DecodeFromSlice},
     json::{self, FastJsonWrite, JsonDeserialize},
 };
-use num_bigint::BigInt as InnerBigInt;
+use num_bigint::{BigInt as InnerBigInt, BigUint as InnerBigUint};
 use num_traits::{One, Signed, Zero};
+use std::alloc::Layout;
+#[cfg(target_pointer_width = "64")]
+type NativeBigDigit = u64;
+#[cfg(not(target_pointer_width = "64"))]
+type NativeBigDigit = u32;
 /// Width of the signed two's-complement domain represented by [`BigInt`].
 ///
 /// Values are in `-2^4095..=2^4095-1`. This is deliberately a signed-width
@@ -33,6 +38,22 @@ pub enum BigIntError {
     NonCanonical,
     /// Division by zero
     DivisionByZero,
+}
+/// Refusal while cloning one exact native-digit magnitude for resource admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BigIntAdmissionCloneError {
+    /// The native-digit allocation layout is not representable.
+    #[error("native-digit clone layout overflows")]
+    LayoutOverflow,
+    /// The allocator refused the exact precomputed native-digit layout.
+    #[error("allocator refused {requested_bytes} native-digit clone bytes")]
+    Allocator {
+        /// Exact native-digit allocation requested.
+        requested_bytes: usize,
+    },
+    /// Borrowed digit inventory differed from its checked magnitude width.
+    #[error("native-digit clone source changed during materialization")]
+    SourceShapeChanged,
 }
 /// Bounded signed integer with adaptive width in `-2^4095..=2^4095-1`.
 ///
@@ -72,6 +93,69 @@ impl BigInt {
     /// Bit length of the unsigned magnitude.
     pub fn bit_len(&self) -> usize {
         usize::try_from(self.inner.bits()).unwrap_or(usize::MAX)
+    }
+    /// Exact native-digit allocation layout of a cloned magnitude.
+    ///
+    /// Zero has a zero-byte layout. This describes the physical `num-bigint`
+    /// backing, not the signed two's-complement encoding length.
+    ///
+    /// # Errors
+    /// Rejects an unrepresentable allocation layout.
+    pub fn admission_clone_layout(&self) -> Result<Layout, BigIntAdmissionCloneError> {
+        let bits_per_digit = NativeBigDigit::BITS as usize;
+        let digits = self.bit_len().div_ceil(bits_per_digit);
+        Layout::array::<NativeBigDigit>(digits)
+            .map_err(|_| BigIntAdmissionCloneError::LayoutOverflow)
+    }
+    /// Clone through one exact, fallible native-digit allocation.
+    ///
+    /// The caller must prepay and retain the matching original-pool charge
+    /// until this value is dropped. This method does not charge a pool itself.
+    ///
+    /// # Errors
+    /// Rejects an unrepresentable layout or physical allocator refusal.
+    #[allow(unsafe_code)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, BigIntAdmissionCloneError> {
+        self.try_clone_for_admission_with(|layout| unsafe { std::alloc::alloc(layout) })
+    }
+    #[allow(unsafe_code)]
+    fn try_clone_for_admission_with(
+        &self,
+        allocate: impl FnOnce(Layout) -> *mut u8,
+    ) -> Result<Self, BigIntAdmissionCloneError> {
+        let layout = self.admission_clone_layout()?;
+        if layout.size() == 0 {
+            return Ok(Self::zero());
+        }
+        let pointer = allocate(layout);
+        if pointer.is_null() {
+            return Err(BigIntAdmissionCloneError::Allocator {
+                requested_bytes: layout.size(),
+            });
+        }
+        let capacity = layout.size() / core::mem::size_of::<NativeBigDigit>();
+        // SAFETY: `pointer` owns exactly `Layout::array::<NativeBigDigit>(capacity)`.
+        // Length starts at zero and each guarded push remains below capacity;
+        // the Vec frees the exact allocation on any later error.
+        let mut digits =
+            unsafe { Vec::from_raw_parts(pointer.cast::<NativeBigDigit>(), 0, capacity) };
+        #[cfg(target_pointer_width = "64")]
+        let source_digits = self.inner.iter_u64_digits();
+        #[cfg(not(target_pointer_width = "64"))]
+        let source_digits = self.inner.iter_u32_digits();
+        for digit in source_digits {
+            if digits.len() == capacity {
+                return Err(BigIntAdmissionCloneError::SourceShapeChanged);
+            }
+            digits.push(digit);
+        }
+        if digits.len() != capacity {
+            return Err(BigIntAdmissionCloneError::SourceShapeChanged);
+        }
+        let magnitude = InnerBigUint::from_native_digits(digits);
+        Ok(Self {
+            inner: InnerBigInt::from_biguint(self.inner.sign(), magnitude),
+        })
     }
     /// Compute `10^exp` with signed-domain checking.
     pub fn pow10(exp: u32) -> Option<Self> {
@@ -397,6 +481,36 @@ impl<'a> DecodeFromSlice<'a> for BigInt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admitted_clone_uses_exact_native_digit_layout_and_refuses_allocator() {
+        let zero = BigInt::zero();
+        assert_eq!(zero.admission_clone_layout().unwrap().size(), 0);
+        assert_eq!(
+            zero.try_clone_for_admission_with(|_| panic!("zero must not allocate"))
+                .unwrap(),
+            zero
+        );
+        let wide = BigInt::from_inner((InnerBigInt::one() << 130) + 7_u8).unwrap();
+        for value in [
+            BigInt::one(),
+            wide.clone(),
+            BigInt::from_inner(-wide.inner).unwrap(),
+        ] {
+            let layout = value.admission_clone_layout().unwrap();
+            let native_bytes = core::mem::size_of::<NativeBigDigit>();
+            assert_eq!(
+                layout.size(),
+                value.bit_len().div_ceil(native_bytes * 8) * native_bytes
+            );
+            assert_eq!(value.try_clone_for_admission().unwrap(), value);
+            assert_eq!(
+                value.try_clone_for_admission_with(|_| core::ptr::null_mut()),
+                Err(BigIntAdmissionCloneError::Allocator {
+                    requested_bytes: layout.size(),
+                })
+            );
+        }
+    }
     #[test]
     fn roundtrip_twos_bytes_positive() {
         let values = [0i128, 1, 42, i128::from(u64::MAX), i128::MAX];

@@ -2859,6 +2859,10 @@ pub struct NexusStorage {
     /// Finite shared pool for retained carrier World shells, effects and service descriptors.
     /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
     pub retained_carrier_shell_bytes: usize,
+    /// Process-local prune-key and pending-penalty backing pool, distinct from carrier shells.
+    pub consensus_evidence_preparation_bytes: usize,
+    /// Process-local flat stake-index share-key backing pool.
+    pub consensus_stake_index_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
     pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
@@ -2893,6 +2897,14 @@ impl fmt::Debug for NexusStorage {
                 "retained_carrier_shell_bytes",
                 &self.retained_carrier_shell_bytes,
             )
+            .field(
+                "consensus_evidence_preparation_bytes",
+                &self.consensus_evidence_preparation_bytes,
+            )
+            .field(
+                "consensus_stake_index_bytes",
+                &self.consensus_stake_index_bytes,
+            )
             .field("disk_budget_weights", &self.disk_budget_weights)
             .finish()
     }
@@ -2905,6 +2917,9 @@ impl_default!(NexusStorage => {
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
             retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
+            consensus_evidence_preparation_bytes:
+                defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+            consensus_stake_index_bytes: defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
             configured_component_caps: None,
         }

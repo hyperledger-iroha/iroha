@@ -2,6 +2,7 @@
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_schema::Metadata;
+use norito::codec::DecodeAll as _;
 use sorafs_manifest::signer::protocol::{SignerOperationActionV1, SignerOperationAuditHeadV1};
 
 mod check;
@@ -46,6 +47,12 @@ fn execution() -> FinalPromotionExecutionV1 {
         ordinal: 0,
         recorded_at_unix_ms: 10,
         authority: AccountId::new(key.public_key().clone()),
+    }
+}
+fn origin() -> FinalPromotionOperationOriginV1 {
+    FinalPromotionOperationOriginV1 {
+        entry_hash: [19; 32],
+        entry_index: 0,
     }
 }
 
@@ -164,6 +171,10 @@ fn final_promotion_authority_schema_reuses_manifest_operation_types() {
         schema.get::<SignerOperationCommitmentV1>(),
         Some(Metadata::Struct(_))
     ));
+    assert!(matches!(
+        schema.get::<FinalPromotionOperationOriginV1>(),
+        Some(Metadata::Struct(_))
+    ));
 }
 
 #[test]
@@ -210,10 +221,17 @@ fn final_promotion_operation_records_retain_original_reservation_for_every_outco
             predecessor_digest: [0; 32],
             request_digest: [9; 32],
             execution: execution(),
+            execution_origin: matches!(
+                outcome,
+                FinalPromotionOperationOutcomeV1::Reserved
+                    | FinalPromotionOperationOutcomeV1::Completed(_)
+            )
+            .then_some(origin()),
             intent: intent(),
             custody: custody(),
             reservation: reservation(),
             reserved: execution(),
+            reserved_origin: origin(),
             outcome,
         };
         let frame = norito::encode_canonical(&record).expect("operation record frame");
@@ -235,6 +253,81 @@ fn final_promotion_operation_records_retain_original_reservation_for_every_outco
         assert!(
             !json.contains("\"signature\""),
             "unreleased signatures cannot enter a transaction"
+        );
+    }
+}
+
+#[test]
+fn final_promotion_operation_record_rejects_missing_v1_origins() {
+    // A test-only encoding of the retired pre-origin layout proves that the one V1 decoder
+    // cannot silently default either causal source. No legacy decoder exists in production.
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1"
+    )]
+    struct MissingOrigins {
+        deployment_id: String,
+        revision: u64,
+        predecessor_digest: [u8; 32],
+        request_digest: [u8; 32],
+        execution: FinalPromotionExecutionV1,
+        intent: SignerOperationIntentV1,
+        custody: SignerOperationCustodyV1,
+        reservation: SignerOperationReservationV1,
+        reserved: FinalPromotionExecutionV1,
+        outcome: FinalPromotionOperationOutcomeV1,
+    }
+    let retired = MissingOrigins {
+        deployment_id: "sora-main".into(),
+        revision: 1,
+        predecessor_digest: [0; 32],
+        request_digest: [9; 32],
+        execution: execution(),
+        intent: intent(),
+        custody: custody(),
+        reservation: reservation(),
+        reserved: execution(),
+        outcome: FinalPromotionOperationOutcomeV1::Reserved,
+    };
+    let old_payload = retired.encode();
+    assert!(FinalPromotionOperationRecordV1::decode_all(&mut old_payload.as_slice()).is_err());
+    let old_frame = norito::encode_canonical(&retired).unwrap();
+    assert!(norito::decode_canonical::<FinalPromotionOperationRecordV1>(&old_frame).is_err());
+
+    let current = FinalPromotionOperationRecordV1 {
+        deployment_id: retired.deployment_id,
+        revision: retired.revision,
+        predecessor_digest: retired.predecessor_digest,
+        request_digest: retired.request_digest,
+        execution: retired.execution,
+        execution_origin: Some(origin()),
+        intent: retired.intent,
+        custody: retired.custody,
+        reservation: retired.reservation,
+        reserved: retired.reserved,
+        reserved_origin: origin(),
+        outcome: retired.outcome,
+    };
+    for missing in ["execution_origin", "reserved_origin"] {
+        let mut json = norito::json::to_value(&current).unwrap();
+        assert!(json.as_object_mut().unwrap().remove(missing).is_some());
+        assert!(norito::json::from_value::<FinalPromotionOperationRecordV1>(json).is_err());
+    }
+    for outcome in [
+        FinalPromotionOperationOutcomeV1::Expired,
+        FinalPromotionOperationOutcomeV1::Invalidated,
+    ] {
+        let mut terminal = current.clone();
+        terminal.execution_origin = None;
+        terminal.outcome = outcome;
+        let json = norito::json::to_value(&terminal).unwrap();
+        assert_eq!(
+            json.get("execution_origin"),
+            Some(&norito::json::Value::Null)
+        );
+        assert_eq!(
+            norito::json::from_value::<FinalPromotionOperationRecordV1>(json).unwrap(),
+            terminal
         );
     }
 }

@@ -126,6 +126,7 @@ pub(crate) fn anchor(height: u64) -> SignerCustodyAnchorV1 {
 pub(crate) struct SimulatedFinality {
     pub tip: AtomicU64,
     pub unavailable: std::sync::atomic::AtomicBool,
+    pub completed_proof_source_available: std::sync::atomic::AtomicBool,
     pub validations: AtomicUsize,
     pub advance_clock: Mutex<Option<(usize, Arc<FixedClock>, u64)>>,
 }
@@ -134,6 +135,7 @@ impl SimulatedFinality {
         Self {
             tip: AtomicU64::new(100),
             unavailable: false.into(),
+            completed_proof_source_available: true.into(),
             validations: AtomicUsize::new(0),
             advance_clock: Mutex::new(None),
         }
@@ -144,6 +146,12 @@ impl SimulatedFinality {
     }
 }
 impl SignerFinalityV1 for SimulatedFinality {
+    fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError> {
+        if !self.completed_proof_source_available.load(Ordering::SeqCst) {
+            return Err(StreamTokenIssuerError::SignerFinalityUnavailable);
+        }
+        Ok(())
+    }
     fn capture(
         &self,
         minimum: SignerCustodyAnchorV1,

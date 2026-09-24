@@ -640,5 +640,7 @@ fn same_key_custody_renewal_cannot_replay_or_relabel_a_stream_receipt() {
     assert_eq!(harness.calls(), 5);
 }
 
+#[path = "stream_token_completed_read.rs"]
+mod completed_read;
 #[path = "stream_token_transport.rs"]
 mod transport;

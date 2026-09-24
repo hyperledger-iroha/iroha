@@ -22,6 +22,35 @@ def read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
 
+def isolated_python312() -> str:
+    """Find the canonical Python required by Apple release consumers."""
+
+    candidates = (
+        sys.executable,
+        "/opt/homebrew/opt/python@3.12/bin/python3.12",
+        "/opt/homebrew/bin/python3.12",
+        "/usr/local/opt/python@3.12/bin/python3.12",
+        "/usr/local/bin/python3.12",
+        "/usr/bin/python3.12",
+    )
+    for candidate in candidates:
+        try:
+            executable = Path(candidate).resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            continue
+        result = subprocess.run(
+            [str(executable), "-I", "-S", "-B", "-c",
+             "import sys; raise SystemExit(sys.version_info[:2] != (3, 12) "
+             "or not sys.flags.isolated)"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode == 0:
+            return str(executable)
+    raise AssertionError("isolated Python 3.12 is required for Apple release checks")
+
+
 def workflow_job(source: str, name: str) -> str:
     """Return one top-level workflow job block."""
 
@@ -101,7 +130,18 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
         ):
             self.assertIn(marker, source)
-        self.assertNotIn("IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH", source)
+        # This name is a release-corridor sentinel for the local-integration
+        # rejection only; it must never select the builder's Cargo graph.
+        release_lock_name = "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+        self.assertEqual(source.count(release_lock_name), 1)
+        self.assertIn(
+            '|| -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}"',
+            source,
+        )
+        lock_selection = source[
+            source.index('CARGO_LOCKFILE=""'):source.index('CI_HANDOFF_DIR=')
+        ]
+        self.assertNotIn(release_lock_name, lock_selection)
         fixture = read("scripts/tests/mobile_sdk_build_source_seal_test.sh")
         self.assertIn('"$root/ci/privacy_sdk_cargo_lockfile.sh"', fixture)
         self.assertIn("External Cargo.lock must match the canonical reviewed graph", fixture)
@@ -117,7 +157,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             owner = root / "owner.sh"
             owner.write_text('readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256="' + ("a" * 64) + '"\n')
             for privacy, selected, success in (("1", str(root / "Cargo.lock"), False), ("1", str(root.parent / "snapshot/Cargo.lock"), True), ("0", str(root / "Cargo.lock"), True)):
-                environment = dict(os.environ, ROOT_DIR=str(root), CARGO_GRAPH_OWNER=str(owner), PRIVACY_PRODUCTION_ENABLED=privacy, CARGO_LOCKFILE=selected, CARGO_LOCK_SHA256_START="a" * 64)
+                environment = dict(os.environ, ROOT_DIR=str(root), CARGO_GRAPH_OWNER=str(owner), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION="0", CARGO_LOCKFILE=selected, CARGO_LOCK_SHA256_START="a" * 64)
                 result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], env=environment, text=True, capture_output=True)
                 self.assertEqual(result.returncode == 0, success, result.stderr)
                 if not success:
@@ -128,18 +168,29 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         fragment = source[source.index("selected_cargo_lock_sha256() {"):source.index("CARGO_LOCK_SHA256_START=")]
         command = 'run_isolated_python() { "$TEST_PYTHON_BINARY" -I -S -B "$@"; }\n' + fragment + "\nselected_cargo_lock_sha256\n"
         with tempfile.TemporaryDirectory() as directory:
-            selected = Path(directory).resolve() / "Cargo.lock"
-            selected.write_bytes((REPO_ROOT / "Cargo.lock").read_bytes())
+            fixture = Path(directory).resolve()
+            root = fixture / "source"
+            (root / "ci").mkdir(parents=True)
+            lock_bytes = (REPO_ROOT / "Cargo.lock").read_bytes()
+            digest = hashlib.sha256(lock_bytes).hexdigest()
+            (root / "Cargo.lock").write_bytes(lock_bytes)
+            (root / "ci/privacy_sdk_cargo_lockfile.sh").write_text(
+                'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n'
+                f'"{digest}"\n',
+                encoding="utf-8",
+            )
+            selected = fixture / "Cargo.lock"
+            selected.write_bytes(lock_bytes)
             for privacy, mode, valid in (("1", 0o600, False), ("0", 0o600, True), ("1", 0o400, True)):
                 selected.chmod(mode)
-                environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(selected), PRIVACY_PRODUCTION_ENABLED=privacy)
+                environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(selected), PRIVACY_PRODUCTION_ENABLED=privacy, LOCAL_INTEGRATION="0", ROOT_DIR=str(root))
                 result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], env=environment, text=True, capture_output=True)
                 self.assertEqual(result.returncode == 0, valid, result.stderr)
                 if valid:
-                    self.assertEqual(result.stdout.strip(), hashlib.sha256(selected.read_bytes()).hexdigest())
+                    self.assertEqual(result.stdout.strip(), digest)
                 else:
                     self.assertIn("must be read-only", result.stderr)
-            self.assertEqual(selected.read_bytes(), (REPO_ROOT / "Cargo.lock").read_bytes())
+            self.assertEqual(selected.read_bytes(), lock_bytes)
 
     def test_builder_requires_one_explicit_lock_argument_without_environment_alias(self) -> None:
         source = read("scripts/build_norito_xcframework.sh")
@@ -166,7 +217,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                     self.assertIn("--lockfile-path", result.stderr)
 
     def test_all_apple_consumers_reject_missing_selected_lock_before_artifact_access(self) -> None:
-        python = str(Path(sys.executable).resolve())
+        python = isolated_python312()
         commands = [
             [python, "-I", "-S", "-B", "scripts/validate_norito_bridge_xcframework.py",
              "--root", str(REPO_ROOT), "--xcframework", "/absent/framework", "--manifest", "/absent/manifest",

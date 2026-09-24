@@ -1545,12 +1545,16 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "registry/stream_token_authority_tests.rs"]
+mod stream_token_authority_tests;
+#[cfg(test)]
 #[path = "registry/stream_token_custody_tests.rs"]
 mod stream_token_custody_tests;
 
 #[cfg(test)]
 #[path = "registry/final_promotion_authority_tests.rs"]
 mod final_promotion_authority_tests;
+#[cfg(test)]
 #[path = "registry/release_manifest_authority_tests.rs"]
 mod release_manifest_authority_tests;
 

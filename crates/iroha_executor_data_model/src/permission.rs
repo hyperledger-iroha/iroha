@@ -1081,6 +1081,24 @@ pub mod sorafs {
         }
     }
     permission! {
+        /// Permission for the registered owner to reserve, complete or expire one provider's stream-token operations.
+        #[derive(Copy)]
+        #[norito(deny_unknown_fields)]
+        pub struct CanOperateSorafsStreamToken {
+            /// Provider whose operation journal this permission may mutate.
+            pub provider_id: ProviderId,
+        }
+    }
+    permission! {
+        /// Separate read-only permission to submit a challenged stream-token Check for one provider.
+        #[derive(Copy)]
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsStreamToken {
+            /// Provider whose operation journal this permission may observe.
+            pub provider_id: ProviderId,
+        }
+    }
+    permission! {
         /// Permission to configure, enroll, or revoke final-promotion custody for one deployment.
         #[norito(deny_unknown_fields)]
         pub struct CanManageSorafsFinalPromotionCustody {
@@ -1554,3 +1572,6 @@ mod final_promotion_permission_tests;
 #[cfg(test)]
 #[path = "release_manifest_permission_tests.rs"]
 mod release_manifest_permission_tests;
+#[cfg(test)]
+#[path = "stream_token_permission_tests.rs"]
+mod stream_token_permission_tests;

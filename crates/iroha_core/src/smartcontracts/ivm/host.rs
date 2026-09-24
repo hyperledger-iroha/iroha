@@ -686,7 +686,7 @@ pub struct CoreHostImpl<QS> {
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
     zk_roots: BTreeMap<AssetDefinitionId, ZkRootsSnapshot>,
-    zk_elections: BTreeMap<String, (u32, bool, Vec<u64>)>,
+    zk_elections: BTreeMap<String, (u32, bool, Vec<u128>)>,
     vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, Arc<VerifyingKeyRecord>>,
@@ -4438,8 +4438,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<(), ivm::VMError> {
         let mut elections = BTreeMap::new();
         for (id, st) in world.elections().iter() {
-            iroha_data_model::isi::zk::validate_election_tally_v1(st.options, st.tally.len())
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            Self::validate_zk_election_tally(st.options, &st.tally)?;
             elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
         }
         // Validate selector syntax as well as tally shape before replacing any
@@ -4906,22 +4905,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// length.
     pub fn set_zk_elections_snapshot(
         &mut self,
-        map: BTreeMap<String, (u32, bool, Vec<u64>)>,
+        map: BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
         Self::validate_zk_elections_snapshot(&map)?;
         self.zk_elections = map;
         Ok(())
     }
     fn validate_zk_elections_snapshot(
-        map: &BTreeMap<String, (u32, bool, Vec<u64>)>,
+        map: &BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
         for (election_id, (options, _, tally)) in map {
             if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            Self::validate_zk_election_tally(*options, tally)?;
         }
+        Ok(())
+    }
+    fn validate_zk_election_tally(options: u32, tally: &[u128]) -> Result<(), ivm::VMError> {
+        iroha_data_model::isi::zk::validate_election_tally_v1(options, tally.len())
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        tally
+            .iter()
+            .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+            .ok_or(ivm::VMError::NoritoInvalid)?;
         Ok(())
     }
     /// Configure the non-zero retained-root bound returned by `ZK_ROOTS_GET`.
@@ -5621,8 +5628,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 tally: Vec::new(),
             });
         };
-        iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        Self::validate_zk_election_tally(*options, tally)?;
         Ok(ivm::zk_verify::VoteGetTallyResponse {
             finalized: *finalized,
             tally: tally.clone(),
@@ -26436,9 +26442,10 @@ seiyaku DurableOwner {
     fn zk_vote_tally_syscall_reads_world_snapshot() {
         let mut world = World::new();
         let mut election = ElectionState::default();
+        let large_weight = u128::from(u64::MAX) + 1;
         election.options = 3;
         election.finalized = true;
-        election.tally = vec![2, 1, 0];
+        election.tally = vec![large_weight, 1, 0];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
         let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
@@ -26491,7 +26498,7 @@ seiyaku DurableOwner {
         let resp: ivm::zk_verify::VoteGetTallyResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(resp.finalized);
-        assert_eq!(resp.tally, vec![2, 1, 0]);
+        assert_eq!(resp.tally, vec![large_weight, 1, 0]);
     }
     #[test]
     fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_response() {
@@ -26536,6 +26543,7 @@ seiyaku DurableOwner {
             ("zero-tally", 64, Vec::new()),
             ("long-tally", 64, vec![0; 65]),
             ("oversized", 65, vec![0; 65]),
+            ("overflow", 2, vec![u128::MAX, 1]),
         ] {
             let mut invalid = BTreeMap::new();
             invalid.insert(id.to_string(), (options, false, tally));
@@ -26572,6 +26580,7 @@ seiyaku DurableOwner {
             ("response-zero-tally", 64, Vec::new()),
             ("response-long-tally", 64, vec![0; 65]),
             ("response-oversized", 65, vec![0; 65]),
+            ("response-overflow", 2, vec![u128::MAX, 1]),
         ] {
             let tally_len = tally.len();
             host.zk_elections

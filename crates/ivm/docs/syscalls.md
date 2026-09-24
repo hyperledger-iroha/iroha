@@ -282,6 +282,11 @@ Zero‑knowledge (verification/state‑read)
 - 0x62 ZK_ROOTS_GET — Args: `r10=&NoritoBytes(RootsGetRequest)` → `ptr (NoritoBytes(RootsGetResponse))` — Gas: G_roots_get + bytes
 - 0x63 ZK_VOTE_GET_TALLY — Args: `r10=&NoritoBytes(VoteGetTallyRequest)` → `ptr (NoritoBytes(VoteGetTallyResponse))` — Gas: G_vote_get + bytes
 
+`VoteGetTallyResponse.tally` contains one exact `u128` weight per option in the
+canonical V1 Norito payload. The response does not narrow conviction weights to
+`u64`; the standalone private-election proof relation remains closed pending
+qualification.
+
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
 - `DefaultHost` has no verifier-key registry or cryptographic backend. It

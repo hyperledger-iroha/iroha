@@ -14,7 +14,8 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     block::BlockHeader,
     kagemusha::{
-        KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1,
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+        KagemushaDevicePublicKeyV1, KagemushaHardwarePlatformClassV1,
         kagemusha_liability_pool_id_v1, kagemusha_mint_credit_opening_commitment_preimage_v1,
         kagemusha_recipient_credential_commitment_preimage_v1,
     },

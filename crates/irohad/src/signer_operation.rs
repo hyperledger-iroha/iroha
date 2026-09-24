@@ -45,7 +45,8 @@ pub mod final_promotion;
 #[cfg(unix)]
 pub mod journal;
 mod recovery;
-use authority::{SignerOperationAuthorityV1, SignerOperationObservationSourceV1};
+use authority::SignerOperationAuthorityV1;
+pub use authority::SignerOperationFinalizedReadSourceV1;
 /// Exact reviewed release-manifest producer with mandatory durable private receipt staging.
 #[cfg(unix)]
 pub mod release_manifest;

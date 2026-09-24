@@ -128,6 +128,7 @@ const V_CODE_INVALID_MULTIHASH = ValidationErrorCode.INVALID_MULTIHASH;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const UINT64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn;
+const UINT128_MAX_BIGINT = (1n << 128n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
   "private_key",
@@ -868,6 +869,26 @@ function asNonNegativeInteger(value, name) {
     return Number(numeric);
   }
   fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
+}
+
+function asElectionTallyU128(value, name) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a lossless non-negative integer`, name);
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    integer = BigInt(value);
+  } else {
+    fail(V_CODE_INVALID_NUMERIC, `${name} must be a canonical non-negative integer`, name);
+  }
+  if (integer < 0n || integer > UINT128_MAX_BIGINT) {
+    fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in unsigned 128 bits`, name);
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
 
 function asKaigiU64(value, name) {
@@ -5329,7 +5350,8 @@ export function buildSubmitBallotInstruction(options) {
 }
 
 /**
- * Build a `zk::FinalizeElection` instruction payload with 2–64 tally counters.
+ * Build a `zk::FinalizeElection` instruction payload with 2–64 exact u128 tally weights.
+ * Large weights remain bigint until the Norito encoder emits their exact JSON numeric tokens.
  * @param {object} options
  * @returns {{zk: {FinalizeElection: object}}}
  */
@@ -5343,14 +5365,18 @@ export function buildFinalizeElectionInstruction(options) {
       "finalizeElection.tally",
     );
   }
+  const tally = tallyInput.map((entry, index) =>
+    asElectionTallyU128(entry, `finalizeElection.tally[${index}]`),
+  );
+  if (tally.reduce((sum, weight) => sum + BigInt(weight), 0n) > UINT128_MAX_BIGINT) {
+    fail(V_CODE_VALUE_OUT_OF_RANGE, "finalizeElection.tally total must fit in unsigned 128 bits", "finalizeElection.tally");
+  }
   const payload = {
     election_id: normalizeGovernanceSelectorV1(
       source.electionId ?? source.election_id,
       "finalizeElection.electionId",
     ),
-    tally: tallyInput.map((entry, index) =>
-      asNonNegativeInteger(entry, `finalizeElection.tally[${index}]`),
-    ),
+    tally,
     tally_proof: normalizeProofAttachment(source.tallyProof ?? source.proof ?? source.tally_proof, "finalizeElection.tallyProof"),
   };
   return {

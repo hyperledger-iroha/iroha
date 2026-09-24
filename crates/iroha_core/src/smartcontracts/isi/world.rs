@@ -1976,18 +1976,18 @@ pub mod isi {
         }
         Ok((columns[0][0], columns[1][0]))
     }
-    fn bytes_to_u64(value: &[u8; 32]) -> Option<u64> {
-        if value[8..].iter().any(|b| *b != 0) {
+    fn bytes_to_u128(value: &[u8; 32]) -> Option<u128> {
+        if value[16..].iter().any(|b| *b != 0) {
             return None;
         }
-        Some(u64::from_le_bytes(
-            value[..8].try_into().expect("slice length"),
+        Some(u128::from_le_bytes(
+            value[..16].try_into().expect("slice length"),
         ))
     }
     fn tally_from_columns(
         columns: &[Vec<[u8; 32]>],
         expected_len: usize,
-    ) -> Result<Vec<u64>, Error> {
+    ) -> Result<Vec<u128>, Error> {
         if columns.len() != expected_len || columns.iter().any(|col| col.len() != 1) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "tally proof must expose one public input per option".into(),
@@ -1995,7 +1995,7 @@ pub mod isi {
         }
         let mut tally = Vec::with_capacity(expected_len);
         for column in columns {
-            let value = bytes_to_u64(&column[0]).ok_or_else(|| {
+            let value = bytes_to_u128(&column[0]).ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     "tally proof public input out of range".into(),
                 )
@@ -16779,7 +16779,7 @@ pub mod isi {
     fn persist_finalized_standalone_election_v1(
         election_id: String,
         mut election: crate::state::ElectionState,
-        tally: &[u64],
+        tally: &[u128],
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         if election.finalized {
@@ -16793,6 +16793,14 @@ pub mod isi {
                 "finalized election tally has the wrong width".into(),
             ));
         }
+        // A result over frozen smallest-unit weights must remain exact across all options.
+        tally.iter().try_fold(0_u128, |total, weight| {
+            total.checked_add(*weight).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "finalized election total exceeds the exact u128 domain".into(),
+                )
+            })
+        })?;
         let late_decision = state_transaction
             .world
             .governance_referenda
@@ -16804,9 +16812,9 @@ pub mod isi {
             .map(|_| {
                 standalone_referendum_decision_v1(
                     election_id.clone(),
-                    u128::from(tally[0]),
-                    u128::from(tally[1]),
-                    tally.get(2).copied().map_or(0, u128::from),
+                    tally[0],
+                    tally[1],
+                    tally.get(2).copied().unwrap_or(0),
                     state_transaction.gov.approval_threshold_q_num,
                     state_transaction.gov.approval_threshold_q_den,
                     state_transaction.gov.min_turnout,
@@ -27974,10 +27982,11 @@ pub mod isi {
                 .insert(referendum_id.clone(), election.clone());
             state_transaction.world.take_external_events();
 
+            let large_weight = u128::from(u64::MAX) + 1;
             super::persist_finalized_standalone_election_v1(
                 referendum_id.clone(),
                 election,
-                &[2, 1, 7],
+                &[large_weight, 1, 7],
                 &mut state_transaction,
             )
             .expect("verified tally persisted after referendum closure");
@@ -27990,7 +27999,7 @@ pub mod isi {
                 panic!("late finalization emitted the wrong event: {:?}", events[0]);
             };
             assert_eq!(decision.referendum_id, referendum_id);
-            assert_eq!(decision.approve, 2);
+            assert_eq!(decision.approve, large_weight);
             assert_eq!(decision.reject, 1);
             assert_eq!(decision.abstain, 7);
             assert!(decision.approved);
@@ -28001,12 +28010,12 @@ pub mod isi {
                 .cloned()
                 .expect("finalized election retained");
             assert!(finalized.finalized);
-            assert_eq!(finalized.tally, vec![2, 1, 7]);
+            assert_eq!(finalized.tally, vec![large_weight, 1, 7]);
 
             let replay = super::persist_finalized_standalone_election_v1(
                 referendum_id,
                 finalized,
-                &[2, 1, 7],
+                &[large_weight, 1, 7],
                 &mut state_transaction,
             )
             .expect_err("finalized election cannot replay");
@@ -28015,6 +28024,41 @@ pub mod isi {
                 state_transaction.world.take_external_events().is_empty(),
                 "replay rejection must not emit a second decision"
             );
+        });
+        world_test!(standalone_tally_public_inputs_reject_noncanonical_u128_limbs {
+            let large_weight = u128::from(u64::MAX) + 1;
+            let mut limb = [0_u8; 32];
+            limb[..16].copy_from_slice(&large_weight.to_le_bytes());
+            assert_eq!(
+                super::tally_from_columns(&[vec![limb], vec![[0_u8; 32]]], 2)
+                    .expect("exact u128 proof limb"),
+                vec![large_weight, 0],
+            );
+            limb[16] = 1;
+            assert!(
+                super::tally_from_columns(&[vec![limb], vec![[0_u8; 32]]], 2).is_err(),
+                "a proof limb above u128 must not be truncated",
+            );
+        });
+        world_test!(standalone_tally_total_overflow_rejects_before_state_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            let election_id = "overflow-election".to_owned();
+            let election = crate::state::ElectionState {
+                options: 2,
+                tally: vec![0, 0],
+                ..Default::default()
+            };
+            state_transaction.world.take_external_events();
+            let error = super::persist_finalized_standalone_election_v1(
+                election_id.clone(),
+                election,
+                &[u128::MAX, 1],
+                &mut state_transaction,
+            )
+            .expect_err("an overflowing aggregate cannot finalize");
+            assert_contains!(error.to_string(), "total exceeds the exact u128 domain");
+            assert!(state_transaction.world.elections.get(&election_id).is_none());
+            assert!(state_transaction.world.take_external_events().is_empty());
         });
         world_test!(direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission {
             second_height_transaction!(state, block, state_transaction);

@@ -115,6 +115,14 @@ def test_global_applied_measurement_boundary_and_complete_drain_latency():
     assert len(result.latencies_ns)==100 and result.latencies_ns[:3]==(T-1,T-10_000_000,T+D-20_000_000)
 
 
+def test_late_acknowledgment_preserves_earlier_applied_latency_and_inclusive_drain():
+    value=run();T=value.plan.load.measurement_ns;D=value.plan.load.drain_ns
+    value=changed_request(value,0,acknowledgment_offset_ns=T+D)
+    result=measure.measure_run(value,LIMITS)
+    assert result.measurement_committed==100 and result.drain_committed==0
+    assert result.latencies_ns[0]==1_000_000
+
+
 def test_warmup_is_fully_drained_and_excluded_from_measurement_p95():
     value=run(trial(warmup=NS),latency=4,warmup_latency=100_000_000)
     result=measure.measure_run(value,LIMITS)
@@ -173,6 +181,12 @@ def test_complete_request_identity_schedule_and_bounds_fail_closed(kind):
             'unmarked_hash':{'transaction_hash':'0'*64},'canonical_digest':{'canonical_sha256':'x'*64},
             'body_length':{'canonical_size_bytes':0},'bool_offset':{'applied_offset_ns':True}}[kind]
         value=changed_request(value,0,**updates)
+    with pytest.raises(measure.MeasurementError):measure.measure_run(value,LIMITS)
+
+
+@pytest.mark.parametrize('invalid', ['1'*63, '1'*65, 'A'*63+'1', '1'*63+'0', 'g'*63+'1'])
+def test_signed_transaction_hash_requires_exact_sdk_text_shape(invalid):
+    value=changed_request(run(),0,transaction_hash=invalid)
     with pytest.raises(measure.MeasurementError):measure.measure_run(value,LIMITS)
 
 

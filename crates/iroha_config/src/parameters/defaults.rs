@@ -3337,6 +3337,60 @@ pub mod nexus {
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
+        /// Exact backing for one maximum-size committed-evidence prune-key plan.
+        pub const CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<iroha_crypto::Hash>();
+        /// Exact in-memory shape of one pending penalty metadata entry.
+        /// Each optional peer's compact bytes hold a separate original charge.
+        pub type ConsensusPenaltyPendingEntry = (
+            iroha_crypto::Hash,
+            u64,
+            Option<(
+                iroha_data_model::block::consensus::ValidatorIndex,
+                iroha_model_base::peer::PeerId,
+                mv::allocation::AllocationCharge,
+            )>,
+        );
+        /// Exact fixed backing for the maximum retained pending penalty plan.
+        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
+        /// Maximum compact peer-key bytes in one pending plan. Actual plans
+        /// reserve each present key's exact tag-plus-payload length instead.
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        /// Minimum pool able to retain one maximum prune plan and one pending plan.
+        pub const CONSENSUS_EVIDENCE_ONE_PLAN_BYTES: usize = CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES;
+        /// Simultaneously retained proposal, validation, application and replay plans.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS: usize = 8;
+        /// Finite pool for eight maximum prune/pending plans and cloned peer keys.
+        /// Stake indexes, proof snapshots and penalty scratch remain unfunded.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_BYTES: usize =
+            CONSENSUS_EVIDENCE_ONE_PLAN_BYTES * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS;
+        /// Minimum original-owner backing for one public-lane stake-share key,
+        /// one validator group, and three cloned Ed25519 account identifiers.
+        /// The Core group is a transparent wrapper around this exact tuple
+        /// layout. Larger keys/multisig controllers are measured against the
+        /// configured finite pool; Quantity owners remain separate obligations.
+        pub const CONSENSUS_STAKE_INDEX_MIN_BYTES: usize = core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            iroha_data_model::account::AccountId,
+        )>() + core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            core::ops::Range<usize>,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+        )>() + 3
+            * (1 + 32 + core::mem::size_of::<mv::allocation::AllocationCharge>());
+        /// Finite process-local pool for stake-index backings and nested account keys.
+        pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).

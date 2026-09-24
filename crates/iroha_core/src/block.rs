@@ -2673,6 +2673,8 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
+    /// Local evidence or stake-index penalty preparation failed: {0}
+    EvidencePreparation(crate::state::EvidencePreparationError),
     /// Local hash-history admission failed before State execution: {0}
     BlockHashAdmission(crate::state::BlockHashAdmissionError),
     /// Local membership-history admission failed before State execution: {0}
@@ -6077,31 +6079,7 @@ pub(crate) mod valid {
         axt_snapshot_mismatch: bool,
         has_native_participant_frontiers: bool,
     }
-    /// Actual pristine consensus work, shared by ordinary and Native execution.
-    /// Preparation reads the committed predecessor before acquiring State writers;
-    /// consumption applies these exact effects once on the retained overlay.
-    struct PreparedPristineConsensusEffects {
-        header: BlockHeader,
-        effects: iroha_data_model::consensus::NposConsensusEffects,
-        prune_keys: Vec<Hash>,
-        expected_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
-        roster: Vec<PeerId>,
-    }
-    impl PreparedPristineConsensusEffects {
-        fn apply(self, state_block: &mut StateBlock<'_>) -> Result<(), BlockValidationError> {
-            if state_block._curr_block != self.header {
-                return Err(ValidBlock::npos_effects_error(
-                    "pristine effects have another carrier",
-                ));
-            }
-            state_block.apply_pristine_npos_consensus_effects(
-                &self.effects, &self.prune_keys, self.expected_anchor, &self.roster,
-                self.header.height().get(), self.header.view_change_index(), self.header.creation_time_ms,
-            ).map(|_| ()).map_err(|error| ValidBlock::npos_effects_error(format!(
-                "NPoS consensus effects are not applicable to pristine parent state: {error}"
-            )))
-        }
-    }
+    include!("block/pristine_consensus_effects.rs");
 
     /// Owned, authenticated control inputs for the same Native execution scope.
     /// This is neither global block validity nor publication authority.
@@ -6140,7 +6118,7 @@ pub(crate) mod valid {
         header: BlockHeader,
         network_id: NetworkId,
         effects: iroha_data_model::consensus::NposConsensusEffects,
-        prune_keys: Vec<Hash>,
+        prune_keys: mv::allocation::ChargedBuffer<Hash>,
         roster: Vec<PeerId>,
         parent_surface: Hash,
     }
@@ -6151,7 +6129,7 @@ pub(crate) mod valid {
             BlockHeader,
             NetworkId,
             iroha_data_model::consensus::NposConsensusEffects,
-            Vec<Hash>,
+            mv::allocation::ChargedBuffer<Hash>,
             Vec<PeerId>,
             Hash,
         ) {
@@ -6166,6 +6144,7 @@ pub(crate) mod valid {
         }
     }
     include!("block/carrier_preparation.rs");
+    include!("block/merge_beacon_owner.rs");
     include!("block/post_execution_tail.rs");
 
     impl ValidBlock {
@@ -7203,10 +7182,9 @@ pub(crate) mod valid {
             let height = header.height().get();
             Ok(Some(PreparedPristineConsensusEffects {
                 prune_keys: crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                    state,
-                    height,
-                    effects.v2_evidence_admissions.len(),
-                ),
+                    state, height,
+                )
+                .map_err(BlockValidationError::EvidencePreparation)?,
                 expected_anchor: header.prev_block_hash().map(|block_hash| {
                     iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
                         height: height.saturating_sub(1),
@@ -7323,7 +7301,7 @@ pub(crate) mod valid {
             replay: Option<&VerifiedReplayProposal>,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
-            let prepared_npos = Self::prepare_pristine_consensus_effects(
+            let mut prepared_npos = Self::prepare_pristine_consensus_effects(
                 block,
                 state,
                 authenticated_height_context,
@@ -7353,17 +7331,13 @@ pub(crate) mod valid {
                         "merge beacon composition requires an authenticated height context",
                     )
                 })?;
-                let prepared = prepared_npos.as_ref().ok_or_else(|| {
+                let prepared = prepared_npos.take().ok_or_else(|| {
                     Self::npos_effects_error("merge beacon composition lacks effects")
                 })?;
-                Some(VerifiedMergeBeaconPulse {
-                    header: block.header(),
-                    network_id: context.network_id,
-                    effects: prepared.effects.clone(),
-                    prune_keys: prepared.prune_keys.clone(),
-                    roster: prepared.roster.clone(),
-                    parent_surface: crate::state::merge_beacon_parent_surface(&state.world_view()),
-                })
+                Some(prepared.into_merge_beacon(
+                    context.network_id,
+                    crate::state::merge_beacon_parent_surface(&state.world_view()),
+                ))
             } else {
                 None
             };
@@ -7385,7 +7359,7 @@ pub(crate) mod valid {
                     ));
                 }
                 return state
-                    .block_with_pristine_stage(block.header(), |state_block| {
+                    .block_with_pristine_carrier_stage(block, |state_block| {
                         state_block
                             .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
                             .map_err(|error| {
@@ -7410,7 +7384,7 @@ pub(crate) mod valid {
                     )
                 })?;
                 return state
-                    .block_with_pristine_stage(block.header(), |state_block| {
+                    .block_with_pristine_carrier_stage(block, |state_block| {
                         let stage = match replay {
                             Some(authority) => state_block
                                 .stage_certified_merge_reference_for_verified_replay(
@@ -7439,9 +7413,9 @@ pub(crate) mod valid {
                     .map_err(BlockValidationError::from);
             }
             let state_block = if soft_fork {
-                state.block_and_revert_with_pristine_stage(block.header(), apply_npos)
+                state.block_and_revert_with_pristine_carrier_stage(block, apply_npos)
             } else {
-                state.block_with_pristine_stage(block.header(), apply_npos)
+                state.block_with_pristine_carrier_stage(block, apply_npos)
             }?;
             Ok(Box::new(state_block))
         }
@@ -8223,6 +8197,24 @@ pub(crate) mod valid {
         fn npos_effects_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::NposEffectsInvalid(message.into())
         }
+        fn classify_npos_penalty_derivation_error(error: eyre::Report) -> BlockValidationError {
+            if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+                match local {
+                    crate::state::StateAdmissionError::History(error) => {
+                        BlockValidationError::BlockHashAdmission(error.clone())
+                    }
+                    crate::state::StateAdmissionError::Membership(error) => {
+                        BlockValidationError::MembershipAdmission(error.clone())
+                    }
+                }
+            } else if let Some(local) =
+                error.downcast_ref::<crate::state::EvidencePreparationError>()
+            {
+                BlockValidationError::EvidencePreparation(local.clone())
+            } else {
+                Self::npos_effects_error(format!("failed to derive NPoS effects: {error}"))
+            }
+        }
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let expected_policies = block.da_proof_policies().map(HashOf::new);
             let actual_policies = block.header().da_proof_policies_hash();
@@ -8505,20 +8497,7 @@ pub(crate) mod valid {
             );
             let expected_actions = applier
                 .derive_npos_penalty_actions(&block.header())
-                .map_err(|err| {
-                    if let Some(local) = err.downcast_ref::<crate::state::StateAdmissionError>() {
-                        match local {
-                            crate::state::StateAdmissionError::History(e) => {
-                                BlockValidationError::BlockHashAdmission(e.clone())
-                            }
-                            crate::state::StateAdmissionError::Membership(e) => {
-                                BlockValidationError::MembershipAdmission(e.clone())
-                            }
-                        }
-                    } else {
-                        Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
-                    }
-                })?;
+                .map_err(Self::classify_npos_penalty_derivation_error)?;
             let actual_actions = actual_effects
                 .map(|effects| effects.penalty_actions.as_slice())
                 .unwrap_or(&[]);
@@ -11698,7 +11677,8 @@ pub(crate) mod valid {
                     advertised_transitions.as_ref(),
                 )
             };
-            // Standalone ordinary callers may enter with a plain overlay.
+            // Ordinary source hashes must already be prepaid on this original
+            // overlay; a plain nonempty source is refused locally by the tail.
             crate::sumeragi::witness::start_block();
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
@@ -12189,6 +12169,8 @@ pub(crate) mod valid {
             sync::Arc,
             time::Duration,
         };
+        include!("block/canonical_carrier_source_tests.rs");
+        include!("block/merge_beacon_owner_tests.rs");
         include!("block/parallel_account_profile_tests.rs");
         fn sumeragi_v2_test_profile(block: &SignedBlock) -> ConsensusValidationProfile {
             ConsensusValidationProfile::SumeragiV2 {
@@ -15799,6 +15781,30 @@ pub(crate) mod valid {
                 ],
                 ..NposConsensusEffects::default()
             }
+        }
+        #[test]
+        fn penalty_derivation_capacity_is_local_validation_not_invalid_effects() {
+            let budget = mv::allocation::AllocationBudget::new(8);
+            let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");
+            let refusal = match budget.try_reserve_bytes(2) {
+                Ok(_) => panic!("occupied pool must refuse the exact demand"),
+                Err(refusal) => refusal,
+            };
+            let classified = ValidBlock::classify_npos_penalty_derivation_error(eyre::Report::new(
+                crate::state::EvidencePreparationError::Admission(refusal),
+            ));
+            let BlockValidationError::EvidencePreparation(local) = classified else {
+                panic!("penalty preparation capacity must stay a typed local refusal");
+            };
+            assert!(local.release_wait().is_some());
+            drop(original_owner);
+            assert_eq!(budget.reserved_bytes(), 0);
+            assert!(matches!(
+                ValidBlock::classify_npos_penalty_derivation_error(eyre::eyre!(
+                    "malformed committed penalty source"
+                )),
+                BlockValidationError::NposEffectsInvalid(_)
+            ));
         }
         #[test]
         fn soft_fork_replacement_rejects_npos_effects_before_overlay_construction() {
@@ -24427,6 +24433,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::EvidencePreparation(_)
             | BlockValidationError::BlockHashAdmission(_)
             | BlockValidationError::MembershipAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,

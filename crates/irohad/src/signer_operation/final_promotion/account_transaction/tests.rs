@@ -14,7 +14,7 @@ use iroha_core::query::{
     },
     final_promotion_authority::{
         observation::{
-            FinalPromotionCheckExpectedV1, FinalPromotionCheckFloorV1,
+            FinalPromotionCheckExpectedV1, FinalPromotionCheckFloorV1, FinalPromotionCheckSourceV1,
             PreparedFinalPromotionCheckV1, begin_final_promotion_check_v1,
         },
         read_final_promotion_authority_at_v1,
@@ -47,6 +47,7 @@ use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 mod current_observation;
 mod observer_signing;
+mod software_key;
 
 mod statements {
     use sorafs_manifest as manifest;
@@ -93,12 +94,17 @@ fn policy(
             deployment_id: DEPLOYMENT.into(),
         }
     };
+    let handle_role = if role == SignerRoleV1::FinalPromotionAccountTransaction {
+        "final-promotion-account-transaction"
+    } else {
+        role.as_str()
+    };
     SignerCustodyPolicyV1 {
         binding: SignerCustodyBindingV1 {
             chain_id: native.state().chain_id_ref().to_string(),
             network_id: *native.state().network_id_ref().as_bytes(),
-            runtime_handle: format!("software://sorafs/{}/primary", role),
-            key_handle: format!("software://sorafs/{}/key-1", role),
+            runtime_handle: format!("software://sorafs/{handle_role}/primary"),
+            key_handle: format!("software://sorafs/{handle_role}/key-1"),
             service_id: format!("promotion-service-{signer}"),
             administrator_id: format!("promotion-admin-{signer}"),
             role,
@@ -130,6 +136,8 @@ struct Fixture {
     statement: Arc<[u8]>,
     expected: SignerFinalPromotionExpectedV1,
     journal: SignerReceiptJournalV1,
+    reserve_signed: Option<SignedTransaction>,
+    reserve_floor: Option<FinalPromotionCheckFloorV1>,
     _directory: tempfile::TempDir,
 }
 impl Fixture {
@@ -167,6 +175,8 @@ impl Fixture {
             },
             statement,
             journal,
+            reserve_signed: None,
+            reserve_floor: None,
             _directory: directory,
         };
         let configure_receipt = MutateSorafsFinalPromotionAuthority {
@@ -314,6 +324,26 @@ impl Fixture {
         let request =
             SignerFinalPromotionRequestV1::new(&custody, &self.expected, &statement).unwrap();
         let (height, block_hash, context_id) = self.native.finalized_floor().unwrap();
+        let floor = if matches!(
+            &subject,
+            Some(
+                FinalPromotionCheckSubjectV1::BeforeProvider(_)
+                    | FinalPromotionCheckSubjectV1::AfterProvider(_)
+                    | FinalPromotionCheckSubjectV1::BeforeCommit(_)
+            )
+        ) {
+            self.reserve_floor.unwrap_or(FinalPromotionCheckFloorV1 {
+                height,
+                block_hash,
+                context_id,
+            })
+        } else {
+            FinalPromotionCheckFloorV1 {
+                height,
+                block_hash,
+                context_id,
+            }
+        };
         let prepared = begin_final_promotion_check_v1(
             Arc::clone(self.native.state()),
             FinalPromotionCheckExpectedV1 {
@@ -326,11 +356,7 @@ impl Fixture {
                 )),
                 control_revision: snapshot.control_record.revision,
                 control_digest: snapshot.custody_anchor.state_digest,
-                floor: FinalPromotionCheckFloorV1 {
-                    height,
-                    block_hash,
-                    context_id,
-                },
+                floor,
             },
             max_elapsed,
         )
@@ -342,6 +368,14 @@ impl Fixture {
         &mut self,
         prepared: PreparedFinalPromotionCheckV1,
     ) -> VerifiedFinalPromotionCheckV1 {
+        let reserved = matches!(
+            &prepared.instruction().action,
+            FinalPromotionAuthorityActionV1::Check(check)
+                if matches!(&check.subject,
+                    FinalPromotionCheckSubjectV1::BeforeProvider(_)
+                    | FinalPromotionCheckSubjectV1::AfterProvider(_)
+                    | FinalPromotionCheckSubjectV1::BeforeCommit(_))
+        );
         let payload = self.observer_payload(prepared.instruction().clone().into());
         let pending = self
             .observer_transactions()
@@ -352,7 +386,16 @@ impl Fixture {
             .unwrap();
         let signed = pending.signed_transaction().clone();
         assert_eq!(self.native.commit(NOW, vec![signed]), [true]);
-        pending.verify_finalized(|| Ok(times().0)).unwrap()
+        let source = if reserved {
+            FinalPromotionCheckSourceV1::Reserved(
+                self.reserve_signed
+                    .as_ref()
+                    .expect("original signed Reserve"),
+            )
+        } else {
+            FinalPromotionCheckSourceV1::Current
+        };
+        pending.verify_finalized(source, || Ok(times().0)).unwrap()
     }
     fn execute_account_check(
         &mut self,
@@ -472,6 +515,7 @@ impl Fixture {
 fn account_transaction_signing_retains_exact_native_authority_and_payload_through_submission() {
     let mut f = Fixture::new();
     let checked = f.receipt_check(None);
+    let pre_reserve_floor = checked.applied_floor();
     let prepared = f.prepare(checked);
     let FinalPromotionAuthorityActionV1::Check(initial_check) =
         &prepared.receipt_check.instruction().action
@@ -512,6 +556,8 @@ fn account_transaction_signing_retains_exact_native_authority_and_payload_throug
     assert_eq!(transaction.payload(), &original);
     transaction.verify_signature().unwrap();
     assert_eq!(f.native.commit(NOW, vec![transaction.clone()]), [true]);
+    f.reserve_signed = Some(transaction.clone());
+    f.reserve_floor = Some(pre_reserve_floor);
     assert_eq!(signed.reconciliation_transaction(), &transaction);
     assert!(
         signed

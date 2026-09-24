@@ -16,7 +16,6 @@ fn execute_request(f: &mut Fixture, authority: &AccountId, now: u64, action: Act
 fn public_request_digest_matches_each_native_custody_and_operation_transition() {
     let mut f = fixture();
     let manager = f.manager.clone();
-    let operator = f.operator.clone();
     let policy = encode(&f.policy).unwrap();
     let configured = execute_request(&mut f, &manager, 1_000, Action::Configure(policy));
     assert_eq!(snapshot(&f, None).control_record.request_digest, configured);
@@ -25,6 +24,14 @@ fn public_request_digest_matches_each_native_custody_and_operation_transition() 
     assert_ne!(configured, enrolled);
     assert_eq!(snapshot(&f, None).control_record.request_digest, enrolled);
 
+    // Direct Reserve/Complete also require an independently enrolled role-15 account. Use a
+    // fresh fixture with both native purposes active; the custody digest checks above retain
+    // their exact single-purpose transitions.
+    let mut f = fixture();
+    configure(&mut f);
+    enroll(&mut f);
+    let manager = f.manager.clone();
+    let operator = f.operator.clone();
     let request = reserve_request(&f, 31);
     let reserved = execute_request(&mut f, &operator, 2_000, Action::Reserve(request));
     let row = snapshot(&f, Some([31; 32])).operation.unwrap();

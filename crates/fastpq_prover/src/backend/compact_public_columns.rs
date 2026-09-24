@@ -127,6 +127,73 @@ pub(super) fn project_base_row(
     }))
 }
 
+/// Borrowed, completely checked physical columns for the private DEEP producer.
+///
+/// The existing quantity producer owns the 342 source columns. This view checks
+/// their complete base-domain shape and every canonical cell before exposing the
+/// 301 retained columns, and checks the omitted public cells at every physical
+/// row. It does not establish the AIR, a quotient, hiding, or a commitment.
+pub(super) struct SourceTraceColumns<'a> {
+    columns: &'a [&'a [u64]],
+}
+
+impl<'a> SourceTraceColumns<'a> {
+    /// Reject an incomplete or inconsistent source before any DEEP transform.
+    pub(super) fn new(columns: &'a [&'a [u64]]) -> Result<Self> {
+        if columns.len() != COLUMN_COUNT
+            || columns
+                .iter()
+                .any(|column| column.len() != PHYSICAL_ROW_COUNT)
+        {
+            return Err(Error::InvalidTraceShape {
+                details: "DEEP source requires exactly 342 complete physical columns".into(),
+            });
+        }
+        for (column, values) in columns.iter().enumerate() {
+            for (row, &value) in values.iter().enumerate() {
+                value.validate("deep_source_trace", &[column, row])?;
+            }
+        }
+        for row in 0..PHYSICAL_ROW_COUNT {
+            let index = PhysicalRowIndex::new(row).expect("bounded physical row");
+            for (&column, expected) in PUBLIC_COLUMNS.iter().zip(base_values(index)) {
+                if columns[column][row] != expected {
+                    return Err(Error::InvalidTraceShape {
+                        details: format!(
+                            "DEEP source public column {column} differs at physical row {row}"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(Self { columns })
+    }
+
+    /// Borrow one retained base column in the fixed 301-column commitment order.
+    pub(super) fn committed_column(&self, index: usize) -> Result<&'a [u64]> {
+        let source = COMMITTED_COLUMNS
+            .get(index)
+            .ok_or(Error::QueryIndexOutOfRange {
+                index,
+                len: COMMITTED_COLUMN_COUNT,
+            })?;
+        Ok(self.columns[*source])
+    }
+
+    /// Read one retained physical row without copying or reinterpreting source.
+    pub(super) fn committed_row(&self, row: usize) -> Result<[u64; COMMITTED_COLUMN_COUNT]> {
+        if row >= PHYSICAL_ROW_COUNT {
+            return Err(Error::QueryIndexOutOfRange {
+                index: row,
+                len: PHYSICAL_ROW_COUNT,
+            });
+        }
+        Ok(core::array::from_fn(|index| {
+            self.columns[COMMITTED_COLUMNS[index]][row]
+        }))
+    }
+}
+
 /// Immutable verifier-owned geometry for the exact 41 public polynomials.
 ///
 /// Construction accepts trusted parameters, never proof-supplied fixed values.

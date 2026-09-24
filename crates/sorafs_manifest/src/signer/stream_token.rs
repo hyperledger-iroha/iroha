@@ -227,7 +227,20 @@ impl fmt::Debug for SignerStreamTokenExpectedV1 {
 /// Exact prepared request, tied to its independently verified original custody generation.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::signer::stream_token::SignerStreamTokenRequestV1")]
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct SignerStreamTokenRequestV1 {
     /// Exact independently prepared operation identity.
     pub operation_id: [u8; 32],

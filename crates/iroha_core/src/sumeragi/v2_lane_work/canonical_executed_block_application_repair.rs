@@ -1,7 +1,10 @@
 #[derive(Debug, Error)]
-enum CanonicalRecoveryReadError {
+/// Source-read failure classified before a canonical chunk leaves its worker.
+pub(crate) enum CanonicalRecoveryReadError {
+    /// The remote request or selected source does not match canonical authority.
     #[error("{0}")]
     Rejected(String),
+    /// Local durable storage or preparation failed and requires a restart.
     #[error("canonical recovery durable read failed: {0}")]
     LocalPersistence(String),
 }
@@ -18,7 +21,8 @@ impl CanonicalRecoveryReadError {
 const CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES: usize = MAX_CERTIFIED_MERGE_CHUNK_BYTES;
 const CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS: usize =
     (STRICT_INIT_MAX_BLOCK_BYTES as usize).div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
-fn canonical_executed_block_request_fits_frame(
+/// Check the canonical-only request against the configured authenticated frame.
+pub(crate) fn canonical_executed_block_request_fits_frame(
     limits: V2LaneWorkLimits,
     request: &LaneHistoricalRecoveryRequestV1,
 ) -> bool {
@@ -214,7 +218,8 @@ fn canonical_executed_block_matches_need(
         && u64::try_from(wire.len()).ok() == Some(need.executed_block_wire_len)
         && Hash::new(&wire) == need.executed_block_wire_hash
 }
-fn build_canonical_executed_block_response(
+/// Build one exact Kura-backed response after validating committed State and finality.
+pub(crate) fn build_canonical_executed_block_response(
     context: &wire::HeightContext,
     state: &State,
     kura: &Kura,
