@@ -309,6 +309,7 @@ impl PublishedFacts {
         Ok(identity)
     }
     /// Recheck every retained source and the exact facts descriptor before returning scalars.
+    #[cfg(test)]
     pub(in crate::kura::scaling_evidence::export) fn identity(
         &self,
     ) -> Result<PreparedTransportIdentity> {

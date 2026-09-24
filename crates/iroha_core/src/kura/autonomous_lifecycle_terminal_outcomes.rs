@@ -108,6 +108,7 @@ pub enum LaneBlockAuxiliaryPersistenceOutcome {
 /// Result of appending one authenticated autonomous NewView certificate while
 /// serialized with exact lane-application receipt publication.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 pub(crate) enum LaneBlockNewViewPersistenceOutcome {
     /// The certificate crossed its durability boundary and advanced this cursor.
     Persisted(LaneBlockProposalV1),
@@ -3355,6 +3356,7 @@ impl Kura {
     /// canonical batch order. A first attempt binds Pending record hashes; an
     /// idempotent retry binds the current source-equivalent Complete hashes.
     /// Queue must receive this whole set before mutating any reservation group.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     pub(crate) fn persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(
         &self,
         entry: &MergeLedgerEntry,

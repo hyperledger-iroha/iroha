@@ -4,7 +4,7 @@ use crate::sumeragi::evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
-        ConsensusKeyGate, WorldReadOnly, consensus_key_roles_for_lane,
+        ConsensusKeyGate, WorldReadOnly, consensus_key_role_for_lane,
         peer_consensus_key_gate_for_lane, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
@@ -851,7 +851,7 @@ impl Execute for RegisterPublicLaneCandidate {
                 &registration.peer_id,
                 activation_height,
             )?;
-            let allowed_roles = consensus_key_roles_for_lane(registration.lane_id);
+            let required_role = consensus_key_role_for_lane(registration.lane_id);
             let exact_live_pop =
                 state_transaction
                     .world
@@ -859,7 +859,7 @@ impl Execute for RegisterPublicLaneCandidate {
                     .iter()
                     .any(|(id, record)| {
                         record.id == *id
-                            && allowed_roles.contains(&id.role)
+                            && id.role == required_role
                             && record.public_key == *registration.peer_id.public_key()
                             && record.pop.as_deref() == Some(self.proof_of_possession.as_slice())
                             && record.expiry_height.is_none()
@@ -945,7 +945,7 @@ fn register_public_lane_validator(
         .and_then(|candidate| candidate.prepared_peer.as_ref())
     {
         if prepared.public_key != *registration.peer_id.public_key()
-            || !consensus_key_roles_for_lane(registration.lane_id).contains(&prepared.id.role)
+            || prepared.id.role != consensus_key_role_for_lane(registration.lane_id)
             || prepared.expiry_height.is_some()
             || !prepared.is_live_at(activation_height, 0, 0)
         {
@@ -2640,7 +2640,7 @@ fn ensure_validator_peer_registered(
 ) -> Result<(), Error> {
     // Lane zero is global Sumeragi and requires a Validator key. Participant
     // lanes require their purpose-specific Committee key.
-    let allowed_roles = consensus_key_roles_for_lane(lane_id);
+    let required_role = consensus_key_role_for_lane(lane_id);
     let role_label = if lane_id == LaneId::SINGLE {
         "validator"
     } else {
@@ -2714,7 +2714,7 @@ fn ensure_validator_peer_registered(
         .get(&peer_public_key.to_string())
         .is_some_and(|ids| {
             ids.iter().any(|id| {
-                allowed_roles.contains(&id.role)
+                id.role == required_role
                     && state_transaction
                         .world
                         .consensus_keys()

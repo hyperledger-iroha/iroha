@@ -4,17 +4,16 @@ use iroha_data_model::{
     NetworkId,
     block::consensus_v2::ValidatorPower,
     isi::kagemusha_v1::{
-        BeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
-        KagemushaMintFinalityEpochDecisionV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1,
+        KagemushaMintFinalityEpochAuthorizationV1,
     },
 };
 #[cfg(test)]
 use iroha_data_model::{
     block::consensus_v2::SumeragiV2GenesisContextParameters,
     isi::kagemusha_v1::{
-        KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityGenesisParametersV1,
+        BeaconEpochBindingV1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
+        KagemushaMintFinalityEpochDecisionV1, KagemushaMintFinalityGenesisParametersV1,
     },
 };
 
@@ -60,7 +59,7 @@ pub(crate) fn mint_finality_genesis_for_authority(
 }
 
 /// Build a complete generation-zero authority and explicit genesis authorization.
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn mint_finality_genesis_authorization(
     network_id: NetworkId,
     last_height: u64,

@@ -1,4 +1,5 @@
 // Deferred certified merge-sidecar recovery driver.
+#[allow(dead_code, reason = "TODO: native runner cutover")]
 fn drive_merge_sidecar_recovery(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,

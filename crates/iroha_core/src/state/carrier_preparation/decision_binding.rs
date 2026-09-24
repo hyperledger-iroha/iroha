@@ -98,16 +98,6 @@ pub(crate) enum RetainedCarrier<Admission> {
 }
 
 impl<Admission> RetainedCarrier<Admission> {
-    /// Borrow the same immutable result-bearing block in every retained phase.
-    pub(crate) fn block(&self) -> &SignedBlock {
-        match self {
-            Self::Capturing(carrier) => carrier.journals.valid.as_ref(),
-            Self::Validated(journals) => journals.valid.as_ref(),
-            Self::Decided(carrier) => carrier.block(),
-            Self::Checkpointed(carrier) => carrier.block(),
-        }
-    }
-
     /// Borrow the manifest captured from original execution without State rereads.
     pub(crate) fn native_amx_manifest(
         &self,

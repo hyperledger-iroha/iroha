@@ -1,6 +1,10 @@
 /// Remove retired source occurrences from semantic work already owned by the
 /// lane adapter. A malformed effect which never carried its required route is
 /// left intact so normal strict validation rejects it.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native runner cutover")
+)]
 fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
     retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
 }
@@ -14,6 +18,10 @@ where
 {
     retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native runner cutover")
+)]
 fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
     effect: &mut V2LaneWorkEffect,
     after_snapshot: AfterSnapshot,

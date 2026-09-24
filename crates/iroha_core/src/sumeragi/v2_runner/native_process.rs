@@ -259,14 +259,6 @@ impl NativeRunnerProcess {
             .map_err(V2RunnerError::Service)
     }
 
-    /// Inspect retained transport custody without completing or replacing an output.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn retained_transport_outputs_for_test(
-        &self,
-    ) -> Vec<(Arc<super::super::message::BlockMessageWire>, Vec<PeerId>)> {
-        self.transport.retained_outputs_for_test()
-    }
-
     /// Native and exact historical responses continue while global Validate waits.
     pub(in crate::sumeragi) fn service_native_ingress(
         &mut self,
@@ -309,13 +301,6 @@ impl NativeRunnerProcess {
         self.source
             .as_ref()
             .is_some_and(|source| source.admits(message))
-    }
-
-    pub(in crate::sumeragi) fn matches_output_guard(
-        &self,
-        guard: &Arc<ConsensusOutputGuard>,
-    ) -> bool {
-        Arc::ptr_eq(&self.guard, guard)
     }
 
     pub(in crate::sumeragi) fn accept_source_response(

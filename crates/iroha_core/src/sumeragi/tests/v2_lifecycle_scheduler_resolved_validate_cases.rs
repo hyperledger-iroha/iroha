@@ -287,7 +287,6 @@ impl ProductionLifecycleOwnerV1 {
                 assert_eq!(published.lifecycle_ordinal(), ordinal);
                 super::ReadyValidateSuccessorV1::from_rejected(published, physical)
             }
-            _ => panic!("the held worker must publish success or deterministic rejection"),
         };
         ack.acknowledge_after_publication();
         successor

@@ -44,8 +44,8 @@ ordered roster and active lane incarnation from consensus state, requires the
 resolved authority height to equal that context height, requires the V1
 `f = 1` four-validator geometry, and verifies every BLS proof of possession.
 Private-settlement and all participant-lane authorities require a live
-`Committee` key for every member. A
-Committee-only peer is registered in WSV and trusted P2P state but is never
+`Committee` key for every member. A Committee-only peer is registered in WSV
+and trusted P2P state but is never
 added to lane `0`'s signed topology, NPoS candidate set, or global quorum.
 Restricted upload, Prepare voting, and global receipt admission all use this
 same state-anchored authority boundary.

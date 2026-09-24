@@ -3223,10 +3223,10 @@ _PRODUCTION_MERGE_SIDECAR_ARTIFACT_HELPER_SHA256 = {
         "db337960ec3b7ec95115625706916eb8fe37bd6fca838194b517e651eb7f6838",
     ),
     "verify_open_lifecycle_directory": (
-        "5ec718f669775d8ffc986775be5b35d023b4d17422cec6a1527332d5dc9225e4",
+        "23293a4b23f31f4fb85c10521c814104568ccb6161260822087b19adb0d5c754",
     ),
     "open_lifecycle_directory": (
-        "1c480a6f24d1d39a6fe9c7c37bb9cfc738cad69609082b66c60531f141f3fdec",
+        "642c45e23166064b4256a2b6242f9238b20287f944f9cedae11ca0d9641efc24",
         "cfc8db5f4cd9eaee8a95a476440bb53c2f39423b12860d444ffd713c051f1ceb",
     ),
     "verify_open_lifecycle_regular": (

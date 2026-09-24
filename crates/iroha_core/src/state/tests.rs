@@ -132,6 +132,21 @@ mod world_capture_tests;
 mod world_complete_drop_tests;
 #[path = "world_stack_tests.rs"]
 mod world_stack_tests;
+#[test]
+fn lane_consensus_key_role_is_exact() {
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::SINGLE),
+        ConsensusKeyRole::Validator
+    );
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::new(1)),
+        ConsensusKeyRole::Committee
+    );
+    assert_eq!(
+        consensus_key_role_for_lane(LaneId::new(42)),
+        ConsensusKeyRole::Committee
+    );
+}
 macro_rules! let_row { ($($tokens:tt)*) => { let $($tokens)*; }; }
 macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {

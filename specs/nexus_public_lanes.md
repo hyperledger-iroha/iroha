@@ -201,10 +201,11 @@ Validation rules:
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
 - `peer_id` MUST resolve to a registered world-state peer. Lane `0` requires
   an unbounded `Validator` consensus key and current global topology membership
-  for the current tenure. A fresh global peer enters through a prepared,
-  certified committee transition. A non-zero participant lane requires an
-  unbounded `Committee` key live at the scheduled `activation_height`;
-  participant admission never confers global committee membership.
+  for the current tenure. Direct admission of a fresh global peer requires a
+  prepared, certified committee transition first. A non-zero participant lane
+  requires an unbounded `Committee` key live at the scheduled
+  `activation_height`; participant admission never confers global committee
+  membership.
 - A public lane cannot bind the same `peer_id` to multiple retained validator
   records. Exited records continue to reserve both their validator-capacity
   slot and peer identity while any slashable custody remains.
@@ -381,10 +382,10 @@ account migration and entity deletion preserve these obligations.
   stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
   For stake-elected lanes, `RegisterPublicLaneValidator` now binds an explicit
   `peer_id`. Lane `0` requires a registered peer with a live, unbounded
-  `Validator` key in the current topology. Fresh global peers must complete
-  candidate publication and a certified epoch transition. Non-zero participant
-  lanes require a live, unbounded `Committee` key and do not add that peer to
-  global quorum.
+  `Validator` key in the current topology. Fresh global candidates outside the
+  frozen topology are refused until a prepared, certified epoch transition
+  activates them. Non-zero participant lanes require a live, unbounded
+  `Committee` key and do not add that peer to global quorum.
   Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release

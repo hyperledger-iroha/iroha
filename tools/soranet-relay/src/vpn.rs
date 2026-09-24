@@ -948,6 +948,7 @@ pub struct VpnSessionHandle {
     account_hash: [u8; 32],
     relay_id: [u8; 32],
     payment_tx_hash: [u8; 32],
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     valid_after_ms: u64,
     expires_at_ms: u64,
     highest_voucher: Arc<Mutex<Option<VpnUsageVoucherEnvelopeV1>>>,
@@ -1073,14 +1074,17 @@ impl VpnSessionHandle {
         self.session_id
     }
     /// Return the signed lower timestamp bound retained for WAL recovery validation.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn valid_after_ms(&self) -> u64 {
         self.valid_after_ms
     }
     /// Return the signed exclusive session expiry retained for WAL recovery validation.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn expires_at_ms(&self) -> u64 {
         self.expires_at_ms
     }
     /// Return the signed tariff retained for durable settlement recovery.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn tariff(&self) -> Option<&VpnTariffV1> {
         self.tariff.as_ref()
     }
@@ -1099,6 +1103,7 @@ impl VpnSessionHandle {
         Ok(())
     }
     /// Start the billable service interval after prepaid admission and backend readiness.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn begin_metered_service(&self, started_at_ms: u64) -> Result<(), VpnBillingError> {
         self.ensure_forwarding_available()?;
         let started_at_ms =
@@ -1122,6 +1127,7 @@ impl VpnSessionHandle {
     /// The wall-clock sample is intentionally ignored for billing duration;
     /// only monotonic elapsed time can survive a clock rollback without
     /// under-reporting service.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn end_metered_service(&self, _ended_at_ms: u64) -> Result<(), VpnBillingError> {
         self.ensure_forwarding_available()?;
         let mut window = lock_billing_state(
@@ -1137,12 +1143,14 @@ impl VpnSessionHandle {
         Ok(())
     }
     /// Record one client-to-relay user packet after it was forwarded successfully.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn record_metered_ingress(&self, bytes: u64) -> Result<(), VpnBillingError> {
         self.ensure_forwarding_available()?;
         atomic_saturating_add(&self.metered_usage.ingress_bytes, bytes);
         Ok(())
     }
     /// Record one relay-to-client user packet after it was forwarded successfully.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn record_metered_egress(&self, bytes: u64) -> Result<(), VpnBillingError> {
         self.ensure_forwarding_available()?;
         atomic_saturating_add(&self.metered_usage.egress_bytes, bytes);
@@ -1269,6 +1277,7 @@ impl VpnSessionHandle {
     /// The first release never reserves a client's prepaid ceilings as earned
     /// service. A crash therefore recovers zero usage; only graceful
     /// finalization may persist relay-observed bytes and elapsed service time.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn pre_service_settlement_artifact(
         &self,
         envelope: &VpnUsageVoucherEnvelopeV1,

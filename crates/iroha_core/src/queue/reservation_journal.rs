@@ -2441,6 +2441,7 @@ impl LaneQueueReservationJournal {
         Ok(transition.receipt)
     }
     /// Durably append an atomic reservation batch.
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native lane owner"))]
     pub(super) fn put_batch(
         &mut self,
         records: Vec<LaneQueueReservationRecordV1>,

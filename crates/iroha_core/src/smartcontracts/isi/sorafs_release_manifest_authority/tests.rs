@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{State, StateReadOnly, World},
+    state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -226,7 +226,7 @@ fn role13_permission_preflight_rejects_foreign_deployment_and_oversized_action()
 
 #[test]
 fn every_role13_action_remains_closed_even_with_exact_permission() {
-    let mut f = fixture();
+    let f = fixture();
     let header = BlockHeader::new(
         1.try_into().expect("positive height"),
         f.state.view().latest_block_hash(),

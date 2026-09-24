@@ -1648,6 +1648,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     Services(String),
     /// A durable Validate sidecar registration could not be authenticated and rebound.
     #[error("Validate sidecar registration recovery failed: {0}")]
+    // TODO: exercise this failure after native sidecar registration is live.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native runner cutover"))]
     ValidateSidecarRegistration(String),
     /// A post-construction process-identity check failed.
     #[error("launched lifecycle stack lost exact process ownership")]

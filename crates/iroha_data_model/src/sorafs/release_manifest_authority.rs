@@ -296,7 +296,7 @@ pub struct ReleaseManifestCheckV1 {
     pub phase: ReleaseManifestCheckPhaseV1,
 }
 
-/// Governed emergency revocation of the active signer and attester generations.
+/// Governed emergency revocation of the active signer and independent attester generations.
 #[derive(
     Clone,
     Copy,

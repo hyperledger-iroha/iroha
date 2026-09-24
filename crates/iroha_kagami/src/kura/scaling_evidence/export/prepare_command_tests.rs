@@ -17,6 +17,7 @@ use std::{
 };
 
 #[path = "../fixture.rs"]
+#[allow(dead_code, reason = "fixture is shared by focused test suites")]
 mod fixture;
 
 const OUTPUT_CAP: u64 = 1024 * 1024;

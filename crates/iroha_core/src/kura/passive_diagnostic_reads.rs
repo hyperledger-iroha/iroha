@@ -531,6 +531,7 @@ impl Kura {
     }
 }
 impl Kura {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn validate_lane_new_view_certificate_for_artifact(
         artifact: &AutonomousLaneBlockArtifact,
         durable_certificate: &DurableLaneBlockNewViewCertificateV1,
@@ -570,6 +571,7 @@ impl Kura {
         })?;
         Ok((current, target))
     }
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     fn read_autonomous_lane_block_record_read_only_latest_locked(
         &self,
         entry: &LaneStorageEntry,

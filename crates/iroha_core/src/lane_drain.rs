@@ -18,9 +18,18 @@ use std::{
 };
 use thiserror::Error;
 const GUARD_VERSION: u8 = 1;
+// TODO: Remove these scoped allowances when the native lane adapter becomes the production runner.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 const GUARD_DIRECTORY: &str = "lane-drain-signing-guard-v1";
 const RECORD_EXTENSION: &str = "norito";
 const TEMP_EXTENSION: &str = "norito.tmp";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 const LOCK_FILENAME: &str = "owner.lock";
 const RECORD_KEY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record:v1\0";
 const RECORD_INTEGRITY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record-integrity:v1\0";
@@ -35,6 +44,10 @@ struct LaneDrainSigningKeyV1 {
     lane_incarnation: Hash,
 }
 impl LaneDrainSigningKeyV1 {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane Commit signing")
+    )]
     fn from_commit_vote(body: &LaneBlockVoteBodyV1) -> Self {
         Self {
             lane_id: body.lane_id,
@@ -65,6 +78,10 @@ struct LaneCommitVoteLockV1 {
     vote_body_digest: Hash,
 }
 impl LaneCommitVoteLockV1 {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane Commit signing")
+    )]
     fn from_body(body: &LaneBlockVoteBodyV1) -> Self {
         Self {
             proposal_height: body.proposal_height,
@@ -115,9 +132,17 @@ pub(crate) enum LaneDrainSigningGuardError {
     UnsafeJournal(String),
     /// The attempted lane commit vote conflicts with a durable vote decision.
     #[error("lane commit vote conflicts with the durable signing decision")]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane Commit signing")
+    )]
     CommitVoteEquivocation,
     /// The attempted lane commit vote follows a durable drain decision.
     #[error("lane incarnation is durably closed to further commit votes")]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane Commit signing")
+    )]
     LaneClosed,
     /// The attempted drain body conflicts with a durable drain decision.
     #[error("lane drain body conflicts with the durable signing decision")]
@@ -143,6 +168,10 @@ pub(crate) struct LaneDrainSigningGuard {
 impl LaneDrainSigningGuard {
     /// Open the journal below the Kura root and discard records for finalized, inactive
     /// incarnations. Malformed files, symlinks, and non-canonical encodings fail startup closed.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane signing")
+    )]
     pub(crate) fn open(
         store_root: &Path,
         active_incarnations: &BTreeSet<(LaneId, Hash)>,
@@ -224,6 +253,10 @@ impl LaneDrainSigningGuard {
         }
         Ok(record)
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane signing")
+    )]
     fn validate_and_prune(
         &self,
         active_incarnations: &BTreeSet<(LaneId, Hash)>,
@@ -338,6 +371,10 @@ impl LaneDrainSigningGuard {
     /// The caller remains responsible for validating that the body was derived
     /// from a canonical proposal; this guard only enforces durable local
     /// anti-equivocation across bodies that reached the signing boundary.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native lane Commit signing")
+    )]
     pub(crate) fn authorize_commit_vote(
         &self,
         body: &LaneBlockVoteBodyV1,
@@ -449,6 +486,10 @@ fn valid_record_filename(name: &str) -> bool {
     };
     stem.len() == Hash::LENGTH * 2 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn valid_temp_filename(name: &str) -> bool {
     let suffix = format!(".{TEMP_EXTENSION}");
     let Some(stem) = name.strip_suffix(&suffix) else {
@@ -456,6 +497,10 @@ fn valid_temp_filename(name: &str) -> bool {
     };
     stem.len() == Hash::LENGTH * 2 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn acquire_owner_lock(directory: &Path) -> Result<File, LaneDrainSigningGuardError> {
     let path = directory.join(LOCK_FILENAME);
     let before = match fs::symlink_metadata(&path) {
@@ -522,6 +567,10 @@ fn acquire_owner_lock(directory: &Path) -> Result<File, LaneDrainSigningGuardErr
     }
     Ok(file)
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn validate_owner_lock_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -542,20 +591,40 @@ fn validate_owner_lock_metadata(
     Ok(())
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 #[cfg(not(unix))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
 #[cfg(not(unix))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn platform_no_follow_flag() -> i32 {
     rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
@@ -571,6 +640,10 @@ fn platform_no_follow_flag() -> i32 {
         target_os = "dragonfly"
     )
 ))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
@@ -587,9 +660,17 @@ fn platform_no_follow_flag() -> i32 {
         target_os = "dragonfly"
     ))
 ))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn platform_no_follow_flag() -> i32 {
     0
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn ensure_regular_directory(path: &Path) -> Result<(), LaneDrainSigningGuardError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -619,6 +700,10 @@ fn ensure_regular_directory(path: &Path) -> Result<(), LaneDrainSigningGuardErro
     }
     Ok(())
 }
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native lane signing")
+)]
 fn reconcile_temps(directory: &Path) -> Result<(), LaneDrainSigningGuardError> {
     let mut removed = false;
     for item in

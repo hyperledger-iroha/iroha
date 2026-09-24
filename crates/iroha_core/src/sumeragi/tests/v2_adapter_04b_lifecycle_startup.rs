@@ -1092,10 +1092,8 @@ fn assert_safety_wal_retention(path: &std::path::Path, retained: bool) {
 }
 fn exercise_pending_kura_production_lifecycle(
     owner: super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
-    verified: VerifiedHeightContext,
     context: wire::HeightContext,
     state: Arc<State>,
-    queue: Arc<crate::queue::Queue>,
     kura: Arc<Kura>,
     local_signer: KeyPair,
     expected: super::super::v2_recovery::PendingKuraApply,
@@ -2156,10 +2154,8 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             }
             exercise_pending_kura_production_lifecycle(
                 owner,
-                verified,
                 recovered_context,
                 state,
-                queue,
                 kura,
                 local_signer,
                 expected,

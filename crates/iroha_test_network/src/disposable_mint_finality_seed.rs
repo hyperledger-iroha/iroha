@@ -290,7 +290,6 @@ impl NetworkPeer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
     fn generated_seeds_are_independent_and_each_start_consumes_only_its_child() {

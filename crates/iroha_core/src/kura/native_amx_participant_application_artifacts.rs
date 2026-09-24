@@ -279,6 +279,7 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
 /// the original Kura identity; it must be reauthenticated under that instance's
 /// publication fences before use, since its durable files can change after capture.
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 pub(crate) struct NativeAmxParticipantApplicationPrepublicationToken {
     original_kura: KuraInstanceIdentity,
     application_block_height: u64,
@@ -315,11 +316,13 @@ struct NativeAmxParticipantApplicationRoutePreflight {
     current: Option<NativeAmxParticipantReceiptLatestIndexV2>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 struct NativeAmxParticipantApplicationManifestReadback {
     manifest_root: Hash,
     manifest_leaf_count: u32,
     artifact_hashes: Vec<HashOf<NativeAmxParticipantApplicationManifestArtifactV1>>,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 impl NativeAmxParticipantApplicationManifestReadback {
     fn authenticates(
         &self,
@@ -336,10 +339,12 @@ impl NativeAmxParticipantApplicationManifestReadback {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 enum NativeAmxParticipantApplicationPublicationMode {
     PreWsv,
     PostWsvRepair,
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 impl NativeAmxParticipantApplicationPublicationMode {
     const fn requires_post_apply_metadata(self) -> bool {
         matches!(self, Self::PostWsvRepair)
@@ -552,6 +557,7 @@ impl NativeAmxParticipantApplicationPrepublicationIdentity {
         })
     }
 }
+#[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
 impl NativeAmxParticipantApplicationPrepublicationToken {
     fn from_plan(
         original_kura: KuraInstanceIdentity,

@@ -73,13 +73,9 @@ trait HeightReads: Sync {
 
 struct NativeReads {
     clients: [Client; VERIFICATION_PEERS],
-    transport_progress: bool,
 }
 
 impl HeightReads for NativeReads {
-    fn transport_pending(&self, error: &eyre::Report) -> bool {
-        self.transport_progress && crate::taira::observation_transport_unavailable(error)
-    }
     fn tip(&self, peer: usize) -> Result<u64> {
         Ok(self.clients[peer]
             .get_sumeragi_status()?
@@ -107,38 +103,6 @@ impl HeightReads for NativeReads {
 }
 
 impl AuthenticatedHeightObserverV1 {
-    /// Anchor an operator observer in the same independently validated public trust profile.
-    pub(crate) fn from_trust(trust: &TrustV1, network: NetworkId) -> Result<Self> {
-        Ok(Self {
-            authority: trust.authority(network)?,
-            peers: trust.peers.clone(),
-            verifier: None,
-            proofs: Vec::new(),
-            emitted_height: 0,
-        })
-    }
-
-    /// Return fresh same-height evidence as well as advances; transport interruption is progress.
-    /// Fixed peer identity, proof, authorization and codec failures retain their strict errors.
-    pub(crate) fn observe_current(
-        &mut self,
-        clients: &[Client; VERIFICATION_PEERS],
-        discriminant: u16,
-        deadline: Instant,
-    ) -> Result<HeightObservationV1> {
-        let readers = NativeReads {
-            clients: std::array::from_fn(|index| clients[index].with_request_deadline(deadline)),
-            transport_progress: true,
-        };
-        self.observe_with_policy(
-            &readers,
-            discriminant,
-            deadline,
-            rand::random(),
-            rand::random(),
-            true,
-        )
-    }
     /// The opaque bundle can only be obtained through native signed-manifest validation.
     pub(crate) fn new(
         genesis: &iroha_genesis::ValidatedGenesisBundle,
@@ -191,7 +155,6 @@ impl AuthenticatedHeightObserverV1 {
         require_operation_budget(deadline, "starting authenticated height observation")?;
         let readers = NativeReads {
             clients: std::array::from_fn(|index| clients[index].with_request_deadline(deadline)),
-            transport_progress: false,
         };
         self.observe_with(
             &readers,

@@ -30,9 +30,18 @@ use std::{
 use thiserror::Error;
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
 const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 5;
+// TODO: Remove these scoped allowances when the native lane adapter becomes the production runner.
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v5";
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 const NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
     "native-amx-v2-signing-guard-v1",
     "native-amx-v2-signing-guard-v2",
@@ -42,10 +51,18 @@ const NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
 const NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION: &str = "norito";
 const NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION: &str = "norito.tmp";
 #[cfg(any(unix, test))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 const NATIVE_AMX_SIGNING_GUARD_LOCK_FILE: &str = "owner.lock";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE: &str = "chain-anchor.norito";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP: &str = "chain-anchor.norito.tmp";
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 const NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signer-directory:v1\0";
 const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v5\0";
 const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v5\0";
@@ -446,6 +463,10 @@ struct NativeAmxSigningAnchorV2 {
 }
 impl NativeAmxSigningAnchorV2 {
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn empty(binding: NativeAmxHeightBindingV2) -> Result<Self, NativeAmxSigningGuardError> {
         let head_hash = binding.genesis_head()?;
         Ok(Self {
@@ -483,6 +504,10 @@ struct NativeAmxSigningGuardInner {
 }
 #[derive(Debug)]
 #[cfg(any(unix, test))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 struct LoadedNativeAmxJournal {
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
     source_claims: BTreeMap<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>,
@@ -507,6 +532,10 @@ pub(crate) enum NativeAmxSigningGuardError {
         "native AMX signing height regressed from durable height {durable_height} to {supplied_height}"
     )]
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     HeightRegression {
         /// Height supplied by canonical state on this open.
         supplied_height: u64,
@@ -518,6 +547,10 @@ pub(crate) enum NativeAmxSigningGuardError {
         "native AMX signing height jumped from durable height {durable_height} to {supplied_height}"
     )]
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     HeightJump {
         /// Height supplied by canonical state on this open.
         supplied_height: u64,
@@ -645,6 +678,10 @@ pub(crate) struct NativeAmxSigningGuard {
 impl NativeAmxSigningGuard {
     /// Open a signer journal for one frozen context, enforcing the protocol
     /// record bound and exact reopen-or-next-height progression.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     pub(crate) fn open(
         store_root: &Path,
         active_height: u64,
@@ -681,6 +718,10 @@ impl NativeAmxSigningGuard {
         }
     }
     #[cfg(unix)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn open_unix(
         store_root: &Path,
         active_height: u64,
@@ -961,6 +1002,10 @@ impl NativeAmxSigningGuard {
         Ok(record)
     }
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn validate_record_binding(
         path: &Path,
         record: &NativeAmxSigningRecordV2,
@@ -982,6 +1027,10 @@ impl NativeAmxSigningGuard {
         Ok(())
     }
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn load_validated_journal(
         directory: &Path,
         directory_handle: &File,
@@ -1208,6 +1257,10 @@ impl NativeAmxSigningGuard {
         })
     }
     #[cfg(any(unix, test))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn ensure_empty_uninitialized_directory(
         directory: &Path,
     ) -> Result<(), NativeAmxSigningGuardError> {
@@ -1348,6 +1401,10 @@ impl NativeAmxSigningGuard {
     }
     /// Retain Commit claims at or above a certified view, publishing the anchor
     /// before removing retired prefixes so restart sees an authenticated chain.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     pub(crate) fn advance_certified_view(
         &self,
         view: u64,
@@ -1362,6 +1419,10 @@ impl NativeAmxSigningGuard {
         }
         result
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn advance_certified_view_locked(
         &self,
         inner: &mut NativeAmxSigningGuardInner,
@@ -1483,6 +1544,10 @@ impl NativeAmxSigningGuard {
         }
         Ok(())
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX signing")
+    )]
     fn rebuild_durable_claims(inner: &mut NativeAmxSigningGuardInner) {
         inner.source_claims.clear();
         inner.slot_claims.clear();
@@ -1910,6 +1975,10 @@ impl NativeAmxSigningGuard {
     }
 }
 #[cfg(any(unix, test))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_ensure_signer_directory(
     store_root: &Path,
     signer: &PeerId,
@@ -1947,6 +2016,10 @@ fn native_amx_ensure_signer_directory(
     }
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_signer_directory_digest(
     store_root: &Path,
     signer: &PeerId,
@@ -1959,6 +2032,10 @@ fn native_amx_signer_directory_digest(
     ]))
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_reject_unsupported_signer_journals(
     store_root: &Path,
     signer_digest: Hash,
@@ -2006,6 +2083,10 @@ fn native_amx_reject_unsupported_signer_journals(
     Ok(())
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_ensure_secure_directory(
     path: &Path,
     owner_uid: u32,
@@ -2054,6 +2135,10 @@ fn native_amx_validate_secure_directory_metadata(
     Ok(())
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_open_secure_directory(
     path: &Path,
     owner_uid: u32,
@@ -2091,6 +2176,10 @@ fn native_amx_open_secure_directory(
     Ok((handle, opened_identity))
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_acquire_owner_lock(
     directory: &Path,
     directory_handle: &File,
@@ -2225,6 +2314,10 @@ fn native_amx_verify_owned_directory(
     Err(NativeAmxSigningGuardError::UnsupportedPlatform)
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_reconcile_guard_temps(
     directory: &Path,
     directory_handle: &File,
@@ -2450,6 +2543,10 @@ fn native_amx_validate_uid(
     Ok(())
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_effective_user_id(path: &Path) -> Result<u32, NativeAmxSigningGuardError> {
     // A newly created file is owned by the process's effective user. Probe in
     // the store itself so UID namespace/filesystem mappings match the guarded
@@ -2464,6 +2561,10 @@ fn native_amx_effective_user_id(path: &Path) -> Result<u32, NativeAmxSigningGuar
     Ok(metadata.uid())
 }
 #[cfg(any(unix, test))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_valid_record_filename(name: &str) -> bool {
     let suffix = format!(".{NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION}");
     let Some(stem) = name.strip_suffix(&suffix) else {
@@ -2483,6 +2584,10 @@ fn native_amx_valid_record_filename(name: &str) -> bool {
         && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 #[cfg(any(unix, test))]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_valid_record_temp_filename(name: &str) -> bool {
     let suffix = format!(".{NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION}");
     let Some(final_name) = name.strip_suffix(&suffix) else {
@@ -2547,6 +2652,10 @@ fn native_amx_sync_directory_handle(
         .map_err(|error| native_amx_unsafe_journal(path, error.to_string()))
 }
 #[cfg(unix)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: activate native AMX signing")
+)]
 fn native_amx_sync_directory_path(path: &Path) -> Result<(), NativeAmxSigningGuardError> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -3530,6 +3639,10 @@ impl NativeAmxSession {
             .map(|source| source.values().cloned().collect())
             .unwrap_or_default()
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX sessions")
+    )]
     fn retain_view(&mut self, view: u64) {
         self.votes
             .retain(|bucket, _| bucket.body.round.view == view);
@@ -3639,6 +3752,10 @@ impl NativeAmxSessionCache {
     }
     /// Retain buckets for the certified view and retire orphaned source claims;
     /// the signing guard owns durable commits and recovered-prepare quarantine.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX sessions")
+    )]
     pub(crate) fn retain_view(&mut self, view: u64) {
         self.sessions.retain(|_, session| {
             session.retain_view(view);
@@ -3654,6 +3771,10 @@ impl NativeAmxSessionCache {
         });
     }
     /// Retire every volatile vote bucket and source-plan claim at terminal height decision.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: activate native AMX sessions")
+    )]
     pub(crate) fn clear(&mut self) {
         self.sessions.clear();
         self.source_plan_claims.clear();

@@ -211,6 +211,11 @@ pub(crate) fn check_production_reliable_flush_worker_transition(
     }
 }
 /// Check the lane-application half of a reliable writer-flush transition.
+// TODO: check native reliable sidecar flushes before publishing their application.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native sidecar flush")
+)]
 #[must_use]
 pub(crate) fn check_production_reliable_flush_application_transition(
     projection: ProductionReliableFlushApplicationProjection,
@@ -243,6 +248,11 @@ pub(crate) fn check_production_reliable_flush_link_transition(
     }
 }
 /// Check one durable application completion transition.
+// TODO: wire this gate into the native Apply completion path.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native Apply completion")
+)]
 #[must_use]
 pub(crate) fn check_production_application_transition(
     projection: ProductionApplicationTraceProjection,
@@ -337,6 +347,11 @@ pub(crate) fn check_production_in_flight_first_release_observe_replica_queue_rel
 /// `replica` is the one-hot validator bitmap receiving volatile body custody.
 /// The full transition checker rejects a producer, malformed bitmap, crashed
 /// recipient, absent producer custody, or otherwise malformed pre-state.
+// TODO: invoke this constructor from native producer fanout.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native lane transport")
+)]
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_transition(
     before: ProductionInFlightFirstReleaseStateProjection,
@@ -356,6 +371,11 @@ pub(crate) fn check_production_in_flight_first_release_fanout_from_producer_tran
 ///
 /// `source` and `target` are one-hot validator bitmaps. The transition checker
 /// authenticates source custody and rejects a self-send or crashed target.
+// TODO: invoke this constructor from native late-body service.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native lane transport")
+)]
 #[must_use]
 pub(crate) fn check_production_in_flight_first_release_serve_late_body_transition(
     before: ProductionInFlightFirstReleaseStateProjection,

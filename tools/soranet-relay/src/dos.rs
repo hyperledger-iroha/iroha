@@ -119,6 +119,7 @@ impl DoSControls {
         self.signed_ticket_public_key.as_ref().map(Arc::clone)
     }
     /// Returns the configured admission token policy, if any.
+    #[cfg_attr(not(feature = "runtime"), allow(dead_code, reason = "TODO: runtime"))]
     pub(crate) fn has_token_policy(&self) -> bool {
         self.token.is_some()
     }

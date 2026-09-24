@@ -1,6 +1,7 @@
 impl ProductionV2Services {
     /// Return whether the bounded corridor has dispatchable fanout work, a
     /// writer-flush witness, or a sidecar receipt awaiting lane delivery.
+    #[allow(dead_code, reason = "TODO: native cutover")]
     pub(crate) fn has_pending_exact_output(&self) -> Result<bool, String> {
         self.lock_pending_exact_output().map(|pending| {
             if self.exact_output_handoff_owner.is_sealed() {

@@ -466,6 +466,7 @@ impl LifecycleProducerClaimDispositionV1 {
     }
 
     /// Mint lane-local fair-ingress authority while a non-Apply owner blocks ordinary ingress.
+    #[cfg(test)]
     pub(in crate::sumeragi) const fn blocked_ordinary_lane_local_ingress_permit(
         self,
     ) -> Option<LifecycleBlockedOrdinaryLaneLocalIngressPermitV1> {
@@ -591,8 +592,9 @@ const fn blocked_runtime_drain_disposition(
 /// ingress winner is already dequeued and must enter the shared opaque
 /// post-dequeue consumer. Special certified-fence and timeout-vote episodes
 /// remain separate runner modes because they deliberately bypass the ordinary
-/// fair-turn census. The ingress `limit` bounds this batch. Native lane output
-/// is admitted through the Native process's own bounded transport.
+/// fair-turn census. The ingress `limit` bounds this batch. Authenticated lane
+/// ingress consumers retain the active runner turn, and Native lane output is
+/// admitted through the Native process's own bounded transport.
 // PendingKura intentionally uses a narrower no-clock decided-lane driver;
 // every ordinary height enters this owner-preserving batch here.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

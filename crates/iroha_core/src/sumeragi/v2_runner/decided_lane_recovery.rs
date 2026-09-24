@@ -39,6 +39,7 @@ fn drain_open_preflight_recovery_batch<E>(
 /// The checked predicate is the entire authority boundary: global V2 traffic, certified Serve,
 /// Kura adverts, and every other message class remain queued for their ordinary or Apply-terminal
 /// owner.
+#[allow(dead_code, reason = "TODO: native cutover")]
 fn select_blocked_ordinary_lane_local_ingress(
     receiver: &FairV2Ingress,
     permit: LifecycleBlockedOrdinaryLaneLocalIngressPermitV1,
@@ -310,7 +311,6 @@ struct ProductionDecidedLaneRecoveryDrainCommitter<'a> {
     inbound: Option<InboundBlockMessage>,
     bound_leader_wire: Option<FairV2IngressOwnershipEvidence>,
     executor: &'a V2EffectExecutor,
-    services: &'a mut ProductionV2Services,
     decided_subject: wire::BlockSubject,
     kura: &'a Kura,
     block_sync_server: &'a mut V2BlockSyncServer,
@@ -518,7 +518,7 @@ fn select_decided_lane_recovery_ingress(
 fn drain_decided_lane_recovery_ingress(
     receiver: &FairV2Ingress,
     executor: &V2EffectExecutor,
-    services: &mut ProductionV2Services,
+    _services: &mut ProductionV2Services,
     _native: &mut NativeRunnerProcess,
     _active_view: wire::View,
     kura: &Kura,
@@ -543,7 +543,6 @@ fn drain_decided_lane_recovery_ingress(
         inbound: Some(inbound),
         bound_leader_wire: None,
         executor,
-        services,
         decided_subject,
         kura,
         block_sync_server,

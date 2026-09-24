@@ -696,6 +696,75 @@ mod tests {
         )?;
         proof.authenticate_possession(expected, &f.profile, time)
     }
+
+    fn app_bound_fixture() -> (Fixture, KagemushaAppAttestationAuthorityPolicyV1) {
+        let mut f = Fixture::new(1);
+        let authority = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+        let policy = KagemushaAppAttestationAuthorityPolicyV1 {
+            authority_key: authority.public_key().clone(),
+            platform_class: f.profile.platform_class,
+            app_signing_identity_digest: [74; 32],
+            app_release_digest: [75; 32],
+            maximum_lifetime_ms: 1_000,
+        };
+        f.profile.app_attestation_authority_policy_digest = policy.canonical_digest().unwrap();
+        f.profile = f.profile.seal_hardware_profile_id().unwrap();
+        let credential = &mut f.selection.issuance.credential;
+        credential.hardware_profile_id = f.profile.hardware_profile_id;
+        credential.app_policy_binding_digest = KagemushaAppDevicePolicyBindingV1 {
+            app_signing_identity_digest: policy.app_signing_identity_digest,
+            app_release_digest: policy.app_release_digest,
+            release_id: f.selection.issuance.release_id,
+            hardware_profile_id: credential.hardware_profile_id,
+            device_key_reference: credential.device_key_reference,
+            lane_id: credential.lane_commitment,
+        }
+        .canonical_digest()
+        .unwrap();
+        *credential = credential.seal_credential_id().unwrap();
+        let signature: p256::ecdsa::Signature =
+            p256_key(2).sign(&credential.canonical_signing_bytes().unwrap());
+        credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+            &signature.normalize_s().unwrap_or(signature).to_bytes(),
+        )
+        .unwrap();
+        f.certificate.subject.issuance = f.selection.issuance.clone();
+        (f, policy)
+    }
+
+    fn verified_app_for_challenge(
+        challenge: &KagemushaRetailEnrollmentChallengeV1,
+        policy: &KagemushaAppAttestationAuthorityPolicyV1,
+    ) -> KagemushaVerifiedAppEnrollmentV1 {
+        let authority = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
+        let selection = KagemushaAppEnrollmentSelectionV1::for_credential(
+            challenge.client_nonce,
+            challenge.server_nonce,
+            challenge.issuance.release_id,
+            &challenge.issuance.credential,
+        );
+        let assertion = KagemushaAppEnrollmentAssertionV1 {
+            version: 1,
+            domain: "iroha:kagemusha:v1:app-device-enrollment".to_owned(),
+            client_nonce: selection.client_nonce,
+            server_nonce: selection.server_nonce,
+            app_signing_identity_digest: policy.app_signing_identity_digest,
+            app_release_digest: policy.app_release_digest,
+            platform_evidence_digest: [76; 32],
+            release_id: selection.release_id,
+            hardware_profile_id: selection.hardware_profile_id,
+            device_key_reference: selection.device_key_reference,
+            lane_id: selection.lane_id,
+            issued_at_ms: 1_000,
+            expires_at_ms: 2_000,
+        };
+        KagemushaAppEnrollmentCertificateV1 {
+            signature: SignatureOf::try_new(authority.private_key(), &assertion).unwrap(),
+            assertion,
+        }
+        .authenticate(policy, selection, 1_500)
+        .unwrap()
+    }
     #[test]
     fn external_account_signer_uses_the_exact_typed_hash_message() {
         let f = Fixture::new(1);
@@ -731,10 +800,12 @@ mod tests {
 
     #[test]
     fn nonce_bound_issuer_evidence_requires_all_three_signatures_and_exact_commitment() {
-        let f = Fixture::new(1);
-        let c = challenge(&f);
+        let (f, app_policy) = app_bound_fixture();
+        let mut c = challenge(&f);
+        let verified_app = verified_app_for_challenge(&c, &app_policy);
+        c.app_attestation_digest = verified_app.digest();
         let p = proof(&f, &c);
-        let app = f.verified_app(c.client_nonce, c.server_nonce);
+        let app = verified_app;
         let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
             let mut certificate = f.certificate.clone();
             certificate.subject.challenge_evidence_digest =
@@ -829,7 +900,7 @@ mod tests {
         );
         let mut fresh_challenge = c.clone();
         fresh_challenge.client_nonce = [91; 32];
-        let fresh_app = f.verified_app(fresh_challenge.client_nonce, fresh_challenge.server_nonce);
+        let fresh_app = verified_app_for_challenge(&fresh_challenge, &app_policy);
         fresh_challenge.app_attestation_digest = fresh_app.digest();
         let fresh_proof = proof(&f, &fresh_challenge);
         assert_eq!(

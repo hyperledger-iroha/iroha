@@ -368,12 +368,28 @@ const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap-signature:v1\0";
 const AUTONOMOUS_LIFECYCLE_PRODUCER_QUEUE_CUSTODY_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap:producer-queue-custody:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native consensus owner")
+)]
 const AUTONOMOUS_LIFECYCLE_LOSING_RETIREMENT_CUSTODY_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap:losing-retirement-custody:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native consensus owner")
+)]
 const AUTONOMOUS_LIFECYCLE_CANONICAL_CARRIER_REPAIR_CUSTODY_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap:canonical-carrier-repair-custody:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native consensus owner")
+)]
 const AUTONOMOUS_LIFECYCLE_PROTECTED_CARRIER_RECEIVE_CUSTODY_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap:protected-carrier-receive-custody:v1\0";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native consensus owner")
+)]
 const AUTONOMOUS_LIFECYCLE_HISTORICAL_QC_RESPONSE_CUSTODY_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-bootstrap:historical-qc-response-custody:v1\0";
 const AUTONOMOUS_LIFECYCLE_CANONICAL_HISTORICAL_RECOVERY_CUSTODY_HASH_DOMAIN: &[u8] =
@@ -416,6 +432,10 @@ const CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE: &str =
     "canonical_autonomous_replicas_v1.norito";
 const CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE: &str =
     "canonical_autonomous_replicas_v1.index";
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: wire native consensus owner")
+)]
 const LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1: &[u8] =
     b"iroha:kura:lane-ready-execution-input-authorization:v1\0";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
@@ -10956,6 +10976,10 @@ impl Kura {
         }
         Ok(Some(entry))
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn retain_pending_certified_merge_entries_unlocked(
         &self,
         mut retain: impl FnMut(&MergeLedgerEntry) -> bool,
@@ -10990,6 +11014,10 @@ impl Kura {
         accounting_mutation.finish();
         Ok(removed)
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn prune_pending_certified_merge_entries_not_bound_to_unlocked(
         &self,
         carrier_height: u64,
@@ -11008,6 +11036,10 @@ impl Kura {
     /// lifecycle Validate work. Exact-round selection still excludes them from a newer body, and
     /// finalized-height cleanup bounds their lifetime. The pending-count and aggregate-byte limits
     /// remain hard admission bounds across a view storm.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn prune_pending_certified_merge_entries_not_bound_to(
         &self,
         carrier_height: u64,
@@ -11030,6 +11062,10 @@ impl Kura {
     /// newer immutable body wins. It therefore remains serviceable until this height finalizes.
     /// Future-view and wrong-parent sidecars at this height are impossible for the lock and are
     /// removed, while other heights remain untouched.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn retain_pending_certified_merge_entry_for_locked_carrier(
         &self,
         carrier_height: u64,
@@ -11049,6 +11085,10 @@ impl Kura {
     }
     /// Remove every pending merge sidecar whose carrier height is already
     /// finalized. No losing sidecar can become canonical after height rollover.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn prune_finalized_pending_certified_merge_entries(
         &self,
         finalized_height: u64,
@@ -11813,6 +11853,10 @@ impl Kura {
     /// The predicate runs without the sidecar lock, allowing callers to perform
     /// full state/QC validation. Rejected stale entries remain durable and do
     /// not poison selection of a later eligible candidate.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn select_pending_certified_merge_entry_matching(
         &self,
         mut eligible: impl FnMut(HashOf<MergeLedgerEntry>, &MergeLedgerEntry) -> bool,
@@ -15982,6 +16026,10 @@ impl Kura {
     /// # Errors
     ///
     /// Returns an error if finality, its association, or retained record is invalid.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn v2_finality_artifact_with_merge_reference(
         &self,
         height: u64,
@@ -17158,6 +17206,10 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the target block is not durable or the checkpoint cannot be written.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn store_wsv_checkpoint(
         &self,
         height: u64,
@@ -17304,6 +17356,10 @@ impl Kura {
             namespace,
         })
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn bind_wsv_checkpoint_to_manifest(&self, manifest: &CommitManifest) -> Result<()> {
         let path = self.wsv_checkpoint_path(manifest.height);
         let Some(mut checkpoint) = Self::decode_wsv_checkpoint_at(&path)? else {
@@ -17356,6 +17412,10 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the target block is not durable or the manifest cannot be written.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn store_commit_manifest(&self, manifest: CommitManifest) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -17532,6 +17592,10 @@ impl Kura {
         }
         Ok(())
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn ensure_checkpoint_accepts_manifest_write(&self, manifest: &CommitManifest) -> Result<()> {
         let checkpoint_path = self.wsv_checkpoint_path(manifest.height);
         let Some(checkpoint) = Self::decode_wsv_checkpoint_at(&checkpoint_path)? else {
@@ -25936,6 +26000,10 @@ impl Kura {
     /// Returns an error when the session is internally inconsistent, the lane
     /// has no configured storage segment, or any strict persistence barrier
     /// fails.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn persist_committed_lane_block_session(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
@@ -28592,6 +28660,10 @@ impl Kura {
     /// Authenticate a losing locally-produced payload from its exact terminal
     /// slot retirement. The full typed retirement is hashed internally; no
     /// caller can substitute an arbitrary source or evidence digest.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn authorize_losing_retirement_payload_custody(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -28628,6 +28700,10 @@ impl Kura {
     }
     /// Authenticate payload bytes reconstructed from their exact durable
     /// canonical block and verified global finality artifact.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn authorize_canonical_carrier_repair_payload_custody(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -28767,6 +28843,10 @@ impl Kura {
     /// Authenticate payload custody from the exact protected live global
     /// carrier. The complete frozen context, lock round, subject, local peer,
     /// proposal, and executable identity enter the signed custody digest.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn authorize_protected_carrier_receive_payload_custody(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -28857,6 +28937,10 @@ impl Kura {
     /// Authenticate an autonomous payload from one exact outstanding-request
     /// response carrying matching Prepare/Commit and READY authority.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn authorize_historical_qc_response_payload_custody(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -29742,6 +29826,10 @@ impl Kura {
     }
     /// Build the exact full-body producer bootstrap signature preimage.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn autonomous_lifecycle_bootstrap_signing_preimage(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -29793,6 +29881,10 @@ impl Kura {
     }
     /// Persist a fully signed lifecycle bootstrap before any payload mutation.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn persist_autonomous_lifecycle_bootstrap(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -31517,6 +31609,10 @@ impl Kura {
         }
         self.require_active_lane_artifact(entry, descriptor)
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn write_autonomous_lane_block_view_state_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -34681,6 +34777,10 @@ impl Kura {
     /// Read and fully revalidate the durable retirement for one active lane-height slot.
     /// A malformed, oversized, temporary-conflicted, or symlinked view record is returned as an
     /// error rather than being mistaken for an absent retirement.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn read_autonomous_lane_slot_retirement(
         &self,
         lane_id: LaneId,
@@ -34732,6 +34832,10 @@ impl Kura {
     ///
     /// The caller holds the lane-geometry and sidecar locks. Neither frontier
     /// nor indexed-pair recovery is permitted on this admission path.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn autonomous_lane_slot_is_certified_locked(
         &self,
         entry: &LaneStorageEntry,
@@ -34792,6 +34896,10 @@ impl Kura {
     /// potentially large executable payload. The certificate itself is
     /// immutable after first write: only an exact replay is accepted, and a
     /// later synthetic NewView cursor cannot replace the origin Prepare QC.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn persist_lane_payload_availability_certificate(
         &self,
         lane_id: LaneId,
@@ -34939,6 +35047,10 @@ impl Kura {
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload, unless its immutable origin is already
     /// durably applied.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn persist_lane_new_view_certificate(
         &self,
         lane_id: LaneId,
@@ -37370,6 +37482,10 @@ impl Kura {
     /// Authenticate durable block/finality and the exact staged merge entry
     /// against its already-committed association. The WSV join comes later, so
     /// cleanup waits for the post-WSV repair to validate that join.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn prepublish_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
@@ -37505,6 +37621,10 @@ impl Kura {
     /// recovery must instead use
     /// [`Self::repair_native_amx_participant_application_evidence_for_markers`]
     /// to avoid interpreting historical sibling leaves as current work.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn repair_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,
@@ -37608,6 +37728,10 @@ impl Kura {
         }
         Ok(preflights)
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn preflight_native_amx_participant_application_plan_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -38130,6 +38254,10 @@ impl Kura {
             )),
         }
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn read_back_native_amx_plan_manifests_under_publication_guard(
         &self,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
@@ -38350,6 +38478,10 @@ impl Kura {
         }
         Ok(target_indices.len())
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     fn persist_native_amx_participant_application_evidence_under_publication_guard(
         &self,
         block: &SignedBlock,
@@ -40862,6 +40994,10 @@ impl Kura {
         }
         self.write_lane_block_application_receipt_artifact(&actual)
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn persist_lane_block_application_receipt_if_ready(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -42261,6 +42397,10 @@ impl Kura {
             recover,
         )
     }
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn lane_block_payload_availability(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -42335,6 +42475,10 @@ impl Kura {
     }
     /// Recover a certified lane block directly from its producer-authenticated
     /// lane-owned payload, without requiring the global block body to commit.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     pub(crate) fn recover_autonomous_lane_block_payload(
         &self,
         proposal: &LaneBlockProposalV1,

@@ -2070,6 +2070,8 @@ enum ReadyValidateSuccessorIdentityV1 {
     /// A rejected volatile Validate completion replaced its same-address carrier.
     PublishedRejected(DurableValidatePublishedLocation),
     /// A durable merge-sidecar registration woke its unchanged carrier.
+    // TODO: wire the native sidecar wake into Ready Validate recovery.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native Validate sidecar wake"))]
     SidecarWake {
         dispatch_key: LifecycleValidateDispatchKeyV1,
         round: wire::ConsensusRound,
@@ -2143,6 +2145,7 @@ impl ReadyValidateSuccessorV1 {
     }
 
     /// Bind a consumed sidecar registration to the fresh unchanged Ready carrier.
+    #[cfg_attr(test, allow(dead_code, reason = "TODO: native Validate sidecar wake"))]
     pub(super) fn from_sidecar_wake(
         dispatch_key: LifecycleValidateDispatchKeyV1,
         round: wire::ConsensusRound,

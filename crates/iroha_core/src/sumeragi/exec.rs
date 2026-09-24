@@ -507,6 +507,11 @@ impl NativeAmxApplicationManifestV1 {
 /// Canonical, bounded lane-finality manifest for one result-bearing block.
 #[derive(Clone, Debug)]
 pub(crate) struct LaneFinalityManifestV1 {
+    // TODO: consume these statements from native lane application receipts.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     statements: Vec<LaneFinalityStatement>,
     tree: MerkleTree<LaneFinalityStatement>,
 }
@@ -579,11 +584,19 @@ impl LaneFinalityManifestV1 {
     }
     /// Canonically ordered statements.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     pub(crate) fn statements(&self) -> &[LaneFinalityStatement] {
         &self.statements
     }
     /// Inclusion proof for one canonical statement.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native lane finality handoff")
+    )]
     pub(crate) fn proof(&self, index: u32) -> Option<MerkleProof<LaneFinalityStatement>> {
         self.tree.get_proof(index)
     }

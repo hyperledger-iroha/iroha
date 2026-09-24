@@ -840,6 +840,10 @@ impl V2EffectServices for ProductionV2Services {
 /// because their exact task owner, rather than a later certified view, controls
 /// retirement. Height-only recovery requests also return `None`; global
 /// threshold-beacon partials retain their exact round.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "TODO: native runner cutover")
+)]
 fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
     let NetworkMessage::SumeragiBlock(envelope) = message else {
         return None;
@@ -1012,6 +1016,10 @@ impl PendingExactFanout {
     }
 }
 impl PendingExactOutput {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     fn retain_native_amx_round(
         &mut self,
         retained_round: wire::ConsensusRound,
@@ -1062,6 +1070,10 @@ impl PendingExactOutput {
     /// responsive peer. Every removed message is bound to this exact height
     /// context and a strictly lower view; request-bound acquisition/recovery
     /// traffic and epoch-wide traffic are retained.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     fn retain_certified_global_view_output(
         &mut self,
         retained_round: wire::ConsensusRound,
@@ -1116,6 +1128,10 @@ impl ProductionV2Services {
     /// A terminal Decision retires every height-local Native-AMX occurrence.
     /// Matching by the complete round also removes stale predecessor-height
     /// output carried through the exact-output rollover corridor.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) fn retain_native_amx_round(
         &self,
         retained_round: wire::ConsensusRound,
@@ -1131,6 +1147,10 @@ impl ProductionV2Services {
     }
     /// Retire view-scoped global control, payload, and merge output below the
     /// active certified round.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: native runner cutover")
+    )]
     pub(crate) fn retain_certified_global_view_output(
         &self,
         retained_round: wire::ConsensusRound,

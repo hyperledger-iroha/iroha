@@ -2183,6 +2183,34 @@ def _rust_statement_token_sha256(statement: RustStatement) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _rust_impl_header_without_lint_only_attributes(
+    tokens: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Ignore only non-gating dead-code annotations on an impl header.
+
+    The source checker still sees attributes on each method and retains any
+    `cfg` or other `cfg_attr` on the impl in its reviewed ancestor context.
+    """
+    lint_attribute_prefix = (
+        "#", "[", "cfg_attr", "(", "not", "(", "test", ")", ",",
+        "allow", "(", "dead_code",
+    )
+    remainder = tokens
+    while remainder[: len(lint_attribute_prefix)] == lint_attribute_prefix:
+        tail = remainder[len(lint_attribute_prefix) :]
+        if tail[:3] == (",", "reason", "="):
+            tail = tail[3:]
+        if tail[:3] != (")", ")", "]"):
+            break
+        remainder = tail[3:]
+    # Only methods inside a real impl can benefit from this normalization.
+    # An unknown attribute left before impl keeps the reviewed-context check
+    # fail closed, including #[cfg(test)] and cfg_attr(..., cfg(...)).
+    if remainder[:1] == ("impl",):
+        return remainder
+    return tokens
+
+
 @lru_cache(maxsize=512)
 def _rust_delimiter_context(
     structural_source: str, end: int
@@ -2211,16 +2239,17 @@ def _rust_delimiter_context(
                 last_boundary = index + 1
         elif char == ";":
             last_boundary = index + 1
-    return tuple(
-        (
-            opener,
-            position,
+    result = []
+    for opener, position, header_start in stack:
+        header = (
             ()
             if header_start is None
-            else rust_code_tokens(structural_source[header_start:position]),
+            else rust_code_tokens(structural_source[header_start:position])
         )
-        for opener, position, header_start in stack
-    )
+        if opener == "{":
+            header = _rust_impl_header_without_lint_only_attributes(header)
+        result.append((opener, position, header))
+    return tuple(result)
 
 
 def _rust_brace_context(
@@ -58719,13 +58748,21 @@ def _require_lane_output_reconciled_source_contracts(
     constructor = lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard_and_transport_inner")
     request = lane_ack_items.get("V2LaneWorkAdapter::accept_certified_merge_sidecar_request")
     materialize = lane_ack_items.get("V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization")
-    for item in (constructor, request, materialize, lane_items.get("durable_lane_rollover_authority")):
+    rollover = lane_items.get("durable_lane_rollover_authority")
+    for item in (constructor, request, materialize, rollover):
         if item is not None:
+            if item is constructor:
+                expected_attributes = ("#[allow(clippy::too_many_arguments)]",)
+            elif item is rollover:
+                expected_attributes = (
+                    '#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]',
+                )
+            else:
+                expected_attributes = ()
             _require_rust_item_context(
                 lane_path, item, (("impl", "V2LaneWorkAdapter"),),
                 "lane-output reconciled production owner", errors,
-                expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-                if item is constructor else (),
+                expected_attributes=expected_attributes,
             )
     for item, expected, description in (
         (constructor, """
@@ -58987,6 +59024,56 @@ def _exact_output_production_source_fidelity_errors(
 ) -> list[str]:
     """Bind fair exact output and applied-height retirement to production."""
 
+    # These exact allowances retain the reviewed cutover owners in production.
+    # Keep their attribute lists closed so cfg gates or broader lint scopes fail.
+    native_runner_cutover_attr = (
+        '#[cfg_attr(not(test), allow(dead_code, reason = "TODO: native runner cutover"))]',
+    )
+    native_runner_member_cutover_attr = (
+        '#[cfg_attr(\n        not(test),\n        allow(dead_code, reason = "TODO: native runner cutover")\n    )]',
+    )
+    native_runner_top_cutover_attr = (
+        '#[cfg_attr(\n    not(test),\n    allow(dead_code, reason = "TODO: native runner cutover")\n)]',
+    )
+    native_cutover_attr = ('#[allow(dead_code, reason = "TODO: native cutover")]',)
+    reviewed_runner_cutover_items = {
+        "apply_bounded_sidecar_admissions",
+        "apply_certified_merge_sidecar_chunk_admissions",
+        "apply_certified_merge_sidecar_closed_prefixes",
+        "apply_certified_merge_sidecar_closed_prefixes_with",
+        "retry_exact_output_and_apply_sidecar_admissions",
+        "apply_retired_historical_recovery_requests",
+        "apply_retired_merge_sidecar_requests",
+        "apply_obsolete_merge_sidecar_generation_hints",
+        "apply_acknowledged_merge_sidecar_closes",
+        "dispatch_lane_work_effects",
+        "dispatch_lane_work_effects_with_progress",
+        "retain_active_owned_reply_routes",
+        "retain_active_owned_reply_routes_with_snapshot_hook",
+    }
+    reviewed_worker_cutover_items = {
+        "PendingExactOutput::close_certified_sidecar_prefix",
+        "PendingExactOutput::cancel_certified_merge_sidecar_requests",
+        "PendingExactOutput::cancel_acknowledged_certified_merge_sidecar_closes",
+        "DurableExactOutputHandoffReceipt::is_bound_to_transport_owner",
+        "DurableExactOutputHandoffReceipt::matches_predecessor_context",
+        "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions",
+        "ProductionV2Services::close_certified_merge_sidecar_prefix",
+        "ProductionV2Services::cancel_certified_merge_sidecar_requests",
+        "ProductionV2Services::cancel_acknowledged_certified_merge_sidecar_closes",
+    }
+    reviewed_worker_service_cutover_items = {
+        "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions",
+        "ProductionV2Services::close_certified_merge_sidecar_prefix",
+        "ProductionV2Services::cancel_certified_merge_sidecar_requests",
+        "ProductionV2Services::cancel_acknowledged_certified_merge_sidecar_closes",
+    }
+    reviewed_lane_cutover_items = {
+        "durable_lane_rollover_authority",
+        "serve_durable_lane_certificate",
+        "reconstruct_durable_lane_certificate",
+    }
+
     worker_path = (
         repo_root
         / "crates"
@@ -59161,8 +59248,12 @@ def _exact_output_production_source_fidelity_errors(
         errors,
     )
 
+    merge_staged_dead_code_attribute = (
+        '#[cfg_attr(not(test), allow(dead_code, reason = "TODO: activate native sidecar owner"))]'
+    )
     semantic_peer_capacity_tokens = rust_code_tokens(
-        """
+        f"""
+{merge_staged_dead_code_attribute}
 const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize =
     MAX_VALIDATORS_PER_HEIGHT;
 """
@@ -60359,6 +60450,9 @@ executor.can_admit_network_message_with_ingress_ownership(message, ingress_owner
         (),
         "sidecar reliable-flush application production item",
         errors,
+        expected_attributes=(
+            '#[cfg_attr(\n    not(test),\n    allow(dead_code, reason = "TODO: activate native sidecar owner")\n)]',
+        ),
     )
     for item_name in (
         "with_limits_and_server_stream_capacity",
@@ -61050,6 +61144,15 @@ if self.pending_server_closures.is_empty() {
                 item_name,
                 errors,
                 f"exact-output writer-flush {qualified_name} production item",
+                expected_attributes=(
+                    native_cutover_attr
+                    if qualified_name == "ProductionV2Services::has_pending_exact_output"
+                    else native_runner_cutover_attr
+                    if qualified_name in reviewed_worker_service_cutover_items
+                    else native_runner_member_cutover_attr
+                    if qualified_name in reviewed_worker_cutover_items
+                    else ()
+                ),
             )
 
     pending_exact_output_structs = rust_struct_items(
@@ -61672,7 +61775,18 @@ assert!(observed.iter().all(|request| request == &exact_request));
             (),
             f"runner sidecar ACK bridge {item_name} production item",
             errors,
-            expected_attributes=(),
+            expected_attributes=(
+                native_cutover_attr
+                if item_name == "service_historical_recovery_tick"
+                else native_runner_top_cutover_attr
+                if item_name in {
+                    "retain_active_owned_reply_routes",
+                    "retain_active_owned_reply_routes_with_snapshot_hook",
+                }
+                else native_runner_cutover_attr
+                if item_name in reviewed_runner_cutover_items
+                else ()
+            ),
         )
     runner_startup_item = _require_rust_item(
         runner_path, runner_source, "run_inner", errors
@@ -62489,19 +62603,27 @@ match self {
     _require_rust_source_token_sequence(
         merge_path,
         merge_source,
-        """
+        f"""
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_JOURNAL_VERSION_V3: u8 = 3;
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_JOURNAL_DIR: &str = "sumeragi_v2_merge_sidecar_lifecycle_v3";
+{merge_staged_dead_code_attribute}
 const LEGACY_LIFECYCLE_JOURNAL_DIRS: &[&str] = &[
     "sumeragi_v2_merge_sidecar_lifecycle_v1",
     "sumeragi_v2_merge_sidecar_lifecycle_v2",
 ];
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_JOURNAL_SLOT_FILES: [&str; 2] = ["state-0.norito", "state-1.norito"];
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_JOURNAL_TEMP: &str = "state.norito.tmp";
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_ROOT_HIGH_WATER_FILE: &str =
     "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito";
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_ROOT_HIGH_WATER_TEMP: &str =
     "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito.tmp";
+{merge_staged_dead_code_attribute}
 const LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES: usize = 4 * 1024;
 """,
         "the lifecycle storage contract must expose the root-anchored V3 schema and explicitly reject both prior layouts",
@@ -62526,12 +62648,13 @@ const LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES: usize = 4 * 1024;
     _require_rust_source_token_sequence(
         merge_path,
         merge_source,
-        """
-enum ServerServiceGenerationRetirement {
+        f"""
+enum ServerServiceGenerationRetirement {{
     AuthenticatedTerminal,
     ExactOutputSuperseded,
-}
+}}
 
+{merge_staged_dead_code_attribute}
 struct RestoredLifecycleResponderFence;
 """,
         "responder generation retirement must distinguish authenticated terminal closure from exact-output supersession, with a private restart fence",
@@ -67993,16 +68116,16 @@ services.post_certified_merge_sidecar_with_reply_routes(
             path,
             lifecycle_runner_items[key],
             """
-let (exact_output_service_owner, exact_output_transport_owner) =
+let (exact_output_service_owner, _) =
     durable_exact_output_handoff_owner_pair();
 let launch_inputs = ProductionLifecycleLaunchInputsV1::new(
 """ if key == "pending_loop" else """
-let (exact_output_service_owner, exact_output_transport_owner) =
+let (exact_output_service_owner, _) =
     durable_exact_output_handoff_owner_pair();
 let runtime_started_at = Instant::now();
 let launch_inputs = ProductionLifecycleLaunchInputsV1::new(
 """,
-            "lifecycle construction must mint one exact-output owner pair immediately before creating the paired launch corridor",
+            "lifecycle construction must mint the exact-output service owner immediately before creating the native launch corridor",
             errors,
         )
         _require_rust_token_sequence(
@@ -68170,6 +68293,11 @@ loop {
             expected_context,
             f"exact-output {item_name} production item",
             errors,
+            expected_attributes=(
+                native_runner_top_cutover_attr
+                if item_name == "certified_sidecar_prefix_covers_occurrence"
+                else ()
+            ),
         )
         if item is not None:
             observed_sha256 = _rust_item_token_sha256(item)
@@ -69559,11 +69687,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             expected_context = (("impl", "DurableLaneRolloverAuthority"),)
         elif item_name == "persistent":
             expected_context = (("impl", "DurableLaneSessionSource"),)
-        elif item_name in {
-            "durable_lane_rollover_authority",
-            "serve_durable_lane_certificate",
-            "reconstruct_durable_lane_certificate",
-        }:
+        elif item_name in reviewed_lane_cutover_items:
             expected_context = (("impl", "V2LaneWorkAdapter"),)
         else:
             expected_context = ()
@@ -69573,6 +69697,9 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             expected_context,
             f"lane rollover authority {item_name} production item",
             errors,
+            expected_attributes=(
+                native_runner_cutover_attr if item_name in reviewed_lane_cutover_items else ()
+            ),
         )
         if item is not None:
             observed_sha256 = _rust_item_token_sha256(item)
@@ -70658,7 +70785,13 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             (),
             f"exact-output {item_name} runner item",
             errors,
-            expected_attributes=(),
+            expected_attributes=(
+                native_cutover_attr
+                if item_name == "select_blocked_ordinary_lane_local_ingress"
+                else native_runner_cutover_attr
+                if item_name in reviewed_runner_cutover_items
+                else ()
+            ),
         )
         if item is not None:
             observed_sha256 = _rust_item_token_sha256(item)

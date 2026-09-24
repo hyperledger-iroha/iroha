@@ -1,5 +1,4 @@
 // Test fixtures for canonical persisted privacy state.
-
 fn nonzero(byte: u8) -> [u8; 32] {
     [byte; 32]
 }

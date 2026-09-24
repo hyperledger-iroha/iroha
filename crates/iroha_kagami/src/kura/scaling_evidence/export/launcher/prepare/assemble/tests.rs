@@ -17,6 +17,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 #[path = "../../../../fixture.rs"]
+#[allow(dead_code, reason = "fixture is shared by focused test suites")]
 mod transcript;
 
 /// Run a full generated-genesis facts fixture on the bounded stack already used by

@@ -2801,6 +2801,7 @@ pub(crate) struct AutonomousLifecyclePayloadCustodyAuthorization {
 }
 #[allow(variant_size_differences)] // Ephemeral checked Queue facts stay inline and allocation-free.
 enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
+    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
     ProducerQueue {
         height_context_id: HeightContextId,
         validator_count: u8,

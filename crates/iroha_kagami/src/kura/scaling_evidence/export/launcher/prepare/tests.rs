@@ -4,6 +4,7 @@ use super::*;
 use norito::codec::Encode as _;
 
 #[path = "../../../fixture.rs"]
+#[allow(dead_code, reason = "fixture is shared by focused test suites")]
 mod fixture;
 
 /// Test-only raw transport assembly for the retained pair owner's signed fixtures.

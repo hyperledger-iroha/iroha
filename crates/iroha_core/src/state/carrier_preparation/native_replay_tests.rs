@@ -6,8 +6,8 @@ use crate::{
     kura::CommitManifest,
     snapshot::canonical_state_snapshot_hash,
     state::{
-        RetainedCarrier, State, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
-        WorldReadOnly, tests::native_publication_replay_fixture,
+        RetainedCarrier, State, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
+        tests::native_publication_replay_fixture,
     },
     sumeragi::v2_apply::V2ApplyService,
 };

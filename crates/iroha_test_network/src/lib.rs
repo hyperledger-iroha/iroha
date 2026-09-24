@@ -25,6 +25,7 @@ pub mod fslock_ports;
 pub mod genesis_support;
 use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
+pub use config::genesis_participant_committee_key_instructions;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlEvidence, ConsensusMessageControlHeld, ConsensusMessageControlKind,
@@ -3823,8 +3824,8 @@ impl Network {
             // Supplementary committee validators are not genesis submitters or
             // global voters. Start them concurrently with the global validators
             // so their trusted P2P endpoints are available for genesis traffic,
-            // while retaining the base Validator role so independently frozen
-            // participant lanes can select their local signing keys.
+            // They retain the Validator runtime role for signing. Participant
+            // eligibility also requires a live on-chain Committee key record.
             let committee_validator_start_futures = self
                 .committee_validators
                 .iter()
@@ -5429,9 +5430,10 @@ impl ObserverP2pBootstrap {
 /// Bounded recipe for configured validator processes excluded from the global genesis roster.
 ///
 /// Unlike [`ObserverP2pBootstrap`], these processes retain the default
-/// `NodeRole::Validator` runtime capability so they can sign independently
-/// frozen participant-lane work. They remain absent from [`Network::peers`],
-/// the signed global topology, and global quorum calculations.
+/// `NodeRole::Validator` runtime capability for independently frozen
+/// participant-lane work. On-chain eligibility also requires a live Committee
+/// consensus-key record. They remain absent from [`Network::peers`], the signed
+/// global topology, and global quorum calculations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommitteeValidatorP2pBootstrap {
     validator_count: NonZero<usize>,
@@ -7358,7 +7360,8 @@ impl NetworkBuilder {
     /// These peers join the trusted P2P fanout and receive the signed genesis,
     /// but are excluded from [`Self::with_peers`], the global genesis topology,
     /// and global quorum calculations. They start alongside the global roster
-    /// with a bounded stagger and retain the base Validator role.
+    /// with a bounded stagger and retain the Validator runtime role. On-chain
+    /// participant eligibility also requires a live Committee consensus-key record.
     ///
     /// # Errors
     /// Returns an error when all configured processes cannot fit full localnet
@@ -11827,6 +11830,8 @@ mod tests {
             parliament_beacon_signer_mode: None,
             consensus_message_control: None,
             #[cfg(unix)]
+            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
+            #[cfg(unix)]
             disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
@@ -11900,6 +11905,8 @@ mod tests {
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
             consensus_message_control: None,
+            #[cfg(unix)]
+            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
             disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
@@ -14694,7 +14701,7 @@ mod tests {
         assert_eq!(relays.stats_for(&peer_id), Some(stats));
     }
     #[test]
-    fn legacy_builder_has_no_observers_and_preserves_validator_peer_semantics() {
+    fn default_builder_has_no_observers_and_preserves_validator_peer_semantics() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_eq!(network.peers().as_slice(), network.validators());
         assert!(network.observers().is_empty());
@@ -16018,7 +16025,7 @@ mod tests {
                         && register.object.id == fee_asset_definition_id
                     {
                         definition_count += 1;
-                        assert_eq!(register.object.spec(), &NumericSpec::fractional(9));
+                        assert_eq!(&register.object.spec, &NumericSpec::fractional(9));
                     }
                     if let Some(registration) = instruction
                         .as_any()

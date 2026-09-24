@@ -568,7 +568,7 @@ fn run_pending_active_height(
                 services.drain_completions(executor)?;
                 // Pending Kura has no local proposal owner to update; this
                 // still settles retained Decision cleanup and locked-body work.
-                reconcile_executor_locked_body(executor, services)?;
+                let _ = reconcile_executor_locked_body(executor, services)?;
                 drain_decided_lane_recovery_ingress(
                     receiver,
                     executor,
