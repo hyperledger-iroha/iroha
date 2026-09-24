@@ -259,7 +259,7 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
             'state::tests::native_candidate_handoff_rejects_foreign_original_state',
             'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-            'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+            'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
             'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
             'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
             'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
@@ -362,8 +362,8 @@ class BeaconGateTests(unittest.TestCase):
         required.update("sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::" + name
                         for name in dispatch_names)
         for path, pattern, regression in (
-            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_never_selects_ordinary_fallback\s*\(",
-             "sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback"),
+            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_allows_independent_ordinary_snapshot\s*\(",
+             "sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot"),
             ("state/native_lane_preparation_tests.rs", r"state_test!\s*\{\s*sync\s+native_preparation_preserves_local_recorder_conflict\b",
              "state::tests::native_preparation_preserves_local_recorder_conflict"),
         ):
@@ -638,10 +638,10 @@ class BeaconGateTests(unittest.TestCase):
     def test_exact_height_lifecycle_controls_are_unique_and_focused_in_both_scopes(self):
         required = {
             'core': (
-                'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+                'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
             ),
             'cli': (
-                'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+                'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
                 'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
                 'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
             ),
@@ -650,7 +650,7 @@ class BeaconGateTests(unittest.TestCase):
             ),
             'torii-unit': (
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-                'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+                'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
             ),

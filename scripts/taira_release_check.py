@@ -1636,13 +1636,13 @@ TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open',
     'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
 )), )
 STAGES += (("exact-height native lifecycle installation", (
-    'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+    'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
     'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
     'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
 )), )
 TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
     'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-    'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+    'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
 )), )
@@ -2137,13 +2137,13 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
         'state::tests::native_candidate_handoff_rejects_foreign_original_state',
         'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
         'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
         'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
         'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
         'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
-        'sumeragi::v2_apply::tests::current_carrier_rejects_unrelated_ordinary_external_transaction',
-        'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+        'sumeragi::v2_apply::tests::current_carrier_accepts_signed_direct_ordinary_route_without_local_queue',
+        'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
         'state::tests::native_preparation_preserves_local_recorder_conflict',
     )),
     ('native preparation and recorded controls preserve original validation', (
