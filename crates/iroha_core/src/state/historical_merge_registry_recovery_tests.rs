@@ -270,6 +270,7 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
     let (fixture, carrier, context) =
         autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
     let state = &fixture.native.state;
+    let configured_nexus = state.nexus_snapshot();
     let batch = carrier
         .execution_context()
         .unwrap()
@@ -294,7 +295,10 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
-        .into_state_from_json(snapshot.clone())
+        .into_state_from_json_str_with_configured_nexus(
+            &norito::json::to_json(&snapshot).expect("serialize native State snapshot"),
+            configured_nexus.clone(),
+        )
     };
     let error = restore(Arc::new(LaneManifestRegistry::empty()))
         .err()
@@ -324,7 +328,10 @@ fn historical_autonomous_merge_rejects_restored_registry_conflict_on_consensus_s
             #[cfg(feature = "telemetry")]
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
-        .into_state_from_json(changed)
+        .into_state_from_json_str_with_configured_nexus(
+            &norito::json::to_json(&changed).expect("serialize tampered native State snapshot"),
+            configured_nexus.clone(),
+        )
         .err()
         .expect("empty durable merge history cannot authenticate fabricated reduction metadata");
         assert!(

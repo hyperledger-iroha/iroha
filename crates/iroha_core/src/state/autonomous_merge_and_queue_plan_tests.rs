@@ -5332,6 +5332,7 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
     let (fixture, carrier, context) =
         autonomous_native_runtime_effect_fixture(AutonomousRuntimeEffectFixture::Catalog);
     let state = &fixture.native.state;
+    let configured_nexus = state.nexus_snapshot();
     let baseline_dataspaces = state.nexus_snapshot().dataspace_catalog;
     let before = crate::snapshot::canonical_state_snapshot_hash(&state)
         .expect("stable valid fixture snapshot");
@@ -5433,7 +5434,10 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
         #[cfg(feature = "telemetry")]
         telemetry: crate::telemetry::StateTelemetry::default(),
     }
-    .into_state_from_json(norito::json::to_value(state).expect("serialize exact committed catalog"))
+    .into_state_from_json_str_with_configured_nexus(
+        &norito::json::to_json(state).expect("serialize exact committed catalog"),
+        configured_nexus,
+    )
     .expect("restore the exact signed runtime catalog descriptors");
     assert_eq!(
         restored.nexus_snapshot().dataspace_catalog,
