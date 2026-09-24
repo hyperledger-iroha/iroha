@@ -41,12 +41,12 @@ that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes run the exact reset-scope CLI test
 and canonical outcome, transaction-details and prepared-account admission Torii
 groups from the completed native graph. They collect failures before the
-production shipping metadata check. The four-peer network fixture then runs
+production shipping build. The four-peer network fixture then runs
 before the remaining independent tests, so an unusable fresh testnet fails
 before the long regression census.
-The shipping check also reruns when an independent checkpoint
-is reused; it supplies no test pass or artifact qualification. Later shipping
-codegen and network execution remain required.
+The required shipping codegen checks every authoritative binary and rejects
+Core/Torii fixture features from its own Cargo artifact stream, including when
+an independent checkpoint is reused. Network execution remains required.
 Full additionally executes advanced Core recovery and proof-production matrices.
 Both scopes require strict runtime catalog readback codecs and the lifecycle HTTP
 endpoint, compiled in the same native graph; no runtime security policy is relaxed.
@@ -714,6 +714,13 @@ TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact
     "openapi::tests::checked_openapi_assets_match_package_authority",
 )),)
 
+TORII_UNIT_STAGES += (("single-operator funding, deployment and proof admission", (
+    "tests_runtime_handlers::single_operator_demo_budgets_admit_batched_tools_and_weighted_deployment",
+    "tests_runtime_handlers::one_external_operator_walk_passes_the_real_preauth_gate",
+    "tests_runtime_handlers::solo_finality_walk_fits_the_proof_egress_budget",
+    "tests_runtime_handlers::solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429",
+)),)
+
 TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isolation", (
     "tests_runtime_handlers::transaction_details_http_sdk_preserves_exact_absence_and_authorization",
     "tests_runtime_handlers::transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts",
@@ -1133,6 +1140,10 @@ CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary aut
     'smartcontracts::isi::staking::tests::genesis_monetary_scope_requires_exact_height_without_npos_parameters',
 )), )
 CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
+
+CORE_ADMISSION_STARTUP_STAGES += (("committed catalog snapshot restart with complete configured baseline", (
+    "state::tests::snapshot_runtime_catalog_restart_authenticates_full_configured_dataspace_baseline",
+)),)
 
 
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
@@ -3051,6 +3062,37 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
           "shipping codegen and network qualification remain required", flush=True)
 
 
+PRODUCTION_LIBRARY_FORBIDDEN_FEATURES = {
+    "iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures",
+}
+
+
+def observe_shipping_production_library(event: dict, observed: set[str]) -> None:
+    """Audit Core/Torii features in the required default-feature build stream.
+
+    Cargo reports fresh and rebuilt compiler artifacts alike. A missing library
+    report is an evidence failure, even when every binary artifact is present.
+    """
+    if event.get("reason") != "compiler-artifact":
+        return
+    target, profile = event.get("target"), event.get("profile")
+    if not isinstance(target, dict) or not isinstance(profile, dict):
+        return
+    name, kinds = target.get("name"), target.get("kind")
+    if (not isinstance(name, str) or name not in PRODUCTION_LIBRARY_FORBIDDEN_FEATURES
+            or not isinstance(kinds, list) or "lib" not in kinds):
+        return
+    if profile.get("test") is not False:
+        raise CheckError("shipping codegen reported non-production library profile: " + name)
+    features = event.get("features")
+    if not isinstance(features, list) or not all(isinstance(feature, str) for feature in features):
+        raise CheckError("shipping codegen omitted production library features: " + name)
+    forbidden = PRODUCTION_LIBRARY_FORBIDDEN_FEATURES[name]
+    if forbidden in features:
+        raise CheckError(f"shipping codegen enabled forbidden fixture feature: {name}/{forbidden}")
+    observed.add(name)
+
+
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
                      harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
     label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
@@ -3213,7 +3255,8 @@ def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
     """Lock actual Cargo outputs only after Cargo exits, through source validation and copy."""
     if root.is_relative_to(target):
         from taira_cargo_cache import local_package_names, source_fingerprints
-        # Metadata has no artifact authority and must run before acquiring Cargo's locks.
+        # Cargo progress observations have no artifact authority; source
+        # fingerprints remain guarded while copying verified executables.
         packages = local_package_names(root, env)
         with source_fingerprints(root, target, "aarch64-unknown-linux-gnu", packages, repair=False):
             yield
@@ -3926,6 +3969,9 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     started = time.monotonic()
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
+    production_libraries: set[str] = set()
+    audit_production_graph = not message_control and not focused_fixture
+    stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
                           umask=0o077) as child, progress.heartbeat():
@@ -3939,25 +3985,41 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                 continue
             if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
                 continue
-            target = event.get("target", {})
-            name = target.get("name")
-            executable = event.get("executable")
-            if (isinstance(name, str) and name in expected and "bin" in target.get("kind", [])
-                    and event.get("profile", {}).get("test") is False
-                    and isinstance(executable, str) and executable):
-                if name in artifacts and artifacts[name] != executable:
-                    raise CheckError("native network binary has conflicting Cargo artifacts")
-                record = native_artifact_record(event)
-                selection = expected[name][0]
-                if selection in records and records[selection] != record:
-                    raise CheckError("native network binary has conflicting Cargo metadata")
-                artifacts[name] = executable
-                records[selection] = record
-                print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
+            if stream_error is not None:
+                # Keep consuming Cargo's pipe until it exits. Closing stdout
+                # after an early evidence failure can strand or abort its build.
+                continue
+            try:
+                if audit_production_graph:
+                    observe_shipping_production_library(event, production_libraries)
+                target = event.get("target", {})
+                name = target.get("name")
+                executable = event.get("executable")
+                if (isinstance(name, str) and name in expected and "bin" in target.get("kind", [])
+                        and event.get("profile", {}).get("test") is False
+                        and isinstance(executable, str) and executable):
+                    if name in artifacts and artifacts[name] != executable:
+                        raise CheckError("native network binary has conflicting Cargo artifacts")
+                    record = native_artifact_record(event)
+                    selection = expected[name][0]
+                    if selection in records and records[selection] != record:
+                        raise CheckError("native network binary has conflicting Cargo metadata")
+                    artifacts[name] = executable
+                    records[selection] = record
+                    print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
+            except CheckError as error:
+                stream_error = error
         code = child.wait()
     progress.report(f"Cargo exited {code}")
+    if stream_error is not None:
+        raise stream_error
     if code or set(artifacts) != set(expected):
         raise CheckError(f"native network build did not produce every required executable artifact (exit {code})")
+    if audit_production_graph:
+        missing = sorted(PRODUCTION_LIBRARY_FORBIDDEN_FEATURES.keys() - production_libraries)
+        if missing:
+            raise CheckError("shipping codegen omitted production library feature evidence: " + ", ".join(missing))
+        print("[taira-check] shipping production binary and Core/Torii feature evidence passed", flush=True)
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
     return isolate_native_artifacts(root, env, records)
 
@@ -4083,6 +4145,68 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
         label="pure FSM", description="pure consensus FSM (exact production reducer)")
 
 
+def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str, tuple]) -> None:
+    """Reject absent selected test declarations in captured source before Cargo.
+
+    This is an early lexical guard, not a substitute for the executable's exact
+    ``--list`` inventory. The latter remains authoritative for module paths,
+    cfg expansion, macro expansion, and test registration.
+    """
+    selected_by_package: dict[str, list[tuple[str, str]]] = {}
+    for harness, stages in scoped_stages.items():
+        if harness not in HARNESS_TARGETS:
+            raise CheckError(f"selected source inventory has unknown harness: {harness}")
+        package = HARNESS_TARGETS[harness][3][1]
+        names = [name for _, tests in stages for name in tests]
+        if len(names) != len(set(names)):
+            raise CheckError(f"selected source inventory repeats a test in {harness}")
+        selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
+
+    try:
+        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        namespace = {"__name__": "taira_selected_source_text", "__file__": str(helper)}
+        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
+        mask = namespace["mask_rust_comments"]
+        declarations = (
+            re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
+            re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
+                       r"(?:sync|async|consensus_stack)\s+([A-Za-z_]\w*)"),
+            re.compile(r"\b(?:source_contract_test|v2_apply_test)!\s*[({]\s*"
+                       r"([A-Za-z_]\w*)"),
+        )
+        missing = []
+        for package, selections in selected_by_package.items():
+            if not selections:
+                continue
+            package_root = native_package_root(root, package)
+            if not package_root.is_dir():
+                raise ValueError(f"native package source is absent: {package}")
+            wanted = {name.rsplit("::", 1)[-1] for _, name in selections}
+            found = set()
+            for source in package_root.rglob("*.rs"):
+                text = source.read_text(encoding="utf-8")
+                # Most package files cannot contain any selected declaration.
+                # Scan their raw syntax first; only candidate files need the
+                # slower comment/literal masker from this captured source.
+                candidates = {match.group(1) for pattern in declarations
+                              for match in pattern.finditer(text) if match.group(1) in wanted}
+                if not candidates:
+                    continue
+                masked = mask(text)
+                found.update(match.group(1) for pattern in declarations
+                             for match in pattern.finditer(masked) if match.group(1) in candidates)
+                if found == wanted:
+                    break
+            missing.extend(f"{harness}: {name}" for harness, name in selections
+                           if name.rsplit("::", 1)[-1] not in found)
+        if missing:
+            raise ValueError(f"{len(missing)} selected test declarations absent from captured source: "
+                             + "; ".join(missing[:20])
+                             + (f"; and {len(missing) - 20} more" if len(missing) > 20 else ""))
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
+        raise CheckError("selected source test inventory failed: " + str(error)) from error
+
+
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
@@ -4199,8 +4323,11 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
         raise CheckError("Torii lifecycle test source registration failed: " + str(error)) from error
 
 
-def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
+                                scoped_stages: dict[str, tuple] | None = None) -> None:
     """Reject invalid source assets, then run shared contracts before Cargo."""
+    if scoped_stages is not None:
+        validate_selected_source_test_inventory(root, scoped_stages)
     validate_mv_test_registration(root)
     validate_torii_lifecycle_test_registration(root)
     started = time.monotonic()
@@ -4629,7 +4756,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
     run_pure_fsm_checks(root, env, lock_fds)
-    run_lifecycle_source_checks(root, env, lock_fds)
+    run_lifecycle_source_checks(root, env, lock_fds, scoped_stages)
     shipping = shipping_harnesses(root)
     print(f"[taira-check] shipping source coverage passed ({len(shipping)} binaries)", flush=True)
     # Include the configuration integration target in this same Cargo graph:
@@ -4651,6 +4778,14 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
+        # This integration target compiles late in the complete test graph. Check
+        # its Rust metadata first so a four-peer fixture type error does not wait
+        # for every unrelated test executable to finish codegen. Configuration
+        # shares the already-warm focused network graph. This check publishes no
+        # test pass or qualification checkpoint; the complete build still follows.
+        if "network" in selections:
+            early_compile = tuple(name for name in ("config", "network") if name in selections)
+            check_test_harnesses(root, env, harnesses=early_compile, lock_fds=lock_fds)
         # The complete --no-run build type-checks this same selected feature graph
         # and requires one executable for every selected native harness. Keep the
         # faster metadata-only failure probe in focused prequalification; repeating
@@ -4727,11 +4862,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                         failures.extend(error.failures)
                 if failures:
                     raise SelectedRegressionFailures(failures)
-            # Test-harness dev dependencies can conceal production-only errors.
-            # Always check the separate shipping graph, even when the exact
-            # independent test pass is reused. This creates no checkpoint claim.
-            if shipping:
-                check_shipping_binaries(root, env, lock_fds)
+            # The mandatory network fixture's normal shipping build separately
+            # checks production codegen and Core/Torii features. Its Cargo JSON
+            # artifacts are audited before any peer starts, including on reuse.
+            if shipping and not split_network_stages(scoped_stages["network"])[1]:
+                raise CheckError("shipping graph requires a selected runtime network fixture")
             if scoped_stages["network"]:
                 # A fresh testnet that cannot commit its first transaction is a
                 # release blocker. Qualify the real four-peer path before the

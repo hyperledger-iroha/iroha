@@ -719,24 +719,21 @@ impl KuraSeed {
             })
             .into());
         }
-        let added_dataspaces: BTreeSet<_> = world_catalog
-            .as_ref()
-            .into_iter()
-            .flat_map(|catalog| catalog.dataspaces.iter().map(|entry| entry.descriptor.id))
-            .collect();
-        restored_nexus.configured_dataspace_catalog = DataSpaceCatalog::new(
-            restored_nexus
-                .dataspace_catalog
-                .entries()
-                .iter()
-                .filter(|entry| !added_dataspaces.contains(&entry.id))
-                .cloned()
-                .collect(),
-        )
-        .map_err(|error| json::Error::InvalidField {
-            field: "nexus_runtime.blocks.owner_policy".to_owned(),
-            message: error.to_string(),
-        })?;
+        // Owner policy commits to physical identity and fault tolerance, but deliberately
+        // omits operator-facing descriptions. The protected runtime catalog instead binds the
+        // *complete* configured baseline, descriptions included. Reconstructing that baseline
+        // from owner policy loses those bytes and makes a valid post-catalog snapshot impossible
+        // to restart. Strict startup supplies the validated static configuration; use its exact
+        // baseline and authenticate it against the committed catalog below. The config-free
+        // decoder can still reconstruct snapshots with no runtime catalog.
+        restored_nexus.configured_dataspace_catalog = match replay_nexus.as_ref() {
+            Some(configured) => configured.configured_dataspace_catalog.clone(),
+            None if world_catalog.is_some() => return Err((json::Error::InvalidField {
+                field: "nexus_runtime.blocks.owner_policy".to_owned(),
+                message: "committed runtime catalog requires the complete configured dataspace baseline at snapshot restore".to_owned(),
+            }).into()),
+            None => restored_nexus.dataspace_catalog.clone(),
+        };
         let reconstructed_dataspaces = runtime_catalog_dataspaces(
             &restored_nexus.configured_dataspace_catalog,
             world_catalog.as_ref(),

@@ -2256,7 +2256,8 @@ pub mod torii {
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
     /// Maximum time a query waits for execution capacity before Torii rejects it.
-    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 25;
+    /// A bounded solo proof burst may briefly occupy all heavy-query permits.
+    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 1_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
     /// Derive the V1 routed-read route-body phase during configuration parsing.
@@ -2276,21 +2277,25 @@ pub mod torii {
             .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
             .filter(|phase| *phase > 1)
     }
-    // A 128-proof operator walk consumes 1,024 tokens at eight tokens per
-    // bridge-finality GET. Keep a finite 20-proof/s refill and the separate
-    // heavy-query concurrency and proof-egress limits.
+    // A solo walk can use 128 direct bridge-finality GETs plus 416 MCP
+    // finality-proof tools (4,352 tokens at eight each). Leave headroom for
+    // direct readbacks and funding/contract reads while keeping a finite
+    // 20-proof/s refill and independent heavy-query and egress limits.
     /// Default steady-state query rate tokens issued per authority every second.
     pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(160);
     /// Maximum burst tokens accumulated per authority.
-    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(1_024);
+    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(8_192);
     /// Default steady-state transaction submission rate tokens per authority every second.
     pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
     /// Default transaction submission burst tokens per authority.
     pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(20_000);
+    // A single deployment can make 48 contract mutations and eight weighted
+    // bridge-proof submissions (eight tokens each) before refill. Keep both
+    // the per-origin refill and burst finite; admission and queue caps remain.
     /// Default steady-state deploy rate tokens issued per origin every second.
-    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(4);
+    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(16);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
-    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(8);
+    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(128);
     /// Default public Soracloud local-read rate per remote IP every second.
     pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(5);
     /// Default public Soracloud local-read burst capacity per remote IP.
@@ -2664,10 +2669,14 @@ pub mod torii {
         pub const OPERATION_REGISTRY_MAX_BYTES: usize =
             OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
+    // The pre-auth gate charges every external HTTP request, including routine
+    // deployment reads and writes. A solo walk with 128 proof reads, 58
+    // mutations, 32 direct readbacks, four funding requests and seven outer MCP
+    // requests fits before refill without a 60s IP ban.
     /// Steady-state rate for pre-authorization attempts per IP.
-    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
+    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
     /// Burst tokens allowed for pre-authorization attempts per IP.
-    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
+    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
     /// Maximum number of temporary pre-auth bans retained in memory.
@@ -2966,10 +2975,13 @@ pub mod torii {
         pub fn deny_tool_prefixes() -> Vec<String> {
             Vec::new()
         }
+        // Six bounded 64-tool batches plus 32 follow-up reads fit without
+        // throttling one operator. The finite refill is 20 tool calls/second;
+        // independent dispatch concurrency and payload limits still apply.
         /// Optional steady-state MCP request budget (requests/minute). None disables.
-        pub const RATE_PER_MINUTE: Option<u32> = Some(240);
+        pub const RATE_PER_MINUTE: Option<u32> = Some(1_200);
         /// Optional MCP request burst budget.
-        pub const BURST: Option<u32> = Some(120);
+        pub const BURST: Option<u32> = Some(512);
     }
     /// Account-onboarding defaults surfaced via `torii.account_onboarding`.
     pub mod account_onboarding {

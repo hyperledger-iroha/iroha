@@ -244,6 +244,87 @@ state_test! { sync snapshot_owner_policy_survives_startup_with_live_nondefault_s
     );
 }
 
+state_test! { sync snapshot_runtime_catalog_restart_authenticates_full_configured_dataspace_baseline
+    use iroha_data_model::nexus::{
+        NexusRuntimeCatalogV1, RuntimeDataSpaceAdditionV1, dataspace_catalog_hash,
+    };
+
+    let (_directory, mut state, configured) = snapshot_owner_policy_fixture_with_stored_history(true);
+    let baseline = configured.configured_dataspace_catalog.clone();
+    assert!(baseline.entries().iter().any(|entry| entry.description.is_some()));
+    let manifest_hash = [0x63; 32];
+    let runtime = NexusRuntimeCatalogV1 {
+        version: NexusRuntimeCatalogV1::VERSION,
+        baseline_dataspaces_hash: dataspace_catalog_hash(&baseline),
+        baseline_manifests_hash: Hash::prehashed(
+            state.lane_manifests.read().baseline_consensus_policy_digest(),
+        ),
+        dataspaces: vec![RuntimeDataSpaceAdditionV1 {
+            descriptor: DataSpaceMetadata {
+                id: DataSpaceId::from_hash(&manifest_hash),
+                alias: "paid-runtime-dataspace".to_owned(),
+                description: Some("committed catalog description".to_owned()),
+                fault_tolerance: 1,
+            },
+            manifest_hash,
+        }],
+        manifests: Vec::new(),
+    };
+    let effective = runtime_catalog_dataspaces(&baseline, Some(&runtime))
+        .expect("valid baseline and committed addition");
+    let mut current_nexus = configured.clone();
+    current_nexus.dataspace_catalog = effective.clone();
+    *state.nexus.write() = current_nexus.clone();
+    let mut current_runtime = state.canonical_runtime.view().get().clone();
+    current_runtime.owner_policy = SnapshotNexusOwnerPolicy::from_nexus(&current_nexus);
+    state.canonical_runtime.replace_current_preserving_predecessor(current_runtime);
+    {
+        let mut world = state.world.block();
+        world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(
+                runtime.into_custom_parameter().expect("valid protected catalog"),
+            ),
+        );
+        world.commit();
+    }
+    let snapshot = norito::json::to_json(&state).expect("serialize committed catalog snapshot");
+    let seed = || deserialize::KuraSeed {
+        kura: Arc::clone(&state.kura),
+        lane_manifests: state.lane_manifests.read().clone(),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    };
+    let restored = seed()
+        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+            &snapshot,
+            configured.clone(),
+        )
+        .expect("full startup baseline restores the committed runtime catalog");
+    assert_eq!(restored.nexus_snapshot().configured_dataspace_catalog, baseline);
+    assert_eq!(restored.nexus_snapshot().dataspace_catalog, effective);
+
+    let mut changed_config = configured;
+    let mut entries = baseline.entries().to_vec();
+    entries.last_mut().expect("configured dataspace").description =
+        Some("different configured description".to_owned());
+    changed_config.configured_dataspace_catalog =
+        DataSpaceCatalog::new(entries).expect("same physical geometry, changed baseline bytes");
+    let error = seed()
+        .into_state_from_json_str_with_configured_nexus_without_durable_recovery(
+            &snapshot,
+            changed_config,
+        )
+        .err()
+        .expect("changed full baseline must fail catalog authentication");
+    assert!(error.to_string().contains("configured dataspace baseline differs"), "{error}");
+    let error = seed()
+        .into_state_from_json_str_without_durable_recovery(&snapshot)
+        .err()
+        .expect("catalog restore without full configured baseline must fail closed");
+    assert!(error.to_string().contains("requires the complete configured dataspace baseline"), "{error}");
+}
+
 state_test! { sync snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration
     let (_directory, mut restored, configured) = snapshot_owner_policy_fixture();
     for hydrated in [false, true] {
