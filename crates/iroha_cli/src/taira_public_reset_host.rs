@@ -4576,7 +4576,7 @@ fn ensure_host_lease(admitted: &HostAdmission, action: HostAction) -> Result<()>
                 "expired or rollback recovery cannot replace a foreign host lease"
             ));
         }
-        if !expired_host_session_releasable(&guard, &lease, now)? {
+        if !host_session_releasable(&guard, &lease, now)? {
             return Err(eyre!(
                 "another authorization owns a nonterminal host deployment session"
             ));
@@ -4603,16 +4603,11 @@ fn ensure_host_lease(admitted: &HostAdmission, action: HostAction) -> Result<()>
     publish_host_lease(&guard, &admitted.authorization_sha256, &bytes)
 }
 
-fn expired_host_session_releasable(
-    guard: &Path,
-    lease: &HostLeaseV1,
-    now_unix_ms: u64,
-) -> Result<bool> {
-    if now_unix_ms <= lease.execution_expires_at_unix_ms {
-        return Ok(false);
-    }
+fn host_session_releasable(guard: &Path, lease: &HostLeaseV1, now_unix_ms: u64) -> Result<bool> {
+    let execution_expired = now_unix_ms > lease.execution_expires_at_unix_ms;
     let parent = File::open(guard)?;
     let mut saw_progress = false;
+    let mut touched_hosts = BTreeSet::new();
     for name in ["progress.json", "progress.successor.json"] {
         let Some(bytes) = read_regular_at(&parent, name, MAX_HOST_REQUEST_BYTES)? else {
             continue;
@@ -4629,22 +4624,112 @@ fn expired_host_session_releasable(
                 "released host progress is not bound to its exact lease"
             ));
         }
-        let untouched = progress.touched_hosts.is_empty();
-        let sealed = progress.sealed && progress.prepared_action.is_none();
-        let rolled_back = progress.rolling_back
-            && progress.prepared_action.is_none()
-            && progress.rolled_back_hosts.len() == progress.touched_hosts.len()
-            && progress
-                .rolled_back_hosts
-                .iter()
-                .all(|slug| progress.touched_hosts.contains(slug));
-        if !(untouched || sealed || rolled_back) {
+        if !host_progress_releasable(&progress, execution_expired) {
             return Ok(false);
         }
+        touched_hosts.extend(progress.touched_hosts);
+    }
+    if !execution_expired {
+        return Ok(saw_progress && terminal_rollback_receipt_exists(lease, &touched_hosts)?);
     }
     // A lease can crash before its initial progress publication. With no
     // touched state and an expired signed execution window, it is releasable.
     Ok(saw_progress || !guard.join("progress.json").exists())
+}
+
+fn host_progress_releasable(progress: &HostProgressV1, execution_expired: bool) -> bool {
+    let touched = progress.touched_hosts.iter().collect::<BTreeSet<_>>();
+    let rolled_back = progress.rolled_back_hosts.iter().collect::<BTreeSet<_>>();
+    let terminal_rollback = progress.rolling_back
+        && !progress.sealed
+        && progress.prepared_action.is_none()
+        && touched.len() == progress.touched_hosts.len()
+        && rolled_back.len() == progress.rolled_back_hosts.len()
+        && touched == rolled_back;
+    terminal_rollback
+        || execution_expired
+            && (progress.touched_hosts.is_empty()
+                || progress.sealed && progress.prepared_action.is_none())
+}
+
+fn terminal_rollback_receipt_exists(
+    lease: &HostLeaseV1,
+    touched_hosts: &BTreeSet<String>,
+) -> Result<bool> {
+    let receipt_dir = Path::new(super::JOURNAL_ROOT).join("rolled-back");
+    let receipt_path = receipt_dir.join(format!("{}.json", lease.authorization_semantic_sha256));
+    if !receipt_path.exists() {
+        return Ok(false);
+    }
+    require_root_directory(&receipt_dir, true, "rolled-back journal receipt directory")?;
+    let (record, bytes) =
+        read_private_json::<json::Value>(&receipt_path, "rolled-back journal receipt")?;
+    let _: super::executor_model::JournalV1 =
+        json::from_slice(&bytes).wrap_err("rolled-back journal receipt is not exact V1 JSON")?;
+    Ok(terminal_rollback_receipt_matches(
+        lease,
+        touched_hosts,
+        &record,
+    ))
+}
+
+fn terminal_rollback_receipt_matches(
+    lease: &HostLeaseV1,
+    touched_hosts: &BTreeSet<String>,
+    record: &json::Value,
+) -> bool {
+    let string = |key: &str| record.get(key).and_then(json::Value::as_str);
+    if string("schema") != Some(super::JOURNAL_SCHEMA_V1)
+        || string("inventory_sha256") != Some(lease.inventory_sha256.as_str())
+        || string("authorization_sha256") != Some(lease.authorization_semantic_sha256.as_str())
+        || string("authorization_nonce") != Some(lease.authorization_nonce.as_str())
+        || string("status") != Some("rolled_back")
+        || string("phase") != Some("rolled_back")
+        || record.get("recovery_intent") != Some(&json::Value::Null)
+        || !record
+            .get("rollback_failures")
+            .and_then(json::Value::as_array)
+            .is_some_and(Vec::is_empty)
+        || !string("failure_summary")
+            .is_some_and(|summary| !summary.is_empty() && summary.len() <= 512)
+    {
+        return false;
+    }
+    let Some(validators) = record
+        .get("touched_validators")
+        .and_then(json::Value::as_array)
+    else {
+        return false;
+    };
+    if validators.len() > super::VALIDATOR_SLUGS.len()
+        || validators
+            .iter()
+            .zip(super::VALIDATOR_SLUGS)
+            .any(|(actual, expected)| actual.as_str() != Some(expected))
+        || record
+            .get("rollback_next_validator")
+            .and_then(json::Value::as_u64)
+            != u64::try_from(validators.len()).ok()
+    {
+        return false;
+    }
+    let edge_touched = record.get("edge_touched").and_then(json::Value::as_bool);
+    if edge_touched.is_none()
+        || record
+            .get("edge_rollback_complete")
+            .and_then(json::Value::as_bool)
+            != edge_touched
+    {
+        return false;
+    }
+    let mut native_touched = validators
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect::<BTreeSet<_>>();
+    if edge_touched == Some(true) {
+        native_touched.insert("taira-edge".to_owned());
+    }
+    *touched_hosts == native_touched
 }
 
 fn publish_host_lease(guard: &Path, authorization_sha256: &str, bytes: &[u8]) -> Result<()> {
@@ -20953,6 +21038,106 @@ mod tests {
             },
             action_deadline: Instant::now() + Duration::from_secs(60),
             execution_expired: false,
+        }
+    }
+
+    #[test]
+    fn terminal_rollback_releases_host_lease_before_expiry() {
+        let admitted = progress_admission();
+        let mut progress = initial_host_progress(&admitted);
+        progress.touched_hosts = vec!["taira-validator-1".to_owned()];
+        assert!(!host_progress_releasable(&progress, false));
+        assert!(host_progress_releasable(&progress, true));
+
+        progress.rolling_back = true;
+        assert!(!host_progress_releasable(&progress, false));
+        progress.rolled_back_hosts = progress.touched_hosts.clone();
+        assert!(host_progress_releasable(&progress, false));
+
+        progress.prepared_action = Some(HostActionKeyV1 {
+            host_slug: "taira-validator-1".to_owned(),
+            action: HostAction::Rollback.label().to_owned(),
+            artifact_role: String::new(),
+        });
+        assert!(!host_progress_releasable(&progress, false));
+        progress.prepared_action = None;
+        progress.touched_hosts.push("taira-validator-1".to_owned());
+        progress
+            .rolled_back_hosts
+            .push("taira-validator-1".to_owned());
+        assert!(!host_progress_releasable(&progress, false));
+    }
+
+    #[test]
+    fn native_terminal_receipt_must_complete_host_rollback() {
+        let admitted = progress_admission();
+        let lease = HostLeaseV1 {
+            schema: LEASE_SCHEMA_V1.to_owned(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_semantic_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            execution_expires_at_unix_ms: admitted
+                .authorization
+                .claims
+                .execution_expires_at_unix_ms,
+        };
+        let touched_hosts = BTreeSet::from([
+            "taira-validator-1".to_owned(),
+            "taira-validator-2".to_owned(),
+            "taira-validator-3".to_owned(),
+            "taira-validator-4".to_owned(),
+            "taira-edge".to_owned(),
+        ]);
+        let terminal = norito::json!({
+            "schema": (super::super::JOURNAL_SCHEMA_V1),
+            "qualification_scope": "core_testnet",
+            "deployment_id": (admitted.inventory.deployment_id),
+            "inventory_sha256": (lease.inventory_sha256.clone()),
+            "authorization_sha256": (lease.authorization_semantic_sha256.clone()),
+            "authorization_nonce": (lease.authorization_nonce.clone()),
+            "status": "rolled_back",
+            "phase": "rolled_back",
+            "next_step": 5,
+            "recovery_intent": (json::Value::Null),
+            "touched_validators": (super::super::VALIDATOR_SLUGS.to_vec()),
+            "edge_touched": true,
+            "edge_rollback_complete": true,
+            "rollback_next_validator": 4,
+            "failure_summary": "forward apply failed",
+            "rollback_failures": (Vec::<String>::new()),
+        });
+        assert!(terminal_rollback_receipt_matches(
+            &lease,
+            &touched_hosts,
+            &terminal
+        ));
+        let mut missing_host = touched_hosts.clone();
+        missing_host.remove("taira-validator-4");
+        assert!(!terminal_rollback_receipt_matches(
+            &lease,
+            &missing_host,
+            &terminal
+        ));
+        for (field, value) in [
+            ("status", json::Value::String("rolling_back".to_owned())),
+            ("authorization_sha256", json::Value::String("0".repeat(64))),
+            ("recovery_intent", json::Value::String("pending".to_owned())),
+            ("rollback_next_validator", json::Value::from(3_u64)),
+            ("edge_rollback_complete", json::Value::Bool(false)),
+            (
+                "rollback_failures",
+                norito::json!(["taira-validator-2 rollback failed"]),
+            ),
+        ] {
+            let mut stale = terminal.clone();
+            stale
+                .as_object_mut()
+                .expect("journal object")
+                .insert(field.to_owned(), value);
+            assert!(
+                !terminal_rollback_receipt_matches(&lease, &touched_hosts, &stale),
+                "unexpectedly accepted {field} drift"
+            );
         }
     }
 

@@ -18,6 +18,10 @@ pub(in super::super::super) struct PrepareDispatcherTransition {
     retained_inventory: PathBuf,
     #[arg(long)]
     expected_retained_inventory_sha256: String,
+    /// The current host lease belongs to a terminally rolled-back occupied reset.
+    /// This admits a new signed candidate without reusing the failed authorization.
+    #[arg(long)]
+    terminal_rolled_back: bool,
     #[arg(long)]
     current_runtime: PathBuf,
     #[arg(long)]
@@ -237,6 +241,45 @@ fn runtime_roles(runtime: &CurrentRuntime, observed: &mut Observed) -> Result<Ve
     )?);
     Ok(roles)
 }
+
+fn validate_rolled_back_inventory(
+    bytes: &[u8],
+    runtime: &CurrentRuntime,
+    plan: &Plan,
+) -> Result<()> {
+    let inventory: super::super::super::InventoryV1 = json::from_slice(bytes)?;
+    let predecessor = &plan.predecessor;
+    need(
+        inventory.schema == super::super::super::INVENTORY_SCHEMA_V1
+            && inventory.validators.len() == 4
+            && inventory.authorization_nonce == predecessor.authorization_nonce
+            && inventory.revision.commit != plan.candidate.commit,
+        "rolled-back inventory identity differs",
+    )?;
+    let terminal: Value = json::from_slice(&admission::read(&predecessor.completed)?)?;
+    need(
+        terminal.get("deployment_id").and_then(Value::as_str)
+            == Some(inventory.deployment_id.as_str())
+            && terminal.get("qualification_scope")
+                == Some(&json::to_value(&inventory.qualification_scope)?),
+        "rolled-back terminal is not the retained execution",
+    )?;
+    for (index, row) in inventory.validators.iter().enumerate() {
+        need(
+            row.slug == SLUGS[index]
+                && row.endpoint.upload_guard_sha256 == predecessor.guards[index].sha256
+                && json::to_vec(row.admitted_release()?)?
+                    == json::to_vec(&runtime.validators[index])?,
+            "rolled-back validator is not the restored stopped release",
+        )?;
+    }
+    need(
+        inventory.edge.slug == SLUGS[4]
+            && inventory.edge.endpoint.upload_guard_sha256 == predecessor.guards[4].sha256
+            && json::to_vec(inventory.edge.admitted_release()?)? == json::to_vec(&runtime.edge)?,
+        "rolled-back edge is not the restored selected release",
+    )
+}
 impl PrepareDispatcherTransition {
     /// Produce private reviewable input from current typed records; never apply it.
     pub(in super::super::super) fn run<W: Write>(&self, output: &mut W) -> Result<()> {
@@ -274,6 +317,10 @@ impl PrepareDispatcherTransition {
                 inventory.sha256 == self.expected_retained_inventory_sha256,
                 "retained inventory digest differs",
             )?;
+            let rolled_back_inventory = self
+                .terminal_rolled_back
+                .then(|| admission::read(&inventory))
+                .transpose()?;
             let lease_pin = observed.pin(
                 &coordination.join("lease.json"),
                 Some(0o600),
@@ -291,9 +338,15 @@ impl PrepareDispatcherTransition {
             )?;
             let progress: HostProgressV1 = json::from_slice(&admission::read(&progress_pin)?)?;
             require_lower_sha256(&lease.authorization_semantic_sha256, "sealed authorization")?;
+            let terminal_dir = if self.terminal_rolled_back {
+                "rolled-back"
+            } else {
+                "completed"
+            };
             let terminal_pin = observed.pin(
                 &Path::new(RUNTIME)
-                    .join("journal-v1/completed")
+                    .join("journal-v1")
+                    .join(terminal_dir)
                     .join(format!("{}.json", lease.authorization_semantic_sha256)),
                 Some(0o600),
                 16 * 1024 * 1024,
@@ -331,6 +384,7 @@ impl PrepareDispatcherTransition {
                     inventory_sha256: inventory.sha256,
                     authorization_sha256: lease.authorization_semantic_sha256,
                     authorization_nonce: lease.authorization_nonce,
+                    rolled_back: self.terminal_rolled_back,
                     completed_next_step,
                     sealed_forward_ordinal: progress.next_forward_ordinal,
                     completed: terminal_pin,
@@ -345,6 +399,9 @@ impl PrepareDispatcherTransition {
                     occupied: runtime_roles(&runtime, &mut observed)?,
                 },
             };
+            if let Some(bytes) = rolled_back_inventory.as_deref() {
+                validate_rolled_back_inventory(bytes, &runtime, &plan)?;
+            }
             admission::validate_plan(&plan)?;
             let held = admission::admit(&plan)?;
             let new_guards = admission::new_guards(&plan, &operation_root(&plan))?;

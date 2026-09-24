@@ -303,8 +303,10 @@ fn exact_meshed_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
     expected: u64,
 ) -> Result<bool> {
-    Ok(exact_height_reached(statuses, expected)?
-        && statuses.iter().all(|status| status.peers == 3))
+    Ok(
+        exact_height_reached(statuses, expected)?
+            && statuses.iter().all(|status| status.peers == 3),
+    )
 }
 
 async fn wait_for_exact_meshed_height(
@@ -1533,6 +1535,29 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         preparation_started.elapsed().as_secs_f64()
     );
     let directory = &prepared.directory;
+    // The running fixture uses its feature-isolated daemon for beacon custody.
+    // Qualify the shipping launcher separately against every exact generated
+    // core-testnet config before any peer starts: its deployment profile guard
+    // must accept the same four-node inputs the reset will materialize.
+    let launcher_check_deadline = Instant::now() + PHASE_BUDGET;
+    for peer in 0..4 {
+        let mut check = command(&launcher, directory);
+        check
+            .args(["--sora", "--config"])
+            .arg(directory.join(format!("peer{peer}.toml")))
+            .args(["--genesis-manifest-json"])
+            .arg(prepared.genesis_directory.join("genesis.json"))
+            .arg("--check-config");
+        let output = run(check, launcher_check_deadline)
+            .await
+            .wrap_err_with(|| {
+                format!("shipping Taira launcher rejected generated peer{peer} config")
+            })?;
+        ensure!(
+            output == b"Ready: configuration and available genesis are valid\n",
+            "shipping Taira launcher did not complete offline genesis validation for peer{peer}"
+        );
+    }
     let fresh = fresh_client(directory, &prepared.network_id)?;
     let clients = (0..4)
         .map(|index| client(&directory.join("client.toml"), api + index))

@@ -86,6 +86,7 @@ fn fixture() -> Fixture {
             inventory_sha256: "f".repeat(64),
             authorization_sha256: "1".repeat(64),
             authorization_nonce: "2".repeat(32),
+            rolled_back: false,
             completed_next_step: 15,
             sealed_forward_ordinal: 62,
             completed: evidence.clone(),
@@ -421,6 +422,79 @@ fn dispatcher_transition_accepts_exact_sealed_completed_predecessor() {
     let f = fixture();
     let (l, p, t) = sealed_records(&f.plan);
     admission::validate_sealed_records(&f.plan, &l, &p, &t).unwrap();
+}
+#[test]
+fn dispatcher_transition_accepts_only_complete_occupied_rollback() {
+    let mut f = fixture();
+    f.plan.predecessor.rolled_back = true;
+    f.plan.predecessor.completed_next_step = 5;
+    f.plan.predecessor.sealed_forward_ordinal = 49;
+    let (lease, mut progress, mut terminal) = sealed_records(&f.plan);
+    progress.touched_hosts.pop();
+    progress.sealed = false;
+    progress.rolling_back = true;
+    progress.last_rollback_rank = 1;
+    progress.rolled_back_hosts = SLUGS[..4]
+        .iter()
+        .rev()
+        .map(|slug| (*slug).to_owned())
+        .collect();
+    let record = terminal.as_object_mut().unwrap();
+    record.insert("status".into(), Value::String("rolled_back".into()));
+    record.insert("phase".into(), Value::String("rolled_back".into()));
+    record.insert("edge_touched".into(), Value::Bool(false));
+    record.insert("rollback_next_validator".into(), Value::from(4_u64));
+    record.insert(
+        "failure_summary".into(),
+        Value::String("apply failed".into()),
+    );
+    admission::validate_rolled_back_records(&f.plan, &lease, &progress, &terminal).unwrap();
+
+    for case in 0..10 {
+        let (mut lease, mut progress, mut terminal) =
+            (lease.clone(), progress.clone(), terminal.clone());
+        match case {
+            0 => progress.rolled_back_hosts.pop().map(|_| ()).unwrap(),
+            1 => progress.touched_hosts.pop().map(|_| ()).unwrap(),
+            2 => progress.sealed = true,
+            3 => progress.last_rollback_rank = 2,
+            4 => lease.inventory_sha256 = "0".repeat(64),
+            5 => {
+                terminal
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("rollback_next_validator".into(), Value::from(3_u64));
+            }
+            6 => {
+                terminal
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("edge_rollback_complete".into(), Value::Bool(true));
+            }
+            7 => {
+                terminal.as_object_mut().unwrap().insert(
+                    "rollback_failures".into(),
+                    norito::json!(["validator1 rollback failed"]),
+                );
+            }
+            8 => {
+                terminal
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("failure_summary".into(), Value::String(String::new()));
+            }
+            _ => {
+                terminal
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("status".into(), Value::String("rolling_back".into()));
+            }
+        };
+        assert!(
+            admission::validate_rolled_back_records(&f.plan, &lease, &progress, &terminal).is_err(),
+            "case {case}"
+        );
+    }
 }
 #[test]
 fn dispatcher_transition_rejects_unsealed_rollback_and_foreign_lease() {
