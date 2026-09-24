@@ -52,9 +52,9 @@ pub(super) struct KagemushaAssignedTerminalBodyFieldsV1<F: KagemushaPoseidonFiel
     pub state_successor_commitment: [AssignedValue<F>; 2],
     /// The same compact successor commitment in the verified Guard relation.
     pub guard_successor_commitment: [AssignedValue<F>; 2],
-    /// Digest of the durable terminal journal preimage, still requiring proof.
+    /// Digest of the durable terminal journal preimage, requiring its SHA opening.
     pub private_journal_commitment: [AssignedValue<F>; 2],
-    /// Digest of the sealed recovery preimage, still requiring proof.
+    /// Digest of the sealed recovery preimage, requiring its SHA opening.
     pub private_recovery_commitment: [AssignedValue<F>; 2],
 }
 
@@ -81,8 +81,8 @@ pub(super) struct KagemushaAuthenticatedTerminalBodyPrefixV1<F: KagemushaPoseido
 /// SHA outputs of the canonical journal and recovery preimages.
 ///
 /// Construct this only after both durable preimages have been constrained from the same verified
-/// prepared intent. The current terminal witness does not yet carry that authenticated opening;
-/// assigning matching host digests here would not authorize money.
+/// prepared intent. The outgoing terminal source path now supplies that opening; assigning
+/// matching host digests here would still not authorize money.
 pub(super) struct KagemushaAuthenticatedTerminalBodyDurableSourcesV1<F: KagemushaPoseidonFieldV1> {
     pub(super) private_journal_commitment: [AssignedValue<F>; 2],
     pub(super) private_recovery_commitment: [AssignedValue<F>; 2],

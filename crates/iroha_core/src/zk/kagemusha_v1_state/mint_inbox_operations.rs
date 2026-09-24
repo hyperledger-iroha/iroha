@@ -1,7 +1,7 @@
 //! Hardware-certified mint reservation, durable staging, and mixed-credit fold scheduling.
 
-use super::*;
 use super::mint_inbox::{applied_top_up_result_v1, require_exact_top_up_reservation_v1};
+use super::*;
 use crate::zk::kagemusha_v1_recursion::KagemushaAuthenticatedRecursiveVerifierV1;
 use iroha_data_model::kagemusha::KagemushaMintAuthorizationV1;
 
@@ -180,7 +180,7 @@ pub enum MintCreditStageOutcomeV1 {
 /// Require an exact retry to carry the certificate retained by the native inbox.
 ///
 /// A detached certificate cannot replace the original Guard evidence or advance its revision.
-fn require_original_mint_stage_certificate_v1(
+pub(super) fn require_original_mint_stage_certificate_v1(
     inbox: &KagemushaMintInboxV1,
     credit_id: CreditIdV1,
     certificate: &MintStageCertificateV1,
@@ -252,11 +252,7 @@ where
         status
             .validate_against(trust_anchor)
             .map_err(|_| KagemushaStateErrorV1::MintFinalityMismatch)?;
-        if !require_original_mint_stage_certificate_v1(
-            &self.mint_inbox,
-            credit_id,
-            certificate,
-        )? {
+        if !require_original_mint_stage_certificate_v1(&self.mint_inbox, credit_id, certificate)? {
             return Err(KagemushaStateErrorV1::CreditNotStaged(credit_id));
         }
         self.stage_mint_credit(authorization, credit, None, None)

@@ -108,7 +108,6 @@ use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Pipeline, Queue as Config,
 };
 use iroha_crypto::{Hash, HashOf};
-#[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 use iroha_data_model::nexus::{
     DataSpaceCatalog, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
@@ -3178,6 +3177,17 @@ enum PlanJournalDurability {
     StartupPending,
 }
 impl LaneQueueReservationStore {
+    /// All reservation phases retain the original QueuePlan claim until Kura
+    /// finishes their exact terminal handoff. A plan tombstone is included
+    /// defensively even though it normally accompanies a commit barrier.
+    fn owns_entrypoint(&self, hash: EntrypointHash) -> bool {
+        self.durable_owned_hashes().any(|owned| owned == hash)
+            || self
+                .plan_tombstoned
+                .iter()
+                .any(|key| key.entrypoint_hash == hash)
+    }
+
     fn durable_owned_hashes(&self) -> impl Iterator<Item = EntrypointHash> + '_ {
         self.live_by_entrypoint
             .keys()
@@ -3871,7 +3881,14 @@ pub enum PendingKagemushaOperationLookupError {
     },
 }
 
-/// Lockfree queue for transactions
+/// Advisory position for bounded leader sampling of local queue availability.
+#[derive(Default)]
+struct BoundedPendingScanCursor {
+    parent_hash: Option<HashOf<BlockHeader>>,
+    next_index: usize,
+}
+
+/// Queue for admitted transactions.
 ///
 /// Multiple producers, single consumer. Sumeragi must serialize transaction popping and guard
 /// returns through one consumer path; producers may continue admitting transactions concurrently.
@@ -3925,6 +3942,8 @@ pub struct Queue {
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
     /// Also serializes `tx_hashes` updates with this age index.
     queued_age_ring: parking_lot::Mutex<VecDeque<(EntrypointHash, u64)>>,
+    /// Local leader sampling position. This is never part of proposal validity.
+    pending_scan_cursor: parking_lot::Mutex<BoundedPendingScanCursor>,
     /// Cached count of hashes still waiting in `tx_hashes`.
     queued_count: AtomicUsize,
     /// Optional local journal for replaying pending transactions with full routing plans.
@@ -13091,11 +13110,51 @@ impl Queue {
     /// Returns `Ok(false)` while a selected, popped, or reserved owner still
     /// holds the claim. Selection and guard release resume deferred cleanup;
     /// reservation ownership remains under its original Kura terminal corridor.
-    pub fn reject_exact_queue_plan_admission_claim(
+    pub(crate) fn reject_exact_queue_plan_admission_claim(
         &self,
         binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<bool, LaneQueueReservationError> {
-        self.reject_exact_queue_plan_admission_claim_inner(binding, true)
+        binding
+            .validate_structure()
+            .map_err(LaneQueueReservationError::InvalidIdentity)?;
+        let hash = binding.entrypoint_hash;
+        let claim = loop {
+            let queue_guard = self.push_remove_lock.lock();
+            if self.transaction_selection_durability_faulted() {
+                return Err(LaneQueueReservationError::DurabilityFault);
+            }
+            if self.durability_transition_active(&hash) {
+                drop(queue_guard);
+                self.wait_for_durability_transitions(&[hash]);
+                continue;
+            }
+            let Some(claim) = self
+                .durable_plan_claims
+                .get(&hash)
+                .map(|claim| claim.value().clone())
+            else {
+                if self.txs.contains_key(&hash) {
+                    let error = std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "queue transaction has no durable QueuePlan admission claim during exact rejection",
+                    );
+                    self.mark_plan_journal_durability_fault(&error, None);
+                    return Err(LaneQueueReservationError::Journal(error));
+                }
+                return Ok(false);
+            };
+            if &claim
+                .global_admission_binding()
+                .map_err(LaneQueueReservationError::InvalidIdentity)?
+                != binding
+            {
+                // A delayed losing certificate cannot remove a replacement,
+                // even when it has the same entrypoint and routing-plan digest.
+                return Ok(false);
+            }
+            break claim;
+        };
+        self.reject_unreserved_terminal_plan_claim(&claim)
     }
     /// Terminalize local durable claims whose exact autoscale route has closed
     /// without acquiring canonical admission membership.
@@ -13214,30 +13273,7 @@ impl Queue {
             if current != *expected {
                 return Ok(false);
             }
-            let reservation_owned = {
-                let reservations = self.lane_reservations.lock();
-                reservations.live_by_entrypoint.contains_key(&hash)
-                    || reservations
-                        .commit_barriers
-                        .iter()
-                        .any(|key| key.entrypoint_hash == hash)
-                    || reservations
-                        .plan_tombstoned
-                        .iter()
-                        .any(|key| key.entrypoint_hash == hash)
-                    || reservations.release_barriers.iter().any(|barrier| {
-                        barrier
-                            .ordered_keys
-                            .iter()
-                            .any(|key| key.entrypoint_hash == hash)
-                    })
-                    || reservations.completed_releases.iter().any(|completion| {
-                        completion
-                            .ordered_records
-                            .iter()
-                            .any(|record| record.key.entrypoint_hash == hash)
-                    })
-            };
+            let reservation_owned = self.lane_reservations.lock().owns_entrypoint(hash);
             if reservation_owned || current.local_custody == QueuePlanLocalCustody::Autonomous {
                 return Ok(false);
             }
@@ -13309,17 +13345,6 @@ impl Queue {
         }
         Ok(())
     }
-    /// Durably release an exact replay-terminal QueuePlan owner which never entered a lane.
-    ///
-    /// Canonical State must first resolve the owner's pending obligation through a committed
-    /// signed replay alias. This Queue-side boundary then refuses to race any selected, popped,
-    /// reserved, or terminalizing lifecycle owner; those remain under the Kura corridor.
-    fn reject_unreserved_replay_terminal_queue_plan_admission_claim(
-        &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
-    ) -> Result<bool, LaneQueueReservationError> {
-        self.reject_exact_queue_plan_admission_claim_inner(binding, true)
-    }
     /// Inspect the terminal obligation retained by this exact admission.
     fn replay_terminal_cleanup_pending(&self, hash: EntrypointHash) -> bool {
         self.durable_plan_claims.get(&hash).is_some_and(|claim| {
@@ -13382,127 +13407,6 @@ impl Queue {
             .collect::<Vec<_>>();
         for hash in pending {
             self.resume_replay_terminal_cleanup(hash);
-        }
-    }
-    fn reject_exact_queue_plan_admission_claim_inner(
-        &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
-        require_unreserved_replay_terminal_owner: bool,
-    ) -> Result<bool, LaneQueueReservationError> {
-        binding
-            .validate_structure()
-            .map_err(LaneQueueReservationError::InvalidIdentity)?;
-        let hash = binding.entrypoint_hash;
-        loop {
-            let queue_guard = self.push_remove_lock.lock();
-            if require_unreserved_replay_terminal_owner
-                && self.transaction_selection_durability_faulted()
-            {
-                return Err(LaneQueueReservationError::DurabilityFault);
-            }
-            if self.durability_transition_active(&hash) {
-                drop(queue_guard);
-                self.wait_for_durability_transitions(&[hash]);
-                continue;
-            }
-            let Some(indexed_claim) = self
-                .durable_plan_claims
-                .get(&hash)
-                .map(|claim| claim.value().clone())
-            else {
-                if self.txs.contains_key(&hash) {
-                    let error = std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "queue transaction has no durable QueuePlan admission claim during exact rejection",
-                    );
-                    self.mark_plan_journal_durability_fault(&error, None);
-                    return Err(LaneQueueReservationError::Journal(error));
-                }
-                return Ok(false);
-            };
-            let indexed_binding = indexed_claim
-                .global_admission_binding()
-                .map_err(LaneQueueReservationError::InvalidIdentity)?;
-            if &indexed_binding != binding {
-                // A delayed losing certificate must not delete a later admission for the same
-                // entrypoint, including an ABA replacement with the same routing-plan digest.
-                return Ok(false);
-            }
-            if require_unreserved_replay_terminal_owner {
-                let reservation_owned = {
-                    let reservations = self.lane_reservations.lock();
-                    reservations.live_by_entrypoint.contains_key(&hash)
-                        || reservations
-                            .commit_barriers
-                            .iter()
-                            .any(|key| key.entrypoint_hash == hash)
-                        || reservations
-                            .plan_tombstoned
-                            .iter()
-                            .any(|key| key.entrypoint_hash == hash)
-                        || reservations.release_barriers.iter().any(|barrier| {
-                            barrier
-                                .ordered_keys
-                                .iter()
-                                .any(|key| key.entrypoint_hash == hash)
-                        })
-                        || reservations.completed_releases.iter().any(|completion| {
-                            completion
-                                .ordered_records
-                                .iter()
-                                .any(|record| record.key.entrypoint_hash == hash)
-                        })
-                };
-                if reservation_owned
-                    || indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous
-                {
-                    return Ok(false);
-                }
-                // Canonical State authenticated this exact binding before the
-                // Queue lock. Retain that monotonic evidence on its original
-                // claim before observing the ephemeral owners which defer it.
-                // A retired autonomous claim remains Autonomous until Kura's
-                // Complete-authorized cleanup, even after ForgetRelease.
-                self.durable_plan_claims
-                    .get_mut(&hash)
-                    .expect("the Queue lock retains the exact admission claim")
-                    .local_custody = QueuePlanLocalCustody::ReplayTerminalPending;
-                // Publish before testing counters, so the final owner cannot
-                // observe a clean hint after deciding that this claim defers.
-                self.replay_terminal_cleanup_dirty
-                    .store(true, Ordering::Release);
-                if self.global_selection_owners.lock().contains_key(&hash)
-                    || self.inflight_guards.load(Ordering::Acquire) != 0
-                    || self.selection_attempts.load(Ordering::Acquire) != 0
-                {
-                    return Ok(false);
-                }
-            }
-            let transaction = self
-                .txs
-                .get(&hash)
-                .map(|entry| Arc::clone(entry.value()))
-                .ok_or_else(|| {
-                    LaneQueueReservationError::InvalidIdentity(
-                        "durable QueuePlan admission claim has no live queue transaction"
-                            .to_owned(),
-                    )
-                })?;
-            let transition = self
-                .begin_durability_transition_locked([hash])
-                .expect("active exact rejection was checked under the queue lock");
-            drop(queue_guard);
-            self.tombstone_conflicting_global_admission(binding)?;
-            let queue_guard = self.push_remove_lock.lock();
-            self.finalize_conflicting_global_admission_locked(
-                hash,
-                &transaction,
-                &indexed_claim.routing_plan,
-                binding,
-            )?;
-            drop(transition);
-            drop(queue_guard);
-            return Ok(true);
         }
     }
     /// Append and force-sync one exact pending-plan tombstone for reservation commit ordering.
@@ -14600,6 +14504,7 @@ impl Queue {
                 fifo_order_by_hash: DashMap::new(),
                 next_fifo_ordinal: parking_lot::Mutex::new(1),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
+                pending_scan_cursor: parking_lot::Mutex::new(BoundedPendingScanCursor::default()),
                 queued_count: AtomicUsize::new(0),
                 plan_journal: parking_lot::Mutex::new(None),
                 plan_journal_installed: AtomicBool::new(false),
@@ -15257,7 +15162,9 @@ impl Queue {
         }
         pending.into_iter()
     }
-    /// Clone and fence a FIFO-bounded pending prefix without popping queue ownership.
+    /// Clone and fence a bounded queue-ordered sample without popping ownership.
+    /// Unadmitted QueuePlan claims are skipped; durable selected or reserved
+    /// predecessors retain their existing ordering fence.
     pub(crate) fn bounded_pending_snapshot(
         self: &Arc<Self>,
         state_view: &StateView<'_>,
@@ -15294,10 +15201,16 @@ impl Queue {
         }
         let mut global_owners = self.global_selection_owners.lock();
         let mut age_ring = self.queued_age_ring.lock();
+        let mut scan_cursor = self.pending_scan_cursor.lock();
         if self.transaction_selection_durability_faulted()
             || self.lane_reservation_startup_reconciliation_pending()
         {
             return None;
+        }
+        let parent_hash = state_view.latest_block_hash();
+        if scan_cursor.parent_hash != parent_hash {
+            scan_cursor.parent_hash = parent_hash;
+            scan_cursor.next_index = 0;
         }
         let mut remaining_scan = max_scan.get();
         while remaining_scan > 0
@@ -15312,19 +15225,65 @@ impl Queue {
                 break;
             }
             age_ring.pop_front();
+            scan_cursor.next_index = 0;
             remaining_scan = remaining_scan.saturating_sub(1);
         }
         if remaining_scan == 0 {
+            let retry = !age_ring.is_empty();
+            drop(scan_cursor);
+            drop(age_ring);
+            drop(global_owners);
+            drop(queue_guard);
+            if retry {
+                self.wake_sumeragi();
+            }
             return Some((Vec::new(), GlobalQueueSelectionLease::empty(self)));
+        }
+        // The leader samples local availability in bounded windows. The parent
+        // hash resets this advisory cursor because a formerly absent admission
+        // can become canonical only through committed State. Live owners and
+        // durability transitions retain the older FIFO fence.
+        let mut scan_start = scan_cursor.next_index;
+        if scan_start >= age_ring.len() {
+            scan_start = 0;
+        }
+        let mut active_fifo_cut = live_reservation_fifo_cut;
+        let mut unknown_owner_cut = false;
+        {
+            let active_transitions = self.durability_transitions.lock();
+            for hash in global_owners.keys().chain(active_transitions.iter()) {
+                if let Some(order) = self.fifo_order_by_hash.get(hash) {
+                    active_fifo_cut = Some(
+                        active_fifo_cut.map_or(order.ordinal, |cut: u64| cut.min(order.ordinal)),
+                    );
+                } else if self.queued_tx_enqueued_at_ms.contains_key(hash) {
+                    unknown_owner_cut = true;
+                }
+            }
+        }
+        if unknown_owner_cut {
+            scan_start = 0;
+        }
+        if let Some(cut) = active_fifo_cut
+            && scan_start > 0
+            && age_ring
+                .get(scan_start)
+                .and_then(|(hash, _)| self.fifo_order_by_hash.get(hash))
+                .is_none_or(|order| order.ordinal >= cut)
+        {
+            scan_start = 0;
         }
         let mut seen = HashSet::with_capacity(remaining_scan);
         let mut pending_status_fault = None;
         let mut blocked_by_fifo_predecessor = false;
+        let mut canonical_queue_plan_fence = None;
         let mut conflicting_admission = None;
         let pending = age_ring
             .iter()
+            .skip(scan_start)
             .take(remaining_scan)
-            .filter_map(|(hash, enqueued_at_ms)| {
+            .enumerate()
+            .filter_map(|(offset, (hash, enqueued_at_ms))| {
                 if blocked_by_fifo_predecessor {
                     return None;
                 }
@@ -15333,9 +15292,6 @@ impl Queue {
                     .get(hash)
                     .is_some_and(|entry| *entry.value() == *enqueued_at_ms);
                 if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
-                    return None;
-                }
-                if self.replay_terminal_cleanup_pending(*hash) {
                     return None;
                 }
                 if live_reservations.contains(hash) || global_owners.contains_key(hash) {
@@ -15366,6 +15322,9 @@ impl Queue {
                     blocked_by_fifo_predecessor = true;
                     return None;
                 }
+                if self.replay_terminal_cleanup_pending(*hash) {
+                    return None;
+                }
                 let transaction = self.txs.get(hash)?;
                 if transaction.value().is_in_blockchain(state_view) {
                     return None;
@@ -15373,6 +15332,11 @@ impl Queue {
                 match self.global_admission_registry_match_for_hash(*hash, state_view) {
                     Ok(None) => {}
                     Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Exact))) => {
+                        // Candidate assembly may inspect controls after this
+                        // QueuePlan item, but the next local scan must return
+                        // to its canonical FIFO cut until lane ownership or
+                        // terminal State settles it.
+                        canonical_queue_plan_fence.get_or_insert(scan_start + offset);
                         let open = binding.routing_plan().is_ok_and(|plan| {
                             resolve_routing_plan_for_queue_admission(
                                 plan,
@@ -15399,7 +15363,9 @@ impl Queue {
                         }
                     }
                     Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {
-                        blocked_by_fifo_predecessor = true;
+                        // An uncarried local claim has no canonical ordering
+                        // promise. Keep its exact Queue ownership, but let the
+                        // leader choose later independently eligible work.
                         return None;
                     }
                     Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
@@ -15424,6 +15390,7 @@ impl Queue {
             })
             .collect::<Vec<_>>();
         if let Some((hash, reason)) = pending_status_fault {
+            drop(scan_cursor);
             drop(age_ring);
             drop(global_owners);
             drop(queue_guard);
@@ -15436,6 +15403,7 @@ impl Queue {
             return None;
         }
         if let Some((hash, binding)) = conflicting_admission {
+            drop(scan_cursor);
             drop(age_ring);
             drop(global_owners);
             drop(queue_guard);
@@ -15451,7 +15419,28 @@ impl Queue {
             self.publish_backpressure_state(self.active_len(), None);
             return Some((Vec::new(), GlobalQueueSelectionLease::empty(self)));
         }
+        if blocked_by_fifo_predecessor {
+            scan_cursor.next_index = scan_start;
+        } else if let Some(fence) = canonical_queue_plan_fence {
+            scan_cursor.next_index = fence;
+        } else {
+            scan_cursor.next_index = scan_start
+                .saturating_add(remaining_scan)
+                .min(age_ring.len());
+        }
+        let scan_more = !blocked_by_fifo_predecessor
+            && canonical_queue_plan_fence.is_none()
+            && !unknown_owner_cut
+            && scan_cursor.next_index < age_ring.len()
+            && scan_cursor.next_index > scan_start;
+        drop(scan_cursor);
         if pending.is_empty() {
+            drop(age_ring);
+            drop(global_owners);
+            drop(queue_guard);
+            if scan_more {
+                self.wake_sumeragi();
+            }
             return Some((Vec::new(), GlobalQueueSelectionLease::empty(self)));
         }
         let hashes = pending.iter().map(|(hash, _)| *hash).collect::<Vec<_>>();
@@ -15501,6 +15490,9 @@ impl Queue {
         drop(age_ring);
         drop(global_owners);
         drop(queue_guard);
+        if scan_more {
+            self.wake_sumeragi();
+        }
         let pending = pending
             .into_iter()
             .map(|(_, transaction)| transaction.as_accepted().clone())
@@ -17315,6 +17307,7 @@ impl Queue {
                     age_ring
                         .make_contiguous()
                         .sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+                    self.pending_scan_cursor.lock().next_index = 0;
                 }
                 drop(age_ring);
                 drop(transition);
@@ -21011,12 +21004,14 @@ impl Queue {
     fn clear_queued_age_index_locked(&self, age_ring: &mut VecDeque<(EntrypointHash, u64)>) {
         self.queued_tx_enqueued_at_ms.clear();
         age_ring.clear();
+        self.pending_scan_cursor.lock().next_index = 0;
         self.queued_count.store(0, Ordering::Relaxed);
     }
     fn oldest_queued_tx_age_ms(&self) -> u64 {
         let mut ring = self.queued_age_ring.lock();
         if self.tx_hashes.is_empty() {
             ring.clear();
+            self.pending_scan_cursor.lock().next_index = 0;
             return 0;
         }
         let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
@@ -21029,6 +21024,7 @@ impl Queue {
                 return now_ms.saturating_sub(enqueued_at_ms);
             }
             ring.pop_front();
+            self.pending_scan_cursor.lock().next_index = 0;
         }
         0
     }
@@ -21752,6 +21748,7 @@ impl Queue {
                 age_ring
                     .make_contiguous()
                     .sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+                self.pending_scan_cursor.lock().next_index = 0;
             }
             journal_removals = pending_journal_removals;
             for (guard, plan) in guards.iter_mut().zip(plans) {
@@ -21876,7 +21873,7 @@ impl Queue {
         }
         for binding in replay_terminal_bindings {
             removed = removed.saturating_add(usize::from(
-                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?,
+                self.reject_exact_queue_plan_admission_claim(&binding)?,
             ));
         }
         Ok(removed)

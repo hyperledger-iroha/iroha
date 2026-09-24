@@ -3,9 +3,9 @@
 //! The pinned `halo2-ecc` generic point checker and scalar multipliers assume
 //! `y² = x³ + b`. P-256 instead has `y² = x³ - 3x + b`; using those generic
 //! routines for App Attest or Android P-256 signatures is incorrect. These
-//! primitives, constrained ECDSA equation and exact-width App Attest hash/
-//! counter slice do not yet bind Core's subject body, enrolled credential,
-//! CBOR/DER extraction or recursive monetary authorization.
+//! primitives and the App Attest hash/counter slice are composed with staged
+//! subject, credential and original-CBOR/DER relations. The composed stage is
+//! not yet invoked by recursive monetary authorization.
 // TODO: Qualify the full 256-bit signature relation, supported Apple assertion
 // profiles, and governed credential fold before hardware proofs authorize money.
 
@@ -22,7 +22,7 @@ use halo2_ecc::{
     fields::{FieldChip as _, Selectable as _, fp::FpChip},
 };
 use halo2_proofs::halo2curves::{
-    CurveAffine as _, CurveAffineExt as _,
+    CurveAffine as _,
     ff::Field as _,
     ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
@@ -635,10 +635,6 @@ where
 /// hash/key to the enrolled Apple credential, and the two indices to the
 /// recursive transition. The SHA jobs must be realized with
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
     const S_LEN: usize,

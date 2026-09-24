@@ -213,6 +213,75 @@ fn candidate(
         })
         .unwrap()
 }
+
+#[test]
+fn committed_redemption_exports_exact_native_terminal_opening_messages() {
+    use sha2::{Digest as _, Sha256};
+
+    let (machine, credential, beneficiary) = machine();
+    let intent = intent(&machine, credential, beneficiary, id(90));
+    let prepared = candidate(&machine, &intent);
+    let artifacts = machine.proof_release.artifacts;
+    // This accepting snapshot verifier tests Core's retained preimages, not proof validity.
+    // A genuine paired redemption proof belongs in the funded State/Terminal corridor.
+    let proof = snapshot_paired_proof(
+        prepared.semantic_digest().unwrap(),
+        artifacts.eq_protocol_digest,
+        artifacts.ep_protocol_digest,
+        91,
+    );
+    let persisted = PersistedOutgoingCandidateV1::verify_and_persist_redemption(
+        prepared.clone(),
+        proof,
+        artifacts,
+        &AcceptSnapshotRecursiveVerifierV1,
+    )
+    .expect("verify the native redemption candidate before commitment");
+    let body = persisted.hardware_terminal_body().unwrap();
+    let certificate = KagemushaCommitCertificateV1 {
+        version: body.version,
+        certificate_id: [0; 32],
+        candidate_envelope_digest: body.candidate_envelope_digest,
+        lifecycle_binding_digest: body.lifecycle_binding_digest,
+        transition_nullifier: body.transition_nullifier,
+        outbox_reservation_commitment: body.outbox_reservation_commitment,
+        commit_evidence: body.commit_evidence,
+        hardware_profile_id: body.hardware_profile_id,
+        policy_epoch: body.policy_epoch,
+        hardware_terminal_commitment: [0; 32],
+    }
+    .seal_with_terminal_body(&body)
+    .unwrap();
+    let committed = CommittedOutgoingCandidateV1::from_hardware_commit(persisted, certificate)
+        .expect("native certificate matches the retained redemption candidate");
+    let messages = committed
+        .canonical_outgoing_opening_sha_messages_v1()
+        .expect("export exact native redemption SHA preimages");
+    let digest = |message: &[u8]| -> DigestV1 { Sha256::digest(message).into() };
+    let carriers = prepared.prepared_intent_commitments();
+    let operation_offset = b"iroha:kagemusha:v1:outgoing-preparation\0".len() + 2;
+    assert_eq!(messages[2][operation_offset], 4);
+    assert_eq!(
+        digest(&messages[0]),
+        carriers.sealed_transition_inputs_digest
+    );
+    assert_eq!(digest(&messages[1]), carriers.sealed_recovery_seeds_digest);
+    assert_eq!(digest(&messages[2]), carriers.preparation_id);
+    assert_eq!(digest(&messages[3]), body.private_journal_commitment);
+    assert_eq!(digest(&messages[4]), body.private_recovery_commitment);
+    assert_eq!(
+        digest(&messages[5]),
+        committed.commit_certificate.hardware_terminal_commitment
+    );
+    let mut changed = committed;
+    changed.candidate.prepared.sealed_recovery_seeds[0] ^= 1;
+    assert!(
+        changed
+            .canonical_outgoing_opening_sha_messages_v1()
+            .is_err()
+    );
+}
+
 fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV1) {
     let candidate = candidate(machine, intent);
     machine
@@ -224,6 +293,158 @@ fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV
         )
         .unwrap();
 }
+
+#[test]
+fn outgoing_state_proof_archive_export_uses_only_retained_core_pair() {
+    // The accepting snapshot verifier and structural terminal proof test retained-byte identity
+    // across Core stages; they do not establish cryptographic validity or monetary admission.
+    let (mut machine, credential, beneficiary) = machine();
+    let operation_id = id(93);
+    let intent = intent(&machine, credential, beneficiary, operation_id);
+    let prepared = candidate(&machine, &intent);
+    let artifacts = machine.proof_release.artifacts;
+    let proof = snapshot_paired_proof(
+        prepared.semantic_digest().unwrap(),
+        artifacts.eq_protocol_digest,
+        artifacts.ep_protocol_digest,
+        94,
+    );
+    let expected_public = prepared.candidate_public_inputs(artifacts, &proof).unwrap();
+    assert_eq!(
+        machine.export_outgoing_state_proof_archives(operation_id),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+    let (_, _, capability) = machine
+        .prepare_indexed_outgoing_candidate(
+            operation_id,
+            credential,
+            intent.context.core_authorization_key_reference,
+            prepared,
+        )
+        .unwrap();
+    assert_eq!(
+        machine.export_outgoing_state_proof_archives(operation_id),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+    machine
+        .persist_outgoing_redemption_candidate(&capability, proof.clone())
+        .unwrap();
+    let archives = machine
+        .export_outgoing_state_proof_archives(operation_id)
+        .unwrap();
+    assert_eq!(archives.operation_id, operation_id);
+    assert_eq!(
+        archives.public_inputs_archive,
+        norito::encode_canonical(&expected_public).unwrap()
+    );
+    assert_eq!(
+        archives.paired_proof_archive,
+        norito::encode_canonical(&proof).unwrap()
+    );
+    assert!(
+        archives.public_inputs_archive.len()
+            <= KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
+    );
+    assert!(archives.paired_proof_archive.len() <= KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
+    assert_eq!(
+        machine.export_outgoing_state_proof_archives(id(95)),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+    let mut recovered = restored(machine);
+    assert_eq!(
+        recovered
+            .export_outgoing_state_proof_archives(operation_id)
+            .unwrap(),
+        archives,
+        "authenticated snapshot recovery preserves the original observer bytes"
+    );
+    let original_lane_id = recovered.state.lane.device_lane_id;
+    recovered.state.lane.device_lane_id = id(96);
+    assert_eq!(
+        recovered.export_outgoing_state_proof_archives(operation_id),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity)
+    );
+    recovered.state.lane.device_lane_id = original_lane_id;
+
+    let candidate = match recovered.outgoing_candidate_journal.stage() {
+        KagemushaOutgoingJournalStageV1::Candidate(candidate) => candidate,
+        _ => panic!("restored Core must retain its verified candidate"),
+    };
+    let body = candidate.hardware_terminal_body().unwrap();
+    let certificate = KagemushaCommitCertificateV1 {
+        version: body.version,
+        certificate_id: [0; 32],
+        candidate_envelope_digest: body.candidate_envelope_digest,
+        lifecycle_binding_digest: body.lifecycle_binding_digest,
+        transition_nullifier: body.transition_nullifier,
+        outbox_reservation_commitment: body.outbox_reservation_commitment,
+        commit_evidence: body.commit_evidence,
+        hardware_profile_id: body.hardware_profile_id,
+        policy_epoch: body.policy_epoch,
+        hardware_terminal_commitment: [0; 32],
+    }
+    .seal_with_terminal_body(&body)
+    .unwrap();
+    let recovered_capability = recovered
+        .recover_indexed_outgoing_commit_capability(operation_id)
+        .unwrap();
+    let committed = recovered
+        .commit_outgoing_candidate(recovered_capability, certificate)
+        .unwrap();
+    assert_eq!(
+        recovered
+            .export_outgoing_state_proof_archives(operation_id)
+            .unwrap(),
+        archives,
+        "hardware commit cannot substitute the earlier State proof pair"
+    );
+
+    let output = committed.public_output().unwrap();
+    let terminal_proof = KagemushaRedemptionProofV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        eq_protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
+        ep_protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
+        semantic_digest: output.semantic_digest,
+        candidate_envelope_digest: output.candidate_envelope_digest,
+        commit_certificate_digest: output.commit_certificate_digest,
+        eq_deferred_audit: artifacts.commit_wrapper_eq_protocol_digest,
+        ep_deferred_audit: artifacts.commit_wrapper_ep_protocol_digest,
+        eq_proof: vec![98; 32],
+        ep_proof: vec![99; 32],
+        eq_history: proof.eq_history,
+        ep_history: proof.ep_history,
+    };
+    recovered
+        .finalize_outgoing_redemption(terminal_proof, Vec::new())
+        .unwrap();
+    assert_eq!(
+        recovered
+            .export_outgoing_state_proof_archives(operation_id)
+            .unwrap(),
+        archives,
+        "installed envelope keeps the original observer pair until release"
+    );
+    recovered.state.logical_sequence -= 1;
+    assert_eq!(
+        recovered.export_outgoing_state_proof_archives(operation_id),
+        Err(KagemushaStateErrorV1::SnapshotIntegrity),
+        "an installed candidate ahead of the current State is stale"
+    );
+}
+
+#[test]
+fn released_sender_index_cannot_export_prepared_state_proof() {
+    let (mut machine, credential, beneficiary) = machine();
+    let operation_id = id(97);
+    let intent = intent(&machine, credential, beneficiary, operation_id);
+    prepare(&mut machine, &intent);
+    release_index_fixture(&mut machine, operation_id);
+    assert_eq!(
+        machine.export_outgoing_state_proof_archives(operation_id),
+        Err(KagemushaStateErrorV1::InvalidCandidateStage)
+    );
+}
+
 fn restored(machine: Machine) -> Machine {
     let machine = snapshot_publish_checkpoint(machine);
     let anchor = machine.recovery_checkpoint().clone();

@@ -4,6 +4,10 @@ Pixel 6 is a required phone profile. Its observed Android Keystore one-use
 restriction is software-enforced, so a KAGEMUSHA V1 monetary profile on this
 device requires a separately provisioned **internal** eSE service. The stock
 Pixel 6 is not qualified by this document or by the transport model test.
+Android [documents software fallback for usage limits](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec.Builder)
+when the hardware feature is absent, and [OMAPI applet selection](https://developer.android.com/reference/android/se/omapi/Session)
+requires an access grant for the caller. Neither StrongBox key provenance nor
+an authentic APK replaces the applet's durable one-successor rule.
 
 The secure-element owner must supply an installed applet instance, its exact
 5–16-byte AID and protocol version, an ARA-M access rule for that AID and the

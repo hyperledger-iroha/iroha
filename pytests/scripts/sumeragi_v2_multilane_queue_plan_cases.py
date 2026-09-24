@@ -87,6 +87,25 @@ def test_queue_plan_autonomous_only_contract_rejects_virtual_fifo_cut_bypass(
     ), errors
 
 
+@pytest.mark.parametrize(("old", "new"), [
+    ("canonical_queue_plan_fence.get_or_insert(scan_start + offset);", "let _ = scan_start + offset;"),
+    ("scan_cursor.next_index = fence;", "scan_cursor.next_index = scan_start;"),
+])
+def test_queue_plan_autonomous_only_contract_retains_canonical_scan_fence(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    replace_once_after(
+        tmp_path / "crates/iroha_core/src/queue.rs",
+        "pub(crate) fn bounded_pending_snapshot(",
+        old,
+        new,
+    )
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any("Queue::bounded_pending_snapshot" in error for error in errors), errors
+
+
 def test_queue_plan_autonomous_only_contract_rejects_ordinary_lane_payload_intent(
     tmp_path: Path,
 ) -> None:
@@ -1935,21 +1954,25 @@ def test_replay_terminal_queue_plan_custody_accepts_actual_sources() -> None:
 @pytest.mark.parametrize("symbol,old,new", [
     ("QueuePlanDurableClaimIndexEntry", "local_custody: QueuePlanLocalCustody", "local_custody: bool"),
     ("Queue::replay_terminal_cleanup_pending", "== QueuePlanLocalCustody::ReplayTerminalPending", "!= QueuePlanLocalCustody::Autonomous"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "&& self.transaction_selection_durability_faulted()", "&& false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if &indexed_binding != binding", "if false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if reservation_owned", "if false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous", "|| false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".local_custody = QueuePlanLocalCustody::ReplayTerminalPending", ".local_custody = QueuePlanLocalCustody::Available"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".store(true, Ordering::Release)", ".store(false, Ordering::Release)"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if self.global_selection_owners.lock().contains_key(&hash)", "if false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.inflight_guards.load(Ordering::Acquire) != 0", "|| false"),
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.selection_attempts.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::reject_exact_queue_plan_admission_claim", "if self.transaction_selection_durability_faulted()", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim", "!= binding", "== binding"),
+    ("Queue::reject_exact_queue_plan_admission_claim", "self.reject_unreserved_terminal_plan_claim(&claim)", "Ok(false)"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "self.lane_reservations.lock().owns_entrypoint(hash)", "false"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "|| current.local_custody == QueuePlanLocalCustody::Autonomous", "|| false"),
+    ("Queue::reject_unreserved_terminal_plan_claim", ".local_custody = QueuePlanLocalCustody::ReplayTerminalPending", ".local_custody = QueuePlanLocalCustody::Available"),
+    ("Queue::reject_unreserved_terminal_plan_claim", ".store(true, Ordering::Release)", ".store(false, Ordering::Release)"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "if self.global_selection_owners.lock().contains_key(&hash)", "if false"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "|| self.inflight_guards.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "|| self.selection_attempts.load(Ordering::Acquire) != 0", "|| false"),
+    ("LaneQueueReservationStore::owns_entrypoint", "self.durable_owned_hashes().any(|owned| owned == hash)", "false"),
+    ("LaneQueueReservationStore::owns_entrypoint", ".plan_tombstoned", ".commit_barriers"),
     ("Queue::resume_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
     ("Queue::resume_replay_terminal_cleanup", "claim.value().clone()", "replacement.value().clone()"),
     ("Queue::resume_replay_terminal_cleanup", "self.reject_unreserved_terminal_plan_claim(&claim)", "self.reject_exact_queue_plan_admission_claim(&binding)"),
     ("Queue::resume_replay_terminal_cleanup", "self.mark_accepted_work_validation_fault(", "ignore_fault("),
     ("Queue::resume_unowned_replay_terminal_cleanup", ".swap(false, Ordering::AcqRel)", ".load(Ordering::Acquire)"),
     ("Queue::resume_unowned_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
+    ("Queue::bounded_pending_snapshot", "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {", "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => { blocked_by_fifo_predecessor = true;"),
     ("GlobalQueueSelectionLease::retain_only", "\n        drop(owners);", ""),
     ("GlobalQueueSelectionLease::retain_only", "\n        drop(queue_guard);", ""),
     ("GlobalQueueSelectionLease::retain_only", "queue.resume_replay_terminal_cleanup(hash);", ""),
@@ -1988,7 +2011,7 @@ def test_replay_terminal_queue_plan_custody_rejects_semantic_mutation(symbol: st
 
 
 @pytest.mark.parametrize("symbol,before,after", [
-    ("Queue::reject_exact_queue_plan_admission_claim_inner", "self.replay_terminal_cleanup_dirty\n                    .store(true, Ordering::Release);", "self.tombstone_conflicting_global_admission(binding)?;"),
+    ("Queue::reject_unreserved_terminal_plan_claim", "self.replay_terminal_cleanup_dirty\n                .store(true, Ordering::Release);", "self.tombstone_exact_durable_plan_claim(&current)?;"),
     ("GlobalQueueSelectionLease::drop", "drop(queue_guard);", "queue.resume_replay_terminal_cleanup(*hash);"),
     ("TransactionGuard::drop", "self.queue.release_inflight_guard();", "self.queue.resume_unowned_replay_terminal_cleanup();"),
     ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".release_pre_kura_autonomous_reservation_batch(context)", "self.pending_autonomous_reservation_batches.remove(&route);"),
@@ -2064,7 +2087,7 @@ def test_replay_terminal_queue_plan_startup_contract_accepts_actual_sources() ->
 
 @pytest.mark.parametrize("symbol", [
     "Queue::prepare_plan_journal_replay_locked",
-    "Queue::reject_exact_queue_plan_admission_claim_inner",
+    "Queue::reject_unreserved_terminal_plan_claim",
     "Queue::remove_state_committed_replay_owners_preserving_globally_bound",
 ])
 def test_replay_terminal_queue_plan_shared_startup_ledger_retains_every_obligation(symbol: str) -> None:

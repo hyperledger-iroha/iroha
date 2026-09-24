@@ -4,9 +4,9 @@
 //! evidence without creating a digest cycle. This module keeps the phases explicit: the private
 //! candidate relation binds request/state/outbox commitments, hardware commits that exact
 //! candidate once, and this terminal-authorization relation recursively verifies the candidate,
-//! postcommit terminal Guard, and a complete claim for all original SHA jobs. Their carried
-//! histories are folded into the final accumulator, and both deferred audits bind the same
-//! claim carrier tail. Only an unlinkable projection is exposed by the final proof.
+//! postcommit terminal Guard, and a complete claim for 26 original plus six outgoing SHA jobs.
+//! Their carried histories are folded into the final accumulator, and both deferred audits bind
+//! the same claim carrier tail. Only an unlinkable projection is exposed by the final proof.
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_CREDIT_ID_DOMAIN_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
@@ -70,6 +70,10 @@ use super::{
         constant_bytes, constrain_guard_bundle_semantics_v1, digest_limbs_assigned, hash,
     },
     mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+    terminal_durable_commitments::{
+        KagemushaAuthenticatedTerminalRecoveryOpeningV1,
+        constrain_outgoing_terminal_recovery_opening_v1,
+    },
     typed_sha_consumer::{
         KagemushaRecursiveHashClaimParityWitnessV1, constrain_recursive_hash_claim_v1,
         validate_recursive_hash_claim_v1,
@@ -450,9 +454,10 @@ pub(crate) struct KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) terminal_payload_digest: DigestV1,
     /// Exact receiver opening for SendSplit; absent for redemption.
     pub(crate) send: Option<KagemushaTerminalSendPrivateV1>,
-    /// Exact prepared send streams retained by the producer. These are private witness bytes,
-    /// not hardware attestation or proof authority until opened against State's SHA carriers.
-    pub(crate) send_sealed_streams: Option<[Vec<u8>; 2]>,
+    /// Exact prepared outgoing streams retained by the producer for SendSplit or RedeemSplit.
+    /// These are private witness bytes, not hardware attestation or proof authority until opened
+    /// against State's SHA carriers.
+    pub(crate) outgoing_sealed_streams: Option<[Vec<u8>; 2]>,
     pub(crate) journal_revision_before: u128,
     pub(crate) journal_revision_after: u128,
     pub(crate) authorization_counter_before: u128,
@@ -470,25 +475,28 @@ pub(crate) struct KagemushaTerminalSendPrivateV1 {
     pub(crate) encrypted_credit_digest: DigestV1,
 }
 
-/// Reject malformed optional producer bytes without granting them proof authority.
+/// Require well-shaped outgoing producer bytes without granting them proof authority.
 ///
-/// Existing testnet admission may omit this witness. When supplied, the dormant terminal SHA
-/// opening must still authenticate every active byte and length against the verified State
-/// carriers before it can be used for outgoing monetary authorization.
-fn validate_send_sealed_stream_witness_shape_v1(
-    send: bool,
+/// The complete terminal SHA opening authenticates every active byte and length against the
+/// verified State carriers. No outgoing proof path may omit this witness.
+fn validate_outgoing_sealed_stream_witness_shape_v1(
+    operation: KagemushaOperationV1,
     streams: Option<&[Vec<u8>; 2]>,
 ) -> Result<(), String> {
-    let Some(streams) = streams else {
-        return Ok(());
-    };
-    if !send
-        || streams[0].is_empty()
+    if !matches!(
+        operation,
+        KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+    ) {
+        return Err("terminal sealed-byte witness requires an outgoing operation".to_owned());
+    }
+    let streams = streams
+        .ok_or_else(|| "terminal outgoing sealed-byte producer witness is missing".to_owned())?;
+    if streams[0].is_empty()
         || streams[0].len() > KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize
         || streams[1].is_empty()
         || streams[1].len() > KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize
     {
-        return Err("terminal send sealed-byte producer witness has invalid shape".to_owned());
+        return Err("terminal outgoing sealed-byte producer witness has invalid shape".to_owned());
     }
     Ok(())
 }
@@ -499,9 +507,9 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
         public: &KagemushaTerminalAuthorizationPublicInputsV1,
     ) -> Result<(), String> {
         public.validate()?;
-        validate_send_sealed_stream_witness_shape_v1(
-            self.send.is_some(),
-            self.send_sealed_streams.as_ref(),
+        validate_outgoing_sealed_stream_witness_shape_v1(
+            public.operation,
+            self.outgoing_sealed_streams.as_ref(),
         )?;
         self.lifecycle
             .validate()
@@ -2695,9 +2703,9 @@ where
         public_cells,
         history_cells,
         assigned_terminal_guard,
-        prepared_source_cells: mut prepared_source_cells,
+        mut prepared_source_cells,
         candidate_instances: assigned_candidate_instances,
-        sha_jobs,
+        mut sha_jobs,
     } = terminal_semantic_pipeline::assign_terminal_semantic_pipeline_v1(
         &mut builder,
         &range,
@@ -2891,14 +2899,23 @@ where
         );
     }
 
-    // Authenticate the entire original queue before consuming it. Fixed-shape inactive
-    // transcripts remain part of all 26 jobs; there is no optional inline-SHA fallback.
-    // TODO: consume the prepared send sealed-byte witness and release-pinned redemption
-    // manifest source, then replan the claim and generator as one fixed-shape change for the two
-    // bounded stream hashes, preparation-ID transcript, and durable journal/recovery/body
-    // openings. Qualify full 2048/512-byte capacities at k=16 in both parities first.
-    if sha_jobs.claim_jobs()?.len() != 26 {
-        return Err("terminal authorization requires the complete 26-job SHA queue".to_owned());
+    // Only the recursively verified State and Guard cells can supply the prepared opening.
+    // The exact producer bytes remain private and become authoritative only when the six
+    // appended SHA jobs are bound to this same typed recursive claim and its complete history.
+    let outgoing_opening =
+        KagemushaAuthenticatedTerminalRecoveryOpeningV1::from_verified_assigned_sources_v1(
+            prepared_source_cells,
+            &assigned_terminal_guard,
+            witness.private_transition.outgoing_sealed_streams.as_ref(),
+        )?;
+    constrain_outgoing_terminal_recovery_opening_v1(
+        loader.ctx_mut().main(),
+        &range,
+        &mut sha_jobs,
+        Some(&outgoing_opening),
+    )?;
+    if sha_jobs.typed_claim_jobs()?.len() != 32 {
+        return Err("terminal authorization requires the complete 32-job SHA queue".to_owned());
     }
     let (complete, claim_tail, claim_current_end) = constrain_recursive_hash_claim_v1(
         &loader,
@@ -3975,7 +3992,20 @@ pub(super) struct KagemushaCandidatePreparationTranscriptCellsV1<F: KagemushaPos
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-/// Existing terminal relation cells available to a future prepared-intent opening.
+/// Terminal values retained from their assigned SHA and certificate cells.
+///
+/// These cells are not an outgoing authorization on their own. The complete body opening binds
+/// them to the verified State and Guard proofs, durable SHA outputs, and typed SHA claim.
+#[derive(Clone, Copy)]
+pub(super) struct KagemushaTerminalDerivedCommitCellsV1<F: KagemushaPoseidonFieldV1> {
+    pub(super) transition_nullifier: [AssignedValue<F>; 2],
+    pub(super) evidence_tag: AssignedValue<F>,
+    pub(super) evidence_commitment: [AssignedValue<F>; 2],
+    pub(super) hardware_terminal_commitment: [AssignedValue<F>; 2],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Terminal relation cells retained for the complete prepared-intent opening.
 ///
 /// These are derived in the circuit and linked to the recursively verified candidate and Guard
 /// on the terminal branch. The State candidate authenticates only the carried preparation ID
@@ -3983,6 +4013,8 @@ pub(super) struct KagemushaCandidatePreparationTranscriptCellsV1<F: KagemushaPos
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) terminal_branch: AssignedValue<F>,
+    /// SHA-derived and certificate-linked terminal cells, retained without granting authority.
+    pub(super) derived_commit_cells: Option<KagemushaTerminalDerivedCommitCellsV1<F>>,
     /// Only a complete in-circuit opening of the carried pre-proof transcript may populate this.
     pub(super) verified_preparation_id: Option<[AssignedValue<F>; 2]>,
     /// State's SHA-derived transition digest, installed only after the candidate proof and
@@ -3997,6 +4029,11 @@ pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFie
     /// Transcript fields exported from the same verified candidate column as the carriers.
     pub(super) candidate_preparation_transcript:
         Option<KagemushaCandidatePreparationTranscriptCellsV1<F>>,
+    /// Hardware profile from the recursively verified State candidate, retained separately
+    /// from the terminal and Guard fields for the terminal-body equality relation.
+    pub(super) candidate_hardware_profile_id: Option<[AssignedValue<F>; 2]>,
+    /// Policy epoch from that same recursively verified State candidate.
+    pub(super) candidate_policy_epoch: Option<AssignedValue<F>>,
     /// Terminal request digest, constrained by the send opening and zero on redemption.
     pub(super) request_digest: [AssignedValue<F>; 2],
     /// Zero for send; for redemption the terminal public instance is fixed by the verifier's
@@ -4026,6 +4063,8 @@ fn install_verified_candidate_semantic_carriers_v1<F: KagemushaPoseidonFieldV1>(
         || sources.candidate_preparation_id_carrier.is_some()
         || sources.candidate_stream_digest_carriers.is_some()
         || sources.candidate_preparation_transcript.is_some()
+        || sources.candidate_hardware_profile_id.is_some()
+        || sources.candidate_policy_epoch.is_some()
     {
         return Err("verified State semantic carriers are already installed".to_owned());
     }
@@ -4062,6 +4101,9 @@ fn install_verified_candidate_semantic_carriers_v1<F: KagemushaPoseidonFieldV1>(
             lifecycle_binding_digest: digest(state_relation::public_instance::LIFECYCLE_LO),
             normalized_guard_statement_digest: digest(state_relation::public_instance::GUARD_LO),
         });
+    sources.candidate_hardware_profile_id =
+        Some(digest(state_relation::public_instance::HARDWARE_PROFILE_LO));
+    sources.candidate_policy_epoch = Some(candidate[state_relation::public_instance::POLICY_EPOCH]);
     Ok(())
 }
 
@@ -4265,7 +4307,9 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         ]
         .concat(),
     )?;
-    for (actual, expected) in digest_limbs_assigned(ctx, &derived_transition_nullifier)
+    let derived_transition_nullifier_limbs =
+        digest_limbs_assigned(ctx, &derived_transition_nullifier);
+    for (actual, expected) in derived_transition_nullifier_limbs
         .into_iter()
         .zip(&public[public_instance::TRANSITION_NULLIFIER_LO..][..2])
     {
@@ -4407,7 +4451,8 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         evidence_commitment_v1(private.commit_certificate.commit_evidence),
     );
     let certificate_evidence_limbs = digest_limbs_assigned(ctx, &certificate_evidence_commitment);
-    for (actual, expected) in digest_limbs_assigned(ctx, &evidence_commitment)
+    let derived_evidence_commitment_limbs = digest_limbs_assigned(ctx, &evidence_commitment);
+    for (actual, expected) in derived_evidence_commitment_limbs
         .into_iter()
         .zip(certificate_evidence_limbs)
     {
@@ -4775,15 +4820,22 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     }
     Ok(KagemushaTerminalPreparedSourceCellsV1 {
         terminal_branch,
-        // TODO: consume the prepared send sealed-byte witness and install the dormant exact
-        // preparation transcript and two stream SHA
-        // openings in the complete typed claim. The 93-cell State prefix only carries an ID;
-        // the live fold cannot promote it to a verified opening.
+        derived_commit_cells: Some(KagemushaTerminalDerivedCommitCellsV1 {
+            transition_nullifier: derived_transition_nullifier_limbs,
+            evidence_tag: evidence_kind.value,
+            evidence_commitment: derived_evidence_commitment_limbs,
+            hardware_terminal_commitment: hardware_terminal_limbs,
+        }),
+        // The State prefix carries only a preparation ID. Keep it unverified here; after the
+        // nested State proof is checked, the six-job opening SHA-verifies its exact transcript
+        // and sealed bytes before this ID can authorize the durable terminal commitments.
         verified_preparation_id: None,
         verified_state_transition_digest: None,
         candidate_preparation_id_carrier: None,
         candidate_stream_digest_carriers: None,
         candidate_preparation_transcript: None,
+        candidate_hardware_profile_id: None,
+        candidate_policy_epoch: None,
         request_digest: [
             public[public_instance::REQUEST_LO],
             public[public_instance::REQUEST_LO + 1],
@@ -4882,11 +4934,32 @@ mod tests {
     }
 
     #[test]
-    fn optional_send_sealed_byte_witness_rejects_bad_shape_without_changing_admission() {
+    fn outgoing_sealed_byte_witness_is_required_for_both_outgoing_operations() {
+        use super::KagemushaOperationV1::{Bootstrap, RedeemSplit, SendSplit};
+
         let valid = [vec![0x11], vec![0x22]];
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, None).is_ok());
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(false, None).is_ok());
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, Some(&valid)).is_ok());
+        let maximum = [
+            vec![0x11; super::KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize],
+            vec![0x22; super::KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize],
+        ];
+        for operation in [SendSplit, RedeemSplit] {
+            assert_eq!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, None),
+                Err("terminal outgoing sealed-byte producer witness is missing".to_owned())
+            );
+            assert!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, Some(&valid))
+                    .is_ok()
+            );
+            assert!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, Some(&maximum))
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            super::validate_outgoing_sealed_stream_witness_shape_v1(Bootstrap, None),
+            Err("terminal sealed-byte witness requires an outgoing operation".to_owned())
+        );
         let invalid = [
             [Vec::new(), vec![0x22]],
             [vec![0x11], Vec::new()],
@@ -4899,15 +4972,22 @@ mod tests {
                 vec![0x22; super::KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize + 1],
             ],
         ];
-        for streams in &invalid {
-            assert_eq!(
-                super::validate_send_sealed_stream_witness_shape_v1(true, Some(streams)),
-                Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
-            );
+        let error =
+            Err("terminal outgoing sealed-byte producer witness has invalid shape".to_owned());
+        for operation in [SendSplit, RedeemSplit] {
+            for streams in &invalid {
+                assert_eq!(
+                    super::validate_outgoing_sealed_stream_witness_shape_v1(
+                        operation,
+                        Some(streams)
+                    ),
+                    error
+                );
+            }
         }
         assert_eq!(
-            super::validate_send_sealed_stream_witness_shape_v1(false, Some(&valid)),
-            Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
+            super::validate_outgoing_sealed_stream_witness_shape_v1(Bootstrap, Some(&valid)),
+            Err("terminal sealed-byte witness requires an outgoing operation".to_owned())
         );
     }
 
@@ -5158,11 +5238,14 @@ mod tests {
             let digest = [zero; 2];
             let mut sources = super::KagemushaTerminalPreparedSourceCellsV1 {
                 terminal_branch: zero,
+                derived_commit_cells: None,
                 verified_preparation_id: None,
                 verified_state_transition_digest: None,
                 candidate_preparation_id_carrier: None,
                 candidate_stream_digest_carriers: None,
                 candidate_preparation_transcript: None,
+                candidate_hardware_profile_id: None,
+                candidate_policy_epoch: None,
                 request_digest: digest,
                 verified_artifact_manifest_digest: None,
                 candidate_envelope_digest: digest,
@@ -5271,6 +5354,24 @@ mod tests {
                     assert_eq!(*cell.value(), F::from((offset + limb + 1) as u64));
                 }
             }
+            let profile = sources
+                .candidate_hardware_profile_id
+                .expect("candidate hardware profile cells");
+            for (limb, cell) in profile.into_iter().enumerate() {
+                assert_eq!(
+                    *cell.value(),
+                    F::from(
+                        (state_relation::public_instance::HARDWARE_PROFILE_LO + limb + 1) as u64
+                    )
+                );
+            }
+            assert_eq!(
+                *sources
+                    .candidate_policy_epoch
+                    .expect("candidate policy epoch cell")
+                    .value(),
+                F::from((state_relation::public_instance::POLICY_EPOCH + 1) as u64)
+            );
             assert!(
                 super::install_verified_candidate_semantic_carriers_v1(&mut sources, &candidate)
                     .is_err(),
@@ -5697,5 +5798,8 @@ mod terminal_semantic_pipeline;
 
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use terminal_semantic_pipeline::{
-    TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_semantic_sha_v1,
+    TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_outgoing_sha_v1,
 };
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) use terminal_semantic_pipeline::plan_terminal_semantic_sha_v1;
