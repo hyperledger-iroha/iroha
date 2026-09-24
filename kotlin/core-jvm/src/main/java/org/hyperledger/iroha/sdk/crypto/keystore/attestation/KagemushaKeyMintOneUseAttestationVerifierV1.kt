@@ -35,6 +35,75 @@ private val KEYMINT_SET_TAGS_V1 = setOf(1, 5)
 private val KEYMINT_INTEGER_TAGS_V1 = setOf(2, 3, 10, 405, 701, 702, 705, 706, 718, 719)
 private val KEYMINT_HARDWARE_ONLY_TAGS_V1 = setOf(1, 2, 3, 5, 10, 303, 405, 702, 704)
 
+/** Fixed offsets from Core's sole V1 hardware-transition selection signing layout. */
+internal object KagemushaSelectionFrameV1 {
+    private val domain =
+        "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(StandardCharsets.US_ASCII)
+    private const val FRAME_BYTES = 460
+    private const val BODY_BYTES = 403
+    private const val RELEASE = 59
+    private const val PROVIDER = 91
+    private const val APP_POLICY = 123
+    private const val CREDENTIAL = 155
+    private const val NETWORK = 187
+    private const val LANE = 219
+    private const val PROFILE = 251
+    private const val POLICY_EPOCH = 283
+    private const val HARDWARE_EPOCH = 291
+    private const val HARDWARE_GENERATION = 323
+    private const val OPERATION = 331
+    private const val TRANSITION = 332
+    private const val CANDIDATE = 364
+    private const val TERMINAL = 396
+    private const val BEFORE = 428
+    private const val AFTER = 444
+
+    fun requireExact(frame: ByteArray, lane: ByteArray, before: ByteArray, after: ByteArray) {
+        require(domain.size == 49 && frame.size == FRAME_BYTES) { "Core S has the wrong V1 width" }
+        require(frame.copyOfRange(0, domain.size).contentEquals(domain)) {
+            "Core S has the wrong V1 signing domain"
+        }
+        require(frame.copyOfRange(domain.size, RELEASE - 2).contentEquals(
+            byteArrayOf(BODY_BYTES.toByte(), (BODY_BYTES ushr 8).toByte(), 0, 0, 0, 0, 0, 0),
+        )) { "Core S has the wrong V1 body length" }
+        require(frame[RELEASE - 2] == 1.toByte() && frame[RELEASE - 1] == 0.toByte()) {
+            "Core S has the wrong V1 wire version"
+        }
+        for (offset in intArrayOf(RELEASE, PROVIDER, APP_POLICY, CREDENTIAL, NETWORK, LANE,
+                PROFILE, HARDWARE_EPOCH, TRANSITION)) {
+            require(frame.copyOfRange(offset, offset + 32).any { it != 0.toByte() }) {
+                "Core S has an empty required identity or transition digest"
+            }
+        }
+        require(frame.copyOfRange(POLICY_EPOCH, POLICY_EPOCH + 8).any { it != 0.toByte() } &&
+            frame.copyOfRange(HARDWARE_GENERATION, HARDWARE_GENERATION + 8).any { it != 0.toByte() }
+        ) { "Core S has a zero policy or hardware generation" }
+        val operation = frame[OPERATION].toInt() and 0xff
+        require(operation in 1..5) { "Core S has an invalid monetary operation" }
+        val outgoing = operation == 2 || operation == 4
+        require(frame.copyOfRange(CANDIDATE, CANDIDATE + 32).any { it != 0.toByte() } == outgoing &&
+            frame.copyOfRange(TERMINAL, TERMINAL + 32).any { it != 0.toByte() } == outgoing
+        ) { "Core S has the wrong outgoing commitment shape" }
+        require(frame.copyOfRange(LANE, LANE + 32).contentEquals(lane) &&
+            frame.copyOfRange(BEFORE, BEFORE + 16).contentEquals(before) &&
+            frame.copyOfRange(AFTER, AFTER + 16).contentEquals(after)
+        ) { "Core S differs from the selected lane or exact-next indices" }
+    }
+
+    fun requireAppAttest(frame: ByteArray, previous: UInt) {
+        require(previous != UInt.MAX_VALUE && frame.size == FRAME_BYTES) {
+            "App Attest Core S counter or width is invalid"
+        }
+        fun index(value: UInt): ByteArray = ByteArray(16).also { bytes ->
+            for (offset in 0 until 4) {
+                bytes[offset] = (value.toLong() ushr (offset * 8)).toByte()
+            }
+        }
+        requireExact(frame, frame.copyOfRange(LANE, LANE + 32),
+            index(previous), index(previous + 1u))
+    }
+}
+
 /** One release-pinned trust anchor, committed by both DER bytes and SHA-256. */
 class KagemushaKeyMintPinnedRootV1(certificateDer: ByteArray, certificateSha256: ByteArray) {
     private val der = certificateDer.copyOf()
@@ -88,11 +157,11 @@ class KagemushaKeyMintExpectedSelectionV1(
     private val key = committedPublicKeySec1.copyOf()
 
     init {
-        require(frame.isNotEmpty() && frame.size <= 1_024) { "Core selection frame is outside V1 bounds" }
         require(lane.size == 32 && before.size == 16 && after.size == 16)
         require(nonce.size == 32 && nonce.any { it != 0.toByte() })
         require(key.size == 65 && key[0] == 0x04.toByte())
         require(isExactNextV1(before, after)) { "Selection hardware index is not exact-next" }
+        KagemushaSelectionFrameV1.requireExact(frame, lane, before, after)
     }
 
     fun canonicalSelectionFrame(): ByteArray = frame.copyOf()

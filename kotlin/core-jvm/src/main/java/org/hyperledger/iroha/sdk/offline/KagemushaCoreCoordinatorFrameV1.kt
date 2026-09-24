@@ -7,6 +7,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -188,13 +189,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                             .decode(ByteBuffer.wrap(keyID))
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
-                val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
-                require(selection.size == 460 && selection.copyOfRange(0, domain.size).contentEquals(domain) &&
-                    ByteBuffer.wrap(selection, domain.size, 8).order(ByteOrder.LITTLE_ENDIAN).long == 403L) {
-                    "invalid App Attest selection"
-                }
                 bounded(fields, 3, 8 * 1024)
-                require(number(fields, 4).toUInt() != UInt.MAX_VALUE) { "App Attest counter exhausted" }
+                KagemushaSelectionFrameV1.requireAppAttest(selection, number(fields, 4).toUInt())
                 digest(fields, 5); digest(fields, 6)
             }
         }

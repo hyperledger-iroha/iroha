@@ -54,7 +54,8 @@ pub use archives::{
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaArtifactRoleV1,
-    KagemushaDeviceSignatureV1, KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
+    KagemushaDeviceSignatureV1, KagemushaHardwareSelectionSigningLayoutV1,
+    KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
 };
 use sha2::{Digest as _, Sha256};
 use std::sync::{Arc, OnceLock};
@@ -574,22 +575,66 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
             let selection = fields
                 .get(2)
                 .ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
-            if selection.len() != APP_ATTEST_SELECTION_SIGNING_BYTES_V1
-                || !selection.starts_with(APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1)
-                || selection[APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1.len()
-                    ..APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1.len() + 8]
-                    != APP_ATTEST_SELECTION_BODY_BYTES_V1.to_le_bytes()
-            {
-                return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
-            }
             require_bounded_nonempty_field(fields.get(3), 8 * 1024)?;
-            if require_u32_field(fields.get(4))? == u32::MAX {
+            let previous = require_u32_field(fields.get(4))?;
+            if previous == u32::MAX {
                 return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
             }
+            require_app_attest_selection_subject_v1(selection, previous)?;
             require_nonzero_digest_field(fields.get(5))?;
             require_nonzero_digest_field(fields.get(6))
         }
     }
+}
+
+fn require_app_attest_selection_subject_v1(
+    selection: &[u8],
+    previous: u32,
+) -> Result<(), KagemushaCoreCoordinatorFrameErrorV1> {
+    use KagemushaHardwareSelectionSigningLayoutV1 as S;
+
+    let next = previous
+        .checked_add(1)
+        .ok_or(KagemushaCoreCoordinatorFrameErrorV1::Field)?;
+
+    if selection.len() != S::TOTAL_BYTES
+        || selection.len() != APP_ATTEST_SELECTION_SIGNING_BYTES_V1
+        || !selection.starts_with(APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1)
+        || selection[S::BODY_LENGTH] != APP_ATTEST_SELECTION_BODY_BYTES_V1.to_le_bytes()
+        || selection[S::VERSION] != 1_u16.to_le_bytes()
+    {
+        return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+    }
+    let nonzero = |range: core::ops::Range<usize>| selection[range].iter().any(|byte| *byte != 0);
+    if [
+        S::RELEASE_ID,
+        S::PROVIDER_POLICY_ROOT,
+        S::APP_POLICY_DIGEST,
+        S::CREDENTIAL_ID,
+        S::NETWORK_ID,
+        S::LANE_COMMITMENT,
+        S::HARDWARE_PROFILE_ID,
+        S::HARDWARE_EPOCH_ID,
+        S::TRANSITION_STATEMENT_DIGEST,
+    ]
+    .into_iter()
+    .any(|range| !nonzero(range))
+        || !nonzero(S::POLICY_EPOCH)
+        || !nonzero(S::HARDWARE_EPOCH_GENERATION)
+    {
+        return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+    }
+    let operation = selection[S::OPERATION_TAG.start];
+    let outgoing = matches!(operation, 2 | 4);
+    if !(1..=5).contains(&operation)
+        || nonzero(S::CANDIDATE_ENVELOPE_DIGEST) != outgoing
+        || nonzero(S::TERMINAL_BODY_COMMITMENT) != outgoing
+        || selection[S::SECURE_INDEX_BEFORE] != u128::from(previous).to_le_bytes()
+        || selection[S::SECURE_INDEX_AFTER] != u128::from(next).to_le_bytes()
+    {
+        return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1212,18 +1257,30 @@ mod tests {
     }
 
     fn app_attest_ack_request_fields() -> Vec<Vec<u8>> {
-        let mut selection = APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1.to_vec();
-        selection.extend_from_slice(&APP_ATTEST_SELECTION_BODY_BYTES_V1.to_le_bytes());
-        selection.extend_from_slice(&[0x42; APP_ATTEST_SELECTION_BODY_BYTES_V1 as usize]);
         vec![
             digest(0x11),
             b"app-attest-key".to_vec(),
-            selection,
+            app_attest_selection_for_tests(),
             vec![0xa2, 0x01, 0x02],
             u32_field(4),
             digest(0x33),
             digest(0x44),
         ]
+    }
+
+    fn app_attest_selection_for_tests() -> Vec<u8> {
+        use KagemushaHardwareSelectionSigningLayoutV1 as S;
+
+        let mut selection = APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1.to_vec();
+        selection.extend_from_slice(&APP_ATTEST_SELECTION_BODY_BYTES_V1.to_le_bytes());
+        selection.extend_from_slice(&[0x42; APP_ATTEST_SELECTION_BODY_BYTES_V1 as usize]);
+        selection[S::VERSION].copy_from_slice(&1_u16.to_le_bytes());
+        selection[S::POLICY_EPOCH].copy_from_slice(&1_u64.to_le_bytes());
+        selection[S::HARDWARE_EPOCH_GENERATION].copy_from_slice(&1_u64.to_le_bytes());
+        selection[S::OPERATION_TAG.start] = 2;
+        selection[S::SECURE_INDEX_BEFORE].copy_from_slice(&4_u128.to_le_bytes());
+        selection[S::SECURE_INDEX_AFTER].copy_from_slice(&5_u128.to_le_bytes());
+        selection
     }
 
     fn observation_request_fields(operation: u8) -> Vec<Vec<u8>> {
@@ -1539,6 +1596,28 @@ mod tests {
             let frame = kagemusha_core_coordinator_encode_request_v1(&changed).unwrap();
             assert!(kagemusha_core_coordinator_validate_method_request_v1(method, &frame).is_err());
         }
+        for index in [
+            KagemushaHardwareSelectionSigningLayoutV1::VERSION.start,
+            KagemushaHardwareSelectionSigningLayoutV1::OPERATION_TAG.start,
+            KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_BEFORE.start,
+            KagemushaHardwareSelectionSigningLayoutV1::SECURE_INDEX_AFTER.start,
+        ] {
+            let mut changed = request.clone();
+            changed[2][index] ^= 1;
+            let frame = kagemusha_core_coordinator_encode_request_v1(&changed).unwrap();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_request_v1(method, &frame),
+                Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+                "signed Core S byte {index} was not bound"
+            );
+        }
+        let mut other_counter = request.clone();
+        other_counter[4] = 3_u32.to_le_bytes().to_vec();
+        let frame = kagemusha_core_coordinator_encode_request_v1(&other_counter).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_request_v1(method, &frame),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+        );
         let mut skipped = request;
         skipped[4] = u32::MAX.to_le_bytes().to_vec();
         let frame = kagemusha_core_coordinator_encode_request_v1(&skipped).unwrap();
@@ -2436,13 +2515,10 @@ mod tests {
         );
         assert_eq!(handle, 7);
 
-        let mut selection = APP_ATTEST_SELECTION_SIGNING_DOMAIN_V1.to_vec();
-        selection.extend_from_slice(&APP_ATTEST_SELECTION_BODY_BYTES_V1.to_le_bytes());
-        selection.extend_from_slice(&[0x42; APP_ATTEST_SELECTION_BODY_BYTES_V1 as usize]);
         let acknowledgment_request = kagemusha_core_coordinator_encode_request_v1(&[
             digest(0x11),
             b"app-attest-key".to_vec(),
-            selection,
+            app_attest_selection_for_tests(),
             vec![0xa2, 0x01, 0x02],
             4_u32.to_le_bytes().to_vec(),
             digest(0x33),
