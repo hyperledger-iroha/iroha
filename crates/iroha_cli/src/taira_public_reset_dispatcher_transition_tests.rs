@@ -152,6 +152,24 @@ fn dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes() {
     );
 }
 #[test]
+fn topology_producer_requires_durable_applied_transition_and_exact_live_guards() {
+    let f = fixture();
+    assert!(storage::check(&f.plan, &f.bytes, &f.root, &f.guards).is_ok());
+    assert!(storage::check_applied(&f.plan, &f.bytes, &f.root, &f.guards).is_err());
+    run(&f, Action::Apply).unwrap();
+    storage::check_applied(&f.plan, &f.bytes, &f.root, &f.guards).unwrap();
+    fs::write(&f.plan.predecessor.guards[0].path, b"foreign guard").unwrap();
+    assert!(storage::check_applied(&f.plan, &f.bytes, &f.root, &f.guards).is_err());
+}
+
+#[test]
+fn topology_producer_rejects_rolled_back_transition() {
+    let f = fixture();
+    run(&f, Action::Apply).unwrap();
+    run(&f, Action::Rollback).unwrap();
+    assert!(storage::check_applied(&f.plan, &f.bytes, &f.root, &f.guards).is_err());
+}
+#[test]
 fn dispatcher_transition_completed_replays_do_not_republish() {
     let f = fixture();
     run(&f, Action::Apply).unwrap();

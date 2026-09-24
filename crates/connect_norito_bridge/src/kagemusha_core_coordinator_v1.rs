@@ -12,6 +12,7 @@
 pub(crate) mod archive_boundary;
 mod archives;
 mod enrollment_attempt_journal;
+mod enrollment_phase_one_backend;
 mod exclusive_backend;
 mod signed_app_preparation;
 pub use enrollment_attempt_journal::{
@@ -21,6 +22,7 @@ pub use enrollment_attempt_journal::{
     KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
     KagemushaEnrollmentLiveSelectionV1,
 };
+pub use enrollment_phase_one_backend::KagemushaEnrollmentPhaseOneBackendV1;
 pub use exclusive_backend::KagemushaExclusiveCoordinatorBackendV1;
 pub use initial_enrollment::{
     AcceptedIssuerChallengeV1, FreshIssuerAdmissionV1, InitialEnrollmentErrorV1,
@@ -932,12 +934,12 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
         KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
             match require_u32_field(request.first())? {
                 INITIAL_ENROLLMENT_BEGIN_V1 => {
-                    require_field_count(&response, 5)?;
+                    require_field_count(&response, 7)?;
                     require_nonzero_ticket_field(response.first())?;
-                    for index in 1..=4 {
+                    for index in 1..=5 {
                         require_nonzero_digest_field(response.get(index))?;
                     }
-                    Ok(())
+                    require_nonzero_ticket_field(response.get(6))
                 }
                 INITIAL_ENROLLMENT_ACCEPT_CHALLENGE_V1 => {
                     require_field_count(&response, 4)?;
@@ -1345,6 +1347,8 @@ mod tests {
                 digest(0x45),
                 digest(0x46),
                 digest(0x47),
+                digest(0x48),
+                120_007_u64.to_le_bytes().to_vec(),
             ],
             KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest => vec![
                 request[0].clone(),
@@ -1544,7 +1548,7 @@ mod tests {
                 Some(method)
             );
         }
-        for unknown in [0, 14, u8::MAX] {
+        for unknown in [0, 15, u8::MAX] {
             assert_eq!(KagemushaCoreCoordinatorMethodV1::from_code(unknown), None);
         }
     }
@@ -1637,7 +1641,8 @@ mod tests {
             Ok(())
         );
         let mut response = vec![7_u64.to_le_bytes().to_vec()];
-        response.extend((1..=4).map(|byte| vec![byte; 32]));
+        response.extend((1..=5).map(|byte| vec![byte; 32]));
+        response.push(120_007_u64.to_le_bytes().to_vec());
         let good = kagemusha_core_coordinator_encode_response_v1(&response).unwrap();
         assert_eq!(
             kagemusha_core_coordinator_validate_method_response_v1(method, &request, &good),
@@ -1679,6 +1684,37 @@ mod tests {
     fn initial_enrollment_phase_frames_bound_full_device_response_without_truncation() {
         let method = KagemushaCoreCoordinatorMethodV1::InitialEnrollment;
         let ticket = 7_u64.to_le_bytes().to_vec();
+        let begin = kagemusha_core_coordinator_encode_request_v1(&[
+            u32_field(INITIAL_ENROLLMENT_BEGIN_V1),
+            b"i105example".to_vec(),
+        ])
+        .unwrap();
+        let selected = vec![
+            ticket.clone(),
+            vec![0x44; 32],
+            vec![0x45; 32],
+            vec![0x46; 32],
+            vec![0x47; 32],
+            vec![0x48; 32],
+            120_007_u64.to_le_bytes().to_vec(),
+        ];
+        let selected_frame = kagemusha_core_coordinator_encode_response_v1(&selected).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(method, &begin, &selected_frame),
+            Ok(()),
+        );
+        let old_five = kagemusha_core_coordinator_encode_response_v1(&selected[..5]).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(method, &begin, &old_five),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+        );
+        let mut no_deadline = selected;
+        no_deadline[6] = vec![0; 8];
+        let no_deadline = kagemusha_core_coordinator_encode_response_v1(&no_deadline).unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(method, &begin, &no_deadline),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field),
+        );
         let complete_response_max =
             iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_RESPONSE_MAX_BYTES_V1;
         let request = kagemusha_core_coordinator_encode_request_v1(&[
@@ -1887,7 +1923,7 @@ mod tests {
 
     #[test]
     fn signed_android_and_ios_requests_have_one_exact_method_matrix() {
-        let expected_counts = [3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2];
+        let expected_counts = [3, 6, 10, 8, 9, 2, 2, 5, 8, 2, 10, 11, 2, 2, 2, 2, 2, 7, 1];
         let cases = mobile_request_cases();
         assert_eq!(
             cases

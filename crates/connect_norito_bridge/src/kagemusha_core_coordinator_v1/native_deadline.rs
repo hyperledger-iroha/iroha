@@ -71,6 +71,12 @@ impl NativeDeadlineV1 {
         Self::from_reading(NativeContinuousInstantV1::now()?, lifetime)
     }
 
+    /// Fixed suspend-inclusive expiry for app-side early rejection only. Native phase checks
+    /// remain authoritative, and this value must never be interpreted as Unix time.
+    pub(super) fn expiry_continuous_ms(&self) -> Result<u64> {
+        u64::try_from(self.0.expires_nanos / 1_000_000).map_err(|_| NativeDeadlineErrorV1::Invalid)
+    }
+
     fn from_reading(started: NativeContinuousInstantV1, lifetime: Duration) -> Result<Self> {
         if lifetime.is_zero() || lifetime > MAX_LIFETIME || started.process_id == 0 {
             return Err(NativeDeadlineErrorV1::Invalid);
@@ -237,6 +243,31 @@ mod tests {
         assert_eq!(
             deadline.check_reading(tick(150)),
             Err(NativeDeadlineErrorV1::Expired)
+        );
+    }
+
+    #[test]
+    fn exported_continuous_millisecond_expiry_is_fixed_and_never_wall_clock_time() {
+        let deadline =
+            NativeDeadlineV1::from_reading(tick(1_000_000_001), Duration::from_millis(2)).unwrap();
+        assert_eq!(deadline.expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(deadline.clone().expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_000)),
+            Ok(tick(1_002_000_000))
+        );
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_001)),
+            Err(NativeDeadlineErrorV1::Expired)
+        );
+        let overflow = NativeDeadlineV1::from_reading(
+            tick((u128::from(u64::MAX) + 1) * 1_000_000),
+            Duration::from_nanos(1),
+        )
+        .unwrap();
+        assert_eq!(
+            overflow.expiry_continuous_ms(),
+            Err(NativeDeadlineErrorV1::Invalid)
         );
     }
 

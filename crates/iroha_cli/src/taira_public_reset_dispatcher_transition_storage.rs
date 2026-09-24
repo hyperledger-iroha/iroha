@@ -466,6 +466,21 @@ pub(super) fn check(plan: &Plan, bytes: &[u8], root: &Path, new: &[Vec<u8>]) -> 
     validate_backups(plan, root)
 }
 
+/// Require the durable applied event as well as the exact live candidate state.
+/// A successful generic check may describe the predecessor before apply.
+pub(super) fn check_applied(plan: &Plan, bytes: &[u8], root: &Path, new: &[Vec<u8>]) -> Result<()> {
+    need(
+        verify_event(root, "prepared.json", bytes)? && verify_event(root, "applied.json", bytes)?,
+        "applied transition event is absent",
+    )?;
+    need(
+        !exists(&root.join("rollback-requested.json"))? && !exists(&root.join("rolled-back.json"))?,
+        "applied transition has entered rollback",
+    )?;
+    check(plan, bytes, root, new)?;
+    validate_live(plan, new, true)
+}
+
 fn barrier(plan: &Plan, root: &Path, rollback: bool) -> Result<()> {
     let live = Path::new(&plan.predecessor.dispatcher.path);
     if exists(live)? {

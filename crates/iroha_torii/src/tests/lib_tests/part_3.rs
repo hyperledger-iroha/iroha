@@ -924,7 +924,7 @@ async fn identifier_policies_lists_registered_policy() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x11,
         "derive identifier policy-list signer fixture key",
@@ -967,7 +967,7 @@ async fn identifier_policies_lists_registered_policy() {
     assert_eq!(dto.items[0].policy_id, policy_id.to_string());
     assert!(dto.items[0].active);
     assert_eq!(dto.items[0].backend, "bfv-affine-sha3-256-v1");
-    assert_eq!(dto.items[0].normalization, "phone_e164");
+    assert_eq!(dto.items[0].normalization, "email_address");
     assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
     assert!(
         dto.items[0]
@@ -1034,6 +1034,11 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
         norito::json::from_slice(&body).expect("json decode");
     assert_eq!(dto.total, 1);
     assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+    let signer_public_key = signer.public_key().to_string();
+    assert_eq!(
+        dto.items[0].phone_retail_attestor_public_key.as_deref(),
+        Some(signer_public_key.as_str())
+    );
     let profile = dto.items[0]
         .ram_fhe_profile
         .clone()
@@ -1090,7 +1095,7 @@ async fn identifier_resolve_returns_bound_account() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x15,
         "derive identifier resolve bound signer fixture key",
@@ -1111,7 +1116,7 @@ async fn identifier_resolve_returns_bound_account() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"+15551234567",
+        b"owner@example.test",
         b"identifier-resolve-bound-account",
     );
     let encrypted_input_hex =
@@ -1150,7 +1155,8 @@ async fn identifier_resolve_returns_bound_account() {
         NoritoJson(routing::IdentifierResolveRequestDto {
             policy_id: policy_id.to_string(),
             encrypted_input: encrypted_input_hex,
-            output_opening,
+            output_opening: output_opening.clone(),
+            phone_retail_canonicality: None,
         }),
     )
     .await
@@ -1199,7 +1205,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         .build(&authority);
     let world = World::with([domain], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x17,
         "derive identifier resolve programmed signer fixture key",
@@ -1220,7 +1226,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"+15551234567",
+        b"owner@example.test",
         b"identifier-resolve-programmed",
     );
     let encrypted_input_hex =
@@ -1260,6 +1266,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
             policy_id: policy_id.to_string(),
             encrypted_input: encrypted_input_hex,
             output_opening,
+            phone_retail_canonicality: None,
         }),
     )
     .await
@@ -1364,6 +1371,7 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
             policy_id: policy_id.to_string(),
             encrypted_input,
             output_opening,
+            phone_retail_canonicality: None,
         }),
     )
     .await
@@ -1467,6 +1475,7 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
             policy_id: policy_id.to_string(),
             encrypted_input: hex::encode(malformed),
             output_opening: dummy_output_opening_for_access_test(),
+            phone_retail_canonicality: None,
         }),
     )
     .await
@@ -1500,6 +1509,7 @@ async fn identifier_resolve_enforces_token_policy() {
             policy_id: "phone#retail".to_owned(),
             encrypted_input: String::new(),
             output_opening: dummy_output_opening_for_access_test(),
+            phone_retail_canonicality: None,
         }),
     )
     .await;
@@ -1559,6 +1569,17 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
         hex::encode(norito::to_bytes(&encrypted_input).expect("encode encrypted input"));
     let output_opening =
         output_opening_for_ciphertext(&resolver, &program_policy, &signer, &encrypted_input);
+    let network_id = app.signed_query_admission.network_id();
+    let canonicality = phone_retail_canonicality_for_ciphertext(
+        &policy,
+        &program_policy,
+        &signer,
+        network_id,
+        uaid,
+        &authority,
+        &encrypted_input,
+        &output_opening,
+    );
     let response = handler_identifier_claim_receipt(
         State(app.clone()),
         HeaderMap::new(),
@@ -1566,8 +1587,9 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
         AxPath(authority.to_string()),
         NoritoJson(routing::IdentifierResolveRequestDto {
             policy_id: policy_id.to_string(),
-            encrypted_input: encrypted_input_hex,
+            encrypted_input: encrypted_input_hex.clone(),
             output_opening: output_opening.clone(),
+            phone_retail_canonicality: Some(canonicality.clone()),
         }),
     )
     .await
@@ -1581,7 +1603,14 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     let dto: routing::IdentifierResolveResponseDto =
         norito::json::from_slice(&body).expect("json decode");
     let expected_draft = resolver
-        .derive_encrypted(&policy, &program_policy, &encrypted_input, output_opening)
+        .derive_phone_retail_encrypted(
+            &policy,
+            &program_policy,
+            &encrypted_input,
+            output_opening.clone(),
+            canonicality,
+            &network_id,
+        )
         .expect("normalized derive");
     assert_eq!(dto.payload.opaque_id, expected_draft.opaque_id.to_string());
     assert_eq!(
@@ -1589,7 +1618,25 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
         expected_draft.receipt_hash.to_string()
     );
     assert_eq!(dto.payload.account_id, authority.to_string());
-    assert_eq!(dto.payload.uaid, uaid.to_string());
+    let missing = handler_identifier_claim_receipt(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath(authority.to_string()),
+        NoritoJson(routing::IdentifierResolveRequestDto {
+            policy_id: policy_id.to_string(),
+            encrypted_input: encrypted_input_hex,
+            output_opening: output_opening.clone(),
+            phone_retail_canonicality: None,
+        }),
+    )
+    .await
+    .expect_err("phone claim receipt must fail without canonicality evidence");
+    assert!(
+        missing.to_string().contains("requires a trusted canonical"),
+        "{missing}"
+    );
+    assert!(dto.phone_retail_canonicality.is_some());
     assert_eq!(dto.payload.uaid, uaid.to_string());
     assert_eq!(dto.payload.account_id, authority.to_string());
 }
@@ -1607,7 +1654,7 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .build(&authority);
     let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
     let mut app = mk_app_state_for_tests_with_world(world);
-    let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+    let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
     let signer = checked_torii_test_ed25519_keypair(
         0x1f,
         "derive identifier receipt lookup signer fixture key",
@@ -1628,7 +1675,7 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .identifier_resolver = Some(resolver.clone());
     let encrypted_input = encrypted_identifier_ciphertext(
         &program_policy,
-        b"+15551234567",
+        b"owner@example.test",
         b"identifier-receipt-lookup",
     );
     let output_opening =
@@ -1694,6 +1741,7 @@ async fn identifier_claim_receipt_enforces_token_policy() {
             policy_id: "phone#retail".to_owned(),
             encrypted_input: String::new(),
             output_opening: dummy_output_opening_for_access_test(),
+            phone_retail_canonicality: None,
         }),
     )
     .await;

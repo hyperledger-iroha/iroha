@@ -11237,20 +11237,30 @@ fn derive_identifier_request_draft(
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
-    if policy.id.is_phone_retail() {
+    let phone_like = policy.id.kind.as_ref() == "phone"
+        || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+        || policy.program_id.to_string() == "phone_retail";
+    if phone_like {
+        if !policy.id.is_phone_retail() {
+            return Err(identifier_conversion_error(
+                "first-release phone requests require exactly phone#retail",
+            ));
+        }
         let canonicality = request.phone_retail_canonicality.clone().ok_or_else(|| {
             identifier_conversion_error(
                 "phone#retail requires a trusted canonical E.164 nullifier attestation",
             )
         })?;
-        return resolver.derive_phone_retail_encrypted(
-            policy,
-            program_policy,
-            &ciphertext,
-            request.output_opening.clone(),
-            canonicality,
-            network_id,
-        ).map_err(|err| identifier_conversion_error(err.to_string()));
+        return resolver
+            .derive_phone_retail_encrypted(
+                policy,
+                program_policy,
+                &ciphertext,
+                request.output_opening.clone(),
+                canonicality,
+                network_id,
+            )
+            .map_err(|err| identifier_conversion_error(err.to_string()));
     }
     if request.phone_retail_canonicality.is_some() {
         return Err(identifier_conversion_error(
@@ -11405,6 +11415,10 @@ fn identifier_policy_summary_dto(
         output_opening_public_key: program_policy
             .map(|policy| policy.output_opening_public_key.to_string())
             .unwrap_or_default(),
+        phone_retail_attestor_public_key: policy
+            .phone_retail_attestor_public_key
+            .as_ref()
+            .map(ToString::to_string),
         backend: program_policy
             .map(|policy| policy.commitment.backend.as_str().to_owned())
             .unwrap_or_default(),
@@ -11485,6 +11499,7 @@ fn identifier_claim_lookup_response(
         policy_id: claim.policy_id.to_string(),
         opaque_id: claim.opaque_id.to_string(),
         receipt_hash: claim.receipt_hash.to_string(),
+        phone_retail_nullifier: claim.phone_retail_nullifier.map(|value| value.to_string()),
         uaid: claim.uaid.to_string(),
         account_id: claim.account_id.to_string(),
         verified_at_ms: claim.verified_at_ms,
@@ -39974,12 +39989,24 @@ async fn handler_identifier_resolve(
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let draft = derive_identifier_request_draft(
-        resolver, &policy, &program_policy, &request,
-        app.signed_query_admission.network_id(),
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
     )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+    if policy.id.is_phone_retail()
+        && claim.phone_retail_nullifier
+            != draft
+                .phone_retail_canonicality
+                .as_ref()
+                .map(|proof| proof.payload.canonical_phone_nullifier)
+    {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
     if claim
         .expires_at_ms
         .is_some_and(|expires_at_ms| expires_at_ms <= draft.resolved_at_ms)
@@ -40052,8 +40079,11 @@ async fn handler_identifier_claim_receipt(
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let draft = derive_identifier_request_draft(
-        resolver, &policy, &program_policy, &request,
-        app.signed_query_admission.network_id(),
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)

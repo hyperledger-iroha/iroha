@@ -21819,16 +21819,43 @@ impl World {
                     format!("Phone retail claim {opaque_id} lacks a canonical nullifier")
                 })?;
                 if nullifier == Hash::prehashed([0; Hash::LENGTH]) {
-                    return Err(format!("Phone retail claim {opaque_id} has a zero nullifier"));
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has a zero nullifier"
+                    ));
                 }
-                let policy = self.identifier_policies.view().get(&claim.policy_id)
+                let policy = self
+                    .identifier_policies
+                    .view()
+                    .get(&claim.policy_id)
                     .cloned()
-                    .ok_or_else(|| format!("Phone retail claim {opaque_id} lacks its pinned policy"))?;
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned policy")
+                    })?;
                 if policy.program_id.to_string() != "phone_retail"
-                    || policy.normalization != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+                    || policy.normalization
+                        != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
                     || policy.phone_retail_attestor_public_key.is_none()
                 {
-                    return Err(format!("Phone retail claim {opaque_id} has untrusted policy metadata"));
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted policy metadata"
+                    ));
+                }
+                let program = self
+                    .ram_lfe_program_policies
+                    .view()
+                    .get(&policy.program_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned program")
+                    })?;
+                if program.owner != policy.owner
+                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1
+                    || program.commitment.backend != program.backend
+                    || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted program metadata"
+                    ));
                 }
                 let program_id_bytes = norito::encode_canonical(&policy.program_id)
                     .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
@@ -21837,10 +21864,14 @@ impl World {
                 if *opaque_id != OpaqueAccountId::from(expected_id)
                     || claim.receipt_hash != expected_receipt_hash
                 {
-                    return Err(format!("Phone retail claim {opaque_id} diverges from its canonical nullifier index"));
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} diverges from its canonical nullifier index"
+                    ));
                 }
             } else if claim.phone_retail_nullifier.is_some() {
-                return Err(format!("Non-phone claim {opaque_id} carries a phone nullifier"));
+                return Err(format!(
+                    "Non-phone claim {opaque_id} carries a phone nullifier"
+                ));
             }
             let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
                 return Err(format!(

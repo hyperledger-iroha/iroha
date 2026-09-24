@@ -50,6 +50,9 @@ test-network-message-control = [
     "iroha_core/test-network-native-amx-fault-injection",
     "iroha_torii/test-network-private-settlement-route-control",
 ]
+# Four-seat production beacon custody exercises the real Taira provider
+# boundary without enabling Core or Torii fault-injection features.
+test-network-production-beacon-custody = []
 # Dedicated non-shipping daemon used only by the four-validator Parliament
 # integration corridor. It injects proof-valid beacon and TLE shares for this
 # daemon's exact roster seat and does not alter consensus verification.

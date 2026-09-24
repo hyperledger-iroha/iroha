@@ -28,18 +28,29 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         releaseId: ByteArray,
         profileId: ByteArray,
         laneId: ByteArray,
+        ownerScope: ByteArray,
+        nativeDeadlineContinuousMS: ByteArray,
     ) {
         private val ticketValue = ticket.copyOf()
         private val nonceValue = clientNonce.copyOf()
         private val releaseValue = releaseId.copyOf()
         private val profileValue = profileId.copyOf()
         private val laneValue = laneId.copyOf()
+        private val ownerScopeValue = ownerScope.copyOf()
+        private val nativeDeadlineValue = ByteBuffer.wrap(nativeDeadlineContinuousMS)
+            .order(ByteOrder.LITTLE_ENDIAN).long.also {
+                require(it > 0) { "Invalid native continuous enrollment deadline" }
+            }
 
         fun ticket(): ByteArray = ticketValue.copyOf()
         fun clientNonce(): ByteArray = nonceValue.copyOf()
         fun releaseId(): ByteArray = releaseValue.copyOf()
         fun profileId(): ByteArray = profileValue.copyOf()
         fun laneId(): ByteArray = laneValue.copyOf()
+        /** Original native attempt cache scope, not the final enrollment ID. */
+        fun ownerScope(): ByteArray = ownerScopeValue.copyOf()
+        /** Suspend-inclusive boot-clock expiry; native phase checks remain authoritative. */
+        fun nativeDeadlineContinuousMS(): Long = nativeDeadlineValue
     }
 
     /** Native-checked signing projections for one complete qualified issuer challenge. */
@@ -100,7 +111,8 @@ class KagemushaNativeEnrollmentPhasesV1 internal constructor(
         require(account.size <= 512) { "Enrollment account exceeds native frame bound" }
         beginInvoked = true
         val fields = bridge.invoke(METHOD, listOf(u32(1), account))
-        return Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4])
+        return Selection(canonical, fields[0], fields[1], fields[2], fields[3], fields[4],
+            fields[5], fields[6])
             .also { selected = it }
     }
 

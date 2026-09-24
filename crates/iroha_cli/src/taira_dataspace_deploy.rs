@@ -11,8 +11,8 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     alias_setup::{
-        AccountProvisionV1, AliasDataspaceBootstrapGrantV1, AliasIntentV1, AliasPlanDispositionV1,
-        AliasSetupPlanRequestV1, AliasTransactionPlanV1,
+        AccountAliasRoleV1, AccountProvisionV1, AliasDataspaceBootstrapGrantV1, AliasIntentV1,
+        AliasPlanDispositionV1, AliasSetupPlanRequestV1, AliasTransactionPlanV1,
     },
     asset::AssetDefinitionId,
     isi::{InstructionBox, SetParameter},
@@ -71,6 +71,10 @@ pub(crate) enum Command {
     ExportProfile(profile::ExportProfile),
     /// Generate native deployment intent from signed genesis and current namespace policies.
     Init(InitArgs),
+    /// Read-only live readiness check of a complete deployment manifest; retain no operation.
+    Preflight(PreflightArgs),
+    /// Resume one fixed deployment request through the existing init, plan and saved apply journal.
+    Ensure(EnsureArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
     /// Advance the saved plan within one budget; uncertain submissions are only observed again.
@@ -121,6 +125,23 @@ pub(crate) struct PlanArgs {
     /// Existing owner-private directory containing operation-ID subdirectories.
     #[arg(long)]
     journal_dir: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct PreflightArgs {
+    #[arg(long)]
+    manifest: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct EnsureArgs {
+    /// Owner-private V1 request; operation identity and all first-run inputs are fixed here.
+    #[arg(long)]
+    request: PathBuf,
+    /// Budget for the saved apply or status pass; this does not change operation identity.
+    #[arg(long, default_value_t = 600_000,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    timeout_ms: u64,
 }
 
 #[derive(Debug, clap::Args)]
@@ -224,6 +245,38 @@ pub(crate) struct SpendingV1 {
     pub(crate) transaction_fee_maximum: Quantity,
 }
 
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct EnsureRequestV1 {
+    schema: String,
+    operation_id: String,
+    network_id: NetworkId,
+    owner: AccountId,
+    dataspace: String,
+    lane_id: u32,
+    /// `restricted_full_replica` or `public_full_replica`.
+    lane_profile: String,
+    account_alias: String,
+    trust: PathBuf,
+    trust_sha256: String,
+    payment_asset: AssetDefinitionId,
+    alias_create_maximum: Quantity,
+    transaction_fee_maximum: Quantity,
+    lease_years: u8,
+    manifest_dir: PathBuf,
+    journal_dir: PathBuf,
+}
+
+/// Durable first-run selection and the exact manifest produced from native policies.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct EnsureBindingV1 {
+    schema: String,
+    request_sha256: String,
+    manifest_sha256: String,
+    manifest: ManifestV1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PlanV1 {
@@ -308,6 +361,41 @@ struct ReportV1 {
     #[norito(required)]
     completion_receipt: Option<String>,
     verification: VerificationRequestV1,
+}
+
+/// A closed success record; failures return an error and never claim readiness.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreflightReportV1 {
+    schema: String,
+    operation_id: String,
+    manifest_sha256: String,
+    intent_sha256: String,
+    state: String,
+    deployment_complete: bool,
+    manifest_and_profile_verified: bool,
+    validator_finality_routes_verified: bool,
+    capabilities_and_owner_permissions_verified: bool,
+    catalog_and_namespace_available: bool,
+    funding_caps_covered: bool,
+    native_alias_quotes_verified: bool,
+}
+
+fn preflight_report(plan: &PlanV1, manifest_sha256: String) -> PreflightReportV1 {
+    PreflightReportV1 {
+        schema: "iroha.taira.dataspace-deploy.preflight.v1".into(),
+        operation_id: plan.operation_id.clone(),
+        manifest_sha256,
+        intent_sha256: plan.intent_sha256.clone(),
+        state: "ready_for_plan".into(),
+        deployment_complete: false,
+        manifest_and_profile_verified: true,
+        validator_finality_routes_verified: true,
+        capabilities_and_owner_permissions_verified: true,
+        catalog_and_namespace_available: true,
+        funding_caps_covered: true,
+        native_alias_quotes_verified: true,
+    }
 }
 
 fn require(condition: bool, message: &str) -> Result<()> {
@@ -403,11 +491,12 @@ impl ManifestV1 {
                         !account
                             && intent.target_account == self.owner
                             && intent.provision == AccountProvisionV1::Existing
+                            && intent.role == AccountAliasRoleV1::Additional
                             && intent.alias.dataspace_id == grant.dataspace.dataspace_id
                             && intent.alias.canonical_name.dataspace
                                 == grant.dataspace.canonical_name
                             && intent.alias.canonical_name.domain.is_none(),
-                        "account alias must target the existing owner directly in this dataspace",
+                        "account alias must bind the existing owner as an additional alias in this dataspace",
                     )?;
                     account = true;
                 }
@@ -1087,6 +1176,8 @@ impl Run for Command {
                 "`taira dataspace-deploy export-profile` must run before client configuration is loaded"
             ),
             Self::Init(args) => initialize(context, args),
+            Self::Preflight(args) => preflight_manifest(context, args),
+            Self::Ensure(args) => ensure(context, args),
             Self::Plan(args) => plan(context, args),
             Self::Apply(args) => saved(context, args, true),
             Self::Status(args) => saved(context, args, false),
@@ -1095,6 +1186,14 @@ impl Run for Command {
 }
 
 fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
+    let manifest = derive_manifest(context, &args)?;
+    let journal = Journal::open_unpublished(&args.output_dir)?;
+    journal.require_unplanned()?;
+    journal.install_json("deployment.json", &manifest)?;
+    context.print_data(&manifest)
+}
+
+fn derive_manifest<C: RunContext>(context: &C, args: &InitArgs) -> Result<ManifestV1> {
     use iroha_data_model::sns::{ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID};
     let trust: finality::TrustV1 = json::from_slice(&read_public_input(&args.trust)?)?;
     trust.validate(context.config().network_id)?;
@@ -1112,7 +1211,7 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
         )
         .ok_or_else(|| eyre!("quote deadline overflow"))?;
     let manifest = init_manifest(
-        &args,
+        args,
         context.config().network_id,
         context.config().account.clone(),
         trust,
@@ -1124,9 +1223,7 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
         .client()
         .plan_alias_setup(&manifest.alias_request)?;
     validate_alias_plan(&manifest, &plan, configured.client())?;
-    let journal = Journal::open(&args.output_dir, true)?;
-    journal.install_json("deployment.json", &manifest)?;
-    context.print_data(&manifest)
+    Ok(manifest)
 }
 
 fn init_manifest(
@@ -1238,29 +1335,50 @@ fn init_manifest(
 }
 
 fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
+    let planned = plan_manifest(context, args)?;
+    context.print_data(&planned)
+}
+
+fn plan_manifest<C: RunContext>(context: &C, args: PlanArgs) -> Result<PlanV1> {
     let bytes = read_public_input(&args.manifest)?;
     let manifest: ManifestV1 = json::from_slice(&bytes)?;
     let grant = manifest.validate()?;
     let id = manifest.resolved_id()?;
     let client = preflight(context, &manifest, true, context.client_from_config()?)?;
     let path = args.journal_dir.join(&id);
-    if path.try_exists()? {
-        let journal = Journal::open(&path, false)?;
-        let existing: PlanV1 = journal.read_json("plan.json")?;
+    // Acquire the operation lock before inspecting an existing directory. A
+    // crash may leave only its lock (or an unpublished staging file); no phase
+    // can have been signed or dispatched before the immutable plan exists.
+    let journal = Journal::open_unpublished(&path)?;
+    if let Some(existing) = journal.optional_json::<PlanV1>("plan.json")? {
         existing.verify()?;
         require(
             existing.manifest == manifest && existing.intent_sha256 == manifest.intent_digest()?,
             "operation ID is already bound to another manifest",
         )?;
-        return context.print_data(&existing);
+        return Ok(existing);
     }
+    journal.require_unplanned()?;
+    let result = fresh_plan_after_preflight(context, manifest, grant, id, client.client())?;
+    journal.install_json("plan.json", &result)?;
+    Ok(result)
+}
+
+/// Runs the same fresh-plan admission as `plan`, ending before its first journal write.
+fn fresh_plan_after_preflight<C: RunContext>(
+    context: &C,
+    manifest: ManifestV1,
+    grant: AliasDataspaceBootstrapGrantV1,
+    id: String,
+    client: &Client,
+) -> Result<PlanV1> {
     finality::preflight(context, &manifest)?;
-    let baseline = client.client().get_lane_lifecycle_status()?;
-    let baseline_overlay = overlay(&client.client().get_parameters()?, &baseline)?;
+    let baseline = client.get_lane_lifecycle_status()?;
+    let baseline_overlay = overlay(&client.get_parameters()?, &baseline)?;
     let catalog_transition = transition(&manifest, &baseline)?;
-    check_funding(client.client(), &manifest, PHASES.len())?;
-    let initial_alias_plan = client.client().plan_alias_setup(&manifest.alias_request)?;
-    validate_alias_plan(&manifest, &initial_alias_plan, client.client())?;
+    check_funding(client, &manifest, PHASES.len())?;
+    let initial_alias_plan = client.plan_alias_setup(&manifest.alias_request)?;
+    validate_alias_plan(&manifest, &initial_alias_plan, client)?;
     let result = PlanV1 {
         schema_version: 1,
         operation_id: id,
@@ -1273,9 +1391,284 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
         initial_alias_plan,
     };
     result.verify()?;
-    let journal = Journal::open(&path, true)?;
-    journal.install_json("plan.json", &result)?;
-    context.print_data(&result)
+    Ok(result)
+}
+
+fn preflight_manifest<C: RunContext>(context: &mut C, args: PreflightArgs) -> Result<()> {
+    let bytes = read_public_input(&args.manifest)?;
+    let manifest: ManifestV1 = json::from_slice(&bytes)?;
+    let grant = manifest.validate()?;
+    let id = manifest.resolved_id()?;
+    let client = preflight(context, &manifest, true, context.client_from_config()?)?;
+    let candidate = fresh_plan_after_preflight(context, manifest, grant, id, client.client())?;
+    context.print_data(&preflight_report(&candidate, digest(&bytes)))
+}
+
+fn normal_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && path.components().all(|part| {
+            matches!(
+                part,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+}
+
+impl EnsureRequestV1 {
+    fn lane_profile(&self) -> Result<LaneProfile> {
+        match self.lane_profile.as_str() {
+            "restricted_full_replica" => Ok(LaneProfile::RestrictedFullReplica),
+            "public_full_replica" => Ok(LaneProfile::PublicFullReplica),
+            _ => eyre::bail!("ensure request uses an unknown native lane profile"),
+        }
+    }
+
+    fn validate<C: RunContext>(&self, context: &C) -> Result<finality::TrustV1> {
+        require(
+            self.schema == "iroha.taira.dataspace-deploy.ensure-request.v1",
+            "unknown dataspace ensure request schema",
+        )?;
+        operation_id(&self.operation_id)?;
+        require(
+            self.network_id == context.config().network_id
+                && self.owner == context.config().account,
+            "ensure request differs from the configured network or signer",
+        )?;
+        require(
+            self.lane_id > 0 && self.lease_years > 0 && self.lane_profile().is_ok(),
+            "ensure request has an invalid lane or lease selection",
+        )?;
+        for path in [&self.trust, &self.manifest_dir, &self.journal_dir] {
+            require(
+                normal_absolute(path),
+                "ensure request paths must be absolute and normal",
+            )?;
+        }
+        require(
+            self.manifest_dir != self.journal_dir
+                && self.manifest_dir != self.journal_dir.join(&self.operation_id),
+            "ensure request reuses a journal path for its manifest",
+        )?;
+        let bytes = read_public_input(&self.trust)?;
+        require(
+            digest(&bytes) == self.trust_sha256,
+            "ensure request trust profile digest differs",
+        )?;
+        let trust: finality::TrustV1 = json::from_slice(&bytes)?;
+        trust.validate(self.network_id)?;
+        #[cfg(unix)]
+        private_metadata(&fs::symlink_metadata(&self.journal_dir)?, true)?;
+        Ok(trust)
+    }
+
+    fn init_args(&self) -> Result<InitArgs> {
+        Ok(InitArgs {
+            dataspace: self.dataspace.clone(),
+            lane_id: self.lane_id,
+            lane_profile: self.lane_profile()?,
+            account_alias: self.account_alias.clone(),
+            trust: self.trust.clone(),
+            payment_asset: self.payment_asset.clone(),
+            alias_create_maximum: self.alias_create_maximum.clone(),
+            transaction_fee_maximum: self.transaction_fee_maximum.clone(),
+            lease_years: self.lease_years,
+            quote_lifetime_secs: 3600,
+            operation_id: Some(self.operation_id.clone()),
+            output_dir: self.manifest_dir.clone(),
+        })
+    }
+
+    fn matches_manifest(&self, manifest: &ManifestV1, trust: &finality::TrustV1) -> Result<()> {
+        use iroha_data_model::{alias_setup::AccountAliasName, nexus::LaneVisibility};
+        use iroha_model_base::topology::LaneId;
+        manifest.validate()?;
+        let grant = AliasDataspaceBootstrapGrantV1::try_new(&self.dataspace, self.owner.clone())?;
+        let dataspace = grant.dataspace.canonical_name.to_string();
+        let account_alias =
+            AccountAliasName::try_new(&self.account_alias, None::<&str>, &dataspace)?;
+        let visibility = match self.lane_profile()? {
+            LaneProfile::RestrictedFullReplica => LaneVisibility::Restricted,
+            LaneProfile::PublicFullReplica => LaneVisibility::Public,
+        };
+        let expected_dataspace = RuntimeDataSpaceAdditionV1 {
+            descriptor: iroha_data_model::nexus::DataSpaceMetadata {
+                id: grant.dataspace.dataspace_id,
+                alias: dataspace.clone(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            manifest_hash: grant.name_hash,
+        };
+        let expected_lane = LaneConfig {
+            id: LaneId::new(self.lane_id),
+            dataspace_id: grant.dataspace.dataspace_id,
+            alias: dataspace,
+            visibility,
+            storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+            ..LaneConfig::default()
+        };
+        require(
+            manifest.operation_id.as_deref() == Some(self.operation_id.as_str())
+                && manifest.network_id == self.network_id
+                && manifest.owner == self.owner
+                && manifest.dataspace == expected_dataspace
+                && manifest.lane == expected_lane
+                && manifest.finality == *trust
+                && manifest.spending.asset_definition_id == self.payment_asset
+                && manifest.spending.alias_create_maximum == self.alias_create_maximum
+                && manifest.spending.transaction_fee_maximum == self.transaction_fee_maximum
+                && manifest.alias_request.intents.iter().all(|intent| {
+                    intent.acquisition.term_years == self.lease_years
+                        && intent.acquisition.pricing_class_hint.is_none()
+                        && intent.quote_guard.max_amount == self.alias_create_maximum
+                })
+                && manifest.alias_request.intents.iter().any(|intent| {
+                    matches!(&intent.intent, AliasIntentV1::AccountAlias(alias)
+                        if alias.alias.canonical_name == account_alias)
+                }),
+            "retained dataspace manifest differs from the fixed ensure request",
+        )
+    }
+}
+
+impl EnsureBindingV1 {
+    fn new(request: &EnsureRequestV1, manifest: ManifestV1) -> Result<Self> {
+        Ok(Self {
+            schema: "iroha.taira.dataspace-deploy.ensure-binding.v1".into(),
+            request_sha256: digest(&json::to_vec(request)?),
+            manifest_sha256: digest(&json::to_vec(&manifest)?),
+            manifest,
+        })
+    }
+
+    fn verify(&self, request: &EnsureRequestV1, trust: &finality::TrustV1) -> Result<()> {
+        require(
+            self.schema == "iroha.taira.dataspace-deploy.ensure-binding.v1"
+                && self.request_sha256 == digest(&json::to_vec(request)?)
+                && self.manifest_sha256 == digest(&json::to_vec(&self.manifest)?),
+            "retained ensure binding differs from the exact typed request or manifest",
+        )?;
+        request.matches_manifest(&self.manifest, trust)
+    }
+}
+
+/// A binding is published before deployment.json. Replaying that intermediate
+/// state republishes its exact manifest instead of deriving a new quote guard.
+fn recover_bound_manifest(
+    journal: &Journal,
+    request: &EnsureRequestV1,
+    trust: &finality::TrustV1,
+) -> Result<Option<ManifestV1>> {
+    let Some(binding) = journal.optional_json::<EnsureBindingV1>("ensure-binding.json")? else {
+        require(
+            journal
+                .optional_json::<ManifestV1>("deployment.json")?
+                .is_none(),
+            "deployment manifest exists without its native ensure binding",
+        )?;
+        return Ok(None);
+    };
+    binding.verify(request, trust)?;
+    if let Some(published) = journal.optional_json::<ManifestV1>("deployment.json")? {
+        require(
+            published == binding.manifest,
+            "published deployment manifest differs from its retained ensure binding",
+        )?;
+    } else {
+        journal.install_json("deployment.json", &binding.manifest)?;
+    }
+    Ok(Some(binding.manifest))
+}
+
+fn ensure_bound_manifest<C: RunContext>(
+    context: &C,
+    request: &EnsureRequestV1,
+    trust: &finality::TrustV1,
+    allow_create: bool,
+) -> Result<ManifestV1> {
+    let journal = if allow_create {
+        Journal::open_unpublished(&request.manifest_dir)?
+    } else {
+        Journal::open(&request.manifest_dir, false)?
+    };
+    if let Some(manifest) = recover_bound_manifest(&journal, request, trust)? {
+        return Ok(manifest);
+    }
+    require(
+        allow_create,
+        "planned deployment is missing its retained native ensure binding",
+    )?;
+    journal.require_unplanned()?;
+    let manifest = derive_manifest(context, &request.init_args()?)?;
+    request.matches_manifest(&manifest, trust)?;
+    let binding = EnsureBindingV1::new(request, manifest.clone())?;
+    journal.install_json("ensure-binding.json", &binding)?;
+    journal.install_json("deployment.json", &manifest)?;
+    Ok(manifest)
+}
+
+fn ensure<C: RunContext>(context: &mut C, args: EnsureArgs) -> Result<()> {
+    let bytes = read_ensure_request(&args.request)?;
+    let request: EnsureRequestV1 = json::from_slice(&bytes)?;
+    let trust = request.validate(context)?;
+    let operation_dir = request.journal_dir.join(&request.operation_id);
+    let manifest_path = request.manifest_dir.join("deployment.json");
+    let plan_exists = operation_dir.join("plan.json").try_exists()?;
+    let manifest = ensure_bound_manifest(context, &request, &trust, !plan_exists)?;
+    if plan_exists {
+        let journal = Journal::open(&operation_dir, false)?;
+        let retained: PlanV1 = journal.read_json("plan.json")?;
+        retained.verify()?;
+        require(
+            retained.operation_id == request.operation_id,
+            "retained plan belongs to another operation",
+        )?;
+        require(
+            retained.manifest == manifest,
+            "retained plan differs from the native ensure manifest",
+        )?;
+    } else {
+        let retained = plan_manifest(
+            context,
+            PlanArgs {
+                manifest: manifest_path,
+                journal_dir: request.journal_dir.clone(),
+            },
+        )?;
+        require(
+            retained.operation_id == request.operation_id,
+            "planned operation identity differs from the ensure request",
+        )?;
+        require(
+            retained.manifest == manifest,
+            "planned manifest differs from the native ensure binding",
+        )?;
+    }
+    drop(bytes);
+    if plan_exists {
+        let status = run_saved(
+            context,
+            SavedArgs {
+                journal_dir: request.journal_dir.clone(),
+                operation_id: request.operation_id.clone(),
+                timeout_ms: args.timeout_ms,
+            },
+            false,
+        )?;
+        if status.deployment_complete {
+            return print_saved_report(&status, true, |report| context.print_data(report));
+        }
+    }
+    let report = run_saved(
+        context,
+        SavedArgs {
+            journal_dir: request.journal_dir,
+            operation_id: request.operation_id,
+            timeout_ms: args.timeout_ms,
+        },
+        true,
+    )?;
+    print_saved_report(&report, true, |report| context.print_data(report))
 }
 
 fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result<()> {
@@ -1648,9 +2041,51 @@ fn same_file_snapshot(before: &fs::Metadata, after: &fs::Metadata) -> bool {
         && before.ctime_nsec() == after.ctime_nsec()
 }
 
+#[cfg(unix)]
+fn require_unplanned_entries(path: &Path, directory: &File, allow_lock: bool) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let held = directory.metadata()?;
+    let named = fs::symlink_metadata(path)?;
+    private_metadata(&named, true)?;
+    require(
+        held.dev() == named.dev() && held.ino() == named.ino(),
+        "operation journal directory was replaced",
+    )?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if allow_lock && name.to_str() == Some("lock") {
+            continue;
+        }
+        require(
+            name.to_str()
+                .is_some_and(|name| name.starts_with(".staging-")),
+            "operation journal contains evidence without a durable plan",
+        )?;
+        private_metadata(&fs::symlink_metadata(entry.path())?, false)?;
+    }
+    let named = fs::symlink_metadata(path)?;
+    private_metadata(&named, true)?;
+    require(
+        held.dev() == named.dev() && held.ino() == named.ino(),
+        "operation journal directory was replaced",
+    )
+}
+
 impl Journal {
     #[cfg(unix)]
     fn open(path: &Path, create: bool) -> Result<Self> {
+        Self::open_inner(path, create, false)
+    }
+
+    #[cfg(unix)]
+    fn open_unpublished(path: &Path) -> Result<Self> {
+        Self::open_inner(path, true, true)
+    }
+
+    #[cfg(unix)]
+    fn open_inner(path: &Path, create: bool, recover_unplanned: bool) -> Result<Self> {
         use rustix::fs::{Mode, OFlags};
         let name = path
             .file_name()
@@ -1666,8 +2101,13 @@ impl Journal {
             Mode::empty(),
         )?);
         private_metadata(&parent.metadata()?, true)?;
+        let mut created = false;
         if create {
-            rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))?;
+            match rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700)) {
+                Ok(()) => created = true,
+                Err(rustix::io::Errno::EXIST) if recover_unplanned => {}
+                Err(error) => return Err(error.into()),
+            }
             parent.sync_all()?;
         }
         let directory = File::from(rustix::fs::openat(
@@ -1677,25 +2117,43 @@ impl Journal {
             Mode::empty(),
         )?);
         private_metadata(&directory.metadata()?, true)?;
-        let lock = File::from(rustix::fs::openat(
-            &directory,
-            "lock",
-            OFlags::RDWR
-                | OFlags::CLOEXEC
-                | OFlags::NOFOLLOW
-                | OFlags::NONBLOCK
-                | if create {
-                    OFlags::CREATE | OFlags::EXCL
-                } else {
-                    OFlags::empty()
-                },
-            Mode::from_raw_mode(0o600),
-        )?);
+        let canonical_path = parent_path.join(name);
+        let lock_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
+        let lock = if recover_unplanned && !created {
+            match rustix::fs::openat(&directory, "lock", lock_flags, Mode::empty()) {
+                Ok(fd) => File::from(fd),
+                Err(rustix::io::Errno::NOENT) => {
+                    // A lost lock from a planned operation must never be
+                    // silently replaced: another process may still hold its
+                    // unlinked inode across an uncertain submission.
+                    require_unplanned_entries(&canonical_path, &directory, false)?;
+                    File::from(rustix::fs::openat(
+                        &directory,
+                        "lock",
+                        lock_flags | OFlags::CREATE | OFlags::EXCL,
+                        Mode::from_raw_mode(0o600),
+                    )?)
+                }
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            File::from(rustix::fs::openat(
+                &directory,
+                "lock",
+                lock_flags
+                    | if create {
+                        OFlags::CREATE | OFlags::EXCL
+                    } else {
+                        OFlags::empty()
+                    },
+                Mode::from_raw_mode(0o600),
+            )?)
+        };
         private_metadata(&lock.metadata()?, false)?;
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
         directory.sync_all()?;
         let value = Self {
-            path: parent_path.join(name),
+            path: canonical_path,
             directory,
             lock_snapshot: lock.metadata()?,
             _lock: lock,
@@ -1706,6 +2164,23 @@ impl Journal {
 
     #[cfg(not(unix))]
     fn open(_: &Path, _: bool) -> Result<Self> {
+        eyre::bail!("durable deployments require Unix descriptor custody")
+    }
+
+    #[cfg(not(unix))]
+    fn open_unpublished(_: &Path) -> Result<Self> {
+        eyre::bail!("durable deployments require Unix descriptor custody")
+    }
+
+    #[cfg(unix)]
+    fn require_unplanned(&self) -> Result<()> {
+        self.revalidate()?;
+        require_unplanned_entries(&self.path, &self.directory, true)?;
+        self.revalidate()
+    }
+
+    #[cfg(not(unix))]
+    fn require_unplanned(&self) -> Result<()> {
         eyre::bail!("durable deployments require Unix descriptor custody")
     }
 
@@ -1931,6 +2406,42 @@ fn read_public_input(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(unix)]
+fn read_ensure_request(path: &Path) -> Result<Vec<u8>> {
+    use rustix::fs::{Mode, OFlags};
+    require(
+        normal_absolute(path),
+        "ensure request path must be absolute and normal",
+    )?;
+    let mut file = File::from(rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?);
+    let before = file.metadata()?;
+    private_metadata(&before, false)?;
+    require(
+        before.len() > 0 && before.len() <= MAX_BYTES as u64,
+        "ensure request must be nonempty and bounded",
+    )?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    require(
+        bytes.len() as u64 == before.len()
+            && same_file_snapshot(&before, &file.metadata()?)
+            && same_file_snapshot(&before, &fs::symlink_metadata(path)?),
+        "ensure request changed during custody",
+    )?;
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_ensure_request(_: &Path) -> Result<Vec<u8>> {
+    eyre::bail!("dataspace ensure requires Unix descriptor custody")
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -1958,6 +2469,214 @@ mod tests {
 
     fn amount(value: u32, scale: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap()
+    }
+
+    fn ensure_request(manifest: &ManifestV1) -> EnsureRequestV1 {
+        EnsureRequestV1 {
+            schema: "iroha.taira.dataspace-deploy.ensure-request.v1".into(),
+            operation_id: "fixed-op".into(),
+            network_id: manifest.network_id,
+            owner: manifest.owner.clone(),
+            dataspace: "devex".into(),
+            lane_id: 6,
+            lane_profile: "public_full_replica".into(),
+            account_alias: "admin".into(),
+            trust: PathBuf::from("/private/trust.json"),
+            trust_sha256: "ab".repeat(32),
+            payment_asset: manifest.spending.asset_definition_id.clone(),
+            alias_create_maximum: manifest.spending.alias_create_maximum.clone(),
+            transaction_fee_maximum: manifest.spending.transaction_fee_maximum.clone(),
+            lease_years: 1,
+            manifest_dir: PathBuf::from("/private/manifest"),
+            journal_dir: PathBuf::from("/private/journals"),
+        }
+    }
+
+    #[test]
+    fn ensure_request_binds_exact_retained_operation_and_selection() {
+        let mut manifest = manifest();
+        manifest.operation_id = Some("fixed-op".into());
+        let request = ensure_request(&manifest);
+        request
+            .matches_manifest(&manifest, &manifest.finality)
+            .unwrap();
+        let args = request.init_args().unwrap();
+        assert_eq!(args.operation_id.as_deref(), Some("fixed-op"));
+        assert_eq!(args.output_dir, request.manifest_dir);
+        let mut changed = request.clone();
+        changed.operation_id = "different-op".into();
+        assert!(
+            changed
+                .matches_manifest(&manifest, &manifest.finality)
+                .is_err()
+        );
+        changed = request.clone();
+        changed.transaction_fee_maximum = amount(2, 0);
+        assert!(
+            changed
+                .matches_manifest(&manifest, &manifest.finality)
+                .is_err()
+        );
+        changed = request.clone();
+        changed.account_alias = "another".into();
+        assert!(
+            changed
+                .matches_manifest(&manifest, &manifest.finality)
+                .is_err()
+        );
+        let mut changed_manifest = manifest.clone();
+        let account_alias = changed_manifest
+            .alias_request
+            .intents
+            .iter_mut()
+            .find_map(|intent| match &mut intent.intent {
+                AliasIntentV1::AccountAlias(alias) => Some(alias),
+                _ => None,
+            })
+            .unwrap();
+        account_alias.role = AccountAliasRoleV1::Primary;
+        assert!(changed_manifest.validate().is_err());
+        assert!(
+            request
+                .matches_manifest(&changed_manifest, &changed_manifest.finality)
+                .is_err()
+        );
+        let wire = json::to_vec(&request).unwrap();
+        let mut value: json::Value = json::from_slice(&wire).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("retry_with_new_quote".into(), norito::json!(true));
+        assert!(json::from_slice::<EnsureRequestV1>(&json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn ensure_binding_recovers_exact_manifest_and_rejects_foreign_request_or_unbound_manifest() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut manifest = manifest();
+        manifest.operation_id = Some("fixed-op".into());
+        let request = ensure_request(&manifest);
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = root.path().join("bound");
+        let journal = Journal::open_unpublished(&directory).unwrap();
+        journal.require_unplanned().unwrap();
+        let binding = EnsureBindingV1::new(&request, manifest.clone()).unwrap();
+        binding.verify(&request, &manifest.finality).unwrap();
+        journal
+            .install_json("ensure-binding.json", &binding)
+            .unwrap();
+        drop(journal);
+
+        // A crash before deployment.json must replay the exact retained
+        // manifest, including its original quote guard and deadline.
+        let resumed = Journal::open_unpublished(&directory).unwrap();
+        assert_eq!(
+            recover_bound_manifest(&resumed, &request, &manifest.finality).unwrap(),
+            Some(manifest.clone())
+        );
+        assert_eq!(
+            resumed.read_json::<ManifestV1>("deployment.json").unwrap(),
+            manifest
+        );
+        let mut changed = request.clone();
+        changed.journal_dir = PathBuf::from("/private/other-journals");
+        assert!(
+            changed
+                .matches_manifest(&manifest, &manifest.finality)
+                .is_ok()
+        );
+        assert!(recover_bound_manifest(&resumed, &changed, &manifest.finality).is_err());
+        drop(resumed);
+
+        let unbound = Journal::open_unpublished(&root.path().join("unbound")).unwrap();
+        unbound.install_json("deployment.json", &manifest).unwrap();
+        assert!(recover_bound_manifest(&unbound, &request, &manifest.finality).is_err());
+
+        let mismatched = Journal::open_unpublished(&root.path().join("mismatched")).unwrap();
+        mismatched
+            .install_json("ensure-binding.json", &binding)
+            .unwrap();
+        let mut foreign = manifest.clone();
+        foreign.operation_id = Some("foreign-op".into());
+        mismatched
+            .install_json("deployment.json", &foreign)
+            .unwrap();
+        assert!(recover_bound_manifest(&mismatched, &request, &manifest.finality).is_err());
+    }
+
+    #[test]
+    fn ensure_cli_accepts_one_fixed_request_and_budget() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(subcommand)]
+            command: Command,
+        }
+        let parsed =
+            Wrapper::try_parse_from(["test", "ensure", "--request", "/private/ensure.json"])
+                .unwrap();
+        let Command::Ensure(args) = parsed.command else {
+            panic!("ensure subcommand expected")
+        };
+        assert_eq!(args.request.as_path(), Path::new("/private/ensure.json"));
+        assert_eq!(args.timeout_ms, 600_000);
+        assert!(
+            Wrapper::try_parse_from([
+                "test",
+                "ensure",
+                "--request",
+                "/private/ensure.json",
+                "--timeout-ms",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn preflight_command_and_closed_readiness_report() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(subcommand)]
+            command: Command,
+        }
+        let parsed = Wrapper::try_parse_from([
+            "test",
+            "preflight",
+            "--manifest",
+            "/private/deployment.json",
+        ])
+        .unwrap();
+        let Command::Preflight(args) = parsed.command else {
+            panic!("preflight subcommand expected")
+        };
+        assert_eq!(
+            args.manifest.as_path(),
+            Path::new("/private/deployment.json")
+        );
+        assert!(Wrapper::try_parse_from(["test", "preflight"]).is_err());
+        let plan = fixture_plan();
+        let report = preflight_report(&plan, "ab".repeat(32));
+        assert_eq!(report.schema, "iroha.taira.dataspace-deploy.preflight.v1");
+        assert_eq!(report.operation_id, plan.operation_id);
+        assert_eq!(report.intent_sha256, plan.intent_sha256);
+        assert_eq!(report.manifest_sha256, "ab".repeat(32));
+        assert_eq!(report.state, "ready_for_plan");
+        assert!(!report.deployment_complete);
+        let wire = json::to_vec(&report).unwrap();
+        assert_eq!(
+            json::from_slice::<PreflightReportV1>(&wire).unwrap(),
+            report
+        );
+        let mut unknown: json::Value = json::from_slice(&wire).unwrap();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("deployment_applied".into(), norito::json!(true));
+        assert!(json::from_slice::<PreflightReportV1>(&json::to_vec(&unknown).unwrap()).is_err());
     }
 
     fn pending_observation() -> PhaseObservationV1 {
@@ -2897,6 +3616,48 @@ mod tests {
             String::from_utf8_lossy(&child.stderr)
         );
         assert!(root.path().join("fresh-output/intent.json").is_file());
+    }
+
+    #[test]
+    fn unplanned_operation_recovers_only_before_any_phase_evidence() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let before_lock = root.path().join("before-lock");
+        fs::create_dir(&before_lock).unwrap();
+        fs::set_permissions(&before_lock, fs::Permissions::from_mode(0o700)).unwrap();
+        let recovered = Journal::open_unpublished(&before_lock).unwrap();
+        recovered.require_unplanned().unwrap();
+        drop(recovered);
+
+        let before_plan = root.path().join("before-plan");
+        let journal = Journal::open_unpublished(&before_plan).unwrap();
+        journal.require_unplanned().unwrap();
+        drop(journal);
+        let resumed = Journal::open_unpublished(&before_plan).unwrap();
+        resumed.require_unplanned().unwrap();
+        resumed
+            .install_json("plan.json", &"immutable plan")
+            .unwrap();
+        drop(resumed);
+        assert_eq!(
+            Journal::open_unpublished(&before_plan)
+                .unwrap()
+                .read_json::<String>("plan.json")
+                .unwrap(),
+            "immutable plan"
+        );
+        fs::remove_file(before_plan.join("lock")).unwrap();
+        assert!(Journal::open_unpublished(&before_plan).is_err());
+        assert!(!before_plan.join("lock").exists());
+
+        let suspicious = root.path().join("evidence-without-plan");
+        let journal = Journal::open_unpublished(&suspicious).unwrap();
+        journal
+            .install_json("catalog.prepared.json", &"signed wire")
+            .unwrap();
+        assert!(journal.require_unplanned().is_err());
     }
 
     #[test]

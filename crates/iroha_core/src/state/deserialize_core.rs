@@ -451,6 +451,31 @@ impl KuraSeed {
         value: json::Value,
         allow_durable_recovery: bool,
     ) -> Result<Box<State>, StateRestoreError> {
+        self.into_state_from_json_with_recovery_mode_and_configured_nexus(
+            value,
+            allow_durable_recovery,
+            None,
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn into_state_from_json_with_configured_nexus(
+        self,
+        value: json::Value,
+        configured_nexus: iroha_config::parameters::actual::Nexus,
+    ) -> Result<Box<State>, StateRestoreError> {
+        self.into_state_from_json_with_recovery_mode_and_configured_nexus(
+            value,
+            true,
+            Some(configured_nexus),
+        )
+    }
+    #[cfg(test)]
+    fn into_state_from_json_with_recovery_mode_and_configured_nexus(
+        self,
+        value: json::Value,
+        allow_durable_recovery: bool,
+        configured_nexus: Option<iroha_config::parameters::actual::Nexus>,
+    ) -> Result<Box<State>, StateRestoreError> {
         let json::Value::Object(map) = value else {
             return Err((json::Error::InvalidField {
                 field: "state".into(),
@@ -461,7 +486,7 @@ impl KuraSeed {
         self.into_state_from_snapshot_map(
             SnapshotJsonMap::from_owned(map),
             allow_durable_recovery,
-            None,
+            configured_nexus,
         )
     }
     fn into_state_from_snapshot_map(

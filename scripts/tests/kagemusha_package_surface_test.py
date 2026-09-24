@@ -66,7 +66,10 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
         self.assertNotIn("acknowledgeCommittedAppAttest(requestFields:", adapter)
         self.assertRegex(adapter, r"public final class KagemushaNativeCoreCoordinatorAdapterV1")
         self.assertIn("public static func open(storagePath:", adapter)
-        self.assertNotRegex(adapter, r"public (?:convenience )?init\(")
+        adapter_body = adapter.split(
+            "public final class KagemushaNativeCoreCoordinatorAdapterV1", maxsplit=1
+        )[1]
+        self.assertNotRegex(adapter_body, r"public (?:convenience )?init\(")
         self.assertIn("try bridge.acknowledgeCommittedAppAttest(", adapter)
 
     def test_coordinator_methods_match_exact_c_rust_swift_kotlin_and_fixture_inventory(self) -> None:

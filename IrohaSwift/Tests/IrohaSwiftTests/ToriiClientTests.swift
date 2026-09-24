@@ -10933,6 +10933,84 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(redemptionStatus.state, .applied)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaPendingSubmissionRequiresExactRetryAfterOne() async throws {
+        let redemption = try kagemushaRedemptionRequest()
+        for retryAfter in [nil, "1", "0", "01", "2"] as [String?] {
+            StubURLProtocol.handler = { request in
+                var headers = [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/kagemusha/operations/\(redemption.operationID.hexEncodedString())",
+                ]
+                headers["Retry-After"] = retryAfter
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 202,
+                        httpVersion: nil, headerFields: headers)!,
+                    try self.kagemushaStatusJSON(
+                        operationID: redemption.operationID,
+                        kind: "redemption", state: "pending")
+                )
+            }
+            if retryAfter == "1" {
+                let status = try await makeClient().submitKagemushaRedemption(redemption)
+                XCTAssertEqual(status.state, .pending)
+            } else {
+                do {
+                    _ = try await makeClient().submitKagemushaRedemption(redemption)
+                    XCTFail("A noncanonical pending retry interval must fail")
+                } catch ToriiClientError.invalidPayload(let reason) {
+                    XCTAssertEqual(reason,
+                        "Pending KAGEMUSHA operation response requires Retry-After: 1")
+                }
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaHTTPRejectionsPreserveOnlyResponseHeaderCode() async throws {
+        let redemption = try kagemushaRedemptionRequest()
+        let headerCode = "kagemusha_operation_capacity_exhausted"
+        let conflictingBody = Data("{\"code\":\"body_supplied_code\"}".utf8)
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 409,
+                httpVersion: nil,
+                headerFields: ["X-Iroha-Reject-Code": headerCode])!, conflictingBody)
+        }
+        do {
+            _ = try await makeClient().submitKagemushaRedemption(redemption)
+            XCTFail("An HTTP rejection must not return an operation status")
+        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(rejectCode, headerCode)
+        }
+
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 403,
+                httpVersion: nil,
+                headerFields: ["X-Iroha-Reject-Code": headerCode])!, conflictingBody)
+        }
+        do {
+            _ = try await makeClient().getKagemushaOperation(
+                operationID: redemption.operationID)
+            XCTFail("A rejected status read must not become operation absence")
+        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(rejectCode, headerCode)
+        }
+
+        StubURLProtocol.handler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 409,
+                httpVersion: nil, headerFields: [:])!, conflictingBody)
+        }
+        do {
+            _ = try await makeClient().submitKagemushaRedemption(redemption)
+            XCTFail("An HTTP rejection must not return an operation status")
+        } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
+            XCTAssertEqual(status, 409)
+            XCTAssertNil(rejectCode, "an error body cannot supply an authoritative reject code")
+        }
+    }
+
     /// These tests exercise actual SDK task scheduling and streaming bounds only;
     /// their arbitrary HTTP body is not a prepared submission or native fixture.
     @MainActor

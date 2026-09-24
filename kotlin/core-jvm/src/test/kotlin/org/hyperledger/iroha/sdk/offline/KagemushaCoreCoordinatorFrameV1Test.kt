@@ -152,13 +152,21 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val begin = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
             listOf(KagemushaCoreCoordinatorFrameV1.u32(1), "i105example".toByteArray(Charsets.UTF_8)))
         val response = listOf(ticket, ByteArray(32) { 0x44 }, ByteArray(32) { 0x45 },
-            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 })
+            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 }, ByteArray(32) { 0x48 },
+            java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN).putLong(120_007).array())
         val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response)
         val decoded = KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin, responseFrame)
         decoded.zip(response).forEach { (left, right) -> assertContentEquals(right, left) }
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
                 listOf(ticket, response[1], response[2], response[3], byteArrayOf(0x45)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response.take(5))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
+                response.dropLast(1) + listOf(ByteArray(8)))
         }
         val challenge = listOf(KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
             ByteArray(273) { 0x51 }, byteArrayOf(0x52), byteArrayOf(0x53), byteArrayOf(0x54),

@@ -268,17 +268,16 @@ async fn status_height(clients: &[iroha::client::Client], deadline: Instant) -> 
                     .map(|client| validator_status_until(client, deadline)),
             )
             .await?;
-            if statuses
-                .iter()
-                .all(|s| s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0)
-            {
+            if statuses.iter().all(|s| {
+                s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0 && s.peers == 3
+            }) {
                 return Ok(statuses[0].blocks);
             }
             sleep(Duration::from_millis(200)).await;
         }
     })
     .await
-    .wrap_err("four validators did not reach the same drained committed height")?
+    .wrap_err("four validators did not reach the same drained committed height and full mesh")?
 }
 fn exact_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
@@ -1129,6 +1128,7 @@ impl Runtime<'_> {
         for index in 0..4 {
             ready(self.api + index, 200, deadline).await?;
         }
+        status_height(self.clients, deadline).await?;
         Ok(())
     }
     async fn signed_snapshot_restart(&mut self, applied_height: u64) -> Result<()> {

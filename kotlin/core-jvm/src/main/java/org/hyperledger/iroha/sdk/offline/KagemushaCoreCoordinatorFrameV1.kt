@@ -230,7 +230,11 @@ object KagemushaCoreCoordinatorFrameV1 {
                 nonempty(response, 3); nonempty(response, 4); equal(response, 3, request, senderInputs(request, 1))
             }
             KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(request, 0)) {
-                1 -> { count(response, 5); ticket(response, 0); (1..4).forEach { digest(response, it) } }
+                1 -> {
+                    count(response, 7); ticket(response, 0); (1..5).forEach { digest(response, it) }
+                    // Fixed suspend-inclusive native expiry, never Unix time.
+                    nativeContinuousDeadline(response, 6)
+                }
                 2 -> {
                     count(response, 4); equal(response, 0, request, 1)
                     equal(response, 1, request, 7); equal(response, 2, request, 8)
@@ -279,6 +283,13 @@ object KagemushaCoreCoordinatorFrameV1 {
     private fun ticket(fields: List<ByteArray>, index: Int) {
         val value = field(fields, index)
         require(value.size == 8 && value.any { it.toInt() != 0 }) { "invalid enrollment ticket" }
+    }
+
+    private fun nativeContinuousDeadline(fields: List<ByteArray>, index: Int) {
+        val value = field(fields, index)
+        require(value.size == 8 && value.any { it.toInt() != 0 }) {
+            "invalid native continuous deadline"
+        }
     }
 
     private fun digest(fields: List<ByteArray>, index: Int) {

@@ -1160,3 +1160,18 @@ derived named structs with a value-independent object shape, applying the same
 renaming and skipped-field rules as serialization. Conditional omissions and
 flattened objects return `None`. Snapshot readers use this metadata without
 constructing a default World or serializing its stores; this changes no bytes.
+
+### Retail phone identifier attestation
+
+`IdentifierResolutionReceipt` now encodes three derived-struct fields in
+order: `payload`, `attestation`, and
+`Option<PhoneRetailCanonicalityAttestationV1>`. The option is part of the
+Norito payload even when absent for a non-phone receipt. The phone attestation
+encodes its signed `PhoneRetailCanonicalityPayloadV1` followed by the
+signature. The payload fixes the field order as exact `NetworkId`, policy ID,
+program ID, input ciphertext hash, output ciphertext hash, opened output
+hash, canonical phone nullifier, UAID, account ID, issue time, and expiry
+time. The signed payload's schema identity is
+`iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1`; the
+attestation's is
+`iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1`.

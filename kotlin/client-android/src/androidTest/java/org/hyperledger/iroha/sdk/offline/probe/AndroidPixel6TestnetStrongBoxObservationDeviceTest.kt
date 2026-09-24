@@ -4,8 +4,11 @@
 package org.hyperledger.iroha.sdk.offline.probe
 
 import android.os.Build
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.io.DataOutputStream
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.cert.CertificateFactory
@@ -64,11 +67,34 @@ class AndroidPixel6TestnetStrongBoxObservationDeviceTest {
         verifier.initVerify(certificate.publicKey)
         verifier.update(evidence.signedMessage())
         assertTrue(verifier.verify(evidence.signatureDer()))
+        retainPublicCertificateChainV1(context.noBackupFilesDir, evidence.certificateChain())
         val replay = collect(release) as Pixel6TestnetObservationResultV1.Evidence
         assertTrue(replay.recovered)
         assertArrayEquals(evidence.signatureDer(), replay.signatureDer())
         val conflictingRelease = ByteArray(32) { 9 }
         conflictingRelease.copyInto(frame, 59)
         assertTrue(collect(conflictingRelease) is Pixel6TestnetObservationResultV1.Frozen)
+    }
+
+    /** Diagnostic export: big-endian magic/count/length-prefixed leaf-first public DER only. */
+    private fun retainPublicCertificateChainV1(directory: java.io.File, chain: List<ByteArray>) {
+        require(chain.size in 1..8 && chain.all { it.size in 1..16_384 }) {
+            "Pixel 6 public attestation chain is outside diagnostic bounds"
+        }
+        val file = java.io.File(directory, "kagemusha-pixel6-observation-chain-v1.bin")
+        FileOutputStream(file).use { raw ->
+            val output = DataOutputStream(raw)
+            output.writeInt(0x4b474331) // KGC1
+            output.writeInt(chain.size)
+            chain.forEach { certificate ->
+                output.writeInt(certificate.size)
+                output.write(certificate)
+            }
+            output.flush()
+            raw.fd.sync()
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(file.readBytes()).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        Log.i("IrohaKeyMintProbe", "public leaf-first chain=${file.absolutePath}; SHA-256=$digest")
     }
 }

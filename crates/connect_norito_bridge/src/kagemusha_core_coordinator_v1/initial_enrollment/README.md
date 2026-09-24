@@ -13,6 +13,21 @@ exact live selection across App Attest/KeyMint preparation and the one-use devic
 qualification. It must never issue a second key, native nonce or qualification after
 an ambiguous result. A restart or uncertain journal result freezes the attempt.
 
+The phase-1 response has seven fields: ticket, nonce, release ID, profile ID,
+lane ID, native owner scope, and fixed native deadline in continuous milliseconds.
+The owner scope is a digest of the original selected account, ticket, lane and
+independently pinned policies for app cache isolation; it is not the eventual
+retail enrollment ID. The deadline uses the platform's suspend-inclusive boot
+clock, never Unix time. Apps may reject an expired response early, while every
+native phase still checks the original process-owned deadline itself.
+
+`KagemushaEnrollmentPhaseOneBackendV1` is a Rust-only adapter for this selection.
+It requires an independently qualified coordinator delegate, an authenticated
+rollback-checked journal store, exact storage path and governed pins. It consumes
+the phase-1 attempt before durable I/O and freezes the journal on close. It does
+not install itself, and phases 2–6 remain unavailable until a qualified backend
+integrates issuer, app verifier and device-possession checks.
+
 `PendingIssuerEnrollmentV1::begin_selected` consumes the original live selection
 after verifying the issuer-signed 273-byte preparation, the independent verifier's
 canonical signed app certificate, the full raw evidence digest and the canonical
@@ -53,14 +68,11 @@ Only the issuer's signed historical decision instant is used for historical
 challenge validity. Admission still grants no hardware commit clock or monetary
 authority. Consuming types have no clone/deserialize/restart constructor.
 
-The 2026-09-12 phase tests cover validly governed and signed substitutions,
-independent HTTP projection mismatches, same-client-nonce challenge replay,
-account signing purpose, exact retry bytes, certificate commitment and expiry.
-They use explicit test keys and the real data-model verification functions.
-At source application, formatting and source review are complete; these new Rust
-tests have **not been compiled or executed** because the shared native build lane
-is occupied by Taira incident validation. Execute the focused maintained suite
-once that lane is available, reusing its warm target:
+The phase tests cover governed signature substitutions, independent HTTP
+projection mismatches, same-client-nonce challenge replay, account signing
+purpose, exact retry bytes, certificate commitment and expiry. They use explicit
+test keys and the real data-model verification functions. Reuse the warm target
+for the maintained focused suite:
 
 ```sh
 cargo iroha-fast -- test -p connect_norito_bridge --lib kagemusha_core_coordinator_v1::initial_enrollment::tests

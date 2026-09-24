@@ -706,4 +706,4 @@ impl FreshIssuerAdmissionV1 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

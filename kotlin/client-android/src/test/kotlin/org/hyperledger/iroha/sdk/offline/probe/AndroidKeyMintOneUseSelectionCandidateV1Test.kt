@@ -235,7 +235,8 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
         }
     }
 
-    private fun frame(body: ByteArray = byteArrayOf(1, 2, 3)): ByteArray {
+    private fun frame(body: ByteArray? = null): ByteArray {
+        if (body == null) return coreFrame()
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
             .toByteArray(Charsets.US_ASCII)
         return domain + ByteArray(8) { offset ->
@@ -501,6 +502,36 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
             throw AssertionError("reused index accepted")
         } catch (_: IllegalArgumentException) { }
         assertFalse(store.reserved)
+    }
+
+    @Test fun malformedOrSubstitutedCoreSelectionCannotConsumePreparedOneUseKey() {
+        val device = FakeDevice()
+        val store = FakeStore()
+        val runner = SelectionCandidateRunnerV1(device, store)
+        val prepared = runner.prepare(lane, before, after)
+            as KeyMintOneUsePreparationResultV1.Prepared
+        val eventsBefore = store.events.toList()
+        val canonical = coreFrame()
+        val malformed = listOf(
+            frame(byteArrayOf(1, 2, 3)),
+            canonical.copyOfRange(0, canonical.size - 1),
+            canonical.copyOf().also { it[331] = 9 },
+            canonical.copyOf().also { it[219] = (it[219].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it[428] = (it[428].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it[444] = (it[444].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it.fill(0, 364, 396) },
+        )
+        malformed.forEach { selected ->
+            assertFailsWith<IllegalArgumentException> {
+                runner.collect(selected, lane, before, after, prepared.publicKey())
+            }
+            assertEquals(eventsBefore, store.events)
+            assertFalse(store.reserved)
+            assertEquals(0, device.signCalls)
+        }
+        assertTrue(runner.collect(canonical, lane, before, after, prepared.publicKey())
+            is KeyMintOneUseSelectionResultV1.Evidence)
+        assertEquals(1, device.signCalls)
     }
 
     @Test fun fileIntentSurvivesRecreationAndDifferentFrameCannotReuseTheSameSlot() {

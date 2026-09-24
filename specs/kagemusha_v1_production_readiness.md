@@ -253,25 +253,67 @@ The connected Pixel 6 was rechecked on an Android 17 user build
 (`google/oriole/oriole:17/CP2A.260705.006/15641320`) with locked, green
 verified boot. It still advertises neither hardware single-use nor limited-use
 Keystore support, and does not advertise the hardware Identity Credential
-feature. On 2026-09-24, a fresh nonmonetary StrongBox one-use instrumentation
+feature. On 2026-09-24, Android `PackageManager.hasSystemFeature` on that
+API-37 device returned `FEATURE_KEYSTORE_SINGLE_USE_KEY=false` and
+`FEATURE_KEYSTORE_LIMITED_USE_KEY=false`; the hardware one-use qualification
+test rejected with `hardware single-use feature absent`. A fresh nonmonetary
+StrongBox one-use instrumentation
 test passed on that build: the new key's attestation reported StrongBox security
 level 2 for both attestation and KeyMint, hardware tag 303 absent, hardware tag
-405 absent, and software tag 405 equal to one. Its first signature verified and
+405 absent, software tag 303 absent, and software tag 405 equal to one. Its first signature verified and
 its second signing attempt failed with `KeyPermanentlyInvalidatedException`.
 This demonstrates software-enforced one-use only; it does not qualify a
 hardware no-fork monetary ratchet. `eSE1` is connected, but the 2026-09-24
 ordinary-app OMAPI discovery returned `ONLINE_ONLY` for the current applet AID;
 no app access rule was observed and applet SELECT/recovery remains untested.
+Android's [setMaxUsageCount contract](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec.Builder#setMaxUsageCount(int))
+explicitly allows software enforcement when secure hardware lacks the feature;
+the [PackageManager feature definitions](https://developer.android.com/reference/android/content/pm/PackageManager#FEATURE_KEYSTORE_SINGLE_USE_KEY)
+identify hardware support. A successful first signature and rejected second
+signature therefore do not override the missing feature flags and hardware
+attestation tags.
+The same Pixel 6 advertises neither `android.hardware.identity_credential`
+nor `android.hardware.identity_credential_direct_access` in `pm list
+features`, so the [hardware Identity Credential feature](https://developer.android.com/reference/android/content/pm/PackageManager#FEATURE_IDENTITY_CREDENTIAL_HARDWARE)
+cannot supply this device's missing ratchet. That API's authentication-key
+use count is an app-readable replacement indicator; its presentation request
+[allows exhausted-key reuse by default](https://developer.android.com/reference/android/security/identity/CredentialDataRequest.Builder#setAllowUsingExhaustedKeys(boolean))
+and can even skip incrementing the count. The
+[device-signed presentation](https://developer.android.com/reference/android/security/identity/CredentialDataResult)
+authenticates session and credential data, not a monotonic count. Android's
+ordinary passkey API likewise cannot presently qualify this profile: the
+[FIDO2 selection criteria](https://developers.google.com/android/reference/com/google/android/gms/fido/fido2/api/common/AuthenticatorSelectionCriteria.Builder)
+do not require a hardware-backed non-backup credential or nonzero counter,
+and [WebAuthn permits a constant-zero signature counter](https://www.w3.org/TR/webauthn-3/#sctn-sign-counter).
 An experimental Pixel 6 StrongBox observation collector and testnet-only app
-entry point are source-staged with exact selection/network/release binding and
-local lost-result freezing. On 2026-09-24, 15 focused Android JVM tests for the
-collector, store and diagnostic selection passed on the current source. A prior
-physical observation test passed before the latest frame and nonce hardening;
-the same-source JNI build and physical observation rerun remain pending. The
-first Android arm64 production JNI build compiled but failed its source seal
-because Core sources changed during compilation, so no stale native library
-was packaged or installed. Observation output is explicitly non-qualified and
-is not a production monetary certificate.
+entry point retain exact selection/network/release binding and local lost-result
+freezing. On 2026-09-24, both Android JNI slices were built and source-sealed
+at commit `95acc0ac374fc00f2a7fdbb8e69289cd2ae89b7d`, Android source
+final Android source fingerprint
+`67f7c4e912d0de7d97980fbc1584e14ec9c9586a66ae6a65d740e5349cbc91dd`.
+The APK was installed on the locked/verified-boot Pixel 6; the physical
+StrongBox observation and native retained-proof export each passed one
+instrumentation test. Its leaf-first public attestation chain is retained in
+an owner-only artifact outside this repository. Independent parsing found
+StrongBox levels 2/2 and software-enforced tag 405 equal to one, while hardware
+tags 303 and 405 remain absent. Three additional nonmonetary instrumentation
+stages passed: an unused key persisted into a new app process, that process
+made one verified signature, and after reboot the consumed alias was absent
+and a second signing attempt failed. This is observed Android service behavior,
+not a hardware-enforced no-fork guarantee. The collector now checks the exact
+460-byte Core S before touching its intent store or one-use key; its 16 focused
+Android JVM tests and the Core/JVM KeyMint verifier tests pass. The final
+post-edit Android seal verified again, and both physical instrumented checks
+passed after reinstalling that APK (SHA-256
+`2ba9f08755ad99731d465e261817d398ff90c28b48f1d855ba12637208bb1f3e`).
+Observation output is explicitly non-qualified and is not a production
+monetary certificate.
+The captured self-signed root is DER-identical to Google's first
+[previously issued Android attestation root](https://developer.android.com/privacy-and-security/security-key-attestation#root_certificates).
+Google advises retaining that factory chain's trust despite certificate expiry
+only with a successful revocation check. The current application verifier pins
+the two newer published roots and has not admitted this older chain; adding an
+unverified root or skipping the missing hardware tags would be unsound.
 
 | Family | Integration work and evidence required |
 | --- | --- |

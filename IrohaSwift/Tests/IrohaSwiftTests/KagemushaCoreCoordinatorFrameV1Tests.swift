@@ -69,13 +69,20 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     let beginFrame = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: begin)
     let response = [ticket, Data(repeating: 0x44, count: 32),
       Data(repeating: 0x45, count: 32), Data(repeating: 0x46, count: 32),
-      Data(repeating: 0x47, count: 32)]
+      Data(repeating: 0x47, count: 32), Data(repeating: 0x48, count: 32),
+      KagemushaCoreCoordinatorFrameV1.u32(120_007) + KagemushaCoreCoordinatorFrameV1.u32(0)]
     let responseFrame = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
       requestFrame: beginFrame, fields: response)
     XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
       requestFrame: beginFrame, responseFrame: responseFrame), response)
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
       requestFrame: beginFrame, fields: [ticket, response[1], response[2], response[3], Data([0x45])]))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: Array(response.prefix(5))))
+    var zeroDeadline = response
+    zeroDeadline[6] = Data(repeating: 0, count: 8)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: zeroDeadline))
     let challenge = [KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
       Data(repeating: 0x51, count: 273), Data([0x52]), Data([0x53]), Data([0x54]),
       Data(repeating: 0x55, count: 32), Data(repeating: 0x56, count: 32),
@@ -99,8 +106,17 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
   func testAppAttestCommitAcknowledgmentBindsOriginalBytesAndCounter() throws {
     let method = KagemushaCoreCoordinatorMethodV1.acknowledgeCommittedAppAttest
     let domain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
-    let selection = domain + Data([0x93, 0x01, 0, 0, 0, 0, 0, 0])
-      + Data(repeating: 0x42, count: 403)
+    var selection = domain + Data([0x93, 0x01, 0, 0, 0, 0, 0, 0]) + Data([1, 0])
+    for _ in 0..<7 { selection.append(Data(repeating: 0x42, count: 32)) }
+    selection.append(Data([1, 0, 0, 0, 0, 0, 0, 0]))
+    selection.append(Data(repeating: 0x42, count: 32))
+    selection.append(Data([1, 0, 0, 0, 0, 0, 0, 0, 1])) // Generation, MintFold.
+    selection.append(Data(repeating: 0x42, count: 32))
+    selection.append(Data(repeating: 0, count: 64))
+    selection.append(4)
+    selection.append(Data(repeating: 0, count: 15))
+    selection.append(5)
+    selection.append(Data(repeating: 0, count: 15))
     let request = [Data(repeating: 0x11, count: 32), Data("app-attest-key".utf8),
       selection, Data([0xa2, 1, 2]), KagemushaCoreCoordinatorFrameV1.u32(4),
       Data(repeating: 0x33, count: 32), Data(repeating: 0x44, count: 32)]

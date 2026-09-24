@@ -104,6 +104,16 @@ internal object KagemushaSelectionFrameV1 {
     }
 }
 
+/** Reject any Core S other than the exact V1 layout and prepared lane/index selection. */
+fun requireKagemushaCoreSelectionFrameV1(
+    frame: ByteArray,
+    lane: ByteArray,
+    before: ByteArray,
+    after: ByteArray,
+) {
+    KagemushaSelectionFrameV1.requireExact(frame, lane, before, after)
+}
+
 /** One release-pinned trust anchor, committed by both DER bytes and SHA-256. */
 class KagemushaKeyMintPinnedRootV1(certificateDer: ByteArray, certificateSha256: ByteArray) {
     private val der = certificateDer.copyOf()

@@ -117,10 +117,66 @@ pub fn build_canonical_multisig_contract_call_json(
         .iter()
         .map(instruction_to_json_value)
         .collect::<CodecResult<Vec<_>>>()?;
-    json::to_json(&norito::json!({
-        "instructions": instructions,
-        "instructions_hash": hex::encode(call.instructions_hash.as_ref()),
-        "metadata": call.metadata,
-    }))
-    .map_err(codec_error)
+    let mut output = json::Map::new();
+    output.insert(
+        "instructions".to_owned(),
+        json::to_value(&instructions).map_err(codec_error)?,
+    );
+    output.insert(
+        "instructions_hash".to_owned(),
+        json::Value::String(hex::encode(call.instructions_hash.as_ref())),
+    );
+    output.insert(
+        "metadata".to_owned(),
+        json::to_value(&call.metadata).map_err(codec_error)?,
+    );
+    json::to_json(&json::Value::Object(output)).map_err(codec_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{account::AccountId, id::NetworkId};
+    use iroha_model_base::topology::DataSpaceId;
+
+    #[test]
+    fn contract_call_json_contains_exact_native_instructions_and_hash() {
+        let key = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).unwrap();
+        let account = AccountId::new(key.public_key().clone());
+        let network: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .unwrap();
+        let address = ContractAddress::derive(&network, &account, 7, DataSpaceId::new(9)).unwrap();
+        let alias: ContractAlias = "reviewed_artifact::universal".parse().unwrap();
+        let code_hash = Hash::new(b"reviewed-artifact");
+        let payload = Json::new(norito::json!({"proposal_id": "case-1"}));
+        let account_literal = account.to_i105_for_discriminant(369).unwrap();
+        let input = format!(
+            "{{\"multisig_account_id\":\"{account_literal}\",\"contract_address\":\"{address}\",\"contract_alias\":\"{alias}\",\"entrypoint\":\"finalize_mint_request\",\"payload\":{{\"proposal_id\":\"case-1\"}},\"arguments_hex\":null,\"code_hash_hex\":\"{}\"}}",
+            hex::encode(code_hash.as_ref()),
+        );
+        let result = build_canonical_multisig_contract_call_json(&input, 369).unwrap();
+        let value: json::Value = json::from_json(&result).unwrap();
+        let expected = build_multisig_contract_call(
+            &account,
+            &address,
+            &alias,
+            "finalize_mint_request",
+            &payload,
+            None,
+            &code_hash,
+        )
+        .unwrap();
+        assert_eq!(value["instructions"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["instructions_hash"].as_str(),
+            Some(hex::encode(expected.instructions_hash.as_ref()).as_str()),
+        );
+        assert_eq!(
+            value["metadata"],
+            json::to_value(&expected.metadata).unwrap(),
+        );
+    }
 }

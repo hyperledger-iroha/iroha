@@ -14,6 +14,8 @@ export {
   AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
   verifyAuthenticatedBlockProofsV1,
+  verifyContractStateValueInclusionV1,
+  verifyContractStateValueInclusionJsonV1,
   ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
   buildMintAssetInstruction,

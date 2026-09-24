@@ -22,7 +22,10 @@ use iroha_data_model::{
     account::{Account, AccountId, OpaqueAccountId},
     block::{BlockHeader, BlockSignature, SignedBlock},
     domain::Domain,
-    identifier::{IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId},
+    identifier::{
+        IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
+        PhoneRetailCanonicalityAttestationV1, PhoneRetailCanonicalityPayloadV1,
+    },
     isi::identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
     isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
     nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, UniversalAccountId},
@@ -1959,12 +1962,19 @@ fn sample_identifier_policy_with_backend(
         }
         RamLfeBackend::HkdfSha3_512PrfV1 => unreachable!("sample BFV policy"),
     };
-    let policy = IdentifierPolicy::new(
+    let mut policy = IdentifierPolicy::new(
         policy_id.clone(),
         owner.clone(),
-        IdentifierNormalization::PhoneE164,
+        if policy_id.is_phone_retail() {
+            IdentifierNormalization::PhoneE164
+        } else {
+            IdentifierNormalization::EmailAddress
+        },
         program_id,
     );
+    if policy_id.is_phone_retail() {
+        policy = policy.with_phone_retail_attestor_public_key(signer.public_key().clone());
+    }
     (policy, program_policy)
 }
 fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
@@ -2024,6 +2034,58 @@ fn output_opening_for_ciphertext(
             .expect("sign RAM-LFE output opening fixture")
             .into(),
         payload,
+    }
+}
+fn phone_retail_canonicality_for_ciphertext(
+    policy: &IdentifierPolicy,
+    program_policy: &RamLfeProgramPolicy,
+    signer: &KeyPair,
+    network_id: iroha_data_model::NetworkId,
+    uaid: UniversalAccountId,
+    account_id: &AccountId,
+    ciphertext: &iroha_crypto::BfvIdentifierCiphertext,
+    opening: &RamLfeOutputOpening,
+) -> PhoneRetailCanonicalityAttestationV1 {
+    let public_parameters = identifier_resolution::decode_bfv_public_parameters(program_policy)
+        .expect("public parameters");
+    let (_, decryption_key, _) = derive_identifier_key_material_from_seed(
+        &public_parameters.parameters,
+        public_parameters.max_input_bytes,
+        b"resolver-secret",
+        &identifier_resolution::program_id_bytes(&program_policy.program_id),
+    )
+    .expect("trusted attestor decryption key");
+    let nullifier = iroha_crypto::derive_phone_retail_nullifier_from_ciphertext_v1(
+        &public_parameters,
+        &decryption_key,
+        ciphertext,
+        &[0xC3; 32],
+        network_id.as_bytes(),
+    )
+    .expect("encrypted input is canonical E.164");
+    assert_eq!(
+        Hash::new(&norito::to_bytes(ciphertext).expect("encode attested phone ciphertext")),
+        opening.payload.input_ciphertext_hash,
+        "canonicality must bind the exact decrypted ciphertext",
+    );
+    let statement = PhoneRetailCanonicalityPayloadV1 {
+        network_id,
+        policy_id: policy.id.clone(),
+        program_id: program_policy.program_id.clone(),
+        input_ciphertext_hash: opening.payload.input_ciphertext_hash,
+        output_ciphertext_hash: opening.payload.output_ciphertext_hash,
+        opened_output_hash: opening.payload.opened_output_hash,
+        canonical_phone_nullifier: nullifier,
+        uaid,
+        account_id: account_id.clone(),
+        issued_at_ms: opening.payload.opened_at_ms,
+        expires_at_ms: opening.payload.expires_at_ms.unwrap_or(u64::MAX),
+    };
+    PhoneRetailCanonicalityAttestationV1 {
+        signature: SignatureOf::try_new(signer.private_key(), &statement)
+            .expect("sign canonicality statement")
+            .into(),
+        payload: statement,
     }
 }
 fn dummy_output_opening_for_access_test() -> RamLfeOutputOpening {
@@ -2106,7 +2168,11 @@ fn sample_identifier_policy_with_public_parameters(
         .expect("policy commitment"),
         signer.public_key().clone(),
     );
-    let policy = IdentifierPolicy::new(policy_id.clone(), owner.clone(), normalization, program_id);
+    let mut policy =
+        IdentifierPolicy::new(policy_id.clone(), owner.clone(), normalization, program_id);
+    if policy_id.is_phone_retail() {
+        policy = policy.with_phone_retail_attestor_public_key(signer.public_key().clone());
+    }
     (policy, program_policy)
 }
 fn register_and_activate_identifier_policy_bundle(

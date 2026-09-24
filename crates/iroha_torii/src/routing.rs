@@ -3274,6 +3274,8 @@ pub struct IdentifierPolicySummaryDto {
     pub normalization: String,
     pub resolver_public_key: String,
     pub output_opening_public_key: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_attestor_public_key: Option<String>,
     pub backend: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub input_encryption: Option<String>,
@@ -3565,6 +3567,8 @@ pub struct IdentifierClaimLookupResponseDto {
     pub policy_id: String,
     pub opaque_id: String,
     pub receipt_hash: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_nullifier: Option<String>,
     pub uaid: String,
     pub account_id: String,
     pub verified_at_ms: u64,
@@ -22349,6 +22353,12 @@ fn required_canonical_name_string(object: &Map, key: &str) -> Option<String> {
     let name = literal.parse::<Name>().ok()?;
     (name.as_ref() == literal).then_some(literal)
 }
+fn required_canonical_int_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let value = literal.parse::<iroha_primitives::bigint::BigInt>().ok()?;
+    let bounded = iroha_primitives::numeric_abi::IntValueV1::try_new(value).ok()?;
+    (bounded.as_int().to_string() == literal).then_some(literal)
+}
 fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> {
     let literal = value.as_str()?;
     if literal.is_empty() || literal.trim() != literal {
@@ -22574,6 +22584,12 @@ fn strict_multisig_contract_call_intent(
             "apps_mint_request::cbsi",
             "finalize_mint_request" | "cancel_mint_request",
         ) => ("MINT_REQUEST", &["proposal_id"][..]),
+        ("apps_mint_request::bpng", "finalize_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "finalized_at_ms"][..])
+        }
+        ("apps_mint_request::bpng", "cancel_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "canceled_at_ms"][..])
+        }
         ("pkdeploy_issuance_swap_sbp::sbp", "swap") => (
             "ISSUANCE_SWAP",
             &["swap_id", "pkr_amount", "treasury_amount"][..],
@@ -22679,6 +22695,17 @@ fn strict_multisig_contract_call_intent(
                     return None;
                 }
                 intent.insert("ttl_ms".into(), Value::from(ttl_ms));
+            }
+            if contract_alias_literal == "apps_mint_request::bpng" {
+                let timestamp_key = match contract_entrypoint.as_str() {
+                    "finalize_mint_request" => "finalized_at_ms",
+                    "cancel_mint_request" => "canceled_at_ms",
+                    _ => return None,
+                };
+                intent.insert(
+                    timestamp_key.into(),
+                    Value::from(required_canonical_int_string(object, timestamp_key)?),
+                );
             }
         }
         "ISSUANCE_SWAP" => {
@@ -23501,6 +23528,129 @@ mod multisig_contract_call_tests {
         assert_eq!(mint_intent["proposal_id"].as_str(), Some("mint_1"));
         assert_eq!(mint_intent["amount"].as_str(), Some("125"));
         assert_eq!(mint_intent.as_object().expect("flat mint intent").len(), 4);
+        let bpng_mint_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_mint_request::bpng".parse().expect("BPNG mint alias");
+        let bpng_finalize_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "bpng_mint_1",
+            "finalized_at_ms": "9223372036854775808",
+        }));
+        let bpng_finalize = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(
+                &bpng_mint_alias,
+                "finalize_mint_request",
+                &bpng_finalize_payload,
+            )),
+        )
+        .expect("typed BPNG finalize intent");
+        assert_eq!(bpng_finalize.operation_type, "MINT_REQUEST");
+        let bpng_finalize_intent = bpng_finalize
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("BPNG finalize intent value");
+        assert_eq!(
+            bpng_finalize_intent["contract_alias"].as_str(),
+            Some("apps_mint_request::bpng")
+        );
+        assert_eq!(
+            bpng_finalize_intent["contract_entrypoint"].as_str(),
+            Some("finalize_mint_request")
+        );
+        assert_eq!(
+            bpng_finalize_intent["proposal_id"].as_str(),
+            Some("bpng_mint_1")
+        );
+        assert_eq!(
+            bpng_finalize_intent["finalized_at_ms"].as_str(),
+            Some("9223372036854775808")
+        );
+        assert_eq!(bpng_finalize_intent.as_object().expect("flat intent").len(), 4);
+        let bpng_cancel_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "bpng_mint_1",
+            "canceled_at_ms": "-9223372036854775809",
+        }));
+        let bpng_cancel = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(
+                &bpng_mint_alias,
+                "cancel_mint_request",
+                &bpng_cancel_payload,
+            )),
+        )
+        .expect("typed BPNG cancel intent");
+        assert_eq!(bpng_cancel.operation_type, "MINT_REQUEST");
+        let bpng_cancel_intent = bpng_cancel
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("BPNG cancel intent value");
+        assert_eq!(
+            bpng_cancel_intent["contract_entrypoint"].as_str(),
+            Some("cancel_mint_request")
+        );
+        assert_eq!(
+            bpng_cancel_intent["canceled_at_ms"].as_str(),
+            Some("-9223372036854775809")
+        );
+        assert_eq!(bpng_cancel_intent.as_object().expect("flat intent").len(), 4);
+        for invalid_timestamp in [
+            norito::json!(1),
+            norito::json!("+1"),
+            norito::json!("01"),
+            norito::json!("-0"),
+            norito::json!(" 1"),
+            Value::from("9".repeat(200)),
+        ] {
+            let invalid_payload = IrohaJson::new(norito::json!({
+                "proposal_id": "bpng_mint_1",
+                "finalized_at_ms": invalid_timestamp,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(
+                        &bpng_mint_alias,
+                        "finalize_mint_request",
+                        &invalid_payload,
+                    )),
+                )
+                .is_none(),
+                "BPNG timestamp must be an exact signed 512-bit Int JSON string",
+            );
+        }
+        for (entrypoint, invalid_payload) in [
+            (
+                "finalize_mint_request",
+                norito::json!({ "proposal_id": "bpng_mint_1" }),
+            ),
+            (
+                "finalize_mint_request",
+                norito::json!({
+                    "proposal_id": "bpng_mint_1",
+                    "finalized_at_ms": "1",
+                    "canceled_at_ms": "1",
+                }),
+            ),
+            (
+                "cancel_mint_request",
+                norito::json!({
+                    "proposal_id": "bpng_mint_1",
+                    "finalized_at_ms": "1",
+                }),
+            ),
+        ] {
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(
+                        &bpng_mint_alias,
+                        entrypoint,
+                        &IrohaJson::new(invalid_payload),
+                    )),
+                )
+                .is_none(),
+                "BPNG entrypoint payload must have only its exact typed fields",
+            );
+        }
         let issuance_alias: iroha_data_model::smart_contract::ContractAlias =
             "pkdeploy_issuance_swap_sbp::sbp"
                 .parse()

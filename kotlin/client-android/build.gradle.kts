@@ -1675,6 +1675,11 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.bcprov)
+    // This library's self-targeted instrumentation APK needs its compiled Android
+    // classes at runtime; the AGP test classpath alone does not package them.
+    androidTestRuntimeOnly(files(layout.buildDirectory.file(
+        "intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar",
+    )).builtBy("bundleLibCompileToJarDebug"))
 }
 
 tasks.withType<Test>().configureEach {

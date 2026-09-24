@@ -179,11 +179,10 @@ impl Fixture {
         self.sign_proof(challenge)
     }
 
-    /// Synthetic authority result for tests only. Production requires a real platform verifier.
-    fn verified_app(
+    fn app_certificate(
         &self,
         challenge: &KagemushaRetailEnrollmentChallengeV1,
-    ) -> KagemushaVerifiedAppEnrollmentV1 {
+    ) -> KagemushaAppEnrollmentCertificateV1 {
         let key = KeyPair::from_seed(vec![73; 32], Algorithm::Ed25519);
         let policy = self.app_policy.as_ref();
         let selection = KagemushaAppEnrollmentSelectionV1::for_credential(
@@ -208,11 +207,26 @@ impl Fixture {
             issued_at_ms: 1_000,
             expires_at_ms: 2_000,
         };
-        let certificate = KagemushaAppEnrollmentCertificateV1 {
+        KagemushaAppEnrollmentCertificateV1 {
             signature: SignatureOf::try_new(key.private_key(), &assertion).unwrap(),
             assertion,
-        };
-        certificate.authenticate(policy, selection, 1_500).unwrap()
+        }
+    }
+
+    /// Synthetic authority result for tests only. Production requires a real platform verifier.
+    fn verified_app(
+        &self,
+        challenge: &KagemushaRetailEnrollmentChallengeV1,
+    ) -> KagemushaVerifiedAppEnrollmentV1 {
+        let selection = KagemushaAppEnrollmentSelectionV1::for_credential(
+            challenge.client_nonce,
+            challenge.server_nonce,
+            challenge.issuance.release_id,
+            &challenge.issuance.credential,
+        );
+        self.app_certificate(challenge)
+            .authenticate(self.app_policy.as_ref(), selection, 1_500)
+            .unwrap()
     }
 
     fn sign_proof(
@@ -284,6 +298,164 @@ impl Fixture {
             subject,
         }
     }
+}
+
+/// Match the journal's phase-one pins to a real signed test release and profile.
+pub(crate) fn journal_pins() -> super::super::KagemushaEnrollmentJournalPinsV1 {
+    let fixture = Fixture::new();
+    super::super::KagemushaEnrollmentJournalPinsV1 {
+        release_id: fixture.release.release_id(),
+        hardware_profile_id: fixture.qualification.credential.hardware_profile_id,
+        issuer_policy_id: fixture.policy.issuer_policy_id,
+        app_policy_digest: fixture.app_policy.canonical_digest().unwrap(),
+    }
+}
+
+pub(crate) fn journal_account() -> String {
+    Fixture::new().owner.account_id.canonical_i105().unwrap()
+}
+
+/// Build a canonical, signed challenge with this journal owner's actual account and lane.
+/// The journal still only persists phase bytes; platform verification belongs to its backend.
+fn journal_challenge_and_proof(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+) -> (Vec<Vec<u8>>, Vec<u8>, Vec<u8>, [u8; 32]) {
+    let mut fixture = Fixture::new();
+    assert_eq!(selected.release_id, fixture.release.release_id());
+    assert_eq!(
+        selected.hardware_profile_id,
+        fixture.qualification.credential.hardware_profile_id
+    );
+    fixture.owner.account_id = AccountId::parse_encoded(&selected.account_i105).unwrap();
+    fixture.owner.lane_id = selected.lane_id;
+    let credential = &mut fixture.qualification.credential;
+    credential.lane_commitment = selected.lane_id;
+    credential.app_policy_binding_digest = KagemushaAppDevicePolicyBindingV1 {
+        app_signing_identity_digest: fixture.app_policy.app_signing_identity_digest,
+        app_release_digest: fixture.app_policy.app_release_digest,
+        release_id: selected.release_id,
+        hardware_profile_id: selected.hardware_profile_id,
+        device_key_reference: credential.device_key_reference,
+        lane_id: selected.lane_id,
+    }
+    .canonical_digest()
+    .unwrap();
+    fixture.qualification.credential = credential.clone().seal_credential_id().unwrap();
+    let seed = fixture.qualification.profile.provider_id[0].wrapping_add(5);
+    let governance = SigningKey::from_bytes((&[seed; 32]).into()).unwrap();
+    let signature: p256::ecdsa::Signature = governance.sign(
+        &fixture
+            .qualification
+            .credential
+            .canonical_signing_bytes()
+            .unwrap(),
+    );
+    fixture.qualification.credential.governance_signature =
+        KagemushaDeviceSignatureV1::from_raw_bytes(
+            &signature.normalize_s().unwrap_or(signature).to_bytes(),
+        )
+        .unwrap();
+    fixture
+        .qualification
+        .credential
+        .validate_against_profile(&fixture.qualification.profile)
+        .unwrap();
+
+    let mut challenge = KagemushaRetailEnrollmentChallengeV1 {
+        version: 1,
+        client_nonce: selected.client_nonce,
+        server_nonce: [93; 32],
+        issuer_policy_id: fixture.policy.issuer_policy_id,
+        issuer_audience: fixture.policy.issuer_audience.clone(),
+        owner: fixture.owner.clone(),
+        issuance: KagemushaRetailEnrollmentIssuanceV1 {
+            release_id: selected.release_id,
+            hardware_policy_digest: fixture.qualification.hardware_policy_digest,
+            core_authorization_key_reference: fixture
+                .qualification
+                .core_authorization_key_reference,
+            credential: fixture.qualification.credential,
+        },
+        app_attestation_digest: [0; 32],
+        issued_at_ms: 1_000,
+        expires_at_ms: 2_000,
+    };
+    let app_certificate = fixture.app_certificate(&challenge);
+    challenge.app_attestation_digest = app_certificate
+        .authenticate(
+            fixture.app_policy.as_ref(),
+            KagemushaAppEnrollmentSelectionV1::for_credential(
+                challenge.client_nonce,
+                challenge.server_nonce,
+                challenge.issuance.release_id,
+                &challenge.issuance.credential,
+            ),
+            1_500,
+        )
+        .unwrap()
+        .digest();
+
+    let mut preparation = Vec::with_capacity(273);
+    preparation.push(1);
+    preparation.extend_from_slice(&1_000_u64.to_le_bytes());
+    preparation.extend_from_slice(&121_000_u64.to_le_bytes());
+    preparation.extend_from_slice(&selected.client_nonce);
+    preparation.extend_from_slice(&challenge.server_nonce);
+    preparation.extend_from_slice(&selected.release_id);
+    preparation.extend_from_slice(&selected.hardware_profile_id);
+    preparation.extend_from_slice(&[0; 32]);
+    preparation.extend_from_slice(&selected.lane_id);
+    let mut message = b"iroha:kagemusha:v1:app-enrollment-preparation\0".to_vec();
+    message.extend_from_slice(&preparation[1..209]);
+    message.extend_from_slice(&fixture.policy.issuer_policy_id);
+    message.extend_from_slice(&Sha256::digest(
+        fixture.owner.account_id.to_string().as_bytes(),
+    ));
+    preparation.extend_from_slice(
+        Signature::try_new(fixture.issuer.private_key(), &message)
+            .unwrap()
+            .payload(),
+    );
+    assert_eq!(preparation.len(), 273);
+    let proof = fixture.sign_proof(challenge.clone());
+    let certificate = fixture.certificate(&proof);
+    let enrollment_id = certificate.subject.enrollment_id;
+    let proof = proof.canonical_bytes().unwrap();
+    let certificate = certificate.canonical_bytes().unwrap();
+    let request_id = challenge.device_request_id().unwrap().to_vec();
+    let fields = vec![
+        2_u32.to_le_bytes().to_vec(),
+        selected.ticket.to_le_bytes().to_vec(),
+        preparation,
+        norito::encode_canonical(&app_certificate).unwrap(),
+        norito::encode_canonical(&fixture.qualification).unwrap(),
+        norito::encode_canonical(&challenge).unwrap(),
+        request_id.clone(),
+        challenge.account_signing_message().unwrap().to_vec(),
+        request_id,
+        KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap(),
+        challenge.expires_at_ms.to_le_bytes().to_vec(),
+    ];
+    (fields, proof, certificate, enrollment_id)
+}
+
+pub(crate) fn journal_challenge_fields(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+) -> Vec<Vec<u8>> {
+    journal_challenge_and_proof(selected).0
+}
+
+pub(crate) fn journal_proof_bytes(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+) -> Vec<u8> {
+    journal_challenge_and_proof(selected).1
+}
+
+pub(crate) fn journal_certificate(
+    selected: &super::super::KagemushaEnrollmentJournalSelectionV1,
+) -> (Vec<u8>, [u8; 32]) {
+    let (_, _, certificate, enrollment_id) = journal_challenge_and_proof(selected);
+    (certificate, enrollment_id)
 }
 
 fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {

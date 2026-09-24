@@ -169,6 +169,7 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaEnrollmentJournalErrorV1, KagemushaEnrollmentJournalPinsV1,
     KagemushaEnrollmentJournalReservationV1, KagemushaEnrollmentJournalResultV1,
     KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
+    KagemushaEnrollmentPhaseOneBackendV1,
     KagemushaEnrollmentLiveSelectionV1, KagemushaExclusiveCoordinatorBackendV1,
     PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
     SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
@@ -2710,12 +2711,12 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
             .get("attestation")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
-    let phone_retail_canonicality = object
-        .get("phone_retail_canonicality")
-        .filter(|value| !matches!(value, JsonValue::Null))
-        .map(|value| norito::json::from_value(value.clone()))
-        .transpose()
-        .map_err(|_| BridgeError::IdentifierReceipt)?;
+    let phone_retail_canonicality = match object.get("phone_retail_canonicality") {
+        None | Some(JsonValue::Null) => None,
+        Some(value) => Some(
+            norito::json::from_value(value.clone()).map_err(|_| BridgeError::IdentifierReceipt)?,
+        ),
+    };
     Ok(IdentifierResolutionReceipt {
         payload,
         attestation,

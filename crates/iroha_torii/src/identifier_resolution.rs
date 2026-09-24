@@ -280,6 +280,10 @@ impl IdentifierResolutionService {
             || policy.normalization != IdentifierNormalization::PhoneE164
             || policy.program_id.to_string() != "phone_retail"
             || policy.program_id != program_policy.program_id
+            || policy.owner != program_policy.owner
+            || program_policy.backend != RamLfeBackend::BfvProgrammedSha3_256V1
+            || program_policy.commitment.backend != program_policy.backend
+            || program_policy.verification_mode != RamLfeVerificationMode::Signed
         {
             return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
                 "policy or program is not the pinned phone#retail contract".to_owned(),
@@ -288,9 +292,14 @@ impl IdentifierResolutionService {
         let execution = self.execute_encrypted(program_policy, ciphertext)?;
         validate_output_opening(&opening, &execution, program_policy)?;
         let statement = &canonicality.payload;
-        let pinned_key = policy.phone_retail_attestor_public_key.as_ref().ok_or_else(|| {
-            IdentifierResolutionError::InvalidPhoneCanonicality("attestor key is not pinned".to_owned())
-        })?;
+        let pinned_key = policy
+            .phone_retail_attestor_public_key
+            .as_ref()
+            .ok_or_else(|| {
+                IdentifierResolutionError::InvalidPhoneCanonicality(
+                    "attestor key is not pinned".to_owned(),
+                )
+            })?;
         let now = now_ms();
         if statement.network_id != *network_id
             || statement.policy_id != policy.id
@@ -307,9 +316,9 @@ impl IdentifierResolutionService {
                 "network, commitment, nullifier, or validity window mismatch".to_owned(),
             ));
         }
-        canonicality.verify(pinned_key).map_err(|err| {
-            IdentifierResolutionError::InvalidPhoneCanonicality(err.to_string())
-        })?;
+        canonicality
+            .verify(pinned_key)
+            .map_err(|err| IdentifierResolutionError::InvalidPhoneCanonicality(err.to_string()))?;
         let (opaque_id, receipt_hash) = identifier_hashes_from_output_hash(
             &program_id_bytes(&program_policy.program_id),
             &statement.canonical_phone_nullifier,
@@ -423,11 +432,15 @@ impl IdentifierResolutionService {
         account_id: AccountId,
     ) -> Result<IdentifierResolutionReceipt, IdentifierResolutionError> {
         if policy.id.is_phone_retail() {
-            let statement = &draft.phone_retail_canonicality.as_ref().ok_or_else(|| {
-                IdentifierResolutionError::InvalidPhoneCanonicality(
-                    "attestation is required for phone#retail".to_owned(),
-                )
-            })?.payload;
+            let statement = &draft
+                .phone_retail_canonicality
+                .as_ref()
+                .ok_or_else(|| {
+                    IdentifierResolutionError::InvalidPhoneCanonicality(
+                        "attestation is required for phone#retail".to_owned(),
+                    )
+                })?
+                .payload;
             if statement.uaid != uaid || statement.account_id != account_id {
                 return Err(IdentifierResolutionError::InvalidPhoneCanonicality(
                     "attestation beneficiary differs from resolved account".to_owned(),
@@ -976,6 +989,7 @@ mod tests {
             evaluation_key_digest: fixture_payload.execution.evaluation_key_digest,
             verification_mode: fixture_payload.execution.verification_mode,
             opening: fixture_payload.opening.clone(),
+            phone_retail_canonicality: None,
         };
         let issued = service
             .issue_claim_receipt(

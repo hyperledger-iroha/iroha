@@ -34,6 +34,8 @@ class KagemushaNativeEnrollmentPhasesV1Test {
         val selected = phases.begin(account)
         assertEquals(account, selected.accountI105)
         assertSame(selected, phases.recoverExactSelection(account))
+        assertContentEquals(ByteArray(32) { 6 }, selected.ownerScope())
+        assertEquals(120_007L, selected.nativeDeadlineContinuousMS())
         selected.clientNonce().fill(0)
         assertContentEquals(ByteArray(32) { 1 }, selected.clientNonce())
         assertFailsWith<IllegalStateException> { phases.begin(account) }
@@ -193,7 +195,8 @@ class KagemushaNativeEnrollmentPhasesV1Test {
             val ticket = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(17).array()
             return when (ByteBuffer.wrap(fields[0]).order(ByteOrder.LITTLE_ENDIAN).int) {
                 1 -> if (loseBegin) null else arrayOf(ticket, ByteArray(32) { 1 }, ByteArray(32) { 3 },
-                    ByteArray(32) { 4 }, ByteArray(32) { 5 })
+                    ByteArray(32) { 4 }, ByteArray(32) { 5 }, ByteArray(32) { 6 },
+                    ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(120_007).array())
                 2 -> {
                     challengeId = fields[6].copyOf()
                     arrayOf(fields[1], fields[7], fields[8], fields[9])

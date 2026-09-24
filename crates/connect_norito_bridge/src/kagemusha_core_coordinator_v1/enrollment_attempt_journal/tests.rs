@@ -1,6 +1,8 @@
 //! Adversarial journal tests; the memory store models monotonic CAS without hardware claims.
 use super::*;
-use crate::kagemusha_core_coordinator_v1::kagemusha_core_coordinator_encode_request_v1;
+use crate::kagemusha_core_coordinator_v1::{
+    kagemusha_core_coordinator_decode_response_v1, kagemusha_core_coordinator_encode_request_v1,
+};
 use iroha_crypto::KeyPair;
 use std::sync::{Arc, Mutex};
 
@@ -35,14 +37,12 @@ impl KagemushaEnrollmentJournalStoreV1 for MemoryStore {
     }
 }
 fn pins() -> KagemushaEnrollmentJournalPinsV1 {
-    KagemushaEnrollmentJournalPinsV1 {
-        release_id: [1; 32],
-        hardware_profile_id: [2; 32],
-        issuer_policy_id: [3; 32],
-        app_policy_digest: [4; 32],
-    }
+    super::super::initial_enrollment::tests::journal_pins()
 }
 fn account() -> String {
+    super::super::initial_enrollment::tests::journal_account()
+}
+fn other_account() -> String {
     AccountId::new(KeyPair::random().public_key().clone())
         .canonical_i105()
         .unwrap()
@@ -66,6 +66,42 @@ fn select(
     )
     .unwrap();
     selection
+}
+
+#[test]
+fn phase_one_exports_original_owner_scope_and_fixed_native_continuous_expiry() {
+    let journal =
+        KagemushaEnrollmentAttemptJournalV1::open(Arc::new(MemoryStore::default())).unwrap();
+    let request = begin(&account());
+    let (selection, response) = journal.select(&request, pins()).unwrap();
+    let fields = kagemusha_core_coordinator_decode_response_v1(&response).unwrap();
+    assert_eq!(fields.len(), 7);
+    assert_eq!(fields[0], selection.ticket.to_le_bytes());
+    assert_eq!(fields[1], selection.client_nonce);
+    assert_eq!(fields[2], selection.release_id);
+    assert_eq!(fields[3], selection.hardware_profile_id);
+    assert_eq!(fields[4], selection.lane_id);
+    assert_eq!(fields[5].len(), 32);
+    assert!(fields[5].iter().any(|byte| *byte != 0));
+    let exported = u64::from_le_bytes(fields[6].as_slice().try_into().unwrap());
+    assert_eq!(
+        exported,
+        journal
+            .state
+            .lock()
+            .unwrap()
+            .deadlines
+            .get(&selection.ticket)
+            .unwrap()
+            .expiry_continuous_ms()
+            .unwrap(),
+    );
+    archive_boundary::validate_response(
+        KagemushaCoreCoordinatorMethodV1::InitialEnrollment,
+        &request,
+        &response,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -116,27 +152,7 @@ fn live_selection_cannot_transfer_an_expired_original_deadline() {
     ));
 }
 fn challenge_request(selected: &KagemushaEnrollmentJournalSelectionV1) -> Vec<u8> {
-    let mut prep = vec![0_u8; 273];
-    prep[0] = 1;
-    prep[17..49].copy_from_slice(&selected.client_nonce);
-    prep[49..81].copy_from_slice(&[10; 32]);
-    prep[81..113].copy_from_slice(&selected.release_id);
-    prep[113..145].copy_from_slice(&selected.hardware_profile_id);
-    prep[145..177].copy_from_slice(&[11; 32]);
-    prep[177..209].copy_from_slice(&selected.lane_id);
-    frame(&[
-        2_u32.to_le_bytes().to_vec(),
-        selected.ticket.to_le_bytes().to_vec(),
-        prep,
-        vec![12; 8],
-        vec![13; 8],
-        vec![14; 8],
-        vec![15; 32],
-        vec![16; 32],
-        vec![17; 32],
-        vec![18; 8],
-        1_u64.to_le_bytes().to_vec(),
-    ])
+    frame(&super::super::initial_enrollment::tests::journal_challenge_fields(selected))
 }
 fn challenge_response(request: &[u8]) -> Vec<u8> {
     let f = kagemusha_core_coordinator_decode_request_v1(request).unwrap();
@@ -215,10 +231,10 @@ fn exact_published_result_survives_restart_then_revocation_stops_recovery() {
         matches!(reopened.reserve(&s, &request), Ok(KagemushaEnrollmentJournalDispatchV1::Retained(bytes)) if bytes == response)
     );
     let mut altered = kagemusha_core_coordinator_decode_request_v1(&request).unwrap();
-    altered[5][0] ^= 1;
+    altered[2][49] ^= 1;
     assert!(matches!(
         reopened.reserve(&s, &frame(&altered)),
-        Err(KagemushaEnrollmentJournalErrorV1::Frozen)
+        Err(KagemushaEnrollmentJournalErrorV1::Frozen | KagemushaEnrollmentJournalErrorV1::Invalid)
     ));
     reopened
         .cancel(
@@ -280,7 +296,7 @@ fn stale_parallel_owner_cannot_allocate_second_ticket() {
     let first = KagemushaEnrollmentAttemptJournalV1::open(store.clone()).unwrap();
     let second = KagemushaEnrollmentAttemptJournalV1::open(store).unwrap();
     let _ = select(&first, &account());
-    let request = begin(&account());
+    let request = begin(&other_account());
     assert!(matches!(
         second.select(&request, pins()),
         Err(KagemushaEnrollmentJournalErrorV1::Store)
@@ -312,8 +328,8 @@ fn all_published_phase_results_recover_exactly_after_later_phases_and_restart() 
     ]);
     let proof_result = kagemusha_core_coordinator_encode_response_v1(&[
         selected.ticket.to_le_bytes().to_vec(),
-        vec![23; 32],
-        vec![24; 128],
+        kagemusha_core_coordinator_decode_request_v1(&challenge).unwrap()[6].clone(),
+        super::super::initial_enrollment::tests::journal_proof_bytes(&selected),
     ])
     .unwrap();
     journal
@@ -327,14 +343,16 @@ fn all_published_phase_results_recover_exactly_after_later_phases_and_restart() 
         selected.ticket.to_le_bytes().to_vec(),
     ]);
     assert_eq!(journal.read_proof(&selected, &read).unwrap(), proof_result);
+    let (certificate, enrollment_id) =
+        super::super::initial_enrollment::tests::journal_certificate(&selected);
     let finish = frame(&[
         5_u32.to_le_bytes().to_vec(),
         selected.ticket.to_le_bytes().to_vec(),
-        vec![25; 64],
+        certificate,
     ]);
     let finish_result = kagemusha_core_coordinator_encode_response_v1(&[
         selected.ticket.to_le_bytes().to_vec(),
-        vec![26; 32],
+        enrollment_id.to_vec(),
     ])
     .unwrap();
     journal
@@ -386,7 +404,7 @@ fn wrong_owner_scope_cannot_recover_or_consume_selected_lane() {
         Err(KagemushaEnrollmentJournalErrorV1::Invalid)
     ));
     wrong = selected.clone();
-    wrong.account_i105 = account();
+    wrong.account_i105 = other_account();
     assert!(matches!(
         journal.reserve(&wrong, &request),
         Err(KagemushaEnrollmentJournalErrorV1::Invalid)

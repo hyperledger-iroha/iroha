@@ -721,6 +721,7 @@ fn realistic_ram_lfe_email_receipt(
     IdentifierResolutionReceipt {
         payload,
         attestation: RamLfeReceiptAttestation::Signed(signature),
+        phone_retail_canonicality: None,
     }
 }
 fn expected_realistic_ram_lfe_email_claim_counts(

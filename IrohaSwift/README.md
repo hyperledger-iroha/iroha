@@ -113,6 +113,9 @@ and operation ID only from that prepared value; Torii never signs or rebuilds it
 `kagemusha_operation_not_found` 404 header and JSON code. A route or proxy 404
 is an error. On exact absence, retry only the retained signed transaction and
 original operation ID; never reserve or sign a replacement top-up.
+Submission accepts a pending 202 only with the exact operation `Location` and
+`Retry-After: 1`. Other HTTP failures retain Torii's `X-Iroha-Reject-Code`
+header in `ToriiClientError.httpStatus`; JSON body fields cannot supply it.
 Pending, ambiguous and unverified applied responses do not authorize intent
 cleanup, credit issuance or retirement. Native artifact qualification, retained
 hardware ownership and trusted finality checkpoints remain caller prerequisites.
