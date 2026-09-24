@@ -3501,6 +3501,8 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         assert!(error.to_string().contains("policy_id"));
     }
     routing_test! { sync identifier_resolve_request_rejects_malformed_encrypted_fields
+        use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":123,"encrypted_input":"ciphertext","output_opening":{}}"#,
         )
@@ -3527,16 +3529,59 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         )
         .expect_err("duplicate encrypted inputs must be rejected");
         assert!(error.to_string().contains("encrypted_input"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{},"output_opening":{}}"#,
-        )
+        let signer = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
+            .expect("derive output-opening fixture key");
+        let payload = iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id: "email_retail".parse().expect("fixture program id"),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 1,
+            expires_at_ms: Some(2),
+        };
+        let opening = iroha_data_model::ram_lfe::RamLfeOutputOpening {
+            signature: SignatureOf::try_new(signer.private_key(), &payload)
+                .expect("sign output-opening fixture")
+                .into(),
+            payload,
+        };
+        let opening_json = norito::json::to_string(&opening).expect("encode output-opening fixture");
+        let duplicate_opening = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            opening_json.as_str(),
+            r#","output_opening": "#,
+            opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(&duplicate_opening)
         .expect_err("duplicate output openings must be rejected");
         assert!(error.to_string().contains("output_opening"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{"payload":{"program_id":"p","program_id":"q"},"signature":"00"}}"#,
-        )
+        let valid_request = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        norito::json::from_str::<IdentifierResolveRequestDto>(&valid_request)
+            .expect("serialized output-opening fixture must parse");
+        let program_id_json = norito::json::to_string(&opening.payload.program_id)
+            .expect("encode output-opening program id fixture");
+        let duplicate_program_id_key = format!("\"program_id\":{program_id_json},\"program_id\":");
+        let duplicate_opening_json =
+            opening_json.replacen("\"program_id\":", &duplicate_program_id_key, 1);
+        assert_ne!(duplicate_opening_json, opening_json, "fixture has program_id");
+        let nested_duplicate = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            duplicate_opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(&nested_duplicate)
         .expect_err("nested duplicate output-opening fields must be rejected");
-        assert!(error.to_string().contains("program_id"));
+        assert!(error.to_string().contains("program_id"), "{error}");
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
         )

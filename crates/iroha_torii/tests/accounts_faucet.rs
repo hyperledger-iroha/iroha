@@ -218,7 +218,7 @@ fn build_faucet_test_context_with_enabled(
     });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let network_id = iroha_torii::test_utils::signed_query_network_id();
-    let mut world = World::with_assets(
+    let world = World::with_assets(
         [domain, stake_domain],
         accounts,
         [asset_definition, stake_definition],

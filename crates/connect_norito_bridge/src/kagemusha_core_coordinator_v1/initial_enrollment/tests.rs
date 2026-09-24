@@ -9,7 +9,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use p256::ecdsa::{SigningKey, signature::Signer as _};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use std::time::Duration;
 
 mod catalog;

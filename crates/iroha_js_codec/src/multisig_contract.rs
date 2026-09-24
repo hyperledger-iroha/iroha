@@ -117,10 +117,69 @@ pub fn build_canonical_multisig_contract_call_json(
         .iter()
         .map(instruction_to_json_value)
         .collect::<CodecResult<Vec<_>>>()?;
+    let instructions_hash = hex::encode(call.instructions_hash.as_ref());
+    let metadata = call.metadata;
     json::to_json(&norito::json!({
         "instructions": instructions,
-        "instructions_hash": hex::encode(call.instructions_hash.as_ref()),
-        "metadata": call.metadata,
+        "instructions_hash": instructions_hash,
+        "metadata": metadata,
     }))
     .map_err(codec_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{account::AccountId, id::NetworkId};
+    use iroha_model_base::topology::DataSpaceId;
+
+    #[test]
+    fn canonical_call_serializes_instructions_hash_and_metadata() {
+        let prefix = 753;
+        let key = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519).expect("fixture key");
+        let account = AccountId::new(key.public_key().clone());
+        let account_literal = account
+            .to_i105_for_discriminant(prefix)
+            .expect("account address");
+        let network: NetworkId =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse()
+                .expect("network");
+        let address = ContractAddress::derive(&network, &account, 7, DataSpaceId::new(9))
+            .expect("contract address");
+        let alias: ContractAlias = "reviewed_artifact::universal".parse().expect("alias");
+        let code_hash = hex::encode(Hash::new(b"reviewed-artifact").as_ref());
+        let input = norito::json!({
+            "multisig_account_id": account_literal,
+            "contract_address": (address.to_string()),
+            "contract_alias": (alias.to_string()),
+            "entrypoint": "finalize_mint_request",
+            "payload": {"proposal_id": "case-1"},
+            "arguments_hex": null,
+            "code_hash_hex": code_hash,
+        });
+        let input = json::to_json(&input).expect("input JSON");
+        let output = build_canonical_multisig_contract_call_json(&input, prefix)
+            .expect("canonical multisig call");
+        let output = json::parse_value(&output).expect("output JSON");
+        let object = output.as_object().expect("output object");
+        assert_eq!(
+            object["instructions"]
+                .as_array()
+                .expect("instructions")
+                .len(),
+            2
+        );
+        assert_eq!(
+            object["instructions_hash"].as_str().expect("hash").len(),
+            64
+        );
+        assert!(
+            object["metadata"]
+                .as_object()
+                .expect("metadata")
+                .contains_key("contract_address")
+        );
+    }
 }

@@ -29,6 +29,7 @@ use iroha_data_model::kagemusha::{
 use rand::{TryRngCore as _, rngs::OsRng};
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
 use super::native_deadline::NativeDeadlineV1;
 use super::{
     enrollment_attempt_journal::{
@@ -329,22 +330,15 @@ impl PendingIssuerEnrollmentV1 {
         Ok(&self.canonical_qualification)
     }
 
+    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.require_unexpired()?;
         if let Some(live) = &self.live_selection {
             return live.deadline().map_err(map_journal_error);
         }
-        #[cfg(test)]
-        {
-            return self
-                .deadline
-                .clone()
-                .ok_or(InitialEnrollmentErrorV1::Binding);
-        }
-        #[cfg(not(test))]
-        {
-            Err(InitialEnrollmentErrorV1::Binding)
-        }
+        self.deadline
+            .clone()
+            .ok_or(InitialEnrollmentErrorV1::Binding)
     }
 
     fn require_unexpired(&self) -> Result<()> {
@@ -675,6 +669,7 @@ pub struct FreshIssuerAdmissionV1 {
 
 impl FreshIssuerAdmissionV1 {
     /// Recheck the original live ticket and deadline before this admission is used.
+    #[cfg(test)]
     pub(super) fn require_live(&self) -> Result<()> {
         self.pending.require_unexpired()
     }
@@ -700,6 +695,7 @@ impl FreshIssuerAdmissionV1 {
     pub fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
         &self.pending.enrollment
     }
+    #[cfg(test)]
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.pending.deadline()
     }

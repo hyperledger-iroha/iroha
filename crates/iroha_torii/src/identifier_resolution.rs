@@ -617,6 +617,7 @@ mod tests {
         ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
         try_bfv_programmed_public_parameters_with_program,
     };
+    use iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1;
     use iroha_data_model::ram_lfe::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
         RamLfeReceiptAttestation,
@@ -961,6 +962,7 @@ mod tests {
         let signing_seed = hex::decode(fixture_str(&fixture, "signing_seed_hex"))
             .expect("fixture signing seed must be hex");
         let signer = checked_fixture_keypair(signing_seed, Algorithm::Ed25519);
+        let policy = policy.with_phone_retail_attestor_public_key(signer.public_key().clone());
         let mut program_policy = shared_fixture_program_policy(&fixture_payload, &signer);
         let service = IdentifierResolutionService::new();
         service.register_program_runtime(
@@ -971,6 +973,36 @@ mod tests {
             signer.clone(),
             None,
         );
+        // This shared vector fixes payload signing; handler and Core tests enforce phone admission.
+        let issued_at_ms = now_ms();
+        let network_id = crate::signed_query_test_network_id();
+        let canonicality_payload = PhoneRetailCanonicalityPayloadV1 {
+            network_id,
+            policy_id: fixture_payload.policy_id.clone(),
+            program_id: fixture_payload.execution.program_id.clone(),
+            input_ciphertext_hash: fixture_payload.execution.input_ciphertext_hash,
+            output_ciphertext_hash: fixture_payload.execution.output_ciphertext_hash,
+            opened_output_hash: fixture_payload.opening.payload.opened_output_hash,
+            canonical_phone_nullifier: iroha_crypto::derive_phone_retail_nullifier_v1(
+                &[0x51; Hash::LENGTH],
+                network_id.as_bytes(),
+                "+15551234567",
+            )
+            .expect("derive shared network-bound phone nullifier"),
+            uaid: fixture_payload.uaid,
+            account_id: fixture_payload.account_id.clone(),
+            issued_at_ms,
+            expires_at_ms: issued_at_ms.saturating_add(30_000),
+        };
+        let canonicality = PhoneRetailCanonicalityAttestationV1 {
+            signature: SignatureOf::try_new(signer.private_key(), &canonicality_payload)
+                .expect("sign shared phone canonicality fixture")
+                .into(),
+            payload: canonicality_payload,
+        };
+        canonicality
+            .verify(signer.public_key())
+            .expect("shared phone canonicality signature verifies");
         let draft = IdentifierResolutionDraft {
             opaque_id: fixture_payload.opaque_id,
             receipt_hash: fixture_payload.receipt_hash,
@@ -985,6 +1017,7 @@ mod tests {
             evaluation_key_digest: fixture_payload.execution.evaluation_key_digest,
             verification_mode: fixture_payload.execution.verification_mode,
             opening: fixture_payload.opening.clone(),
+            phone_retail_canonicality: Some(canonicality.clone()),
         };
         let issued = service
             .issue_claim_receipt(
@@ -995,6 +1028,7 @@ mod tests {
                 fixture_payload.account_id.clone(),
             )
             .expect("Torii must issue fixture receipt");
+        assert_eq!(issued.phone_retail_canonicality, Some(canonicality));
         assert_eq!(fixture_payload, &issued.payload);
         assert_eq!(
             fixture_str(&fixture, "canonical_payload_sha256"),

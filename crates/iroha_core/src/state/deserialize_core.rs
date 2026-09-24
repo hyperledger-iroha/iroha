@@ -313,6 +313,7 @@ impl KuraSeed {
     /// so restoration never constructs a recursive full-state JSON tree.
     /// The restored State stays on the heap through validation and handoff;
     /// nested restore calls must not reserve a full State in each stack frame.
+    #[cfg(test)]
     pub(crate) fn into_state_from_json_str(
         self,
         input: &str,
@@ -407,13 +408,9 @@ impl KuraSeed {
         state.install_emergency_fast_sccp_policy_hash(sccp_policy_hash);
         Ok(state)
     }
-    /// Decode a State without loading, promoting, truncating, or otherwise
-    /// recovering any durable Kura-adjacent journal.
-    ///
-    /// Replay prevalidation uses this constructor for an isolated dry run;
-    /// its in-memory merge and query authority is populated explicitly
-    /// from the already authenticated live State.
-    /// Decode canonical snapshot bytes for isolated replay prevalidation.
+    /// Decode canonical snapshot bytes without durable journal recovery for
+    /// tests that intentionally omit the configured Nexus policy.
+    #[cfg(test)]
     pub(crate) fn into_state_from_json_str_without_durable_recovery(
         self,
         input: &str,

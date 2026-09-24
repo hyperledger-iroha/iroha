@@ -26624,15 +26624,6 @@ fn sample_lane_relay_envelope_for_state_with_keypair_signers(
     envelope
 }
 
-fn active_lane_incarnation_for_state_test(
-    state: &State,
-    proposal_height: u64,
-    lane_id: LaneId,
-) -> Hash {
-    state
-        .lane_incarnation_at_height(lane_id, proposal_height)
-        .expect("test lane must have an incarnation at the proposal height")
-}
 fn sample_lane_relay_envelope_for_state_with_view(
     state: &State,
     height: u64,

@@ -519,7 +519,7 @@ fn native_selected_output_rejects_rehashed_outputs_and_swapped_rows() {
     let proof = proof_for(&original, None, &keys);
     let root = scalar(&proof.finality_artifact.context_id().0);
     let bundles = vec![bundle(proof)];
-    let wire = original.encode_wire().unwrap();
+    original.encode_wire().unwrap();
     let mut rewritten = original.clone();
     let mut rows = rewritten.execution_outputs().to_vec();
     rows[1] = client_fixture_network_output(
