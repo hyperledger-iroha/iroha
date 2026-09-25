@@ -1389,6 +1389,17 @@ registration and asset transfers; fixtures in `javascript/iroha_js/test/instruct
 and `javascript/iroha_js/test/transactionFixturesParity.test.js` keep the payloads aligned with the
 Rust goldens.
 
+The first-release retail builders `buildActivateRetailDailyLimitV1InstructionJson`,
+`buildBindRetailIdentityV1InstructionJson`, and
+`buildRetailMonetaryMovementV1InstructionJson` return exact JSON text for direct use
+with `noritoEncodeInstruction` or transaction instruction inputs. They preserve
+the full unsigned 64-bit physical dataspace ID without JavaScript number rounding.
+The native instruction codec admits only the three exact typed envelopes and
+their current wire IDs; retail instruction decode returns large integer fields
+as `bigint`. Building an instruction does not install a policy, authenticate a
+bank receipt, or verify ledger finality. A source-matched native addon is
+required to encode and validate the instruction bytes.
+
 ```js
 const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }), networkPrefix,

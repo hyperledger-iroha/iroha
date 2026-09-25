@@ -44,7 +44,13 @@ canonical package pins network, asset/reserve, release, first context and freshn
 its independent native policy cannot be selected by a downloaded response. The
 installer checks a suspend-inclusive token deadline before journal access and
 publication. A signed checkpoint still requires native trusted time and retained
-replay state, approved deployment signatures and actual app-startup integration.
+replay state and approved deployment signatures. The native startup entrypoint
+now accepts only a bounded signed checkpoint, authenticates it against an
+install-once Rust context, retains its replay pin and installs the real native
+host. Swift and Kotlin expose this activation without root keys, storage paths
+or private mint openings. Exact retries reauthenticate; partial installation
+cannot be reset in process. Concrete deployment provisioning and native mint
+preparation remain required before an app can execute the complete testnet flow.
 The scoped bridge suite passes 355 tests with one existing ignored test. The new
 fixed five-slice arithmetic and shared dense MSM suite pass 40 tests with two
 benchmark-only cases ignored, including both-parity full-capacity, empty-slice,

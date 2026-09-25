@@ -1,6 +1,6 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::kagemusha_v1;
+use crate::isi::{kagemusha_v1, retail_daily_limit};
 #[cfg(test)]
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
@@ -69,6 +69,9 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_transfer_control::SetAssetTransferBlacklist => "iroha.asset.transfer.blacklist.set"),
     built_in_wire_id!(asset_transfer_control::SetAssetTransferControl => "iroha.asset.transfer.control.set"),
     built_in_wire_id!(asset_transfer_control::SetAssetHoldingLimit => "iroha.asset.holding_limit.set"),
+    built_in_wire_id!(retail_daily_limit::ActivateRetailDailyLimitV1 => "iroha.asset.retail_day.activate.v1"),
+    built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
+    built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
     built_in_wire_id!(rwa::RwaInstructionBox => "iroha.rwa"),
     built_in_wire_id!(defi::DeFiInstructionBox => "iroha.defi", register),
     built_in_wire_id!(repo::RepoInstructionBox => "iroha.repo"),

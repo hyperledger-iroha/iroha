@@ -609,9 +609,19 @@ verified token has a suspend-inclusive installation lease capped at 120 seconds
 and the checkpoint's remaining validity; loading, journal replay and publication
 must finish within it or require fresh verification. The
 installer derives every release/finality pin from that token and authenticates
-the matching release and artifacts before installing the owner. Approved
-deployment signatures and app startup integration remain required; neither a
-status hint nor the bundle response can choose the checkpoint. JNI finality
+the matching release and artifacts before installing the owner. Swift and
+Android can activate a Rust-provisioned native startup context by transporting
+only that bounded signed package. Native provisioning fixes the authority,
+release archives, proof layout, private paths and create/recover mode once;
+native freshness ownership supplies current trusted time and replay state.
+Activation retains the verified checkpoint before installing the actual host,
+and an exact retry rechecks freshness and authentication. A changed checkpoint
+cannot replace a live host. An uncertain durable mutation or partial installation
+requires process restart and authenticated recovery. There is no reset or
+caller-supplied verification callback across C/JNI. Approved deployment
+signatures and a concrete independently provisioned native context remain
+required; neither a status hint nor the bundle response can choose the
+checkpoint. JNI finality
 coordinates are comparison evidence only and cannot install a pin. The
 observer's MintFold entry
 requires that original reservation, an Applied chain top-up,
@@ -645,9 +655,8 @@ total. The Swift and Android inspection adapters require the exact canonical
 archive layout, the requested operation ID, positive value and finality, and
 `hardware_qualified = false`; Android also checks the native 16-byte alignment
 for both admission and credit frames. Callers cannot pass a copied archive as
-authority. Native host
-installation from independently authenticated app configuration, wallet
-account crediting, and testnet spending are still staged; the registry does
+authority. Concrete deployment provisioning, native private mint preparation,
+wallet account crediting, and testnet spending remain required; the registry does
 not enter production monetary state or attest hardware.
 The terminal hardware fold and production admission
 remain separate. File permissions protect the journal's

@@ -151,6 +151,11 @@ include!("host/contract_state_namespace.rs");
 // canonical root or include its delimiter. Matching reserves only the exact
 // root and `_`/`/` descendants so similarly named user keys remain available.
 const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
+    crate::state::retail_daily_limit_state::POLICY_ROOT,
+    crate::state::retail_daily_limit_state::ACTIVATION_ROOT,
+    crate::state::retail_daily_limit_state::IDENTITY_ROOT,
+    crate::state::retail_daily_limit_state::USAGE_ROOT,
+    crate::state::retail_daily_limit_state::MONETARY_OPERATION_ROOT,
     "sorafs_final_promotion_authority_v1",
     "sorafs_final_promotion_account_custody_v1",
     "sorafs_stream_token_custody_v1",

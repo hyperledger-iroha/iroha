@@ -67751,6 +67751,17 @@ impl SnapshotNexusRuntime {
         }
     }
 }
+#[path = "state/retail_contract_state_snapshot.rs"]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "TODO: publish only after a finalized accumulated root and restricted read ACL"
+    )
+)]
+mod retail_contract_state_snapshot;
+#[path = "state/retail_daily_limit_state.rs"]
+pub(crate) mod retail_daily_limit_state;
 pub(crate) mod deserialize {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::PeerId;

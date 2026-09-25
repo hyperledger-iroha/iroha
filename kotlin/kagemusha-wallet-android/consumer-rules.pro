@@ -17,3 +17,7 @@
 }
 
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaTopUpSubmissionJniV1 { *; }
+
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaTestnetNativeStartupJniV1 {
+    native <methods>;
+}

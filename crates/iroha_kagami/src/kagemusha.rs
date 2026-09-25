@@ -70,7 +70,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 72] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 76] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
@@ -100,6 +100,8 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 72] = [
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
     "connect_norito_kagemusha_testnet_value_credit_v1",
+    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -135,6 +137,8 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 72] = [
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeContractV1",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeActivateV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",

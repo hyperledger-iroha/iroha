@@ -7,6 +7,7 @@ use crate::{
     state::{
         StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+        retail_daily_limit_state as retail_state,
     },
 };
 use iroha_crypto::{Hash, HashOf};
@@ -445,6 +446,28 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_model_base::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    // A controller change cannot silently create a new retail identity or
+    // discard an existing issuer attestation. A future owner-governed rekey
+    // instruction must preserve the exact identity and DAY usage atomically.
+    let has_retail_binding =
+        retail_state::account_is_retained(state_transaction.world(), old_account)
+            .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+    let holds_retail_governed_asset = state_transaction
+        .world
+        .assets_in_account_iter(old_account)
+        .try_fold(false, |found, asset| {
+            retail_state::has_policy_for_definition(
+                state_transaction.world(),
+                asset.id().definition(),
+            )
+            .map(|governed| found || governed)
+        })
+        .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+    if has_retail_binding || holds_retail_governed_asset {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {old_account}: retail identity continuity requires an owner-governed transition").into(),
+        ));
+    }
     if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
         &state_transaction.world,
         old_account,

@@ -10,6 +10,7 @@ mod json_u64;
 mod kaigi;
 mod lifecycle_instructions;
 mod manifest;
+mod retail_daily_limit_instructions;
 mod staking_instructions;
 mod verifying_key_instructions;
 pub use error::{CodecError, CodecErrorKind, CodecResult};
@@ -1277,6 +1278,9 @@ fn kagemusha_instruction_to_json(instruction: &InstructionBox) -> Option<CodecRe
 
 /// Admit a JSON instruction value with the existing explicit variant checks.
 pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
+    if let Some(instruction) = retail_daily_limit_instructions::from_json(&value) {
+        return instruction;
+    }
     if let Some(instruction) = staking_instructions::from_json(&value) {
         return instruction;
     }
@@ -1315,6 +1319,7 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
             if activation_instructions::is_activation_instruction(&instruction)
+                || retail_daily_limit_instructions::is_retail_instruction(&instruction)
                 || game_instructions::is_game_instruction(&instruction)
                 || verifying_key_instructions::is_verifying_key_instruction(&instruction)
                 || lifecycle_instructions::is_lifecycle_instruction(&instruction)
@@ -3338,6 +3343,9 @@ fn exact_json_object_fields(
 
 /// Render a typed instruction through its canonical JavaScript JSON contract.
 pub fn instruction_to_json_value(instruction: &InstructionBox) -> CodecResult<json::Value> {
+    if let Some(value) = retail_daily_limit_instructions::to_json(instruction) {
+        return value;
+    }
     if let Some(value) = staking_instructions::to_json(instruction) {
         return value;
     }

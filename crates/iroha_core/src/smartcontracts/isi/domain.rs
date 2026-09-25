@@ -1274,6 +1274,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
+                state_transaction,
+                &account_id,
+            )?;
             if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
                 &state_transaction.world,
                 &account_id,
@@ -2431,6 +2435,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
+                state_transaction,
+                &BTreeSet::from([asset_definition_id.clone()]),
+                &format!("unregister asset definition {asset_definition_id}"),
+            )?;
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
                 state_transaction,
                 &BTreeSet::from([asset_definition_id.clone()]),

@@ -578,6 +578,23 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
   "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
 
+// Experimental native startup. Rust provisioning must independently install the
+// immutable policy, release archives, verifier profile, private paths and trusted
+// freshness provider before activation. The app supplies only a signed bootstrap.
+// Activation retains the actual host for the process lifetime; it does not open
+// the production Core coordinator or create a private mint. Exact-checkpoint
+// retries are reverified against fresh native time/replay state. Partial durable
+// installation failures require process restart; there is no reset/close ABI.
+// The contract writes [1, 1048576] and returns 2; capacity is in uint32_t words.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_NATIVE_STARTUP_MAX_BYTES_V1 1048576
+#if !defined(_WIN32)
+int32_t connect_norito_kagemusha_testnet_native_startup_contract_v1(
+    uint32_t* output, size_t capacity);
+// Zero means active, -312 means no native context, and -311 means rejected.
+int32_t connect_norito_kagemusha_testnet_native_startup_activate_v1(
+    const uint8_t* signed_bootstrap, size_t signed_bootstrap_length);
+#endif
+
 // Testnet-only paired State proof observation. A release-authenticated native
 // verifier and operator-pinned network/release must be installed from Rust.
 // Stock builds return DEVICE_UNAVAILABLE. The response is a canonical Norito

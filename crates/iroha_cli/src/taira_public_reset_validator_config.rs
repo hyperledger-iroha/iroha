@@ -203,6 +203,64 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
     ]
 }
 
+/// Replace localnet-only admission with the finite public Torii policy.
+///
+/// The public edge connects over loopback and sets the socket-observed client
+/// in `X-Forwarded-For`. Torii must trust that exact proxy hop to give
+/// public callers distinct rate-limit identities. Localnet bypasses are removed
+/// entirely so malformed forwarded chains cannot inherit a loopback exemption.
+fn project_public_torii_ingress(torii: &mut toml::Table) -> Result<()> {
+    use iroha_config::parameters::defaults::torii;
+
+    for (field, configured) in [
+        (
+            "preauth_rate_per_ip_per_sec",
+            torii::PREAUTH_RATE_PER_IP_PER_SEC,
+        ),
+        ("preauth_burst_per_ip", torii::PREAUTH_BURST_PER_IP),
+        (
+            "tx_rate_per_authority_per_sec",
+            torii::TX_RATE_PER_AUTHORITY_PER_SEC,
+        ),
+        ("tx_burst_per_authority", torii::TX_BURST_PER_AUTHORITY),
+        (
+            "query_rate_per_authority_per_sec",
+            torii::QUERY_RATE_PER_AUTHORITY_PER_SEC,
+        ),
+        (
+            "query_burst_per_authority",
+            torii::QUERY_BURST_PER_AUTHORITY,
+        ),
+        (
+            "deploy_rate_per_origin_per_sec",
+            torii::DEPLOY_RATE_PER_ORIGIN_PER_SEC,
+        ),
+        ("deploy_burst_per_origin", torii::DEPLOY_BURST_PER_ORIGIN),
+    ] {
+        let value = configured.ok_or_else(|| eyre!("public Torii `{field}` must be finite"))?;
+        torii.insert(field.into(), toml::Value::Integer(i64::from(value)));
+    }
+
+    torii.insert("preauth_allow_cidrs".into(), toml::Value::Array(Vec::new()));
+    torii.insert(
+        "api_rate_limit_bypass_cidrs".into(),
+        toml::Value::Array(Vec::new()),
+    );
+    let transport = torii
+        .entry("transport")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| eyre!("generated Torii transport must be a table"))?;
+    transport.insert(
+        "trusted_proxy_cidrs".into(),
+        toml::Value::Array(vec![
+            toml::Value::String("127.0.0.1/32".to_owned()),
+            toml::Value::String("::1/128".to_owned()),
+        ]),
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_config(
     bytes: &[u8],
@@ -346,6 +404,7 @@ fn project_config(
                 iroha_primitives::addr::SocketAddr::from(torii_bind_address).to_literal(),
             ),
         );
+        project_public_torii_ingress(torii)?;
         let generated_signatures = torii
             .get("operator_signatures")
             .and_then(toml::Value::as_table)
@@ -584,6 +643,74 @@ mod tests {
                     .to_str()
             );
         }
+    }
+
+    #[test]
+    fn materialization_replaces_localnet_admission_with_distinct_public_clients() {
+        use iroha_config::parameters::defaults::torii;
+
+        let mut generated = source(0);
+        for (field, value) in [
+            ("preauth_rate_per_ip_per_sec", 1_000_000),
+            ("preauth_burst_per_ip", 2_000_000),
+            ("tx_rate_per_authority_per_sec", 1_000_000),
+            ("tx_burst_per_authority", 2_000_000),
+        ] {
+            insert(&mut generated, &["torii", field], value.into());
+        }
+        for field in ["preauth_allow_cidrs", "api_rate_limit_bypass_cidrs"] {
+            insert(
+                &mut generated,
+                &["torii", field],
+                toml::Value::Array(vec!["127.0.0.0/8".into(), "::1/128".into()]),
+            );
+        }
+        insert(
+            &mut generated,
+            &["torii", "transport", "trusted_proxy_cidrs"],
+            toml::Value::Array(vec!["0.0.0.0/0".into()]),
+        );
+
+        let projected = project(&generated, VALIDATOR_SLUGS[0]).expect("public projection");
+        let public = projected["torii"].as_table().expect("Torii table");
+        for (field, expected) in [
+            (
+                "preauth_rate_per_ip_per_sec",
+                torii::PREAUTH_RATE_PER_IP_PER_SEC,
+            ),
+            ("preauth_burst_per_ip", torii::PREAUTH_BURST_PER_IP),
+            (
+                "tx_rate_per_authority_per_sec",
+                torii::TX_RATE_PER_AUTHORITY_PER_SEC,
+            ),
+            ("tx_burst_per_authority", torii::TX_BURST_PER_AUTHORITY),
+            (
+                "query_rate_per_authority_per_sec",
+                torii::QUERY_RATE_PER_AUTHORITY_PER_SEC,
+            ),
+            (
+                "query_burst_per_authority",
+                torii::QUERY_BURST_PER_AUTHORITY,
+            ),
+            (
+                "deploy_rate_per_origin_per_sec",
+                torii::DEPLOY_RATE_PER_ORIGIN_PER_SEC,
+            ),
+            ("deploy_burst_per_origin", torii::DEPLOY_BURST_PER_ORIGIN),
+        ] {
+            assert_eq!(
+                public[field].as_integer(),
+                expected.map(i64::from),
+                "{field}"
+            );
+        }
+        let no_bypass = toml::Value::Array(Vec::new());
+        assert_eq!(public["preauth_allow_cidrs"], no_bypass);
+        assert_eq!(public["api_rate_limit_bypass_cidrs"], no_bypass);
+        assert_eq!(
+            public["transport"]["trusted_proxy_cidrs"],
+            toml::Value::Array(vec!["127.0.0.1/32".into(), "::1/128".into()])
+        );
     }
 
     #[test]

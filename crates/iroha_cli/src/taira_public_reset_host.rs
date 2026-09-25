@@ -632,6 +632,7 @@ struct InrouStageUploadManifestV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostAction {
     Preflight,
+    UnitProbe,
     Upload,
     Stage,
     InrouStageUpload,
@@ -655,6 +656,7 @@ impl HostAction {
     const fn label(self) -> &'static str {
         match self {
             Self::Preflight => "preflight",
+            Self::UnitProbe => "unit_probe",
             Self::Upload => "upload",
             Self::Stage => "stage",
             Self::InrouStageUpload => "inrou_stage_upload",
@@ -678,6 +680,7 @@ impl HostAction {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "preflight" => Ok(Self::Preflight),
+            "unit_probe" => Ok(Self::UnitProbe),
             "upload" => Ok(Self::Upload),
             "stage" => Ok(Self::Stage),
             "inrou_stage_upload" => Ok(Self::InrouStageUpload),
@@ -704,6 +707,7 @@ impl HostAction {
             Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
                 inventory.timeouts.install_secs
             }
+            Self::UnitProbe => inventory.timeouts.canary_secs,
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
@@ -858,6 +862,14 @@ fn dispatch_host_request(request_bytes: &[u8], body: &mut impl Read) -> Result<H
             0,
             "read-only preflight",
         ));
+    }
+    if action == HostAction::UnitProbe {
+        require_existing_host_lease(&admitted)?;
+        let HostTarget::Validator(validator) = &admitted.target else {
+            return Err(eyre!("unit probe requires a validator target"));
+        };
+        let health = probe_validator_unit(validator, admitted.action_deadline)?;
+        return Ok(host_receipt(&admitted, action, false, 0, 0, health.label()));
     }
     let _action_lock = lock_host_action(&admitted)?;
     ensure_host_lease(&admitted, action)?;
@@ -4603,6 +4615,23 @@ fn ensure_host_lease(admitted: &HostAdmission, action: HostAction) -> Result<()>
     publish_host_lease(&guard, &admitted.authorization_sha256, &bytes)
 }
 
+/// A mesh probe must not create or replace a deployment lease. It is only a
+/// read of the unit selected by an already admitted execution.
+fn require_existing_host_lease(admitted: &HostAdmission) -> Result<()> {
+    let path = host_coordination_path(admitted)?.join("lease.json");
+    let (lease, _) = read_private_json::<HostLeaseV1>(&path, "host lease")?;
+    ensure!(
+        lease.schema == LEASE_SCHEMA_V1
+            && lease.inventory_sha256 == admitted.inventory_sha256
+            && lease.authorization_semantic_sha256 == admitted.authorization_sha256
+            && lease.authorization_nonce == admitted.inventory.authorization_nonce
+            && lease.execution_expires_at_unix_ms
+                == admitted.authorization.claims.execution_expires_at_unix_ms,
+        "unit probe requires its exact existing host lease"
+    );
+    Ok(())
+}
+
 fn host_session_releasable(guard: &Path, lease: &HostLeaseV1, now_unix_ms: u64) -> Result<bool> {
     let execution_expired = now_unix_ms > lease.execution_expires_at_unix_ms;
     let parent = File::open(guard)?;
@@ -5522,7 +5551,9 @@ fn revalidate_cached_action_postcondition(
         .join("releases")
         .join(&admitted.inventory.revision.commit);
     match action {
-        HostAction::Preflight => Err(eyre!("preflight does not have a durable action receipt")),
+        HostAction::Preflight | HostAction::UnitProbe => Err(eyre!(
+            "read-only host action does not have a durable action receipt"
+        )),
         HostAction::MutationReserve => Err(eyre!(
             "mutation reservation has no reusable action postcondition"
         )),
@@ -5820,7 +5851,9 @@ fn execute_host_action(
 ) -> Result<(u64, u64, String)> {
     ensure_action_deadline(admitted)?;
     let result = match action {
-        HostAction::Preflight => Err(eyre!("preflight is not a mutating host action")),
+        HostAction::Preflight | HostAction::UnitProbe => {
+            Err(eyre!("read-only host action is not a mutating host action"))
+        }
         HostAction::MutationReserve => Err(eyre!(
             "mutation reservation is handled before the host action executor"
         )),
@@ -11858,6 +11891,96 @@ fn parse_validator_mesh_status(body: &[u8]) -> Result<ValidatorMeshStatus> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidatorUnitHealth {
+    Active,
+    Starting,
+    Failed,
+}
+
+impl ValidatorUnitHealth {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Starting => "starting",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn parse_label(value: &str) -> Result<Self> {
+        match value {
+            "active" => Ok(Self::Active),
+            "starting" => Ok(Self::Starting),
+            "failed" => Ok(Self::Failed),
+            _ => Err(eyre!("unit probe returned an invalid health class")),
+        }
+    }
+}
+
+/// Parse only fixed systemd fields into a fixed health class. Neither raw
+/// systemd output nor daemon logs enter the remote receipt or mesh error.
+fn parse_validator_unit_health(bytes: &[u8]) -> Result<ValidatorUnitHealth> {
+    ensure!(
+        bytes.len() <= 1024,
+        "validator unit probe exceeds its response bound"
+    );
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| eyre!("validator unit probe is not UTF-8"))?;
+    let mut active = None;
+    let mut sub = None;
+    let mut result = None;
+    let mut pid = None;
+    for line in text.lines() {
+        let (name, value) = line
+            .split_once('=')
+            .ok_or_else(|| eyre!("validator unit probe has a malformed property"))?;
+        let slot = match name {
+            "ActiveState" => &mut active,
+            "SubState" => &mut sub,
+            "Result" => &mut result,
+            "MainPID" => &mut pid,
+            _ => return Err(eyre!("validator unit probe has an unknown property")),
+        };
+        ensure!(
+            slot.replace(value).is_none(),
+            "validator unit probe repeats a property"
+        );
+    }
+    let active = active.ok_or_else(|| eyre!("validator unit probe omits ActiveState"))?;
+    let sub = sub.ok_or_else(|| eyre!("validator unit probe omits SubState"))?;
+    let result = result.ok_or_else(|| eyre!("validator unit probe omits Result"))?;
+    let pid = pid
+        .ok_or_else(|| eyre!("validator unit probe omits MainPID"))?
+        .parse::<u32>()
+        .map_err(|_| eyre!("validator unit probe has an invalid MainPID"))?;
+    Ok(if active == "active" && sub == "running" && pid > 1 {
+        ValidatorUnitHealth::Active
+    } else if active == "activating"
+        && matches!(sub, "start" | "start-pre" | "start-post")
+        && result == "success"
+    {
+        ValidatorUnitHealth::Starting
+    } else {
+        ValidatorUnitHealth::Failed
+    })
+}
+
+fn probe_validator_unit(validator: &ValidatorV1, deadline: Instant) -> Result<ValidatorUnitHealth> {
+    let bytes = run_host_command(
+        SYSTEMCTL,
+        &[
+            "show",
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=Result",
+            "--property=MainPID",
+            &validator.systemd_unit,
+        ],
+        deadline,
+    )?;
+    parse_validator_unit_health(&bytes)
+}
+
 fn shared_drained_mesh_height(statuses: &[ValidatorMeshStatus]) -> Option<u64> {
     let first = statuses.first()?;
     (statuses.len() == 4
@@ -11868,6 +11991,31 @@ fn shared_drained_mesh_height(statuses: &[ValidatorMeshStatus]) -> Option<u64> {
     .then_some(first.blocks)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidatorMeshObservation {
+    NotObserved,
+    Status(ValidatorMeshStatus),
+    Http(u16),
+    ConnectionFailed,
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidatorUnitProbeObservation {
+    NotProbed,
+    Health(ValidatorUnitHealth),
+    Unavailable,
+}
+
+fn validator_mesh_evidence(
+    status: &[ValidatorMeshObservation],
+    units: &[ValidatorUnitProbeObservation],
+) -> String {
+    // Both vectors are exactly four entries in signed validator order. Never
+    // include request URLs, response bodies, SSH stderr, or daemon logs.
+    format!("/status by validator index={status:?}; unit health={units:?}")
+}
+
 /// A bound Torii listener can accept writes before its P2P admission quorum
 /// exists. Hold the first canary write until all four direct validator origins
 /// report a fully connected, drained checkpoint at one shared height.
@@ -11875,6 +12023,7 @@ fn wait_for_validator_mesh(
     origins: &[String],
     deadline: Instant,
     mut check_authorization: impl FnMut() -> Result<()>,
+    mut probe_unit: impl FnMut(usize, u64) -> Result<ValidatorUnitHealth>,
 ) -> Result<u64> {
     ensure!(
         origins.len() == 4,
@@ -11890,18 +12039,20 @@ fn wait_for_validator_mesh(
         .connect_timeout(Duration::from_secs(2))
         .build()
         .wrap_err("failed to build validator mesh HTTP client")?;
-    let mut last = Vec::new();
+    let mut last = vec![ValidatorMeshObservation::NotObserved; 4];
+    let mut unit_health = vec![ValidatorUnitProbeObservation::NotProbed; 4];
+    let mut next_unit_probe = Instant::now();
     loop {
         check_authorization()?;
-        let mut statuses = Vec::with_capacity(4);
-        for url in &urls {
+        for (index, url) in urls.iter().enumerate() {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(eyre!(
-                    "four-validator mesh deadline elapsed; latest /status={last:?}"
+                    "four-validator mesh deadline elapsed; {}",
+                    validator_mesh_evidence(&last, &unit_health)
                 ));
             }
-            match http
+            last[index] = match http
                 .get(url.clone())
                 .header(ACCEPT, "application/json")
                 .timeout(Duration::from_secs(2).min(remaining))
@@ -11912,34 +12063,73 @@ fn wait_for_validator_mesh(
                     response
                         .take(64 * 1024 + 1)
                         .read_to_end(&mut body)
-                        .wrap_err("failed to read validator /status")?;
+                        .wrap_err_with(|| format!("failed to read validator[{index}] /status"))?;
                     ensure!(
                         body.len() <= 64 * 1024,
-                        "validator /status exceeds mesh response bound"
+                        "validator[{index}] /status exceeds mesh response bound"
                     );
-                    statuses.push(parse_validator_mesh_status(&body)?);
+                    ValidatorMeshObservation::Status(
+                        parse_validator_mesh_status(&body)
+                            .wrap_err_with(|| format!("validator[{index}] /status is invalid"))?,
+                    )
                 }
                 Ok(response)
-                    if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) => {}
+                    if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) =>
+                {
+                    ValidatorMeshObservation::Http(response.status().as_u16())
+                }
                 Ok(response) => {
                     return Err(eyre!(
-                        "validator /status returned permanent HTTP status {}",
+                        "validator[{index}] /status returned permanent HTTP status {}",
                         response.status()
                     ));
                 }
-                Err(error) if error.is_connect() || error.is_timeout() => {}
-                Err(error) => return Err(error).wrap_err("validator /status request failed"),
-            }
+                Err(error) if error.is_connect() => ValidatorMeshObservation::ConnectionFailed,
+                Err(error) if error.is_timeout() => ValidatorMeshObservation::TimedOut,
+                Err(_) => return Err(eyre!("validator[{index}] /status transport failed")),
+            };
         }
-        last = statuses;
-        if let Some(height) = shared_drained_mesh_height(&last) {
+        let statuses = last
+            .iter()
+            .filter_map(|entry| match entry {
+                ValidatorMeshObservation::Status(status) => Some(*status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if let Some(height) = shared_drained_mesh_height(&statuses) {
             check_authorization()?;
             return Ok(height);
+        }
+        if Instant::now() >= next_unit_probe {
+            for (index, observation) in last.iter().enumerate() {
+                if matches!(observation, ValidatorMeshObservation::Status(_)) {
+                    continue;
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining < Duration::from_secs(1) {
+                    break;
+                }
+                check_authorization()?;
+                unit_health[index] = match probe_unit(index, remaining.as_secs().min(5)) {
+                    Ok(health) => ValidatorUnitProbeObservation::Health(health),
+                    Err(_) => ValidatorUnitProbeObservation::Unavailable,
+                };
+                if unit_health[index]
+                    == ValidatorUnitProbeObservation::Health(ValidatorUnitHealth::Failed)
+                {
+                    return Err(eyre!(
+                        "validator[{index}] unit startup failed; {}",
+                        validator_mesh_evidence(&last, &unit_health)
+                    ));
+                }
+            }
+            next_unit_probe = Instant::now() + Duration::from_secs(2);
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(eyre!(
-                "four-validator mesh deadline elapsed; latest /status={last:?}"
+                "four-validator mesh deadline elapsed; {}",
+                validator_mesh_evidence(&last, &unit_health)
             ));
         }
         std::thread::sleep(Duration::from_millis(250).min(remaining));
@@ -13965,6 +14155,36 @@ impl ResetTransport for RecoverySshTransport<'_> {
 }
 
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
+    fn wait_for_validator_mesh(
+        &mut self,
+        inventory: &InventoryV1,
+        deadline: Instant,
+    ) -> Result<u64> {
+        let origins = inventory
+            .validator_clients
+            .iter()
+            .map(|client| client.probe_origin.clone())
+            .collect::<Vec<_>>();
+        let admitted = self.admitted;
+        wait_for_validator_mesh(
+            &origins,
+            deadline,
+            || ensure_authorization_current(admitted),
+            |index, timeout_secs| {
+                let validator = inventory
+                    .validators
+                    .get(index)
+                    .ok_or_else(|| eyre!("unit probe has no validator at mesh index"))?;
+                let receipt = self.bootstrap_and_dispatch_validator(
+                    validator,
+                    HostAction::UnitProbe,
+                    timeout_secs,
+                )?;
+                ValidatorUnitHealth::parse_label(&receipt.detail)
+            },
+        )
+    }
+
     fn bootstrap_and_dispatch_validator(
         &mut self,
         validator: &ValidatorV1,
@@ -16302,15 +16522,8 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 let deadline = Instant::now()
                     .checked_add(Duration::from_secs(inventory.timeouts.canary_secs))
                     .ok_or_else(|| eyre!("beacon bootstrap deadline overflow"))?;
-                let origins = inventory
-                    .validator_clients
-                    .iter()
-                    .map(|client| client.probe_origin.clone())
-                    .collect::<Vec<_>>();
                 if next_mutation < 4 {
-                    wait_for_validator_mesh(&origins, deadline, || {
-                        ensure_authorization_current(self.admitted)
-                    })?;
+                    self.wait_for_validator_mesh(inventory, deadline)?;
                 }
                 self.run_beacon_prefix(
                     progress,
@@ -16320,9 +16533,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 )?;
                 // Provider activation restarts validators one at a time. A
                 // resumed canary may also begin directly at the write loop.
-                wait_for_validator_mesh(&origins, deadline, || {
-                    ensure_authorization_current(self.admitted)
-                })?;
+                self.wait_for_validator_mesh(inventory, deadline)?;
                 for (index, kind) in inventory
                     .qualification_scope
                     .canary_kinds()
@@ -16388,9 +16599,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                             },
                         )?;
                     }
-                    wait_for_validator_mesh(&origins, restart_deadline, || {
-                        ensure_authorization_current(self.admitted)
-                    })?;
+                    self.wait_for_validator_mesh(inventory, restart_deadline)?;
                     let phase = format!("restart-wave-{wave}");
                     for (offset, kind) in ["onboarding", "faucet", "write_canary"]
                         .into_iter()
@@ -18896,6 +19105,7 @@ mod tests {
                 authorization_checks += 1;
                 Ok(())
             },
+            |_, _| Ok(ValidatorUnitHealth::Active),
         )
         .expect("mesh must become connected before the write");
         assert_eq!(height, 8);
@@ -18943,6 +19153,63 @@ mod tests {
             None
         );
         assert!(parse_validator_mesh_status(br#"{"blocks":8,"peers":3}"#).is_err());
+    }
+
+    #[test]
+    fn validator_mesh_reports_each_unavailable_origin_and_failed_unit_promptly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral port");
+        let origin = format!("http://{}/", listener.local_addr().expect("local address"));
+        drop(listener);
+        let started = Instant::now();
+        let mut probes = Vec::new();
+        let error = wait_for_validator_mesh(
+            &vec![origin; 4],
+            started + Duration::from_secs(3),
+            || Ok(()),
+            |index, _| {
+                probes.push(index);
+                Ok(ValidatorUnitHealth::Failed)
+            },
+        )
+        .expect_err("a failed unit must stop the mesh wait");
+        let message = error.to_string();
+        assert!(message.contains("validator[0] unit startup failed"));
+        assert!(
+            message
+                .contains("ConnectionFailed, ConnectionFailed, ConnectionFailed, ConnectionFailed")
+        );
+        assert_eq!(probes, vec![0]);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn validator_unit_probe_classifies_crash_loops_without_echoing_host_output() {
+        let active = b"ActiveState=active\nSubState=running\nResult=success\nMainPID=1234\n";
+        let starting = b"ActiveState=activating\nSubState=start\nResult=success\nMainPID=0\n";
+        let crash_loop =
+            b"ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nMainPID=0\n";
+        assert_eq!(
+            parse_validator_unit_health(active).unwrap(),
+            ValidatorUnitHealth::Active
+        );
+        assert_eq!(
+            parse_validator_unit_health(starting).unwrap(),
+            ValidatorUnitHealth::Starting
+        );
+        assert_eq!(
+            parse_validator_unit_health(crash_loop).unwrap(),
+            ValidatorUnitHealth::Failed
+        );
+        assert_eq!(
+            ValidatorUnitHealth::parse_label("failed").unwrap(),
+            ValidatorUnitHealth::Failed
+        );
+        let error = parse_validator_unit_health(
+            b"ActiveState=failed\nSubState=failed\nResult=secret-value\nMainPID=0\nPrivateKey=secret-value\n",
+        )
+        .expect_err("unknown systemd fields are rejected");
+        assert!(!error.to_string().contains("secret-value"));
+        assert!(ValidatorUnitHealth::parse_label("secret-value").is_err());
     }
 
     #[test]
@@ -21342,6 +21609,7 @@ mod tests {
         }
         let actions = all_host_actions!(
             Preflight,
+            UnitProbe,
             Upload,
             Stage,
             InrouStageUpload,

@@ -346,6 +346,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",
             "connect_norito_kagemusha_testnet_value_credit_v1",
+            "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+            "connect_norito_kagemusha_testnet_native_startup_activate_v1",
         ):
             with self.subTest(missing=missing):
                 self.payload["required_symbols"] = [

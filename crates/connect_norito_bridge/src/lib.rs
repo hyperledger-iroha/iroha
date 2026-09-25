@@ -190,6 +190,8 @@ mod kagemusha_testnet_native_mint_runtime_v1;
 #[cfg(unix)]
 mod kagemusha_testnet_native_mobile_host_v1;
 #[cfg(unix)]
+mod kagemusha_testnet_native_startup_v1;
+#[cfg(unix)]
 mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
 pub use kagemusha_mobile_bootstrap_v1::{
@@ -214,6 +216,15 @@ pub use kagemusha_testnet_native_mint_runtime_v1::{
 pub use kagemusha_testnet_native_mobile_host_v1::{
     KagemushaTestnetNativeMobileHostV1, KagemushaTestnetNativePinnedMintV1,
     KagemushaTestnetNativeReservedMintV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_startup_v1::{
+    KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1, KagemushaTestnetNativeStartupContextV1,
+    KagemushaTestnetNativeStartupFreshnessProviderV1, KagemushaTestnetNativeStartupFreshnessV1,
+    connect_norito_kagemusha_testnet_native_startup_activate_v1,
+    connect_norito_kagemusha_testnet_native_startup_contract_v1,
+    install_kagemusha_testnet_native_startup_context_v1,
+    with_kagemusha_testnet_native_mobile_host_v1,
 };
 #[cfg(unix)]
 pub use kagemusha_testnet_native_value_ledger_v1::{

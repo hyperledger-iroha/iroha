@@ -1,8 +1,9 @@
 //! Rust-only ordering for an Experimental testnet mint in an ordinary mobile app.
 //!
 //! This host retains signed-bootstrap release and finality roots inside Rust. The
-//! application's JNI calls may submit and inspect an operation, but cannot install the owner,
-//! transport a private credit opening, select the finality root, or create a counted credit.
+//! application's JNI calls may activate a natively provisioned context with a signed checkpoint
+//! and inspect an operation. They cannot supply trusted installation inputs, transport a private
+//! credit opening, select the finality root, or bypass proof verification to count a credit.
 
 use std::path::Path;
 

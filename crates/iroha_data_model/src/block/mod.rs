@@ -27,6 +27,10 @@ use std::{
     time::Duration, vec::Vec,
 };
 pub mod proofs;
+/// Finality-verified historical retail activation; not a current-state proof.
+pub mod retail_activation_proof;
+/// Root-relative retail state inclusion; supplied root still needs current finality.
+pub mod retail_state_map_inclusion;
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     let limit = norito::core::max_archive_len();
     if limit == u64::MAX {

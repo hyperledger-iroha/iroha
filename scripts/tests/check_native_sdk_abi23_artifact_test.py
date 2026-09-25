@@ -44,6 +44,8 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
     "connect_norito_kagemusha_testnet_value_credit_v1",
+    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -57,7 +59,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 33
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 35
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -69,6 +71,8 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
                 "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
                 "connect_norito_kagemusha_testnet_value_admit_v1",
                 "connect_norito_kagemusha_testnet_value_credit_v1",
+                "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+                "connect_norito_kagemusha_testnet_native_startup_activate_v1",
             }
         assert len(required) == len(expected)
         assert set(required) == expected
@@ -205,6 +209,8 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
             "connect_norito_kagemusha_testnet_value_admit_v1",
             "connect_norito_kagemusha_testnet_value_credit_v1",
+            "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+            "connect_norito_kagemusha_testnet_native_startup_activate_v1",
             "connect_norito_kagemusha_device_command_response_v1_verify",
             "connect_norito_kagemusha_reserve_finality_hint_v1",
             "connect_norito_kagemusha_reserve_finality_verify_v1",

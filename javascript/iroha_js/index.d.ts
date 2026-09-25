@@ -13850,6 +13850,58 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   owningDomain: string | null;
 }): object;
 
+/** Exact JSON text preserves 64-bit dataspace IDs across the native signing boundary. */
+export function buildActivateRetailDailyLimitV1InstructionJson(options: {
+  definition: {
+    id: string;
+    name: string;
+    description: string | null;
+    alias: string | null;
+    spec: { scale: 2 };
+    mintable: "Infinitely";
+    logo: string | null;
+    metadata: Record<string, never>;
+    balance_scope_policy: "DataspaceRestricted";
+    owning_domain: string;
+  };
+  policy: {
+    asset_definition_id: string;
+    physical_dataspace: number | string | bigint;
+    revision: number | string | bigint;
+    daily_cap: string;
+    identity_issuer: string;
+    identity_issuer_public_key: string;
+    monetary_issuer_account: string;
+    reserve_account: string;
+    institutional_exceptions: [];
+  };
+}): string;
+
+/** Wrap an issuer-signed identity attestation without creating signing material. */
+export function buildBindRetailIdentityV1InstructionJson(options: {
+  attestation: {
+    body: {
+      domain: "iroha.bpng.retail-identity.v1";
+      asset_definition_id: string;
+      physical_dataspace: number | string | bigint;
+      policy_revision: number | string | bigint;
+      account_id: string;
+      identity: { digest: ReadonlyArray<number> };
+      uniqueness_evidence_digest: ReadonlyArray<number>;
+    };
+    signature: string;
+  };
+}): string;
+
+/** Build a typed monetary effect; bank receipt authentication remains external. */
+export function buildRetailMonetaryMovementV1InstructionJson(options: {
+  assetDefinitionId: string;
+  purpose: "mint_to_reserve" | "credit_retail" | "defund_retail" | "burn_reserve";
+  retailAccount: string | null;
+  amount: string;
+  operationDigest: ReadonlyArray<number>;
+}): string;
+
 export function buildGrantAccountPermissionInstruction(options: {
   accountId?: string;
   destinationAccountId?: string;

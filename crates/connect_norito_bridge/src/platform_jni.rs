@@ -19,6 +19,8 @@ mod account_address;
 mod committed_transaction_inclusion;
 mod gpu;
 mod kagemusha_signed_app_preparation;
+#[cfg(unix)]
+mod kagemusha_testnet_native_startup;
 mod kagemusha_testnet_observation;
 
 include!("platform_jni/part_1.rs");

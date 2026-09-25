@@ -19973,6 +19973,15 @@ pub mod isi {
                 .accounts_in_domain_iter(&domain_id)
                 .map(|account| account.id().clone())
                 .collect();
+            // Domain teardown removes its accounts directly, including issuer
+            // and recipient accounts for definitions owned by another domain.
+            // Apply the same retail guard as individual account teardown.
+            for account_id in &relabeled_accounts {
+                crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
+                    state_transaction,
+                    account_id,
+                )?;
+            }
             // This reverse index is rebuilt from the persisted authoritative mapping at restore
             // and maintained atomically by the world mutators. Enumerating it keeps teardown
             // proportional to the domain being removed instead of scanning every definition.
@@ -19982,6 +19991,11 @@ pub mod isi {
                 .get(&domain_id)
                 .cloned()
                 .unwrap_or_default();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
+                state_transaction,
+                &remove_asset_definitions,
+                &format!("unregister domain {domain_id}"),
+            )?;
             // Pinned custody survives staking selector and alias changes. Protect it before
             // domain teardown stages permission, endorsement or balance removals.
             if let Some(asset) = state_transaction

@@ -57,6 +57,174 @@ fn pending(intents: Vec<DaPinIntent>) -> PendingDaPinIntentBundle {
     }
 }
 
+fn retail_policy_pair() -> ((StatePath, Vec<u8>), (StatePath, Vec<u8>)) {
+    use iroha_data_model::asset::RetailDailyLimitPolicyV1;
+    use iroha_model_base::domain::DomainId;
+
+    let issuer =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519)
+            .unwrap();
+    let reserve =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x72; 32], iroha_crypto::Algorithm::Ed25519)
+            .unwrap();
+    let policy = RetailDailyLimitPolicyV1 {
+        asset_definition_id: AssetDefinitionId::derive_from_components(
+            DomainId::try_new("kina", "bpng").unwrap(),
+            "pgk".parse().unwrap(),
+        ),
+        physical_dataspace: DataSpaceId::new(7),
+        revision: 1,
+        daily_cap: Quantity::from(5_u32),
+        identity_issuer: AccountId::new(issuer.public_key().clone()),
+        identity_issuer_public_key: issuer.public_key().clone(),
+        monetary_issuer_account: AccountId::new(issuer.public_key().clone()),
+        reserve_account: AccountId::new(reserve.public_key().clone()),
+        institutional_exceptions: BTreeSet::new(),
+    };
+    let activation = retail_daily_limit_state::activation_for_policy(&policy, 1_000).unwrap();
+    (
+        (
+            retail_daily_limit_state::policy_key(
+                &policy.asset_definition_id,
+                policy.physical_dataspace,
+            ),
+            norito::encode_canonical(&policy).unwrap(),
+        ),
+        (
+            retail_daily_limit_state::activation_key(&policy.asset_definition_id),
+            norito::encode_canonical(&activation).unwrap(),
+        ),
+    )
+}
+
+#[test]
+fn retail_policy_commit_refuses_replacement_and_removal_before_publication() {
+    let ((policy_path, policy), (activation_path, activation)) = retail_policy_pair();
+    let mut replacement: iroha_data_model::asset::RetailDailyLimitPolicyV1 =
+        norito::decode_canonical(&policy).unwrap();
+    replacement.daily_cap = Quantity::from(6_u32);
+    let replacement_activation =
+        retail_daily_limit_state::activation_for_policy(&replacement, 1_000).unwrap();
+    for (policy_after, activation_after) in [
+        (None, Some(activation.clone())),
+        (Some(policy.clone()), None),
+        (None, None),
+        (Some(vec![0]), Some(activation.clone())),
+        (Some(policy.clone()), Some(vec![0])),
+        (
+            Some(norito::encode_canonical(&replacement).unwrap()),
+            Some(norito::encode_canonical(&replacement_activation).unwrap()),
+        ),
+    ] {
+        let (mut state, _) = fixture();
+        state
+            .world
+            .smart_contract_state
+            .insert(policy_path.clone(), policy.clone());
+        state
+            .world
+            .smart_contract_state
+            .insert(activation_path.clone(), activation.clone());
+        let nexus = state.nexus_snapshot();
+        let activations = state.lane_incarnation_activation_heights_snapshot();
+        let mut world = state.world.block();
+        for (path, after) in [
+            (&policy_path, policy_after),
+            (&activation_path, activation_after),
+        ] {
+            match after {
+                Some(bytes) => {
+                    world.smart_contract_state.insert(path.clone(), bytes);
+                }
+                None => {
+                    world.smart_contract_state.remove(path.clone());
+                }
+            }
+        }
+        let error =
+            PreparedWorldCommit::prepare(&state, world, 2, &nexus, &activations, None, None)
+                .err()
+                .expect("changed established policy pair must not prepare");
+        assert!(error.contains("cannot be replaced or removed"));
+        let current = state.world.smart_contract_state.view();
+        assert_eq!(current.get(&policy_path), Some(&policy));
+        assert_eq!(current.get(&activation_path), Some(&activation));
+    }
+}
+
+#[test]
+fn retail_policy_commit_accepts_fresh_pair_and_preserves_identical_bytes() {
+    let ((policy_path, policy), (activation_path, activation)) = retail_policy_pair();
+    let (state, _) = fixture();
+    let nexus = state.nexus_snapshot();
+    let activations = state.lane_incarnation_activation_heights_snapshot();
+    for height in [1, 2] {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(policy_path.clone(), policy.clone());
+        world
+            .smart_contract_state
+            .insert(activation_path.clone(), activation.clone());
+        world
+            .smart_contract_state
+            .insert("unrelated/state".parse().unwrap(), vec![height as u8]);
+        // This fixture tests the publication invariant only. It does not
+        // authenticate native activation, its owner, or a finalized block.
+        PreparedWorldCommit::prepare(&state, world, height, &nexus, &activations, None, None)
+            .expect("fresh exact pair or exact retained bytes")
+            .commit();
+    }
+    let current = state.world.smart_contract_state.view();
+    assert_eq!(current.get(&policy_path), Some(&policy));
+    assert_eq!(current.get(&activation_path), Some(&activation));
+}
+
+#[test]
+fn retail_policy_commit_refuses_orphan_malformed_and_repaired_predecessor_pairs() {
+    let ((policy_path, policy), (activation_path, activation)) = retail_policy_pair();
+    for case in 0..4 {
+        let (mut state, _) = fixture();
+        if case == 3 {
+            state
+                .world
+                .smart_contract_state
+                .insert(activation_path.clone(), activation.clone());
+        }
+        let nexus = state.nexus_snapshot();
+        let activations = state.lane_incarnation_activation_heights_snapshot();
+        let mut world = state.world.block();
+        if case != 1 {
+            world.smart_contract_state.insert(
+                if case == 2 {
+                    "retail_day_policy_v1/wrong".parse().unwrap()
+                } else {
+                    policy_path.clone()
+                },
+                policy.clone(),
+            );
+        }
+        if case != 0 {
+            world
+                .smart_contract_state
+                .insert(activation_path.clone(), activation.clone());
+        }
+        assert!(
+            PreparedWorldCommit::prepare(&state, world, 2, &nexus, &activations, None, None,)
+                .is_err(),
+            "invalid activation pair case {case}"
+        );
+        assert!(
+            state
+                .world
+                .smart_contract_state
+                .view()
+                .get(&policy_path)
+                .is_none()
+        );
+    }
+}
+
 #[test]
 fn authoritative_world_is_identical_with_empty_or_ahead_pin_cache() {
     let mut roots = Vec::new();

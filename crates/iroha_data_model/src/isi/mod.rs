@@ -173,6 +173,9 @@ impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransfe
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferControl);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetHoldingLimit);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::ActivateRetailDailyLimitV1);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 // Allow direct boxing of ZK asset and voting instructions
 impl_direct_instruction_box!(crate::isi::zk::RegisterZkAsset);
 impl_direct_instruction_box!(crate::isi::zk::ScheduleConfidentialPolicyTransition);
@@ -1867,6 +1870,7 @@ pub mod register;
 pub mod registry;
 /// Repo settlement instructions.
 pub mod repo;
+pub mod retail_daily_limit;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
@@ -2738,6 +2742,9 @@ pub mod prelude {
         },
         register::{Register, RegisterBox, Unregister, UnregisterBox},
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        retail_daily_limit::{
+            ActivateRetailDailyLimitV1, BindRetailIdentityV1, RetailMonetaryMovementV1,
+        },
         rwa::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,

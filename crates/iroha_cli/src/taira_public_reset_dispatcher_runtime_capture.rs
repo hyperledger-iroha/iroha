@@ -41,7 +41,12 @@ fn host_identity(observed: &mut Observed) -> Result<String> {
 fn unit_properties(unit: &str) -> Result<BTreeMap<String, String>> {
     let bytes = super::super::super::run_host_command(
         super::super::super::SYSTEMCTL,
-        &["show", "--all", &format!("--property={UNIT_PROPERTIES}"), unit],
+        &[
+            "show",
+            "--all",
+            &format!("--property={UNIT_PROPERTIES}"),
+            unit,
+        ],
         Instant::now() + Duration::from_secs(30),
     )?;
     let mut fields = BTreeMap::new();

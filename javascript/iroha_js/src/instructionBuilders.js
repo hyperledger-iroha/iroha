@@ -21,6 +21,11 @@ import { canonicalizeDomainIdLabel } from "./domainId.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { networkIdBytes } from "./networkId.js";
 import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+export {
+  buildActivateRetailDailyLimitV1InstructionJson,
+  buildBindRetailIdentityV1InstructionJson,
+  buildRetailMonetaryMovementV1InstructionJson,
+} from "./retailDailyLimitInstructions.js";
 import { KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS, isCanonicalKotodamaDynamicAccessBaseKey, isKotodamaV1DynamicAccessBoundKind, isKotodamaV1StateMapKeyTypeName, kotodamaV1StateMapKeyTypeName } from "./kotodamaIdentifiers.js";
 import {
   KotodamaQuantity,

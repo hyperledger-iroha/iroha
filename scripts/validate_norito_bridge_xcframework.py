@@ -181,6 +181,8 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_testnet_value_admit_v1",
     "connect_norito_kagemusha_testnet_value_credit_v1",
+    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",

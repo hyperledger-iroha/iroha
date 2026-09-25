@@ -2,7 +2,9 @@
 //!
 //! A signed `TestnetExperiment` release, exact private mint reservation, and authenticated
 //! bootstrap checkpoint must originate with the native host. This module
-//! exposes no C/JNI installer, private opening transport, or caller-selected finality anchor.
+//! exposes no C/JNI transport for trusted install inputs, private openings, or caller-selected
+//! finality anchors. Signed-checkpoint activation uses the separately provisioned Rust startup
+//! context and retains the real mobile host.
 //! The retained observation owner still produces no production monetary or hardware authority.
 
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
