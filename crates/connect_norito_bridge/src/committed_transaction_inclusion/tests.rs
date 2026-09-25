@@ -285,6 +285,35 @@ fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_c
     assert_eq!(anchor.block_height, 1);
     assert_eq!(anchor.height_context_id, trusted_context);
 
+    #[cfg(unix)]
+    {
+        let mut pinned_anchor = None;
+        let (newly_pinned, returned_anchor) =
+            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
+                network(),
+                trusted_context,
+                chain.as_bytes(),
+                |verified| {
+                    pinned_anchor = Some(verified.anchor());
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        assert!(newly_pinned);
+        assert!(Some(returned_anchor) == pinned_anchor);
+
+        let (newly_pinned, retry_anchor) =
+            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
+                network(),
+                trusted_context,
+                chain.as_bytes(),
+                |_| Ok(false),
+            )
+            .unwrap();
+        assert!(!newly_pinned);
+        assert!(retry_anchor == returned_anchor);
+    }
+
     let wrong_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])));
     assert!(crate::kagemusha_testnet_finality_chain_v1::
         verify_kagemusha_testnet_finality_anchor_from_chain_v1(

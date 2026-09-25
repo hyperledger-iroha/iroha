@@ -60,6 +60,8 @@ pub fn verify_kagemusha_testnet_finality_anchor_from_chain_v1(
 /// separately authenticated configuration and the operation ID from its private reservation.
 /// The owner rejects missing reservations, changed pins, and a network outside its signed release.
 /// The C/JNI caller cannot install a pin or substitute finality coordinates.
+/// The returned anchor is taken from the same verified token passed to the owner;
+/// an exact retry reports `false` with that anchor.
 ///
 /// # Errors
 ///
@@ -71,10 +73,26 @@ pub(crate) fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
     expected_network_id: NetworkId,
     trusted_first_context_id: HeightContextId,
     chain_json: &[u8],
-) -> Result<bool, String> {
+) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
+    verify_then_pin_chain(
+        expected_network_id,
+        trusted_first_context_id,
+        chain_json,
+        |verified| pin_kagemusha_testnet_authenticated_finality_anchor_v1(operation_id, verified),
+    )
+}
+
+#[cfg(unix)]
+pub(crate) fn verify_then_pin_chain(
+    expected_network_id: NetworkId,
+    trusted_first_context_id: HeightContextId,
+    chain_json: &[u8],
+    pin: impl FnOnce(&KagemushaVerifiedFinalityChainV1) -> Result<bool, String>,
+) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
     let verified =
         verify_chain_token_from_json_v1(expected_network_id, trusted_first_context_id, chain_json)?;
-    pin_kagemusha_testnet_authenticated_finality_anchor_v1(operation_id, &verified)
+    let newly_pinned = pin(&verified)?;
+    Ok((newly_pinned, verified.anchor()))
 }
 
 #[cfg(test)]
@@ -134,5 +152,19 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_chain_never_reaches_native_pin() {
+        let mut called = false;
+        assert!(
+            verify_then_pin_chain(network(), first_context(), b"[]", |_| {
+                called = true;
+                Ok(true)
+            })
+            .is_err()
+        );
+        assert!(!called);
     }
 }

@@ -625,6 +625,8 @@ typed ordering tokens. It requires matching native-trusted create/recover modes
 for the two journals. Mixed modes fail closed because path absence cannot
 distinguish interrupted installation from rollback; interrupted installation
 requires a trusted external checkpoint and explicit repair before restart.
+The signed finality chain is verified once per pin attempt, and the returned
+anchor comes from the same verified token used by the native owner.
 Its C mobile endpoint accepts only that 32-byte operation ID and
 returns a bounded canonical Norito archive with the counted credit and ledger
 total. Callers cannot pass a copied archive as authority. Native host
@@ -721,6 +723,12 @@ must fail. The existing two-challenge common-prime carrier binding must cover
 each paired Eq/Ep slice and link every slice to the same global inventory;
 both fields must validate the other field's canonical point/scalar limbs.
 
+The unsplit Claim now exposes its existing complete-source challenge through a
+typed, circuit-owned helper before coefficient aggregation, with mutation
+fixtures for both Pasta fields. This is a refactoring of the current verifier
+graph, not an independent source-authentication proof: it has no k15 slice
+relation, child-proof binding, or root join, and cannot qualify the phone gate.
+
 The arithmetic tree has exactly five Eq and five Ep slice proofs plus four
 binary joins in each field: eighteen proof instances per transition, before
 any separate source-authentication or final composition proofs. These other
@@ -745,7 +753,7 @@ minimum Base and RLC would require at least 56 advice columns, or 56 MiB for
 one k15 advice bank. Actual Base, key, verifier, join, and peak-process
 memory have not been measured. No subclaim or join circuit is implemented.
 
-TODO: Implement circuit-authenticated global inventory/challenge construction,
+TODO: Implement a standalone circuit-authenticated global-inventory proof,
 five paired bounded slice relations, reciprocal carrier binding and exact
 binary joins; prove the complete source-to-root and terminal bindings with
 positive and omission, duplication, reorder, coefficient, partial-sum,

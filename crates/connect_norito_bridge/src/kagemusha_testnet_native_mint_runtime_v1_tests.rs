@@ -144,8 +144,8 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
     };
     assert_eq!(token.operation_id(), [9; 32]);
     assert_eq!(
-        runtime.pin_finality_chain(&token, b"[]"),
-        Err("testnet mint finality requires this runtime's persisted reservation".to_owned())
+        runtime.pin_finality_chain(&token, b"[]").err(),
+        Some("testnet mint finality requires this runtime's persisted reservation".to_owned())
     );
     // A token from another exact reservation remains unusable even if the
     // operation identifier happens to match.
@@ -155,8 +155,8 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
         .unwrap()
         .insert(token.operation_id(), [11; 32]);
     assert_eq!(
-        runtime.pin_finality_chain(&token, b"[]"),
-        Err("testnet mint finality requires this runtime's persisted reservation".to_owned())
+        runtime.pin_finality_chain(&token, b"[]").err(),
+        Some("testnet mint finality requires this runtime's persisted reservation".to_owned())
     );
     runtime
         .reservations

@@ -10,13 +10,9 @@ use iroha_core::zk::{
     kagemusha_v1_recursion::KagemushaTestnetMintLedgerCreditV1,
     kagemusha_v1_state::MintInboxReservationV1,
 };
-use iroha_data_model::{
-    NetworkId, block::consensus_v2::HeightContextId,
-    isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
-};
+use iroha_data_model::isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1;
 
 use crate::{
-    kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1,
     kagemusha_testnet_native_mint_runtime_v1::{
         KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
         KagemushaTestnetNativeMintRuntimeV1,
@@ -33,8 +29,6 @@ use crate::{
 /// singleton. It grants no hardware-qualified or production monetary authority.
 pub struct KagemushaTestnetNativeMobileHostV1 {
     mint: KagemushaTestnetNativeMintRuntimeV1,
-    trusted_network_id: NetworkId,
-    trusted_first_context_id: HeightContextId,
 }
 
 /// Proof that this exact host fsynced a private mint reservation before online submission.
@@ -102,8 +96,6 @@ impl KagemushaTestnetNativeMobileHostV1 {
         value_ledger_path: &Path,
         trusted_value_ledger_mode: KagemushaTestnetDurableObservationModeV1,
     ) -> Result<Self, String> {
-        let trusted_network_id = mint_inputs.trusted_network_id;
-        let trusted_first_context_id = mint_inputs.trusted_first_context_id;
         let mint_mode = mint_inputs.mode;
         let mint_journal_path = mint_inputs.journal_path;
         let mint = install_in_order(
@@ -119,11 +111,7 @@ impl KagemushaTestnetNativeMobileHostV1 {
                 )
             },
         )?;
-        Ok(Self {
-            mint,
-            trusted_network_id,
-            trusted_first_context_id,
-        })
+        Ok(Self { mint })
     }
 
     /// Fsync the native-owned private opening before exposing the operation for submission.
@@ -174,15 +162,9 @@ impl KagemushaTestnetNativeMobileHostV1 {
         if !std::ptr::eq(self, reserved.host) {
             return Err("testnet mint reservation belongs to another native host".to_owned());
         }
-        let anchor = verify_then_pin(
-            self.trusted_network_id,
-            self.trusted_first_context_id,
-            chain_json,
-            || {
-                self.mint
-                    .pin_finality_chain(&reserved.reservation, chain_json)
-            },
-        )?;
+        let (_, anchor) = self
+            .mint
+            .pin_finality_chain(&reserved.reservation, chain_json)?;
         Ok(KagemushaTestnetNativePinnedMintV1 {
             host: self,
             operation_id: reserved.operation_id(),
@@ -218,21 +200,6 @@ fn prepare_then_reserve<T, R>(
     reserve(&prepared)
 }
 
-fn verify_then_pin(
-    network_id: NetworkId,
-    first_context_id: HeightContextId,
-    chain_json: &[u8],
-    pin: impl FnOnce() -> Result<bool, String>,
-) -> Result<KagemushaFinalityTrustAnchorV1, String> {
-    let anchor = verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        network_id,
-        first_context_id,
-        chain_json,
-    )?;
-    pin()?;
-    Ok(anchor)
-}
-
 fn install_in_order<T>(
     mint_journal_path: &Path,
     value_ledger_path: &Path,
@@ -257,21 +224,12 @@ fn install_in_order<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Hash, HashOf};
     use std::{cell::RefCell, path::PathBuf};
 
     const CREATE: KagemushaTestnetDurableObservationModeV1 =
         KagemushaTestnetDurableObservationModeV1::Create;
     const RECOVER: KagemushaTestnetDurableObservationModeV1 =
         KagemushaTestnetDurableObservationModeV1::Recover;
-
-    fn network() -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([3; 32])))
-    }
-
-    fn first_context() -> HeightContextId {
-        HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([5; 32])))
-    }
 
     #[test]
     fn host_install_orders_signed_owner_before_ledger_and_rejects_shared_path() {
@@ -428,18 +386,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_signed_chain_cannot_reach_native_pin() {
-        let pin_called = RefCell::new(false);
-        assert!(
-            verify_then_pin(network(), first_context(), b"[]", || {
-                *pin_called.borrow_mut() = true;
-                Ok(true)
-            })
-            .is_err()
-        );
-        assert!(!*pin_called.borrow());
-    }
-
     #[test]
     fn private_preparation_must_succeed_before_reservation() {
         let calls = RefCell::new(Vec::new());

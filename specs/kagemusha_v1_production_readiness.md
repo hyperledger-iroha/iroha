@@ -262,6 +262,8 @@ test passed on that build: the new key's attestation reported StrongBox security
 level 2 for both attestation and KeyMint, hardware tag 303 absent, hardware tag
 405 absent, software tag 303 absent, and software tag 405 equal to one. Its first signature verified and
 its second signing attempt failed with `KeyPermanentlyInvalidatedException`.
+On 2026-09-25, the three-stage physical restart probe also passed after a
+fresh device boot and PIN unlock: the consumed alias could not sign again.
 This demonstrates software-enforced one-use only; it does not qualify a
 hardware no-fork monetary ratchet. `eSE1` is connected, but the 2026-09-24
 ordinary-app OMAPI discovery returned `ONLINE_ONLY` for the current applet AID;

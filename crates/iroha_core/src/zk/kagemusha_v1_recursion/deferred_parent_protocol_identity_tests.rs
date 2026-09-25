@@ -14,6 +14,7 @@ use halo2_proofs::{
     poly::commitment::ParamsProver as _,
 };
 use snark_verifier::{
+    loader::halo2::EccInstructions as _,
     system::halo2::{Config as ProtocolConfig, compile},
     util::arithmetic::{Domain, root_of_unity},
 };
@@ -253,6 +254,150 @@ where
             assert!(!accepted, "native={native} protocol mutation={mutation}");
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GlobalSourceMutation {
+    None,
+    OmitSource,
+    DuplicateSource,
+    ReorderSources,
+    EquationTag,
+    EquationSelector,
+    VerifierInput,
+    BoundValue,
+}
+
+fn global_source_challenge_fixture<C>(
+    mutation: GlobalSourceMutation,
+) -> Result<(IdentityCircuit<C::ScalarExt>, Vec<Vec<C::ScalarExt>>), Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let mut base = BaseCircuitBuilder::<C::ScalarExt>::new(false)
+        .use_k(TEST_K)
+        .use_lookup_bits(8)
+        .use_instance_columns(1);
+    let range = base.range_chip();
+    let (coordinate, scalar_integer) = deferred_field_chips_v1::<C>(&range);
+    let loader = deferred_loader_v1(&mut base, &coordinate, &scalar_integer);
+    let generator = C::generator();
+    let doubled = (generator.to_curve() * C::ScalarExt::from(2)).to_affine();
+    let third = (generator.to_curve() * C::ScalarExt::from(3)).to_affine();
+    let (binding, bound, selector) = {
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        if matches!(mutation, GlobalSourceMutation::ReorderSources) {
+            chip.assign_point(&mut ctx, third);
+        }
+        let first = chip.assign_point(&mut ctx, generator);
+        let second = chip.assign_point(&mut ctx, doubled);
+        if !matches!(
+            mutation,
+            GlobalSourceMutation::OmitSource | GlobalSourceMutation::ReorderSources
+        ) {
+            let third = if matches!(mutation, GlobalSourceMutation::DuplicateSource) {
+                doubled
+            } else {
+                third
+            };
+            chip.assign_point(&mut ctx, third);
+        }
+        // This synthetic scalar-half fixture emits a *true* curve equation;
+        // no standalone monetary proof is claimed without reciprocal auditing.
+        let sum = chip.sum_with_const(&mut ctx, &[&first, &first], C::identity());
+        chip.assert_equal(&mut ctx, &second, &sum);
+        let binding = ctx.main().load_witness(C::ScalarExt::from(
+            if matches!(mutation, GlobalSourceMutation::VerifierInput) {
+                19
+            } else {
+                17
+            },
+        ));
+        let bound = ctx.main().load_witness(C::ScalarExt::from(
+            if matches!(mutation, GlobalSourceMutation::BoundValue) {
+                29
+            } else {
+                23
+            },
+        ));
+        let selector = ctx.main().load_witness(C::ScalarExt::from(
+            if matches!(mutation, GlobalSourceMutation::EquationSelector) {
+                0
+            } else {
+                1
+            },
+        ));
+        (binding, bound, selector)
+    };
+    let mut jobs = PastaNativePoseidonJobsV1::new(2, TEST_ROWS).map_err(transcript_error)?;
+    let tags = [if matches!(mutation, GlobalSourceMutation::EquationTag) {
+        2
+    } else {
+        1
+    }];
+    let global = constrain_mint_hash_claim_global_source_challenge_v1(
+        &loader,
+        &tags,
+        &[selector],
+        &[binding],
+        &[bound],
+        &mut jobs,
+    )?;
+    assert_eq!(
+        global.source_commitments.len(),
+        if matches!(mutation, GlobalSourceMutation::OmitSource) {
+            2
+        } else {
+            3
+        }
+    );
+    assert_eq!(global.bound_u128_values.len(), 1);
+    let public = global.challenge_limbs.map(|limb| *limb.value()).to_vec();
+    base.assigned_instances = vec![global.challenge_limbs.to_vec()];
+    *base.pool(0) = loader.take_ctx();
+    super::super::base_packing::finalize_base_params_v1(&mut base, 9).map_err(transcript_error)?;
+    Ok((IdentityCircuit { base, jobs }, vec![public]))
+}
+
+#[test]
+fn claim_global_source_challenge_binds_complete_inventory_in_both_fields() {
+    fn check<C>()
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: KagemushaPoseidonFieldV1,
+    {
+        let (baseline, public) = global_source_challenge_fixture::<C>(GlobalSourceMutation::None)
+            .expect("complete global source challenge");
+        MockProver::run(TEST_K as u32, &baseline, public.clone())
+            .expect("global source challenge synthesis")
+            .assert_satisfied();
+        for mutation in [
+            GlobalSourceMutation::OmitSource,
+            GlobalSourceMutation::DuplicateSource,
+            GlobalSourceMutation::ReorderSources,
+            GlobalSourceMutation::EquationTag,
+            GlobalSourceMutation::EquationSelector,
+            GlobalSourceMutation::VerifierInput,
+            GlobalSourceMutation::BoundValue,
+        ] {
+            let (changed, changed_public) = global_source_challenge_fixture::<C>(mutation)
+                .expect("mutated global source challenge");
+            assert_ne!(public, changed_public, "{mutation:?} reused the challenge");
+            assert!(
+                MockProver::run(TEST_K as u32, &changed, public.clone())
+                    .expect("mutated global source challenge synthesis")
+                    .verify()
+                    .is_err(),
+                "{mutation:?} retained the original public challenge"
+            );
+        }
+    }
+    check::<EqAffine>();
+    check::<EpAffine>();
 }
 
 #[test]

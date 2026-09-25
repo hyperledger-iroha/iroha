@@ -11,7 +11,9 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read as _, Write as _},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
+    sync::mpsc,
+    thread,
 };
 
 use iroha_data_model::kagemusha::{
@@ -24,6 +26,7 @@ use norito::json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 const MAX_PROJECTION_BYTES: usize = 16 * 1024 * 1024;
+const MAX_VERIFIER_STDERR_BYTES: usize = 64 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_EVIDENCE_FILES: usize = 65_536;
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
@@ -232,7 +235,7 @@ impl Arguments {
             false,
         )?;
         let mut command = isolated_verifier_command(&staged_python, &staged_verifier)?;
-        let output = command
+        command
             .arg("--manifest")
             .arg(&self.manifest)
             .arg("--manifest-sha256")
@@ -243,18 +246,12 @@ impl Arguments {
             .arg(&self.observer_policy)
             .arg("--observer-policy-sha256")
             .arg(hex::encode(self.observer_policy_sha256))
-            .arg("--testnet-experiment")
-            .output()?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "pinned release verifier rejected evidence: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        if output.stdout.len() > MAX_PROJECTION_BYTES {
-            return Err(invalid("verified projection exceeds its input limit"));
-        }
-        Ok(output.stdout)
+            .arg("--testnet-experiment");
+        run_bounded_verifier(
+            &mut command,
+            MAX_PROJECTION_BYTES,
+            MAX_VERIFIER_STDERR_BYTES,
+        )
     }
 }
 
@@ -277,6 +274,114 @@ fn isolated_verifier_command(python: &Path, verifier: &Path) -> io::Result<Comma
         .env_remove("PYTHONHOME")
         .env("PYTHONDONTWRITEBYTECODE", "1");
     Ok(command)
+}
+
+/// Read each verifier pipe concurrently so a noisy diagnostic stream cannot
+/// deadlock the projection stream. A reader retains at most its declared cap.
+fn read_bounded<R: io::Read>(
+    mut reader: R,
+    cap: usize,
+    oversized: &'static str,
+) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; STREAM_BUFFER_BYTES];
+    loop {
+        let remaining_plus_one = cap.saturating_sub(bytes.len()).saturating_add(1);
+        let read_len = buffer.len().min(remaining_plus_one);
+        let count = reader.read(&mut buffer[..read_len])?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        if count > cap - bytes.len() {
+            return Err(invalid(oversized));
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+}
+
+fn terminate_verifier(child: &mut Child) {
+    #[cfg(unix)]
+    if let Some(group) = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        // The verifier is started in its own group, including helpers that
+        // inherit either pipe. Kill them so the bounded readers can finish.
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn run_bounded_verifier(
+    command: &mut Command,
+    stdout_cap: usize,
+    stderr_cap: usize,
+) -> io::Result<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        terminate_verifier(&mut child);
+        return Err(invalid("verifier output pipes were not available"));
+    };
+
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        let stdout_sender = sender.clone();
+        scope.spawn(move || {
+            let result = read_bounded(
+                stdout,
+                stdout_cap,
+                "verified projection exceeds its input limit",
+            );
+            let _ = stdout_sender.send((true, result));
+        });
+        scope.spawn(move || {
+            let result = read_bounded(
+                stderr,
+                stderr_cap,
+                "pinned release verifier diagnostics exceed their input limit",
+            );
+            let _ = sender.send((false, result));
+        });
+
+        let captured: io::Result<_> = (|| {
+            let mut stdout = None;
+            let mut stderr = None;
+            for _ in 0..2 {
+                let (is_stdout, result) = receiver
+                    .recv()
+                    .map_err(|_| io::Error::other("verifier output reader stopped"))?;
+                if is_stdout {
+                    stdout = Some(result?);
+                } else {
+                    stderr = Some(result?);
+                }
+            }
+            let stdout = stdout.ok_or_else(|| io::Error::other("verifier stdout was not read"))?;
+            let stderr = stderr.ok_or_else(|| io::Error::other("verifier stderr was not read"))?;
+            Ok((child.wait()?, stdout, stderr))
+        })();
+        if captured.is_err() {
+            terminate_verifier(&mut child);
+        }
+        let (status, stdout, stderr) = captured?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "pinned release verifier rejected evidence: {}",
+                String::from_utf8_lossy(&stderr)
+            )));
+        }
+        Ok(stdout)
+    })
 }
 
 fn decode_projection(
@@ -1174,6 +1279,124 @@ mod tests {
         );
         assert!(parse_digest(&"ab".repeat(32)).is_ok());
         assert!(parse_digest(&"AB".repeat(32)).is_err());
+    }
+
+    #[test]
+    fn bounded_pipe_reader_accepts_exact_limit_and_rejects_one_extra_byte() {
+        let exact = read_bounded(&b"1234"[..], 4, "too long").unwrap();
+        assert_eq!(exact, b"1234");
+        let oversized = read_bounded(&b"12345"[..], 4, "too long").unwrap_err();
+        assert_eq!(oversized.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(oversized.to_string(), "too long");
+    }
+
+    #[test]
+    fn verifier_capture_drains_both_pipes_and_preserves_rejection() {
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(
+            "import sys; sys.stdout.buffer.write(b'p' * 4096); sys.stderr.buffer.write(b'e' * 4096)",
+        );
+        assert_eq!(
+            run_bounded_verifier(&mut command, 4096, 4096).unwrap(),
+            vec![b'p'; 4096]
+        );
+
+        let mut rejected = Command::new("python3");
+        rejected
+            .arg("-c")
+            .arg("import sys; sys.stderr.write('pinned evidence failed\\n'); sys.exit(17)");
+        let error = run_bounded_verifier(&mut rejected, 4096, 4096).unwrap_err();
+        assert!(error.to_string().contains("pinned evidence failed"));
+    }
+
+    #[test]
+    fn verifier_capture_stops_stdout_and_stderr_floods_before_child_exit() {
+        for (stream, stdout_cap, stderr_cap, expected) in [
+            (
+                "stdout",
+                1024,
+                1024,
+                "verified projection exceeds its input limit",
+            ),
+            (
+                "stderr",
+                1024,
+                1024,
+                "pinned release verifier diagnostics exceed their input limit",
+            ),
+        ] {
+            let mut command = Command::new("python3");
+            command.arg("-c").arg(format!(
+                "import sys,time; sys.{stream}.buffer.write(b'x' * 1025); sys.{stream}.flush(); time.sleep(10)"
+            ));
+            let start = std::time::Instant::now();
+            let error = run_bounded_verifier(&mut command, stdout_cap, stderr_cap).unwrap_err();
+            assert_eq!(error.to_string(), expected);
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "{stream} limit did not terminate the verifier promptly"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifier_capture_ends_inherited_pipes_when_output_is_oversized() {
+        let mut command = Command::new("python3");
+        command.arg("-c").arg(
+            "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'], stdout=sys.stdout, stderr=sys.stderr); sys.stdout.buffer.write(b'x' * 1025); sys.stdout.flush(); time.sleep(10)",
+        );
+        let start = std::time::Instant::now();
+        let error = run_bounded_verifier(&mut command, 1024, 1024).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "verified projection exceeds its input limit"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "inherited pipes kept the reader alive after verifier termination"
+        );
+    }
+
+    #[test]
+    fn pinned_verifier_staging_returns_exact_projection_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let trusted = root.join("trusted");
+        fs::create_dir(&trusted).unwrap();
+        let verifier = trusted.join("verify_kagemusha_v1_release_evidence.py");
+        let contract = trusted.join("release_artifact_contract.py");
+        fs::write(
+            &verifier,
+            b"import sys\nsys.stdout.buffer.write(b'pinned projection\\n')\n",
+        )
+        .unwrap();
+        fs::write(&contract, b"# pinned sibling\n").unwrap();
+        let python_output = Command::new("python3")
+            .arg("-c")
+            .arg("import sys; print(sys.executable)")
+            .output()
+            .unwrap();
+        assert!(python_output.status.success());
+        let python = PathBuf::from(String::from_utf8(python_output.stdout).unwrap().trim())
+            .canonicalize()
+            .unwrap();
+        let digest = |path: &Path| hash_reader(&mut File::open(path).unwrap()).unwrap();
+        let args = Arguments {
+            python_sha256: digest(&python),
+            python,
+            verifier_sha256: digest(&verifier),
+            verifier,
+            artifact_contract_sha256: digest(&contract),
+            artifact_contract: contract,
+            manifest: root.join("unused-manifest"),
+            manifest_sha256: [0; 32],
+            evidence_root: root.join("unused-evidence"),
+            observer_policy: root.join("unused-policy"),
+            observer_policy_sha256: [0; 32],
+            output_dir: root.join("handoff"),
+        };
+        assert_eq!(args.run_verifier().unwrap(), b"pinned projection\n");
     }
 
     #[test]

@@ -15,7 +15,9 @@ use iroha_core::zk::{
     kagemusha_v1_state::MintInboxReservationV1,
 };
 use iroha_data_model::{
-    NetworkId, block::consensus_v2::HeightContextId, kagemusha::KagemushaReleaseAuthorityPolicyV1,
+    NetworkId, block::consensus_v2::HeightContextId,
+    isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
+    kagemusha::KagemushaReleaseAuthorityPolicyV1,
 };
 
 use crate::{
@@ -174,12 +176,13 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     ///
     /// # Errors
     /// Rejects an absent or changed reservation, invalid signed chain, missing durable owner,
-    /// or a replacement finality pin.
+    /// or a replacement finality pin. Returns whether a new pin was written and the exact
+    /// anchor from that same verified chain; an exact retry returns `false` with that anchor.
     pub fn pin_finality_chain(
         &self,
         reservation: &KagemushaTestnetNativeMintReservationV1,
         chain_json: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
         let reservations = self
             .reservations
             .lock()
