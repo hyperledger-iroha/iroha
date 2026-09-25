@@ -36,6 +36,7 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
     let invalid = [
       Data(),
       Data(repeating: 1, count: 769),
+      frame(payload: Data([1])),
       noritoEncode(typeName: "wrong.schema", payload: Data([1]),
                    flags: NoritoHeader.compactLen),
       noritoEncode(typeName: "connect_norito_bridge::KagemushaTestnetValueAdmissionArchiveV1",
@@ -64,10 +65,88 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
     XCTAssertFalse(admission.productionMonetaryAuthorized)
   }
 
-  private func archive() -> Data {
-    // The native owner alone emits the complete verified payload. The SDK checks its frame.
-    noritoEncode(typeName: "connect_norito_bridge::KagemushaTestnetValueAdmissionArchiveV1",
-                 payload: Data([1]), flags: NoritoHeader.compactLen)
+  func testForeignOperationHardwareFlagAndInvalidFinalityFailClosed() {
+    for (index, replacement) in [
+      (1, Data([1])),
+      (9, Data(repeating: 9, count: 32)),
+      (11, KagemushaUInt128V1(0).littleEndianBytes),
+      (15, u64(0)),
+      (16, Data(repeating: 0, count: 32)),
+    ] {
+      var fields = validFields()
+      fields[index] = replacement
+      assertInvalid(archive(fields: fields))
+    }
+  }
+
+  func testMalformedOrNoncanonicalFieldsFailClosed() {
+    var short = validFields()
+    short[10] = Data(repeating: 8, count: 31)
+    assertInvalid(archive(fields: short))
+
+    var writer = CompactNoritoWriter()
+    for field in validFields() { writer.writeField(field) }
+    var tailed = writer.data
+    tailed.append(0)
+    assertInvalid(frame(payload: tailed))
+
+    var overlong = Data([0x82, 0x00])
+    overlong.append(writer.data.dropFirst())
+    assertInvalid(frame(payload: overlong))
+
+    var badPadding = archive()
+    badPadding[NoritoHeader.encodedLength] = 1
+    assertInvalid(badPadding)
+  }
+
+  private let schema = "connect_norito_bridge::KagemushaTestnetValueAdmissionArchiveV1"
+
+  private func validFields() -> [Data] {
+    [u16(1), Data([0]), Data(repeating: 1, count: 32),
+     Data(repeating: 2, count: 32), Data(repeating: 3, count: 32),
+     Data(repeating: 4, count: 32), Data(repeating: 5, count: 32),
+     u32(2), Data(repeating: 6, count: 32), operationID,
+     Data(repeating: 8, count: 32), KagemushaUInt128V1(17).littleEndianBytes,
+     Data(repeating: 10, count: 32), Data(repeating: 11, count: 32),
+     Data(repeating: 12, count: 32), u64(13), Data(repeating: 14, count: 32)]
+  }
+
+  private func archive(fields: [Data]? = nil) -> Data {
+    var writer = CompactNoritoWriter()
+    for field in fields ?? validFields() { writer.writeField(field) }
+    return frame(payload: writer.data)
+  }
+
+  private func frame(payload: Data) -> Data {
+    noritoEncode(typeName: schema, payload: payload,
+                 flags: NoritoHeader.compactLen, payloadAlignment: 16)
+  }
+
+  private func u16(_ value: UInt16) -> Data {
+    var writer = CompactNoritoWriter()
+    writer.writeUInt16LE(value)
+    return writer.data
+  }
+
+  private func u32(_ value: UInt32) -> Data {
+    var writer = CompactNoritoWriter()
+    writer.writeUInt32LE(value)
+    return writer.data
+  }
+
+  private func u64(_ value: UInt64) -> Data {
+    var writer = CompactNoritoWriter()
+    writer.writeUInt64LE(value)
+    return writer.data
+  }
+
+  private func assertInvalid(_ archive: Data, file: StaticString = #filePath, line: UInt = #line) {
+    let endpoint = Endpoint(status: 0, archive: archive)
+    XCTAssertThrowsError(try KagemushaTestnetValueAdmissionBridgeV1.admit(
+      operationID: operationID, endpoint: endpoint), file: file, line: line) { error in
+        XCTAssertEqual(error as? KagemushaTestnetValueAdmissionErrorV1,
+                       .invalidArchive, file: file, line: line)
+      }
   }
 
   private final class Endpoint: KagemushaTestnetValueAdmissionEndpointV1 {

@@ -361,6 +361,8 @@ mod tests {
             total_admitted: 17,
         };
         let bytes = norito::encode_canonical(&record).unwrap();
+        assert_eq!(bytes.len(), 356);
+        assert_eq!(&bytes[40..48], &[0; 8]);
         assert!(bytes.len() <= KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1);
         let decoded: KagemushaTestnetMintLedgerCreditArchiveV1 =
             norito::decode_canonical(&bytes).unwrap();

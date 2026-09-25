@@ -629,7 +629,11 @@ The signed finality chain is verified once per pin attempt, and the returned
 anchor comes from the same verified token used by the native owner.
 Its C mobile endpoint accepts only that 32-byte operation ID and
 returns a bounded canonical Norito archive with the counted credit and ledger
-total. Callers cannot pass a copied archive as authority. Native host
+total. The Swift and Android inspection adapters require the exact canonical
+archive layout, the requested operation ID, positive value and finality, and
+`hardware_qualified = false`; Android also checks the native 16-byte alignment
+for both admission and credit frames. Callers cannot pass a copied archive as
+authority. Native host
 installation from independently authenticated app configuration, wallet
 account crediting, and testnet spending are still staged; the registry does
 not enter production monetary state or attest hardware.

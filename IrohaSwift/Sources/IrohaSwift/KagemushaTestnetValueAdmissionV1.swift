@@ -54,7 +54,7 @@ public enum KagemushaTestnetValueAdmissionBridgeV1 {
     let result = endpoint.admit(operationID: Data(operationID))
     switch result.status {
     case 0:
-      return try decode(result.archive)
+      return try decode(result.archive, operationID: operationID)
     case -312:
       throw KagemushaTestnetValueAdmissionErrorV1.ownerUnavailable
     default:
@@ -68,15 +68,53 @@ public enum KagemushaTestnetValueAdmissionBridgeV1 {
     }
   }
 
-  private static func decode(_ archive: Data) throws -> KagemushaTestnetValueAdmissionV1 {
+  private static func decode(
+    _ archive: Data, operationID: Data
+  ) throws -> KagemushaTestnetValueAdmissionV1 {
     guard !archive.isEmpty, archive.count <= maximumArchiveBytes,
       let frame = noritoDecodeFrame(archive),
       frame.header.compression == .none,
       frame.header.flags == NoritoHeader.compactLen,
       frame.header.schema == noritoSchemaHash(forTypeName: archiveSchema),
-      !frame.payload.isEmpty
+      frame.paddingLength == noritoHeaderPaddingLength(payloadAlignment: 16)
     else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
-    return KagemushaTestnetValueAdmissionV1(canonicalArchive: Data(archive))
+    do {
+      var reader = CanonicalNoritoReader(data: frame.payload)
+      var fields = [Data]()
+      fields.reserveCapacity(17)
+      for length in [2, 1, 32, 32, 32, 32, 32, 4, 32, 32, 32, 16,
+                     32, 32, 32, 8, 32] {
+        let field = try reader.readCompactField()
+        guard field.count == length else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
+        fields.append(field)
+      }
+      guard reader.remaining() == 0 else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
+      var canonical = CompactNoritoWriter()
+      for field in fields { canonical.writeField(field) }
+      guard noritoEncode(
+        typeName: archiveSchema, payload: canonical.data,
+        flags: NoritoHeader.compactLen, payloadAlignment: 16) == archive
+      else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
+
+      var versionReader = CanonicalNoritoReader(data: fields[0])
+      let version = try versionReader.readUInt16LE()
+      var scaleReader = CanonicalNoritoReader(data: fields[7])
+      let assetScale = try scaleReader.readUInt32LE()
+      let amount = try KagemushaUInt128V1(littleEndianBytes: fields[11])
+      var heightReader = CanonicalNoritoReader(data: fields[15])
+      let blockHeight = try heightReader.readUInt64LE()
+      let nonzero: (Data) -> Bool = { $0.contains(where: { $0 != 0 }) }
+      guard version == 1, fields[1][fields[1].startIndex] == 0,
+        assetScale <= 28, blockHeight > 0, !amount.isZero,
+        [fields[2], fields[3], fields[4], fields[5], fields[6], fields[8],
+         fields[9], fields[10], fields[12], fields[13], fields[14], fields[16]].allSatisfy(nonzero),
+        fields[2] != fields[3], fields[2] != fields[4], fields[3] != fields[4],
+        fields[5] != fields[8], fields[9] == operationID
+      else { throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive }
+      return KagemushaTestnetValueAdmissionV1(canonicalArchive: Data(archive))
+    } catch {
+      throw KagemushaTestnetValueAdmissionErrorV1.invalidArchive
+    }
   }
 
   private final class NativeEndpoint: KagemushaTestnetValueAdmissionEndpointV1 {

@@ -116,7 +116,10 @@ class KagemushaTestnetValueCreditV1 private constructor(
 private const val CREDIT_ARCHIVE_SCHEMA_V1 =
     "connect_norito_bridge::KagemushaTestnetMintLedgerCreditArchiveV1"
 private const val CREDIT_PAYLOAD_BYTES_V1 = 308
-private const val CREDIT_PADDING_BYTES_V1 = 9 // Native struct alignment is 16; header is 39 bytes.
+private const val CREDIT_ALIGNMENT_BYTES_V1 = 16
+private const val CREDIT_PADDING_BYTES_V1 =
+    (CREDIT_ALIGNMENT_BYTES_V1 - NoritoHeader.HEADER_LENGTH % CREDIT_ALIGNMENT_BYTES_V1) %
+        CREDIT_ALIGNMENT_BYTES_V1
 private const val CREDIT_FRAME_BYTES_V1 =
     NoritoHeader.HEADER_LENGTH + CREDIT_PADDING_BYTES_V1 + CREDIT_PAYLOAD_BYTES_V1
 
@@ -125,6 +128,10 @@ private fun decodeCreditArchive(
     requestedOperationId: ByteArray,
 ): KagemushaTestnetMintLedgerCreditV1 {
     require(archive.size == CREDIT_FRAME_BYTES_V1) { "KAGEMUSHA testnet credit archive length is invalid" }
+    require(archive.copyOfRange(NoritoHeader.HEADER_LENGTH,
+        NoritoHeader.HEADER_LENGTH + CREDIT_PADDING_BYTES_V1).all { it == 0.toByte() }) {
+        "KAGEMUSHA testnet credit archive padding is not canonical"
+    }
     val frame = NoritoHeader.decode(archive, SchemaHash.hash16(CREDIT_ARCHIVE_SCHEMA_V1))
     require(frame.header.compression == NoritoHeader.COMPRESSION_NONE &&
         frame.header.flags == NoritoHeader.COMPACT_LEN &&

@@ -1227,6 +1227,8 @@ mod tests {
             finality_height_context_id: [14; 32],
         };
         let encoded = norito::encode_canonical(&record).expect("canonical value archive");
+        assert_eq!(encoded.len(), 480);
+        assert_eq!(&encoded[40..48], &[0; 8]);
         assert!(encoded.len() <= KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1);
         let decoded: KagemushaTestnetValueAdmissionArchiveV1 =
             norito::decode_canonical(&encoded).expect("canonical value archive roundtrip");

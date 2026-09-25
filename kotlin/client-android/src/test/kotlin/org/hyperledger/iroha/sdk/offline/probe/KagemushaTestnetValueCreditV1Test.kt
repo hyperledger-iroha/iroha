@@ -50,6 +50,8 @@ class KagemushaTestnetValueCreditV1Test {
     fun `credit exposes exact atomic and decimal value in its release scope`() {
         val endpoint = Endpoint()
         val credit = KagemushaTestnetValueCreditV1.openEndpoint(endpoint)
+        assertEquals(356, endpoint.archive.size)
+        assertEquals(8, CREDIT_TEST_PADDING_BYTES_V1)
         val counted = credit.creditFinalizedValue(operationId)
         assertContentEquals(ByteArray(32) { 7 }, operationId)
         assertTrue(endpoint.direct)
@@ -167,6 +169,8 @@ class KagemushaTestnetValueCreditV1Test {
 
 private const val CREDIT_TEST_SCHEMA_V1 =
     "connect_norito_bridge::KagemushaTestnetMintLedgerCreditArchiveV1"
+private const val CREDIT_TEST_PADDING_BYTES_V1 =
+    (16 - NoritoHeader.HEADER_LENGTH % 16) % 16
 
 private val CREDIT_TEST_PAYLOAD_ADAPTER = object : TypeAdapter<ByteArray> {
     override fun encode(encoder: NoritoEncoder, value: ByteArray) = encoder.writeBytes(value)
@@ -217,6 +221,7 @@ private fun creditArchive(
     val bytes = payload.toByteArray()
     if (lengthOverride != null) bytes[0] = lengthOverride.toByte()
     val frame = NoritoCodec.encode(bytes, schema, CREDIT_TEST_PAYLOAD_ADAPTER, flags)
-    return frame.copyOfRange(0, NoritoHeader.HEADER_LENGTH) + ByteArray(9) +
+    return frame.copyOfRange(0, NoritoHeader.HEADER_LENGTH) +
+        ByteArray(CREDIT_TEST_PADDING_BYTES_V1) +
         frame.copyOfRange(NoritoHeader.HEADER_LENGTH, frame.size)
 }
