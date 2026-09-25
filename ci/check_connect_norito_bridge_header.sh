@@ -10,6 +10,7 @@ UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 PRIVACY_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
 RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_reserve_finality_v1.rs"
+TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
@@ -29,6 +30,8 @@ SELF_TESTS=(
   --self-test-bad-kagemusha-error-code
   --self-test-missing-kagemusha-mint-stage-header-symbol
   --self-test-bad-kagemusha-mint-stage-signature
+  --self-test-missing-finalized-mint-header-symbol
+  --self-test-missing-finalized-mint-rust-symbol
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
@@ -62,6 +65,7 @@ run_contract_check() {
   local hijiri_api="$6"
   local private_settlement_rust="$7"
   local reserve_finality_rust="$8"
+  local testnet_observation_rust="$9"
 
   python3 - \
     "${rust_lib}" \
@@ -71,7 +75,8 @@ run_contract_check() {
     "${parliament_rust}" \
     "${hijiri_api}" \
     "${private_settlement_rust}" \
-    "${reserve_finality_rust}" <<'PY'
+    "${reserve_finality_rust}" \
+    "${testnet_observation_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -84,6 +89,7 @@ rust += "\n" + Path(sys.argv[5]).read_text(encoding="utf-8")
 hijiri_api = Path(sys.argv[6]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[9]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -112,6 +118,9 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_core_coordinator_contract_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
+    "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
+    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -169,6 +178,7 @@ PRIVATE_SETTLEMENT_EXPORTS = {
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
+    "connect_norito_encode_account_read_permission_multisig_signed_transaction",
     "connect_norito_encode_burn_signed_transaction",
     "connect_norito_encode_claim_identifier_signed_transaction",
     "connect_norito_encode_governance_cast_plain_ballot_signed_transaction",
@@ -620,6 +630,7 @@ make_negative_workspace() {
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${RESERVE_FINALITY_RUST}" "${tmp}/kagemusha_reserve_finality_v1.rs"
+  cp "${TESTNET_OBSERVATION_RUST}" "${tmp}/kagemusha_testnet_observation_v1.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -638,7 +649,8 @@ expect_contract_rejection() {
       "${tmp}/parliament_timed_ovn_ffi.rs" \
       "${tmp}/validation_fee_api.rs" \
       "${tmp}/private_settlement_ffi.rs" \
-      "${tmp}/kagemusha_reserve_finality_v1.rs" 2>&1)"; then
+      "${tmp}/kagemusha_reserve_finality_v1.rs" \
+      "${tmp}/kagemusha_testnet_observation_v1.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -664,7 +676,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${PARLIAMENT_RUST}" \
     "${HIJIRI_API}" \
     "${PRIVATE_SETTLEMENT_RUST}" \
-    "${RESERVE_FINALITY_RUST}" >/dev/null
+    "${RESERVE_FINALITY_RUST}" \
+    "${TESTNET_OBSERVATION_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -743,6 +756,16 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_regex_once "${tmp_header}" \
         '(connect_norito_kagemusha_device_mint_stage_result_v1_validate\s*\([^;]*?)unsigned long result_len' \
         '\g<1>uint32_t result_len'
+      ;;
+    --self-test-missing-finalized-mint-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_testnet_finalized_mint_observe_v1' \
+        'removed_testnet_finalized_mint_observe_v1'
+      ;;
+    --self-test-missing-finalized-mint-rust-symbol)
+      replace_regex_once "${tmp}/kagemusha_testnet_observation_v1.rs" \
+        '(pub unsafe extern "C" fn )connect_norito_kagemusha_testnet_finalized_mint_observe_v1' \
+        '\g<1>removed_testnet_finalized_mint_observe_v1'
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \
@@ -857,5 +880,6 @@ run_contract_check \
   "${PARLIAMENT_RUST}" \
   "${HIJIRI_API}" \
   "${PRIVATE_SETTLEMENT_RUST}" \
-  "${RESERVE_FINALITY_RUST}"
+  "${RESERVE_FINALITY_RUST}" \
+  "${TESTNET_OBSERVATION_RUST}"
 compile_header

@@ -87,6 +87,14 @@ check_binary_symbols test-only-library test-only-inventory "$2"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("is missing " + missing, result.stderr)
 
+    def test_missing_finalized_mint_observer_is_rejected_on_apple_and_android(self) -> None:
+        missing = "connect_norito_kagemusha_testnet_finalized_mint_observe_v1"
+        for mode in ("apple", "elf"):
+            with self.subTest(mode=mode):
+                result = self.check(mode, missing)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("is missing " + missing, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

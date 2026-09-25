@@ -38,6 +38,37 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
         )
         self.iroha_root.mkdir()
         self.client_root.mkdir(parents=True)
+        self.cargo_lock = self.iroha_root / "Cargo.lock"
+        self.cargo_lock.write_bytes(b"# fixture Cargo.lock\n")
+        self.native_target = self.client_root / "native/cargo-target/production"
+        self.native_target.mkdir(parents=True)
+        self.source_seal = {
+            "schema": "iroha.norito-bridge-source-seal.v1",
+            "platform": "android",
+            "targets": ["aarch64-linux-android", "x86_64-linux-android"],
+            "source_commit": "1" * 40,
+            "source_tree_dirty": False,
+            "source_status": "",
+            "source_fingerprint_sha256": "2" * 64,
+        }
+        self.source_seal_path = (
+            self.client_root / "native/sourceSeal/production/source-seal-v1.json"
+        )
+        self.source_seal_path.parent.mkdir(parents=True)
+        self.source_seal_path.write_bytes(self.seal_bytes())
+        verifier = self.iroha_root / "scripts/norito_bridge_source_seal.py"
+        verifier.parent.mkdir()
+        verifier.write_text(
+            "from pathlib import Path\n"
+            "import sys\n"
+            "if len(sys.argv) < 2 or sys.argv[1] != 'verify':\n"
+            "    raise SystemExit(1)\n"
+            "snapshot = Path(sys.argv[sys.argv.index('--snapshot') + 1])\n"
+            "expected = Path(__file__).with_name('expected-source-seal.json')\n"
+            "raise SystemExit(0 if snapshot.read_bytes() == expected.read_bytes() else 1)\n",
+            encoding="utf-8",
+        )
+        verifier.with_name("expected-source-seal.json").write_bytes(self.seal_bytes())
         self.libraries = {
             abi: f"\x7fELF-authenticated-{abi}\n".encode("ascii")
             for abi in ABIS
@@ -70,7 +101,7 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
             "source_commit": "1" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "2" * 64,
-            "cargo_lock_sha256": "3" * 64,
+            "cargo_lock_sha256": hashlib.sha256(self.cargo_lock.read_bytes()).hexdigest(),
             "android_ndk_revision": ANDROID_NDK_BASE_REVISION,
             "strip_tool_sha256": "4" * 64,
             "libraries": {
@@ -107,6 +138,11 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
+
+    def seal_bytes(self) -> bytes:
+        return (
+            json.dumps(self.source_seal, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
 
     @staticmethod
     def write_zip(
@@ -474,6 +510,45 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
                         "build environment schema is not exact",
                         result.stderr,
                     )
+
+    def test_rejects_dirty_or_mismatched_source_provenance(self) -> None:
+        for field, replacement in (
+            ("source_tree_dirty", True),
+            ("source_commit", "3" * 40),
+            ("source_fingerprint_sha256", "4" * 64),
+        ):
+            with self.subTest(field=field):
+                provenance = json.loads(json.dumps(self.provenance))
+                provenance[field] = replacement
+                self.replace_provenance(provenance)
+                result = self.verify(self.write_app_archive("apk"), "apk")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("source", result.stderr)
+
+    def test_rejects_stale_or_missing_source_seal(self) -> None:
+        self.source_seal["source_fingerprint_sha256"] = "4" * 64
+        self.source_seal_path.write_bytes(self.seal_bytes())
+        result = self.verify(self.write_app_archive("apk"), "apk")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("source seal disagrees", result.stderr)
+
+        self.source_seal_path.unlink()
+        result = self.verify(self.write_app_archive("apk"), "apk")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("source seal is missing", result.stderr)
+
+    def test_rejects_stale_cargo_lock_or_live_source_verification(self) -> None:
+        self.cargo_lock.write_bytes(b"# changed Cargo.lock\n")
+        result = self.verify(self.write_app_archive("aab"), "aab")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("canonical Cargo.lock", result.stderr)
+
+        self.cargo_lock.write_bytes(b"# fixture Cargo.lock\n")
+        expected = self.iroha_root / "scripts/expected-source-seal.json"
+        expected.write_bytes(b"stale\n")
+        result = self.verify(self.write_app_archive("aab"), "aab")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("live Iroha source tree", result.stderr)
 
 
 if __name__ == "__main__":
