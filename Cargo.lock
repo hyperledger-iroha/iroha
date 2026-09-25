@@ -5755,6 +5755,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_sumeragi"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "norito",
+]
+
+[[package]]
 name = "iroha_swarm"
 version = "2.0.0-rc.2.0"
 dependencies = [

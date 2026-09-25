@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Superseded on 2026-09-25 by [Sumeragi goals](sumeragi_goals.md). Goals L1–L6 are retired unfinished: the rewrite removes the v2 lifecycle owners they were reconciling. This record is kept for history.
+
 The async proposal contract is the refactor target: at each height the leader
 samples a bounded subset of locally available signed transactions against one
 committed parent and signs their chosen order in a proposal. Followers validate
