@@ -765,12 +765,20 @@ source-sealed monetary XCFramework.
   6,654,443,520 bytes; all 5,249 inputs, executable, guard and supervisor remain
   unchanged, and the reviewed guard reaps its child correctly. Reusable typed-SHA generation
   completes with each Claim PK/VK at 799,022,510/6,058 bytes and each shard PK/VK
-  at 8,533,246/13,290 bytes. These are actual serialized diagnostic artifacts;
-  the Claim PK fails the unchanged 64 MiB release limit. The run reaches
+  at 8,533,246/13,290 bytes. These are actual diagnostic artifacts from the
+  then-current `Processed` serializer; that Claim PK fails the unchanged 64 MiB
+  release limit. The later structured-v1 serializer has not been measured for
+  this Claim graph, so the historical 799,022,510-byte result is not its size.
+  The run reaches
   credential typed-SHA proving but provides no full State pass. Its cached-key
   path uses the borrowed prover, whose eager advice buffers are separate from
   the already improved consuming-key path. Reducing either allocation alone
   cannot establish the unchanged 128 MiB device gate.
+  The current structured-v1 resource preflight configures the Claim circuit
+  with a strict minimum legal Base profile and computes an 8,668,355-byte
+  proving-key bound, but its 96 advice columns require a 192 MiB dense advice
+  basis at k16. Those are source-level bounds, not a generated full Claim key
+  or a measured device RSS result; the 128 MiB whole-process gate remains open.
   The next private candidate moves selected complete ordinary transcripts into
   the existing two native Poseidon lanes after reserving mandatory work. Static
   comparison preserves the original complete ordinary/hybrid verifier bodies;
