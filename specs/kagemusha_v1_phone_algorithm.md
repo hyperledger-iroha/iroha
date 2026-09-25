@@ -565,8 +565,10 @@ retries or duplicate credits. The existing release receipt still requires
 production qualification. Kagami can explicitly prepare, threshold-sign,
 assemble and authenticate the experimental release and its distinct
 structural receipt against exact native artifact and evidence hashes. A trusted
-producer for genuine structural evidence and proof artifacts remains required
-before a signed candidate can be issued from real devices.
+producer now converts an independently pinned verifier projection into a typed
+receipt and content-addressed artifact/evidence handoff that Kagami rehashes.
+Genuine structural evidence, real proof artifacts and independent signing
+authority remain required before a candidate can be issued from real devices.
 
 The structural device certificate and real-proof corridor still require
 genuine release evidence and artifact generation. An explicit Experimental
@@ -617,7 +619,13 @@ every retained credit from the durable proof owner on recovery. Exact retries
 are idempotent; changed operation evidence, duplicate credit IDs, and scope
 changes fail. A Rust-only native host API opens this ledger under the installed
 durable owner and credits a finalized top-up by operation ID while holding that
-owner's lock. Its C mobile endpoint accepts only that 32-byte operation ID and
+owner's lock. A process-local Rust host composes release installation, private
+pre-submission reservation, signed-finality pinning and observed crediting with
+typed ordering tokens. It requires matching native-trusted create/recover modes
+for the two journals. Mixed modes fail closed because path absence cannot
+distinguish interrupted installation from rollback; interrupted installation
+requires a trusted external checkpoint and explicit repair before restart.
+Its C mobile endpoint accepts only that 32-byte operation ID and
 returns a bounded canonical Norito archive with the counted credit and ledger
 total. Callers cannot pass a copied archive as authority. Native host
 installation from independently authenticated app configuration, wallet

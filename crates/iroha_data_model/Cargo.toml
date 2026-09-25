@@ -14,7 +14,7 @@ workspace = true
 
 [features]
 default = ["application-model"]
-dev-tools = ["dep:tempfile"]
+dev-tools = ["dep:tempfile", "dep:rustix"]
 # Public application model; node-only additions are requested by node crates.
 application-model = ["governance", "pqc", "bls", "gost", "sm"]
 bridge = []
@@ -82,6 +82,9 @@ time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 trybuild = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"], optional = true }
 
 [dev-dependencies]
 # Storage round-trip integration belongs to tests, not the model dependency graph.

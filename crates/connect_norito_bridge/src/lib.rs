@@ -187,6 +187,8 @@ mod kagemusha_testnet_finality_chain_v1;
 #[cfg(unix)]
 mod kagemusha_testnet_native_mint_runtime_v1;
 #[cfg(unix)]
+mod kagemusha_testnet_native_mobile_host_v1;
+#[cfg(unix)]
 mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
 pub use kagemusha_reserve_finality_v1::{
@@ -199,6 +201,11 @@ pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_a
 pub use kagemusha_testnet_native_mint_runtime_v1::{
     KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
     KagemushaTestnetNativeMintRuntimeV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mobile_host_v1::{
+    KagemushaTestnetNativeMobileHostV1, KagemushaTestnetNativePinnedMintV1,
+    KagemushaTestnetNativeReservedMintV1,
 };
 #[cfg(unix)]
 pub use kagemusha_testnet_native_value_ledger_v1::{

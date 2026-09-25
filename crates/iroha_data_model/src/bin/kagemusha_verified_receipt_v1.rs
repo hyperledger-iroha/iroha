@@ -1,28 +1,34 @@
 //! Encode a freshly verified KAGEMUSHA evidence projection as an experimental receipt.
 //!
 //! This tool runs the existing closed-evidence verifier on private copies of pinned
-//! inputs. It does not generate proving keys, observations, or production qualification.
+//! inputs, then packages the verified files under SHA-256 names for Kagami's release
+//! preparer. It does not generate proving keys, observations, or production qualification.
 
 use std::{
     collections::BTreeMap,
     env,
     error::Error,
-    fs::{self, OpenOptions},
-    io::{self, Write as _},
+    fs::{self, File, OpenOptions},
+    io::{self, Read as _, Write as _},
     path::{Path, PathBuf},
     process::Command,
 };
 
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1, KagemushaArtifactBindingV1,
-    KagemushaInternalValidationReceiptV1, kagemusha_artifact_set_digest_v1,
-    kagemusha_vk_set_digest_v1,
+    KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+    KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1, KagemushaArtifactBindingV1,
+    KagemushaArtifactRoleV1, KagemushaEvidenceFileV1, KagemushaInternalValidationReceiptV1,
+    kagemusha_artifact_set_digest_v1, kagemusha_vk_set_digest_v1,
 };
 use norito::json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 const MAX_PROJECTION_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_EVIDENCE_FILES: usize = 65_536;
+const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const PROJECTION_SCHEMA: &str = "iroha.kagemusha_v1.testnet_experiment_authority_review_projection";
+const MANIFEST_SCHEMA: &str = "iroha.kagemusha_v1.testnet_experiment_evidence_manifest";
 const ISOLATED_VERIFIER_ENTRY: &str = "import runpy,sys; sys.path.append(sys.argv[1]); sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name='__main__')";
 
 #[derive(Debug)]
@@ -41,6 +47,25 @@ struct Arguments {
     output_dir: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+struct SourceFile {
+    path: PathBuf,
+    sha256: [u8; 32],
+    byte_len: u64,
+}
+
+#[derive(Debug)]
+struct ManifestFile {
+    source: SourceFile,
+    kind: String,
+}
+
+#[derive(Debug)]
+struct HandoffSources {
+    artifacts: BTreeMap<[u8; 32], SourceFile>,
+    evidence: BTreeMap<[u8; 32], SourceFile>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Arguments::parse(env::args().skip(1))?;
     args.check_inputs()?;
@@ -54,8 +79,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)?;
     let mut inventory_bytes = norito::json::to_json(&inventory)?.into_bytes();
     inventory_bytes.push(b'\n');
-    write_outputs(
-        &args.output_dir,
+    write_verified_handoff(
+        &args,
+        &receipt,
+        &inventory,
         &receipt_bytes,
         &inventory_bytes,
         &projection,
@@ -418,16 +445,10 @@ fn unit_enum_tag(field: &str) -> Option<&'static str> {
 }
 
 fn check_pinned_file(path: &Path, expected: [u8; 32]) -> io::Result<()> {
-    if !path.is_absolute() || path.canonicalize()? != path || !path.is_file() {
-        return Err(invalid(
-            "pinned input must be a canonical absolute regular file",
-        ));
-    }
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(invalid("pinned input cannot be a symlink"));
-    }
-    let actual: [u8; 32] = Sha256::digest(fs::read(path)?).into();
-    if actual != expected {
+    let mut input = open_pinned_input(path)?;
+    let before = input.metadata()?;
+    let actual = hash_reader(&mut input)?;
+    if actual != expected || !pinned_file_unchanged(path, &before, &input.metadata()?)? {
         return Err(invalid("pinned input SHA-256 changed"));
     }
     Ok(())
@@ -439,10 +460,8 @@ fn stage_pinned_file(
     expected: [u8; 32],
     executable: bool,
 ) -> io::Result<()> {
-    let bytes = fs::read(source)?;
-    if <[u8; 32]>::from(Sha256::digest(&bytes)) != expected {
-        return Err(invalid("pinned source changed before private staging"));
-    }
+    let mut input = open_pinned_input(source)?;
+    let before = input.metadata()?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -451,7 +470,21 @@ fn stage_pinned_file(
         options.mode(0o600);
     }
     let mut file = options.open(target)?;
-    file.write_all(&bytes)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        file.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+    }
+    if <[u8; 32]>::from(hasher.finalize()) != expected
+        || !pinned_file_unchanged(source, &before, &input.metadata()?)?
+    {
+        return Err(invalid("pinned source changed before private staging"));
+    }
     file.sync_all()?;
     #[cfg(unix)]
     {
@@ -464,6 +497,79 @@ fn stage_pinned_file(
     #[cfg(not(unix))]
     let _ = executable;
     check_pinned_file(target, expected)
+}
+
+fn open_pinned_input(path: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        open_nofollow_regular(path)
+    }
+    #[cfg(not(unix))]
+    {
+        if !path.is_absolute()
+            || path.canonicalize()? != path
+            || !path.is_file()
+            || fs::symlink_metadata(path)?.file_type().is_symlink()
+        {
+            return Err(invalid(
+                "pinned input must be a canonical absolute regular file",
+            ));
+        }
+        File::open(path)
+    }
+}
+
+fn hash_reader(reader: &mut impl io::Read) -> io::Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn pinned_file_unchanged(
+    path: &Path,
+    before: &fs::Metadata,
+    after: &fs::Metadata,
+) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        Ok(same_file_metadata(before, after)
+            && same_file_metadata(before, &open_nofollow_regular(path)?.metadata()?))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(before.len() == after.len()
+            && before.modified()? == after.modified()?
+            && fs::metadata(path)?.len() == before.len())
+    }
+}
+
+fn read_pinned_manifest(path: &Path, expected: [u8; 32]) -> io::Result<Vec<u8>> {
+    let mut input = open_pinned_input(path)?;
+    let before = input.metadata()?;
+    if before.len() > MAX_MANIFEST_BYTES {
+        return Err(invalid("verified evidence manifest exceeds its byte limit"));
+    }
+    let mut bytes = Vec::with_capacity(before.len() as usize);
+    (&mut input)
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_MANIFEST_BYTES
+        || bytes.len() as u64 != before.len()
+        || <[u8; 32]>::from(Sha256::digest(&bytes)) != expected
+        || !pinned_file_unchanged(path, &before, &input.metadata()?)?
+    {
+        return Err(invalid(
+            "evidence manifest changed after independent verification",
+        ));
+    }
+    Ok(bytes)
 }
 
 fn check_canonical_dir(path: &Path) -> io::Result<()> {
@@ -494,22 +600,104 @@ fn parse_digest(raw: &str) -> io::Result<[u8; 32]> {
     Ok(digest)
 }
 
+fn write_verified_handoff(
+    args: &Arguments,
+    receipt_binding: &KagemushaInternalValidationReceiptV1,
+    inventory_bindings: &[KagemushaArtifactBindingV1],
+    receipt: &[u8],
+    inventory: &[u8],
+    projection: &[u8],
+) -> io::Result<()> {
+    let sources = collect_handoff_sources(args, receipt_binding, inventory_bindings, projection)?;
+    let root = &args.output_dir;
+    let parent = root
+        .parent()
+        .ok_or_else(|| invalid("handoff output has no parent"))?;
+    let staging = private_staging_dir(parent)?;
+    let staged_root = staging.path();
+    let artifacts = staged_root.join("artifacts");
+    let evidence = staged_root.join("evidence");
+    create_private_dir(&artifacts)?;
+    create_private_dir(&evidence)?;
+    for source in sources.artifacts.values() {
+        copy_content_addressed(source, &artifacts)?;
+    }
+    for source in sources.evidence.values() {
+        copy_content_addressed(source, &evidence)?;
+    }
+    File::open(&artifacts)?.sync_all()?;
+    File::open(&evidence)?.sync_all()?;
+    write_outputs(staged_root, receipt, inventory, projection)?;
+    File::open(staged_root)?.sync_all()?;
+    publish_staged_handoff(staged_root, root)?;
+    // The staging name no longer exists after rename; do not let TempDir's
+    // cleanup race a later private directory created with that old name.
+    let _published_staging_path = staging.keep();
+    Ok(())
+}
+
+fn private_staging_dir(parent: &Path) -> io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".kagemusha-handoff-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir_in(parent)
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+))]
+fn publish_staged_handoff(staging: &Path, root: &Path) -> io::Result<()> {
+    let parent_path = root
+        .parent()
+        .ok_or_else(|| invalid("handoff output has no parent"))?;
+    if staging.parent() != Some(parent_path) {
+        return Err(invalid("handoff staging and output must be siblings"));
+    }
+    let parent = open_nofollow_directory(parent_path)?;
+    rustix::fs::renameat_with(
+        &parent,
+        staging
+            .file_name()
+            .ok_or_else(|| invalid("handoff staging has no name"))?,
+        &parent,
+        root.file_name()
+            .ok_or_else(|| invalid("handoff output has no name"))?,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from)?;
+    parent.sync_all()
+}
+
+#[cfg(not(any(
+    target_vendor = "apple",
+    target_os = "linux",
+    target_os = "android",
+    target_os = "redox"
+)))]
+fn publish_staged_handoff(_staging: &Path, _root: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-replace handoff publication is unavailable on this platform",
+    ))
+}
+
 fn write_outputs(
     root: &Path,
     receipt: &[u8],
     inventory: &[u8],
     projection: &[u8],
 ) -> io::Result<()> {
-    fs::create_dir(root)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
-    }
     for (name, bytes) in [
-        ("receipt.norito", receipt),
         ("artifact_inventory.json", inventory),
         ("authority-review-projection.json", projection),
+        ("receipt.norito", receipt),
     ] {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -523,6 +711,445 @@ fn write_outputs(
         file.sync_all()?;
     }
     Ok(())
+}
+
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+fn collect_handoff_sources(
+    args: &Arguments,
+    receipt: &KagemushaInternalValidationReceiptV1,
+    inventory: &[KagemushaArtifactBindingV1],
+    projection_bytes: &[u8],
+) -> io::Result<HandoffSources> {
+    let manifest_bytes = read_pinned_manifest(&args.manifest, args.manifest_sha256)?;
+    let manifest: Value = norito::json::from_slice(&manifest_bytes)
+        .map_err(|_| invalid("verified evidence manifest is malformed"))?;
+    let object = manifest
+        .as_object()
+        .ok_or_else(|| invalid("verified evidence manifest is not an object"))?;
+    if object.get("schema").and_then(Value::as_str) != Some(MANIFEST_SCHEMA)
+        || object.get("schema_version").and_then(Value::as_u64) != Some(1)
+    {
+        return Err(invalid("verified evidence manifest has the wrong schema"));
+    }
+    let rows = object
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("verified evidence manifest has no file list"))?;
+    if rows.is_empty() || rows.len() > MAX_EVIDENCE_FILES {
+        return Err(invalid("verified evidence manifest file count is invalid"));
+    }
+    let mut files = BTreeMap::new();
+    let mut by_digest = BTreeMap::new();
+    for row in rows {
+        let row = row
+            .as_object()
+            .ok_or_else(|| invalid("verified evidence file row is not an object"))?;
+        let relative = row
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("verified evidence file has no path"))?;
+        let relative = canonical_evidence_relative_path(relative)?;
+        let digest = parse_digest(
+            row.get("sha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("verified evidence file has no SHA-256"))?,
+        )?;
+        let byte_len = row
+            .get("byte_len")
+            .and_then(Value::as_u64)
+            .filter(|len| *len > 0)
+            .ok_or_else(|| invalid("verified evidence file has no positive length"))?;
+        let kind = row
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("verified evidence file has no kind"))?;
+        let source = SourceFile {
+            path: args.evidence_root.join(&relative),
+            sha256: digest,
+            byte_len,
+        };
+        let file = ManifestFile {
+            source: source.clone(),
+            kind: kind.to_owned(),
+        };
+        if files.insert(relative, file).is_some() {
+            return Err(invalid("verified evidence file path is repeated"));
+        }
+        if let Some(previous) = by_digest.insert(digest, source)
+            && previous.byte_len != byte_len
+        {
+            return Err(invalid("verified evidence digest has conflicting lengths"));
+        }
+    }
+
+    let artifact_rows = object
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("verified evidence manifest has no artifact list"))?;
+    let projection: Value = norito::json::from_slice(projection_bytes)
+        .map_err(|_| invalid("verified projection cannot be decoded for handoff"))?;
+    let projection_rows = projection
+        .get("artifact_inventory")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("verified projection has no artifact inventory"))?;
+    if artifact_rows.len() != 50
+        || inventory.len() != artifact_rows.len()
+        || projection_rows.len() != artifact_rows.len()
+    {
+        return Err(invalid("handoff requires exactly 50 ordered artifacts"));
+    }
+    let mut artifacts = BTreeMap::new();
+    for (index, ((row, projected), binding)) in artifact_rows
+        .iter()
+        .zip(projection_rows)
+        .zip(inventory)
+        .enumerate()
+    {
+        let row = row
+            .as_object()
+            .ok_or_else(|| invalid("verified artifact row is not an object"))?;
+        let role = row
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("verified artifact has no role"))?;
+        let typed_role = norito::json::to_value(&binding.role)
+            .map_err(|_| invalid("typed artifact role cannot be projected"))?;
+        if binding.role != KagemushaArtifactRoleV1::ALL[index]
+            || typed_role.get("role").and_then(Value::as_str) != Some(role)
+            || projected.get("role").and_then(Value::as_str) != Some(role)
+            || projected.get("sha256").and_then(Value::as_str)
+                != Some(hex::encode(binding.sha256).as_str())
+            || projected.get("byte_len").and_then(Value::as_u64) != Some(binding.byte_len)
+        {
+            return Err(invalid(
+                "verified artifact role differs from typed inventory",
+            ));
+        }
+        let path = row
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("verified artifact has no path"))?;
+        let path = canonical_evidence_relative_path(path)?;
+        let file = files
+            .get(&path)
+            .ok_or_else(|| invalid("verified artifact path is not in evidence files"))?;
+        if file.kind != "artifact"
+            || file.source.sha256 != binding.sha256
+            || file.source.byte_len != binding.byte_len
+        {
+            return Err(invalid("verified artifact differs from typed inventory"));
+        }
+        if artifacts
+            .insert(binding.sha256, file.source.clone())
+            .is_some()
+        {
+            return Err(invalid("verified artifact digest is repeated"));
+        }
+    }
+
+    let manifest_binding = receipt.evidence_closure.evidence_manifest;
+    let policy_binding = receipt.evidence_closure.observer_policy;
+    if manifest_binding.sha256 != args.manifest_sha256
+        || policy_binding.sha256 != args.observer_policy_sha256
+    {
+        return Err(invalid("typed evidence closure differs from pinned inputs"));
+    }
+    let mut evidence = BTreeMap::new();
+    insert_handoff_evidence(
+        &mut evidence,
+        manifest_binding,
+        SourceFile {
+            path: args.manifest.clone(),
+            sha256: args.manifest_sha256,
+            byte_len: manifest_bytes.len() as u64,
+        },
+    )?;
+    insert_handoff_evidence(
+        &mut evidence,
+        policy_binding,
+        SourceFile {
+            path: args.observer_policy.clone(),
+            sha256: args.observer_policy_sha256,
+            byte_len: fs::metadata(&args.observer_policy)?.len(),
+        },
+    )?;
+    for binding in experimental_receipt_evidence_files(receipt)? {
+        let source = by_digest
+            .get(&binding.sha256)
+            .ok_or_else(|| invalid("typed evidence is absent from verified manifest"))?;
+        insert_handoff_evidence(&mut evidence, binding, source.clone())?;
+    }
+    Ok(HandoffSources {
+        artifacts,
+        evidence,
+    })
+}
+
+fn canonical_evidence_relative_path(raw: &str) -> io::Result<String> {
+    if raw.is_empty()
+        || raw.len() > 512
+        || raw.starts_with('/')
+        || raw.ends_with('/')
+        || raw.contains("//")
+        || raw
+            .bytes()
+            .any(|byte| byte < 0x20 || byte == 0x7f || byte == b'\\' || byte == b':')
+        || raw
+            .split('/')
+            .any(|component| component == "." || component == "..")
+    {
+        return Err(invalid("evidence path is not canonical and relative"));
+    }
+    Ok(raw.to_owned())
+}
+
+fn insert_handoff_evidence(
+    selected: &mut BTreeMap<[u8; 32], SourceFile>,
+    binding: KagemushaEvidenceFileV1,
+    source: SourceFile,
+) -> io::Result<()> {
+    if binding.sha256 == [0; 32]
+        || binding.byte_len == 0
+        || binding.byte_len > KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1
+        || binding.sha256 != source.sha256
+        || binding.byte_len != source.byte_len
+    {
+        return Err(invalid("typed evidence has no exact verified source"));
+    }
+    if let Some(previous) = selected.insert(binding.sha256, source)
+        && previous.byte_len != binding.byte_len
+    {
+        return Err(invalid("typed evidence digest has conflicting lengths"));
+    }
+    Ok(())
+}
+
+fn append_optional_evidence(
+    files: &mut Vec<KagemushaEvidenceFileV1>,
+    binding: KagemushaEvidenceFileV1,
+) -> io::Result<()> {
+    if binding.sha256 == [0; 32] && binding.byte_len == 0 {
+        return Ok(());
+    }
+    if binding.sha256 == [0; 32]
+        || binding.byte_len == 0
+        || binding.byte_len > KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1
+    {
+        return Err(invalid("optional typed evidence is partial or oversized"));
+    }
+    files.push(binding);
+    Ok(())
+}
+
+fn experimental_receipt_evidence_files(
+    receipt: &KagemushaInternalValidationReceiptV1,
+) -> io::Result<Vec<KagemushaEvidenceFileV1>> {
+    let mut files = vec![receipt.circuit_shape_report];
+    for optional in [
+        receipt.security_review_report,
+        receipt.kat_report,
+        receipt.fuzz_report,
+        receipt.resource_report,
+    ] {
+        append_optional_evidence(&mut files, optional)?;
+    }
+    for profile in &receipt.profile_qualifications {
+        files.push(profile.profile.qualification_report);
+        files.extend(profile.relations.iter().map(|row| row.report));
+        files.extend(profile.helper_circuits.iter().map(|row| row.report));
+        for optional in profile
+            .recursive_depths
+            .iter()
+            .map(|row| row.report)
+            .chain([
+                profile.aggregate_balance.report,
+                profile.thermal.report,
+                profile.envelope.report,
+            ])
+            .chain(profile.acceptance_cases.iter().map(|row| row.report))
+        {
+            append_optional_evidence(&mut files, optional)?;
+        }
+    }
+    for optional in receipt.reproducible_builds.iter().map(|row| row.report) {
+        append_optional_evidence(&mut files, optional)?;
+    }
+    Ok(files)
+}
+
+#[cfg(unix)]
+fn copy_content_addressed(source: &SourceFile, target_root: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let mut input = open_nofollow_regular(&source.path)?;
+    let before = input.metadata()?;
+    if before.len() != source.byte_len || source.byte_len == 0 {
+        return Err(invalid("verified source length changed before handoff"));
+    }
+    let target_path = target_root.join(hex::encode(source.sha256));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true).mode(0o600);
+    let mut output = options.open(&target_path)?;
+    let mut hasher = Sha256::new();
+    let mut remaining = source.byte_len;
+    let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
+    while remaining > 0 {
+        let limit = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| invalid("verified source length is unsupported"))?;
+        let count = input.read(&mut buffer[..limit])?;
+        if count == 0 {
+            return Err(invalid("verified source ended before its typed length"));
+        }
+        output.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+        remaining -= count as u64;
+    }
+    if input.read(&mut buffer[..1])? != 0
+        || <[u8; 32]>::from(hasher.finalize()) != source.sha256
+        || !same_file_metadata(&before, &input.metadata()?)
+        || !same_file_metadata(&before, &open_nofollow_regular(&source.path)?.metadata()?)
+    {
+        return Err(invalid(
+            "verified source changed during content-addressed copy",
+        ));
+    }
+    output.sync_all()?;
+    let target_before = output.metadata()?;
+    if target_before.len() != source.byte_len || target_before.mode() & 0o077 != 0 {
+        return Err(invalid("content-addressed target has the wrong identity"));
+    }
+    let mut reopened = open_nofollow_regular(&target_path)?;
+    if !same_file_metadata(&target_before, &reopened.metadata()?) {
+        return Err(invalid("content-addressed target path changed"));
+    }
+    let mut target_hasher = Sha256::new();
+    let mut observed = 0_u64;
+    loop {
+        let count = reopened.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        observed = observed
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("content-addressed target length overflow"))?;
+        if observed > source.byte_len {
+            return Err(invalid("content-addressed target is oversized"));
+        }
+        target_hasher.update(&buffer[..count]);
+    }
+    if observed != source.byte_len
+        || <[u8; 32]>::from(target_hasher.finalize()) != source.sha256
+        || !same_file_metadata(&target_before, &reopened.metadata()?)
+    {
+        return Err(invalid(
+            "content-addressed target differs from its typed binding",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn copy_content_addressed(_source: &SourceFile, _target_root: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-pinned handoff is unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn open_nofollow_regular(path: &Path) -> io::Result<File> {
+    use rustix::fs::OFlags;
+    use std::os::unix::fs::MetadataExt as _;
+
+    if !path.is_absolute() || path.canonicalize()? != path {
+        return Err(invalid(
+            "handoff source or target must be canonical and absolute",
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("handoff file has no parent"))?;
+    let directory = open_nofollow_directory(parent)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| invalid("handoff file has no name"))?;
+    let file = openat_nofollow(
+        &directory,
+        name,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+    )?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o022 != 0 {
+        return Err(invalid(
+            "handoff file is not an owner-controlled regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_nofollow_directory(path: &Path) -> io::Result<File> {
+    use rustix::fs::OFlags;
+    use std::path::Component;
+
+    if !path.is_absolute() || path.canonicalize()? != path {
+        return Err(invalid("handoff directory must be canonical and absolute"));
+    }
+    let mut directory = File::open("/")?;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                directory = openat_nofollow(
+                    &directory,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                )?;
+                if !directory.metadata()?.is_dir() {
+                    return Err(invalid("handoff path component is not a directory"));
+                }
+            }
+            _ => return Err(invalid("handoff directory path is not canonical")),
+        }
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn openat_nofollow(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    flags: rustix::fs::OFlags,
+) -> io::Result<File> {
+    use rustix::fs::{Mode, openat};
+
+    Ok(File::from(
+        openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)?,
+    ))
+}
+
+#[cfg(unix)]
+fn same_file_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 fn invalid(message: &'static str) -> io::Error {
@@ -620,6 +1247,79 @@ sys.stdout.buffer.write(module.VERIFIER.canonical_json_bytes(projection))
         let (receipt, inventory) = decode_projection(&output.stdout, manifest_pin).unwrap();
         assert_eq!(receipt.fuzz_cases, 0);
         assert_eq!(inventory.len(), 50);
+
+        let fixture_parent = root.path().canonicalize().unwrap().join("evidence");
+        let policy = fixture_parent.join("trusted-observer-policy.json");
+        let mut args = Arguments {
+            python: PathBuf::new(),
+            python_sha256: [0; 32],
+            verifier: PathBuf::new(),
+            verifier_sha256: [0; 32],
+            artifact_contract: PathBuf::new(),
+            artifact_contract_sha256: [0; 32],
+            manifest: fixture_parent.join("kagemusha-evidence.json"),
+            manifest_sha256: manifest_pin,
+            evidence_root: fixture_parent.join("evidence"),
+            observer_policy: policy.clone(),
+            observer_policy_sha256: Sha256::digest(fs::read(&policy).unwrap()).into(),
+            output_dir: root.path().canonicalize().unwrap().join("handoff"),
+        };
+        let sources = collect_handoff_sources(&args, &receipt, &inventory, &output.stdout).unwrap();
+        assert_eq!(sources.artifacts.len(), 50);
+        assert!(sources.evidence.len() >= 4);
+        let artifact_to_substitute = sources.artifacts[&inventory[0].sha256].path.clone();
+        let receipt_bytes = norito::encode_canonical(&receipt).unwrap();
+        let mut inventory_bytes = norito::json::to_json(&inventory).unwrap().into_bytes();
+        inventory_bytes.push(b'\n');
+        write_verified_handoff(
+            &args,
+            &receipt,
+            &inventory,
+            &receipt_bytes,
+            &inventory_bytes,
+            &output.stdout,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(args.output_dir.join("receipt.norito")).unwrap(),
+            receipt_bytes
+        );
+        assert_eq!(
+            fs::read(args.output_dir.join("artifact_inventory.json")).unwrap(),
+            inventory_bytes
+        );
+        assert_eq!(
+            fs::read(args.output_dir.join("authority-review-projection.json")).unwrap(),
+            output.stdout
+        );
+        for (digest, source) in sources.artifacts {
+            assert_eq!(
+                fs::read(args.output_dir.join("artifacts").join(hex::encode(digest))).unwrap(),
+                fs::read(source.path).unwrap()
+            );
+        }
+        for (digest, source) in sources.evidence {
+            assert_eq!(
+                fs::read(args.output_dir.join("evidence").join(hex::encode(digest))).unwrap(),
+                fs::read(source.path).unwrap()
+            );
+        }
+        fs::write(&artifact_to_substitute, b"substituted artifact").unwrap();
+        args.output_dir = root.path().canonicalize().unwrap().join("rejected-handoff");
+        assert!(
+            write_verified_handoff(
+                &args,
+                &receipt,
+                &inventory,
+                &receipt_bytes,
+                &inventory_bytes,
+                &output.stdout,
+            )
+            .is_err()
+        );
+        assert!(!args.output_dir.join("receipt.norito").exists());
+        fs::write(&args.manifest, b"substituted manifest").unwrap();
+        assert!(collect_handoff_sources(&args, &receipt, &inventory, &output.stdout).is_err());
     }
 
     #[test]
@@ -651,6 +1351,7 @@ sys.stdout.buffer.write(module.VERIFIER.canonical_json_bytes(projection))
     fn generated_files_are_create_only() {
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("receipt-output");
+        create_private_dir(&output).unwrap();
         write_outputs(&output, b"receipt", b"[]\n", b"{\"verified\":true}\n").unwrap();
         assert_eq!(fs::read(output.join("receipt.norito")).unwrap(), b"receipt");
         assert_eq!(
@@ -663,6 +1364,126 @@ sys.stdout.buffer.write(module.VERIFIER.canonical_json_bytes(projection))
         );
         assert!(write_outputs(&output, b"replacement", b"[]\n", b"{}").is_err());
         assert_eq!(fs::read(output.join("receipt.norito")).unwrap(), b"receipt");
+    }
+
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))]
+    #[test]
+    fn handoff_publication_is_atomic_create_only_and_retry_safe() {
+        let parent = tempfile::tempdir().unwrap();
+        let parent = parent.path().canonicalize().unwrap();
+        let output = parent.join("handoff");
+
+        let interrupted = private_staging_dir(&parent).unwrap();
+        let interrupted_path = interrupted.path().to_owned();
+        fs::write(interrupted.path().join("receipt.norito"), b"incomplete").unwrap();
+        assert!(!output.exists());
+        drop(interrupted);
+        assert!(!interrupted_path.exists());
+        assert!(!output.exists());
+
+        let staging = private_staging_dir(&parent).unwrap();
+        let staging_path = staging.path().to_owned();
+        fs::write(staging.path().join("receipt.norito"), b"complete").unwrap();
+        assert!(!output.exists());
+        publish_staged_handoff(staging.path(), &output).unwrap();
+        let _published_staging_path = staging.keep();
+        assert!(!staging_path.exists());
+        assert_eq!(
+            fs::read(output.join("receipt.norito")).unwrap(),
+            b"complete"
+        );
+
+        let replacement = private_staging_dir(&parent).unwrap();
+        let replacement_path = replacement.path().to_owned();
+        fs::write(replacement.path().join("receipt.norito"), b"replacement").unwrap();
+        assert!(publish_staged_handoff(replacement.path(), &output).is_err());
+        assert_eq!(
+            fs::read(output.join("receipt.norito")).unwrap(),
+            b"complete"
+        );
+        drop(replacement);
+        assert!(!replacement_path.exists());
+    }
+
+    #[test]
+    fn handoff_rejects_noncanonical_relative_paths() {
+        for path in [
+            "../escape",
+            "a/../b",
+            "a//b",
+            "a/./b",
+            "/absolute",
+            "back\\slash",
+            "a:b",
+            "a\0b",
+        ] {
+            assert!(canonical_evidence_relative_path(path).is_err(), "{path:?}");
+        }
+        assert_eq!(
+            canonical_evidence_relative_path("reports/valid.json").unwrap(),
+            "reports/valid.json"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_addressed_copy_rejects_substitution_and_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let source_root = root.join("source");
+        let target_root = root.join("target");
+        create_private_dir(&source_root).unwrap();
+        create_private_dir(&target_root).unwrap();
+        let source_path = source_root.join("evidence.bin");
+        fs::write(&source_path, b"pinned bytes").unwrap();
+        let expected = SourceFile {
+            path: source_path.clone(),
+            sha256: Sha256::digest(b"pinned bytes").into(),
+            byte_len: 12,
+        };
+        copy_content_addressed(&expected, &target_root).unwrap();
+        assert_eq!(
+            fs::read(target_root.join(hex::encode(expected.sha256))).unwrap(),
+            b"pinned bytes"
+        );
+        let changed_root = root.join("changed-target");
+        create_private_dir(&changed_root).unwrap();
+        fs::write(&source_path, b"other bytes!").unwrap();
+        assert!(copy_content_addressed(&expected, &changed_root).is_err());
+
+        let link_root = root.join("link-target");
+        create_private_dir(&link_root).unwrap();
+        let link = source_root.join("link.bin");
+        symlink(&source_path, &link).unwrap();
+        assert!(
+            copy_content_addressed(
+                &SourceFile {
+                    path: link,
+                    ..expected.clone()
+                },
+                &link_root
+            )
+            .is_err()
+        );
+        let parent_link = root.join("linked-source");
+        symlink(&source_root, &parent_link).unwrap();
+        assert!(
+            copy_content_addressed(
+                &SourceFile {
+                    path: parent_link.join("evidence.bin"),
+                    ..expected
+                },
+                &link_root
+            )
+            .is_err()
+        );
     }
 
     #[test]

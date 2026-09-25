@@ -9,18 +9,49 @@ public enum KagemushaTestnetValueCreditErrorV1: Error, Equatable, Sendable {
   case invalidArchive
 }
 
-/// Copyable inspection bytes for one credit counted by the native testnet ledger.
+/// Exact signed-release, network, asset, and liability-pool scope of a testnet credit.
+public struct KagemushaTestnetValueCreditScopeV1: Equatable, Sendable {
+  public let networkID: Data
+  public let releaseID: Data
+  public let releaseAttestationDigest: Data
+  public let assetIdentityDigest: Data
+  public let assetIncarnation: Data
+  public let assetScale: UInt32
+  public let liabilityPoolID: Data
+}
+
+/// Copyable inspection facts for one credit counted by the native testnet ledger.
 ///
-/// The bytes can be copied or forged after return. Only the successful live native call
-/// acknowledges a durable ledger credit; this value is not a spend or hardware credential.
+/// These facts and archive can be copied or forged after return. Only the successful live
+/// native call acknowledges a durable ledger credit; neither is a spend or hardware credential.
 public struct KagemushaTestnetValueCreditV1: Equatable, Sendable {
   public let canonicalArchive: Data
+  public let version: UInt16
+  public let scope: KagemushaTestnetValueCreditScopeV1
+  public let operationID: Data
+  public let creditID: Data
+  /// Positive atomic asset units counted for this finalized top-up.
+  public let amount: KagemushaUInt128V1
+  /// Cumulative atomic asset units in the installed testnet ledger.
+  public let totalAdmitted: KagemushaUInt128V1
   public var testnetOnly: Bool { true }
-  public var hardwareQualified: Bool { false }
+  /// Always false for the current Experimental release; true is rejected on decode.
+  public let hardwareQualified: Bool
   public var productionMonetaryAuthorized: Bool { false }
 
-  fileprivate init(canonicalArchive: Data) {
+  fileprivate init(
+    canonicalArchive: Data, version: UInt16, scope: KagemushaTestnetValueCreditScopeV1,
+    operationID: Data, creditID: Data, amount: KagemushaUInt128V1,
+    totalAdmitted: KagemushaUInt128V1, hardwareQualified: Bool
+  ) {
     self.canonicalArchive = canonicalArchive
+    self.version = version
+    self.scope = scope
+    self.operationID = operationID
+    self.creditID = creditID
+    self.amount = amount
+    self.totalAdmitted = totalAdmitted
+    self.hardwareQualified = hardwareQualified
   }
 }
 
@@ -53,7 +84,7 @@ public enum KagemushaTestnetValueCreditBridgeV1 {
     let result = endpoint.credit(operationID: Data(operationID))
     switch result.status {
     case 0:
-      return try decode(result.archive)
+      return try decode(result.archive, operationID: operationID)
     case -312:
       throw KagemushaTestnetValueCreditErrorV1.ledgerUnavailable
     default:
@@ -67,15 +98,59 @@ public enum KagemushaTestnetValueCreditBridgeV1 {
     }
   }
 
-  private static func decode(_ archive: Data) throws -> KagemushaTestnetValueCreditV1 {
+  private static func decode(
+    _ archive: Data, operationID: Data
+  ) throws -> KagemushaTestnetValueCreditV1 {
     guard !archive.isEmpty, archive.count <= maximumArchiveBytes,
       let frame = noritoDecodeFrame(archive),
       frame.header.compression == .none,
       frame.header.flags == NoritoHeader.compactLen,
       frame.header.schema == noritoSchemaHash(forTypeName: archiveSchema),
-      !frame.payload.isEmpty
+      frame.paddingLength == noritoHeaderPaddingLength(payloadAlignment: 16)
     else { throw KagemushaTestnetValueCreditErrorV1.invalidArchive }
-    return KagemushaTestnetValueCreditV1(canonicalArchive: Data(archive))
+    do {
+      var reader = CanonicalNoritoReader(data: frame.payload)
+      var fields = [Data]()
+      fields.reserveCapacity(13)
+      for length in [2, 1, 32, 32, 32, 32, 32, 4, 32, 32, 32, 16, 16] {
+        let field = try reader.readCompactField()
+        guard field.count == length else { throw KagemushaTestnetValueCreditErrorV1.invalidArchive }
+        fields.append(field)
+      }
+      guard reader.remaining() == 0 else { throw KagemushaTestnetValueCreditErrorV1.invalidArchive }
+      var canonical = CompactNoritoWriter()
+      for field in fields { canonical.writeField(field) }
+      guard noritoEncode(
+        typeName: archiveSchema, payload: canonical.data,
+        flags: NoritoHeader.compactLen, payloadAlignment: 16) == archive
+      else { throw KagemushaTestnetValueCreditErrorV1.invalidArchive }
+
+      var versionReader = CanonicalNoritoReader(data: fields[0])
+      let version = try versionReader.readUInt16LE()
+      let hardwareQualified = fields[1][fields[1].startIndex]
+      var scaleReader = CanonicalNoritoReader(data: fields[7])
+      let assetScale = try scaleReader.readUInt32LE()
+      let amount = try KagemushaUInt128V1(littleEndianBytes: fields[11])
+      let totalAdmitted = try KagemushaUInt128V1(littleEndianBytes: fields[12])
+      let nonzero: (Data) -> Bool = { $0.contains(where: { $0 != 0 }) }
+      guard version == 1, hardwareQualified == 0, assetScale <= 28,
+        [fields[2], fields[3], fields[4], fields[5], fields[6], fields[8],
+         fields[9], fields[10]].allSatisfy(nonzero),
+        fields[2] != fields[3], fields[2] != fields[4], fields[3] != fields[4],
+        fields[5] != fields[8], fields[9] == operationID,
+        !amount.isZero, amount.isLessThanOrEqual(to: totalAdmitted)
+      else { throw KagemushaTestnetValueCreditErrorV1.invalidArchive }
+      return KagemushaTestnetValueCreditV1(
+        canonicalArchive: Data(archive), version: version,
+        scope: KagemushaTestnetValueCreditScopeV1(
+          networkID: fields[2], releaseID: fields[3],
+          releaseAttestationDigest: fields[4], assetIdentityDigest: fields[5],
+          assetIncarnation: fields[6], assetScale: assetScale, liabilityPoolID: fields[8]),
+        operationID: fields[9], creditID: fields[10], amount: amount,
+        totalAdmitted: totalAdmitted, hardwareQualified: false)
+    } catch {
+      throw KagemushaTestnetValueCreditErrorV1.invalidArchive
+    }
   }
 
   private final class NativeEndpoint: KagemushaTestnetValueCreditEndpointV1 {
