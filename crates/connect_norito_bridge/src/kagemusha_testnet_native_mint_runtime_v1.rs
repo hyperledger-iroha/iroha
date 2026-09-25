@@ -14,6 +14,7 @@ use iroha_core::zk::{
     },
     kagemusha_v1_state::MintInboxReservationV1,
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId, block::consensus_v2::HeightContextId,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
@@ -210,7 +211,9 @@ fn require_trusted_pins(
     if scope.network_id() != *network_id.as_bytes() {
         return Err("testnet mint native network differs from signed-release scope".to_owned());
     }
-    if first_context_id.0.as_ref() == &[0; 32] {
+    // Hash::prehashed marks the final bit, so an all-zero input becomes this
+    // canonical placeholder rather than an all-zero HashOf value.
+    if first_context_id.0.as_ref() == Hash::prehashed([0; 32]).as_ref() {
         return Err("testnet mint first finality context is unpinned".to_owned());
     }
     Ok(())

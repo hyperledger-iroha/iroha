@@ -386,7 +386,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn private_preparation_must_succeed_before_reservation() {
         let calls = RefCell::new(Vec::new());
         let result = prepare_then_reserve(
