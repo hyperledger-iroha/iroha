@@ -1766,6 +1766,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
 
 
 STAGES += (("native beacon reset authority, bounded recovery and public input assembly", (
+    'taira_public_reset::host::beacon::tests::beacon_observation_clients_dispatch_with_the_retained_operator_signer',
     'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
     'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
     'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
