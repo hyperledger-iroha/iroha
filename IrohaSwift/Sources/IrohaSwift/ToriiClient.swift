@@ -27006,16 +27006,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Submit one exact canonical full or partial KAGEMUSHA redemption request.
+    /// The original wallet owner must still be current when the POST resumes.
     public func submitKagemushaRedemption(
-        _ value: KagemushaRedemptionRequestV1
+        _ value: KagemushaRedemptionRequestV1,
+        withCurrentOwner: @escaping ToriiTopUpOwnershipV1
     ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        try await withCurrentOwner({})
         let body = try KagemushaNoritoV1.encodeRedemptionRequestShape(value)
-        return try await submitKagemushaOperation(
-            path: "/v1/kagemusha/redeem",
-            operationID: value.operationID,
-            expectedKind: .redemption,
-            body: body
-        )
+        do {
+            let result = try await submitKagemushaOperation(
+                path: "/v1/kagemusha/redeem",
+                operationID: value.operationID,
+                expectedKind: .redemption,
+                body: body,
+                withCurrentOwner: withCurrentOwner
+            )
+            try await withCurrentOwner({})
+            return result
+        } catch {
+            try await withCurrentOwner({})
+            throw error
+        }
     }
 
     /// Poll one KAGEMUSHA reserve operation while withholding unverified applied results.

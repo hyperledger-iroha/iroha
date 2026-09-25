@@ -561,17 +561,30 @@ release; submitted operations must reach applied finality before counting as
 funded or redeemed. A testnet experimental device profile therefore needs
 explicit release/network-scoped proof and runtime installation, not a global
 hardware-admission bypass.
-The native testnet State observer now requires operator-pinned network, asset
+The native testnet State observer requires operator-pinned network, asset
 identity, asset incarnation, scale, reserve liability pool, and authenticated
 release; it verifies the actual paired State proof and returns only an
-unqualified observation. A Rust-only owner retains that concrete
-verifier and one process-local lane lineage. Its MintFold entry now also
-requires the pre-debit reservation, an Applied chain top-up under an independent
-finality anchor, both release-authenticated mint proofs, exact linkage to the
-paired State proof and unique credit ID; a byte-identical process-local retry
-returns the original unqualified observation. No app-facing native
-installation or durable monetary capability exists yet; the terminal hardware
-fold and monetary admission remain separate.
+unqualified observation. A Rust-only owner can retain one process-local lane
+or create a private, exclusive, append-only testnet journal. The durable path
+fsyncs the exact confidential mint reservation before online submission and
+replays every retained State proof and Applied mint against the concrete signed
+release and independently resupplied finality anchors after restart. An exact
+operation anchor must first be pinned through the Rust-only trusted finality
+path; coordinates supplied by JNI cannot pin themselves. Its
+MintFold entry requires that original reservation, an Applied chain top-up,
+both release-authenticated mint proofs, exact linkage to the paired State proof
+and a unique credit ID; exact mint and non-mint retries return their original
+unqualified observations, while changed transcripts are rejected. The mobile
+JNI carries the original Torii status JSON, independent
+finality coordinates and paired proof bytes, never the private credit opening.
+No ordinary-app native provider currently installs and populates this journal,
+and it grants no durable monetary capability; the terminal hardware fold and
+monetary admission remain separate. File permissions protect the journal's
+confidential opening from other ordinary processes; this is not secure-element
+storage. The private WAL detects malformed or
+partially written frames but has no trusted hardware head, so an attacker able
+to replace it with an earlier complete prefix can roll this testnet observation
+back. It must never serve as the phone's anti-rollback monetary counter.
 The signed release manifest includes the exact genesis-derived network ID.
 Node startup, native proof verification, enrollment and testnet observation
 reject a release signed for another network before admitting its artifacts or

@@ -6,6 +6,17 @@
 //! attest an app or device, authorize a terminal transition, or qualify hardware custody.
 
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::path::Path;
+
+#[cfg(unix)]
+#[path = "testnet_mint_journal.rs"]
+mod mint_journal;
+#[cfg(unix)]
+use mint_journal::{
+    JournalAnchor, Record as JournalRecord, TestnetMintJournal,
+    decode_value as decode_journal_value, encode_value as encode_journal_value,
+};
 
 use iroha_data_model::{
     isi::kagemusha_v1::{KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1},
@@ -29,7 +40,12 @@ use crate::zk::kagemusha_v1_state::{
 /// The operator's independent network pin must match the threshold-signed release manifest.
 /// Asset/reserve pins also come from trusted testnet configuration; identifiers copied from a
 /// submitted proof provide no pinning.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaTestnetStateObservationScopeV1"
+)]
 pub struct KagemushaTestnetStateObservationScopeV1 {
     network_id: DigestV1,
     asset_identity_digest: DigestV1,
@@ -183,7 +199,7 @@ pub struct KagemushaTestnetStateProofObservationV1 {
 
 /// Applied top-up and paired MintFold proof observed under one exact testnet release.
 ///
-/// This process-local value is deliberately not encoded as a wallet spend capability and never
+/// This observation is deliberately not encoded as a wallet spend capability and never
 /// asserts hardware qualification. Its operation and credit IDs name only the verified trial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaTestnetFinalizedMintObservationV1 {
@@ -221,6 +237,7 @@ impl KagemushaTestnetFinalizedMintObservationV1 {
 
 struct RetainedTestnetMintObservationV1 {
     reservation_digest: DigestV1,
+    reservation_bytes: Vec<u8>,
     status: KagemushaOperationStatusV1,
     trust_anchor: KagemushaFinalityTrustAnchorV1,
     public_inputs: KagemushaStateRelationPublicInputsV1,
@@ -228,16 +245,34 @@ struct RetainedTestnetMintObservationV1 {
     result: KagemushaTestnetFinalizedMintObservationV1,
 }
 
+struct RetainedTestnetNonMintObservationV1 {
+    public_inputs: KagemushaStateRelationPublicInputsV1,
+    proof: KagemushaPairedProofV1,
+    observation: KagemushaTestnetStateProofObservationV1,
+}
+
+impl RetainedTestnetNonMintObservationV1 {
+    fn exact_retry_matches(
+        &self,
+        public_inputs: &KagemushaStateRelationPublicInputsV1,
+        proof: &KagemushaPairedProofV1,
+    ) -> bool {
+        self.public_inputs == *public_inputs && self.proof == *proof
+    }
+}
+
 impl RetainedTestnetMintObservationV1 {
     fn exact_retry_matches(
         &self,
         reservation_digest: DigestV1,
+        reservation_bytes: &[u8],
         status: &KagemushaOperationStatusV1,
         trust_anchor: &KagemushaFinalityTrustAnchorV1,
         public_inputs: &KagemushaStateRelationPublicInputsV1,
         proof: &KagemushaPairedProofV1,
     ) -> bool {
         self.reservation_digest == reservation_digest
+            && self.reservation_bytes.as_slice() == reservation_bytes
             && self.status == *status
             && self.trust_anchor == *trust_anchor
             && self.public_inputs == *public_inputs
@@ -286,13 +321,14 @@ impl KagemushaTestnetStateProofObservationV1 {
 /// admission capability: recreating the object does not prevent a fork across processes.
 /// TODO: connect actual testnet issuance/finality, conflict adjudication, and redemption runtime
 /// to this proof-lineage diagnostic; process-local observation alone cannot move value.
+#[derive(Clone)]
 pub struct KagemushaTestnetLineageTrialV1 {
     scope: KagemushaTestnetStateObservationScopeV1,
     head: Option<KagemushaStateV1>,
     observed_transitions: u64,
 }
 
-/// Native owner of the authenticated testnet verifier and one process-local lineage trial.
+/// Native owner of the authenticated testnet verifier and one experimental lineage trial.
 ///
 /// Construction requires an already release-authorized concrete verifier; a caller cannot
 /// install a callback that claims proof success. The operator's network/release pins are checked
@@ -302,8 +338,15 @@ pub struct KagemushaTestnetLineageTrialV1 {
 pub struct KagemushaTestnetProofObservationOwnerV1 {
     verifier: KagemushaAuthenticatedRecursiveVerifierV1,
     trial: KagemushaTestnetLineageTrialV1,
+    non_mint_observations: BTreeMap<DigestV1, RetainedTestnetNonMintObservationV1>,
     finalized_mints: BTreeMap<DigestV1, RetainedTestnetMintObservationV1>,
     mint_credit_owners: BTreeMap<DigestV1, DigestV1>,
+    #[cfg(unix)]
+    reserved_mints: BTreeMap<DigestV1, MintInboxReservationV1>,
+    #[cfg(unix)]
+    pinned_anchors: BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
+    #[cfg(unix)]
+    journal: Option<TestnetMintJournal>,
 }
 
 impl KagemushaTestnetProofObservationOwnerV1 {
@@ -348,12 +391,263 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         Ok(Self {
             verifier,
             trial: KagemushaTestnetLineageTrialV1::new(scope),
+            non_mint_observations: BTreeMap::new(),
             finalized_mints: BTreeMap::new(),
             mint_credit_owners: BTreeMap::new(),
+            #[cfg(unix)]
+            reserved_mints: BTreeMap::new(),
+            #[cfg(unix)]
+            pinned_anchors: BTreeMap::new(),
+            #[cfg(unix)]
+            journal: None,
         })
     }
 
+    /// Create a descriptor-owned private testnet lineage journal before a top-up is submitted.
+    ///
+    /// The new directory is private and exclusive, and the scope initialization is fsynced.
+    /// It does not qualify hardware or bypass the production monetary Guard.
+    ///
+    /// # Errors
+    /// Rejects an unauthenticated release, existing/unsafe path, or uncertain journal write.
+    #[cfg(unix)]
+    pub fn create_durable(
+        verifier: KagemushaAuthenticatedRecursiveVerifierV1,
+        scope: KagemushaTestnetStateObservationScopeV1,
+        path: &Path,
+    ) -> Result<Self, KagemushaRecursionErrorV1> {
+        let mut owner = Self::new(verifier, scope)?;
+        owner.journal = Some(TestnetMintJournal::create_new(path, scope)?);
+        Ok(owner)
+    }
+
+    /// Recover the complete private testnet lineage under the current authenticated verifier.
+    ///
+    /// Every retained Applied result and paired State proof is rechecked; WAL hashes alone grant
+    /// no proof, finality, hardware, or spend authority. The caller must supply the independent
+    /// finality anchor originally pinned to each result from a separately authenticated context
+    /// chain. A map reconstructed from this WAL or a response is not independent provenance.
+    /// A dangling pre-submission reservation is retained without inventing an Applied result.
+    /// TODO: exercise a complete Applied top-up and paired MintFold proof through restart once
+    /// a genuine signed-finality fixture and matching authenticated recursive release exist.
+    ///
+    /// # Errors
+    /// Rejects a corrupt/unsafe WAL, any changed release/scope, invalid finality or proof,
+    /// missing reservation, forked lineage, duplicate credit, or uncertain journal storage.
+    #[cfg(unix)]
+    pub fn recover_durable(
+        verifier: KagemushaAuthenticatedRecursiveVerifierV1,
+        scope: KagemushaTestnetStateObservationScopeV1,
+        path: &Path,
+        independent_anchors: &BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
+    ) -> Result<Self, KagemushaRecursionErrorV1> {
+        let mut owner = Self::new(verifier, scope)?;
+        for (operation_id, anchor) in independent_anchors {
+            check_pinned_anchor(scope, *operation_id, anchor)?;
+        }
+        owner.pinned_anchors = independent_anchors.clone();
+        let mut journal = TestnetMintJournal::open_existing(path)?;
+        let mut initialized = false;
+        while let Some((sequence, record)) = journal.next_replayed()? {
+            if sequence == 0 {
+                if record != (JournalRecord::Initialize { scope }) {
+                    return Err(journal_replay_error("testnet scope initialization changed"));
+                }
+                initialized = true;
+                continue;
+            }
+            if !initialized {
+                return Err(journal_replay_error(
+                    "testnet scope initialization is missing",
+                ));
+            }
+            match record {
+                JournalRecord::Initialize { .. } => {
+                    return Err(journal_replay_error("duplicate testnet initialization"));
+                }
+                JournalRecord::ReserveMint { reservation } => {
+                    let reservation: MintInboxReservationV1 = decode_journal_value(&reservation)?;
+                    owner.replay_reservation(reservation)?;
+                }
+                JournalRecord::ObserveNonMint {
+                    public_inputs,
+                    proof,
+                } => {
+                    let public_inputs: KagemushaStateRelationPublicInputsV1 =
+                        decode_journal_value(&public_inputs)?;
+                    let proof: KagemushaPairedProofV1 = decode_journal_value(&proof)?;
+                    let candidate = Self::candidate_envelope_digest(&public_inputs)?;
+                    if owner.non_mint_observations.contains_key(&candidate) {
+                        return Err(journal_replay_error(
+                            "duplicate non-mint observation in testnet journal",
+                        ));
+                    }
+                    owner.observe_and_advance(&public_inputs, &proof)?;
+                }
+                JournalRecord::ObserveFinalizedMint {
+                    operation_id,
+                    status,
+                    trust_anchor,
+                    public_inputs,
+                    proof,
+                } => {
+                    if owner.finalized_mints.contains_key(&operation_id) {
+                        return Err(journal_replay_error(
+                            "duplicate finalized mint record in testnet journal",
+                        ));
+                    }
+                    let status: KagemushaOperationStatusV1 = decode_journal_value(&status)?;
+                    let trust_anchor = trust_anchor.try_into_anchor()?;
+                    if independent_anchors.get(&operation_id) != Some(&trust_anchor) {
+                        return Err(journal_replay_error(
+                            "recovered mint has no exact independent finality anchor",
+                        ));
+                    }
+                    let public_inputs: KagemushaStateRelationPublicInputsV1 =
+                        decode_journal_value(&public_inputs)?;
+                    let proof: KagemushaPairedProofV1 = decode_journal_value(&proof)?;
+                    owner.observe_retained_finalized_mint_and_advance(
+                        operation_id,
+                        &status,
+                        &trust_anchor,
+                        &public_inputs,
+                        &proof,
+                    )?;
+                }
+            }
+        }
+        if !initialized {
+            return Err(journal_replay_error(
+                "testnet scope initialization is missing",
+            ));
+        }
+        require_pins_have_reservations(&owner.pinned_anchors, &owner.reserved_mints)?;
+        journal.check_owned()?;
+        owner.journal = Some(journal);
+        Ok(owner)
+    }
+
+    /// Fsync the exact confidential mint reservation before submitting its online top-up.
+    ///
+    /// Shape checking and an exclusive private journal do not themselves prove key custody.
+    /// The trusted native reservation service must establish that separately. A repeated call
+    /// with identical canonical bytes returns `false` without another append.
+    ///
+    /// # Errors
+    /// Rejects a process-local owner, wrong scope, changed retry, duplicate credit, bad shape,
+    /// unsafe storage, or uncertain append. Submission must not follow an error.
+    #[cfg(unix)]
+    pub fn reserve_mint_before_submission(
+        &mut self,
+        reservation: &MintInboxReservationV1,
+    ) -> Result<bool, KagemushaRecursionErrorV1> {
+        let journal = self.journal.as_mut().ok_or_else(|| {
+            journal_replay_error("pre-debit mint reservation requires a durable testnet owner")
+        })?;
+        journal.check_owned()?;
+        check_reservation_scope(self.trial.scope(), reservation)?;
+        let operation_id = reservation.operation_id();
+        if let Some(previous) = self.reserved_mints.get(&operation_id) {
+            return if previous == reservation {
+                Ok(false)
+            } else {
+                Err(journal_replay_error(
+                    "testnet mint reservation retry changed bytes",
+                ))
+            };
+        }
+        require_unused_mint_credit(&self.mint_credit_owners, reservation.credit_id().0)?;
+        if self
+            .reserved_mints
+            .values()
+            .any(|existing| existing.credit_id() == reservation.credit_id())
+        {
+            return Err(journal_replay_error(
+                "testnet mint credit is already reserved",
+            ));
+        }
+        journal.append(&JournalRecord::ReserveMint {
+            reservation: encode_journal_value(reservation)?,
+        })?;
+        self.reserved_mints
+            .insert(operation_id, reservation.clone());
+        Ok(true)
+    }
+
+    /// Install one exact operation context from a separately authenticated chain source.
+    ///
+    /// This Rust-only method deliberately has no C/JNI registration counterpart. The caller
+    /// must authenticate the context chain independently of the operation status and local WAL;
+    /// passing coordinates copied from either does not satisfy that obligation. A pin is held
+    /// only in memory and must be reacquired from the trusted source on restart. The method
+    /// returns `false` for an identical pin and never changes an existing pin.
+    ///
+    /// # Errors
+    /// Rejects a missing pre-submission reservation, wrong network, malformed or changed pin,
+    /// process-local owner, or compromised/uncertain journal descriptor.
+    #[cfg(unix)]
+    pub fn pin_authenticated_finality_anchor(
+        &mut self,
+        operation_id: DigestV1,
+        trust_anchor: KagemushaFinalityTrustAnchorV1,
+    ) -> Result<bool, KagemushaRecursionErrorV1> {
+        let journal = self
+            .journal
+            .as_ref()
+            .ok_or_else(|| journal_replay_error("finality pin requires a durable testnet owner"))?;
+        journal.check_owned()?;
+        if !self.reserved_mints.contains_key(&operation_id) {
+            return Err(journal_replay_error(
+                "testnet finality pin has no pre-submission reservation",
+            ));
+        }
+        check_pinned_anchor(self.trial.scope(), operation_id, &trust_anchor)?;
+        if let Some(previous) = self.pinned_anchors.get(&operation_id) {
+            return if *previous == trust_anchor {
+                Ok(false)
+            } else {
+                Err(journal_replay_error(
+                    "testnet finality pin changed for one operation",
+                ))
+            };
+        }
+        self.pinned_anchors.insert(operation_id, trust_anchor);
+        Ok(true)
+    }
+
+    /// Verify a finalized top-up using the confidential reservation retained before submission.
+    ///
+    /// This is suitable for a bridge that never accepts or exports the private mint opening.
+    /// The returned observation is testnet-only and explicitly unqualified.
+    ///
+    /// # Errors
+    /// Rejects an absent reservation or any finality, proof, scope, lineage, or storage mismatch.
+    #[cfg(unix)]
+    pub fn observe_retained_finalized_mint_and_advance(
+        &mut self,
+        operation_id: DigestV1,
+        status: &KagemushaOperationStatusV1,
+        trust_anchor: &KagemushaFinalityTrustAnchorV1,
+        public_inputs: &KagemushaStateRelationPublicInputsV1,
+        proof: &KagemushaPairedProofV1,
+    ) -> Result<KagemushaTestnetFinalizedMintObservationV1, KagemushaRecursionErrorV1> {
+        let reservation = self
+            .reserved_mints
+            .get(&operation_id)
+            .ok_or_else(|| journal_replay_error("testnet mint has no pre-submission reservation"))?
+            .clone();
+        self.observe_finalized_mint_and_advance(
+            &reservation,
+            status,
+            trust_anchor,
+            public_inputs,
+            proof,
+        )
+    }
+
     /// Verify and append one non-mint paired State proof using only this owner's retained verifier.
+    /// An exact retry returns the original observation without another append or lineage step;
+    /// changing the proof under the same candidate identity fails closed.
     ///
     /// # Errors
     ///
@@ -365,17 +659,53 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         proof: &KagemushaPairedProofV1,
     ) -> Result<KagemushaTestnetStateProofObservationV1, KagemushaRecursionErrorV1> {
         require_non_mint_observation(public_inputs.operation)?;
-        self.trial
-            .observe_and_advance(&self.verifier, public_inputs, proof)
+        #[cfg(unix)]
+        if let Some(journal) = self.journal.as_ref() {
+            journal.check_owned()?;
+        }
+        let candidate = Self::candidate_envelope_digest(public_inputs)?;
+        if let Some(previous) = self.non_mint_observations.get(&candidate) {
+            return if previous.exact_retry_matches(public_inputs, proof) {
+                Ok(previous.observation)
+            } else {
+                Err(KagemushaRecursionErrorV1::ArtifactSubstitution)
+            };
+        }
+        self.trial.check_next(public_inputs)?;
+        let observation = observe_kagemusha_testnet_state_proof_v1(
+            &self.verifier,
+            self.trial.scope(),
+            public_inputs,
+            proof,
+        )?;
+        let mut next_trial = self.trial.clone();
+        next_trial.record_verified(public_inputs, observation)?;
+        #[cfg(unix)]
+        if let Some(journal) = self.journal.as_mut() {
+            journal.append(&JournalRecord::ObserveNonMint {
+                public_inputs: encode_journal_value(public_inputs)?,
+                proof: encode_journal_value(proof)?,
+            })?;
+        }
+        self.trial = next_trial;
+        self.non_mint_observations.insert(
+            candidate,
+            RetainedTestnetNonMintObservationV1 {
+                public_inputs: public_inputs.clone(),
+                proof: proof.clone(),
+                observation,
+            },
+        );
+        Ok(observation)
     }
 
     /// Observe one actual Applied top-up and its paired MintFold State proof exactly once.
     ///
     /// The pre-debit reservation, independently pinned finality anchor, exact testnet release,
     /// both mint proofs, and the aggregate State proof must agree before the lineage advances.
-    /// A byte-identical process-local retry returns the original observation without advancing;
+    /// A byte-identical retry returns the original observation without advancing;
     /// changed bytes or a second operation consuming the same credit fail closed. This remains
-    /// an unqualified trial, not a durable wallet, peer payment, or hardware admission token.
+    /// an unqualified trial, not a peer payment or hardware admission token.
     ///
     /// # Errors
     ///
@@ -389,12 +719,28 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         public_inputs: &KagemushaStateRelationPublicInputsV1,
         proof: &KagemushaPairedProofV1,
     ) -> Result<KagemushaTestnetFinalizedMintObservationV1, KagemushaRecursionErrorV1> {
+        #[cfg(unix)]
+        if let Some(journal) = self.journal.as_ref() {
+            journal.check_owned()?;
+            if self.reserved_mints.get(&reservation.operation_id()) != Some(reservation) {
+                return Err(journal_replay_error(
+                    "testnet mint does not match the durable pre-submission reservation",
+                ));
+            }
+            if self.pinned_anchors.get(&reservation.operation_id()) != Some(trust_anchor) {
+                return Err(journal_replay_error(
+                    "testnet mint has no exact independently pinned finality anchor",
+                ));
+            }
+        }
         let scope = self.trial.scope();
         if *trust_anchor.network_id.as_bytes() != scope.network_id() {
             return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
         }
         let reservation_digest = reservation
             .digest()
+            .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
+        let reservation_bytes = norito::encode_canonical(reservation)
             .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
         let operation_id = reservation.operation_id();
         if let Some(previous) = self.finalized_mints.get(&operation_id) {
@@ -403,6 +749,7 @@ impl KagemushaTestnetProofObservationOwnerV1 {
             })?;
             if previous.exact_retry_matches(
                 reservation_digest,
+                &reservation_bytes,
                 status,
                 trust_anchor,
                 public_inputs,
@@ -432,21 +779,34 @@ impl KagemushaTestnetProofObservationOwnerV1 {
             verified.mint_finality().proof_binding_digest(),
             public_inputs,
         )?;
-        let observation = self
-            .trial
-            .observe_and_advance(&self.verifier, public_inputs, proof)?;
+        let observation =
+            observe_kagemusha_testnet_state_proof_v1(&self.verifier, scope, public_inputs, proof)?;
         let result = KagemushaTestnetFinalizedMintObservationV1 {
             observation,
             operation_id,
             credit_id: reservation.credit_id().0,
             mint_envelope_digest: verified.envelope_digest(),
         };
+        let mut next_trial = self.trial.clone();
+        next_trial.record_verified(public_inputs, observation)?;
+        #[cfg(unix)]
+        if let Some(journal) = self.journal.as_mut() {
+            journal.append(&JournalRecord::ObserveFinalizedMint {
+                operation_id,
+                status: encode_journal_value(status)?,
+                trust_anchor: JournalAnchor::from(*trust_anchor),
+                public_inputs: encode_journal_value(public_inputs)?,
+                proof: encode_journal_value(proof)?,
+            })?;
+        }
+        self.trial = next_trial;
         self.mint_credit_owners
             .insert(result.credit_id, operation_id);
         self.finalized_mints.insert(
             operation_id,
             RetainedTestnetMintObservationV1 {
                 reservation_digest,
+                reservation_bytes,
                 status: status.clone(),
                 trust_anchor: *trust_anchor,
                 public_inputs: public_inputs.clone(),
@@ -456,6 +816,88 @@ impl KagemushaTestnetProofObservationOwnerV1 {
         );
         Ok(result)
     }
+
+    #[cfg(unix)]
+    fn replay_reservation(
+        &mut self,
+        reservation: MintInboxReservationV1,
+    ) -> Result<(), KagemushaRecursionErrorV1> {
+        check_reservation_scope(self.trial.scope(), &reservation)?;
+        let operation_id = reservation.operation_id();
+        if self.reserved_mints.contains_key(&operation_id)
+            || self
+                .reserved_mints
+                .values()
+                .any(|existing| existing.credit_id() == reservation.credit_id())
+        {
+            return Err(journal_replay_error(
+                "testnet mint reservation was duplicated on disk",
+            ));
+        }
+        require_unused_mint_credit(&self.mint_credit_owners, reservation.credit_id().0)?;
+        self.reserved_mints.insert(operation_id, reservation);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn journal_replay_error(message: &str) -> KagemushaRecursionErrorV1 {
+    KagemushaRecursionErrorV1::StateProofRejected(message.to_owned())
+}
+
+#[cfg(unix)]
+fn check_pinned_anchor(
+    scope: KagemushaTestnetStateObservationScopeV1,
+    operation_id: DigestV1,
+    trust_anchor: &KagemushaFinalityTrustAnchorV1,
+) -> Result<(), KagemushaRecursionErrorV1> {
+    trust_anchor
+        .validate()
+        .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
+    if operation_id == [0; 32] || *trust_anchor.network_id.as_bytes() != scope.network_id() {
+        return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn require_pins_have_reservations<R>(
+    pins: &BTreeMap<DigestV1, KagemushaFinalityTrustAnchorV1>,
+    reservations: &BTreeMap<DigestV1, R>,
+) -> Result<(), KagemushaRecursionErrorV1> {
+    if pins
+        .keys()
+        .all(|operation_id| reservations.contains_key(operation_id))
+    {
+        Ok(())
+    } else {
+        Err(journal_replay_error(
+            "recovered finality pin has no pre-submission mint reservation",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn check_reservation_scope(
+    scope: KagemushaTestnetStateObservationScopeV1,
+    reservation: &MintInboxReservationV1,
+) -> Result<(), KagemushaRecursionErrorV1> {
+    reservation
+        .validate_inputs()
+        .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
+    let context = &reservation.authorization().statement.context;
+    let asset = kagemusha_asset_identity_digest_v1(&context.asset)
+        .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
+    if *context.network_id.as_bytes() != scope.network_id()
+        || asset != scope.asset_identity_digest()
+        || *context.asset_incarnation.as_bytes() != scope.asset_incarnation()
+        || context.scale != scope.asset_scale()
+        || context.liability_pool_id != scope.liability_pool_id()
+        || context.release_id != scope.release_id()
+    {
+        return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
+    }
+    Ok(())
 }
 
 fn require_non_mint_observation(
@@ -924,6 +1366,50 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn finality_pin_requires_exact_operation_network_and_valid_context() {
+        let anchor = KagemushaFinalityTrustAnchorV1 {
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::from_untyped_unchecked(Hash::prehashed(NETWORK)),
+            ),
+            block_height: 7,
+            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [7; 32],
+            ))),
+        };
+        assert_eq!(check_pinned_anchor(scope(), [9; 32], &anchor), Ok(()));
+        assert!(check_pinned_anchor(scope(), [0; 32], &anchor).is_err());
+        assert!(
+            check_pinned_anchor(
+                scope(),
+                [9; 32],
+                &KagemushaFinalityTrustAnchorV1 {
+                    block_height: 0,
+                    ..anchor
+                }
+            )
+            .is_err()
+        );
+        let pins = BTreeMap::from([([9; 32], anchor)]);
+        assert!(require_pins_have_reservations(&pins, &BTreeMap::<DigestV1, ()>::new()).is_err());
+        let reservations = BTreeMap::from([([9; 32], ())]);
+        assert_eq!(require_pins_have_reservations(&pins, &reservations), Ok(()));
+        assert!(
+            check_pinned_anchor(
+                scope(),
+                [9; 32],
+                &KagemushaFinalityTrustAnchorV1 {
+                    network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                        HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])),
+                    ),
+                    ..anchor
+                }
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn owner_candidate_projection_is_deterministic_but_not_authority() {
         let (_, public) = trial_fixture();
@@ -1226,23 +1712,54 @@ mod tests {
         assert!(!result.state_observation().hardware_qualified());
         let retained = RetainedTestnetMintObservationV1 {
             reservation_digest: [0xB4; 32],
+            reservation_bytes: vec![0xB5; 64],
             status: status.clone(),
             trust_anchor: anchor,
             public_inputs: public.clone(),
             proof: proof.clone(),
             result,
         };
-        assert!(retained.exact_retry_matches([0xB4; 32], &status, &anchor, &public, &proof));
-        assert!(!retained.exact_retry_matches([0xB5; 32], &status, &anchor, &public, &proof));
+        assert!(retained.exact_retry_matches(
+            [0xB4; 32],
+            &[0xB5; 64],
+            &status,
+            &anchor,
+            &public,
+            &proof,
+        ));
+        assert!(!retained.exact_retry_matches(
+            [0xB5; 32],
+            &[0xB5; 64],
+            &status,
+            &anchor,
+            &public,
+            &proof,
+        ));
+        assert!(!retained.exact_retry_matches(
+            [0xB4; 32],
+            &[0xB6; 64],
+            &status,
+            &anchor,
+            &public,
+            &proof,
+        ));
         let mut changed = status.clone();
         changed.operation_id[0] ^= 1;
-        assert!(!retained.exact_retry_matches([0xB4; 32], &changed, &anchor, &public, &proof));
+        assert!(!retained.exact_retry_matches(
+            [0xB4; 32],
+            &[0xB5; 64],
+            &changed,
+            &anchor,
+            &public,
+            &proof,
+        ));
         let changed_anchor = KagemushaFinalityTrustAnchorV1 {
             block_height: 2,
             ..anchor
         };
         assert!(!retained.exact_retry_matches(
             [0xB4; 32],
+            &[0xB5; 64],
             &status,
             &changed_anchor,
             &public,
@@ -1250,10 +1767,43 @@ mod tests {
         ));
         let mut changed = public.clone();
         changed.amount += 1;
-        assert!(!retained.exact_retry_matches([0xB4; 32], &status, &anchor, &changed, &proof));
+        assert!(!retained.exact_retry_matches(
+            [0xB4; 32],
+            &[0xB5; 64],
+            &status,
+            &anchor,
+            &changed,
+            &proof,
+        ));
         let mut changed = proof.clone();
         changed.semantic_digest[0] ^= 1;
-        assert!(!retained.exact_retry_matches([0xB4; 32], &status, &anchor, &public, &changed));
+        assert!(!retained.exact_retry_matches(
+            [0xB4; 32],
+            &[0xB5; 64],
+            &status,
+            &anchor,
+            &public,
+            &changed,
+        ));
+    }
+
+    #[test]
+    fn non_mint_retry_requires_exact_public_inputs_and_proof() {
+        let (trial, public) = trial_fixture();
+        let (_, proof) = super::super::tests::state_verification_fixture();
+        let retained = RetainedTestnetNonMintObservationV1 {
+            public_inputs: public.clone(),
+            proof: proof.clone(),
+            observation: observed(&public, trial.scope()),
+        };
+        assert!(retained.exact_retry_matches(&public, &proof));
+        let mut changed_public = public.clone();
+        changed_public.amount += 1;
+        assert!(!retained.exact_retry_matches(&changed_public, &proof));
+        let mut changed_proof = proof.clone();
+        changed_proof.semantic_digest[0] ^= 1;
+        assert!(!retained.exact_retry_matches(&public, &changed_proof));
+        assert!(!retained.observation.hardware_qualified());
     }
 
     #[test]

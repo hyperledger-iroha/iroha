@@ -21,6 +21,9 @@
 -keep class org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetStateProofObservationJniV1 {
     native <methods>;
 }
+-keep class org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetFinalizedMintObservationJniV1 {
+    native <methods>;
+}
 -keep class org.hyperledger.iroha.sdk.offline.probe.Pixel6TestnetDiagnosticSelectionJniV1 {
     native <methods>;
 }

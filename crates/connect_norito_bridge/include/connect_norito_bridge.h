@@ -596,6 +596,32 @@ int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
     const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
     uint8_t* output_observation, size_t output_capacity, size_t* output_length);
 
+// Observe an actual Applied top-up and paired MintFold proof using a private
+// pre-send reservation and separately authenticated finality context already
+// pinned by the Rust-only durable owner. Caller coordinates must match that
+// pin; they cannot establish trust themselves. The reservation and its credit
+// opening never cross this ABI. The original status
+// response is bounded Torii JSON; the independent finality network, height,
+// and context are exact raw coordinates, and State inputs/proof are canonical
+// Norito archives. The returned record declares hardware_qualified
+// false and grants no payment, redemption, or production wallet capability.
+// A missing durable owner or reservation fails closed. output_length is aligned
+// and disjoint from all input/output spans; full output capacity is mandatory.
+#if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 16777216
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 32
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 512
+int32_t connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    const uint8_t* status_json, size_t status_json_length,
+    const uint8_t* anchor_network_id, size_t anchor_network_id_length,
+    uint64_t anchor_height,
+    const uint8_t* anchor_context_id, size_t anchor_context_id_length,
+    const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
+    const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
+    uint8_t* output_observation, size_t output_capacity, size_t* output_length);
+#endif
+
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
 // returns the number of uint32_t words written (12) on success. It is an ABI
 // pin only and grants no monetary authority. The final word is the closed

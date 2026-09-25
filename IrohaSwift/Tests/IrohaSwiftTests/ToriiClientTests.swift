@@ -10928,7 +10928,8 @@ final class ToriiClientTests: XCTestCase {
                     result: ["unverified_result": "opaque"])
             )
         }
-        let redemptionStatus = try await makeClient().submitKagemushaRedemption(redemption)
+        let redemptionStatus = try await makeClient().submitKagemushaRedemption(
+            redemption, withCurrentOwner: { try $0() })
         XCTAssertEqual(redemptionStatus.kind, .redemption)
         XCTAssertEqual(redemptionStatus.state, .applied)
     }
@@ -10952,11 +10953,13 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
             if retryAfter == "1" {
-                let status = try await makeClient().submitKagemushaRedemption(redemption)
+                let status = try await makeClient().submitKagemushaRedemption(
+                    redemption, withCurrentOwner: { try $0() })
                 XCTAssertEqual(status.state, .pending)
             } else {
                 do {
-                    _ = try await makeClient().submitKagemushaRedemption(redemption)
+                    _ = try await makeClient().submitKagemushaRedemption(
+                        redemption, withCurrentOwner: { try $0() })
                     XCTFail("A noncanonical pending retry interval must fail")
                 } catch ToriiClientError.invalidPayload(let reason) {
                     XCTAssertEqual(reason,
@@ -10977,7 +10980,8 @@ final class ToriiClientTests: XCTestCase {
                 headerFields: ["X-Iroha-Reject-Code": headerCode])!, conflictingBody)
         }
         do {
-            _ = try await makeClient().submitKagemushaRedemption(redemption)
+            _ = try await makeClient().submitKagemushaRedemption(
+                redemption, withCurrentOwner: { try $0() })
             XCTFail("An HTTP rejection must not return an operation status")
         } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
             XCTAssertEqual(status, 409)
@@ -11003,7 +11007,8 @@ final class ToriiClientTests: XCTestCase {
                 httpVersion: nil, headerFields: [:])!, conflictingBody)
         }
         do {
-            _ = try await makeClient().submitKagemushaRedemption(redemption)
+            _ = try await makeClient().submitKagemushaRedemption(
+                redemption, withCurrentOwner: { try $0() })
             XCTFail("An HTTP rejection must not return an operation status")
         } catch ToriiClientError.httpStatus(let status, _, let rejectCode) {
             XCTAssertEqual(status, 409)
@@ -11026,6 +11031,35 @@ final class ToriiClientTests: XCTestCase {
                 withCurrentOwner: { _ in throw OwnedTopUpTestFailure.ownerRevoked })
             XCTFail("owner check should reject before task resume")
         } catch { XCTAssertEqual(error as? OwnedTopUpTestFailure, .ownerRevoked) }
+        try await requireNoOwnedTopUpTasks(session)
+    }
+
+    @MainActor
+    func testRedemptionOwnerChangeBeforeResumeSendsNothing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        StubURLProtocol.handler = { _ in
+            XCTFail("revoked redemption owner dispatched")
+            throw URLError(.unsupportedURL)
+        }
+        let client = ToriiClient(baseURL: URL(string: "https://example.test")!,
+            session: session)
+        let request = try kagemushaRedemptionRequest()
+        var checks = 0
+        do {
+            _ = try await client.submitKagemushaRedemption(request,
+                withCurrentOwner: { action in
+                    checks += 1
+                    if checks == 2 { throw OwnedTopUpTestFailure.ownerRevoked }
+                    try action()
+                })
+            XCTFail("The current owner must be checked at task resume")
+        } catch {
+            XCTAssertEqual(error as? OwnedTopUpTestFailure, .ownerRevoked)
+        }
+        XCTAssertGreaterThanOrEqual(checks, 2)
         try await requireNoOwnedTopUpTasks(session)
     }
 

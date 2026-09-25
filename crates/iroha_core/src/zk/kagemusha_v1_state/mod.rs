@@ -48,6 +48,10 @@ mod one_use_key_ratchet;
 mod outgoing_operation_index;
 #[cfg(unix)]
 mod private_journal;
+#[cfg(all(test, unix))]
+pub(crate) use private_journal::TestPersistenceFailure;
+#[cfg(unix)]
+pub(crate) use private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 mod receive_fold;
 mod receive_fold_operation;
 mod recovery_metadata;
