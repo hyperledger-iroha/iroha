@@ -48,6 +48,8 @@ use super::{
     V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
     lane_queue_reservation_group_binding_from_ordered_keys,
 };
+#[cfg(unix)]
+use crate::json_macros::{JsonDeserialize, JsonSerialize};
 use crate::secure_file_metadata::{self, SecureMetadata};
 #[cfg(test)]
 use crate::{
@@ -1490,6 +1492,7 @@ fn require_pristine_configured_catalog_root(
     let lock_path = store_root.join(super::STORE_ROOT_LOCK_FILE_NAME);
     let mut saw_allowed_temp = false;
     let mut saw_authenticated_lock = false;
+    let mut saw_public_reset_marker = false;
     for entry in
         fs::read_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?
     {
@@ -1538,6 +1541,13 @@ fn require_pristine_configured_catalog_root(
             saw_allowed_temp = true;
             continue;
         }
+        if path == store_root.join(".public-reset-generated-v1.json")
+            && !saw_public_reset_marker
+            && exact_public_reset_storage_marker(store_root)
+        {
+            saw_public_reset_marker = true;
+            continue;
+        }
         return Err(Error::IO(
             std::io::Error::new(
                 ErrorKind::InvalidData,
@@ -1561,6 +1571,130 @@ fn require_pristine_configured_catalog_root(
         ));
     }
     configured_catalog_require_store_root_identity(store_root, root_identity)
+}
+
+/// The reset controller creates a marker in each new state directory before
+/// starting a validator. A fresh configured Kura may ignore its own storage
+/// marker only when the adjacent state-root marker proves the same exact reset.
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct PublicResetGeneratedMarkerV1 {
+    schema: String,
+    kind: String,
+    host_slug: String,
+    inventory_sha256: String,
+    authorization_nonce: String,
+    revision: String,
+    created_at_unix_ms: u64,
+}
+
+#[cfg(unix)]
+fn exact_public_reset_storage_marker(store_root: &Path) -> bool {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    fn lowercase_hex(value: &str, len: usize) -> bool {
+        value.len() == len
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
+    fn read_marker(path: &Path, owner: u32, group: u32) -> Option<PublicResetGeneratedMarkerV1> {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        const MAX_MARKER_BYTES: u64 = 1024;
+        let before = secure_file_metadata::from_path(path).ok()?;
+        if !before.is_file()
+            || before.file_type().is_symlink()
+            || before.uid() != owner
+            || before.gid() != group
+            || before.permissions().mode() & 0o7777 != 0o600
+            || before.nlink() != 1
+            || before.len() == 0
+            || before.len() > MAX_MARKER_BYTES
+        {
+            return None;
+        }
+        let (bytes, identity) =
+            read_preflight_file_bounded_with_identity(path, MAX_MARKER_BYTES).ok()?;
+        let after = secure_file_metadata::from_path(path).ok()?;
+        if geometry_file_identity(&before) != identity
+            || geometry_file_identity(&after) != identity
+            || after.uid() != owner
+            || after.gid() != group
+            || after.permissions().mode() & 0o7777 != 0o600
+            || after.nlink() != 1
+            || after.len() != before.len()
+        {
+            return None;
+        }
+        let marker: PublicResetGeneratedMarkerV1 = norito::json::from_slice(&bytes).ok()?;
+        (norito::json::to_json(&marker).ok()?.as_bytes() == bytes).then_some(marker)
+    }
+
+    let Some(state_root) = store_root.parent() else {
+        return false;
+    };
+    let Some(slug) = state_root.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if store_root.file_name().and_then(|name| name.to_str()) != Some("storage")
+        || !matches!(
+            slug,
+            "taira-validator-1" | "taira-validator-2" | "taira-validator-3" | "taira-validator-4"
+        )
+    {
+        return false;
+    }
+    // The shipping reset is root-owned. Unit tests use their process owner so
+    // the full constructor can exercise this gate without elevated privileges.
+    #[cfg(test)]
+    let (owner, group) = (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    );
+    #[cfg(not(test))]
+    let (owner, group) = (0, 0);
+    for path in [state_root, store_root] {
+        let Ok(metadata) = secure_file_metadata::from_path(path) else {
+            return false;
+        };
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != owner
+            || metadata.gid() != group
+            || metadata.permissions().mode() & 0o7777 != 0o700
+        {
+            return false;
+        }
+    }
+    let marker_name = ".public-reset-generated-v1.json";
+    let Some(parent) = read_marker(&state_root.join(marker_name), owner, group) else {
+        return false;
+    };
+    let Some(child) = read_marker(&store_root.join(marker_name), owner, group) else {
+        return false;
+    };
+    parent.schema == "iroha.taira.public-reset.generated-path.v1"
+        && child.schema == parent.schema
+        && parent.kind == "fresh_state"
+        && child.kind == "fresh_state_entry"
+        && parent.host_slug == slug
+        && child.host_slug == slug
+        && lowercase_hex(&parent.inventory_sha256, 64)
+        && lowercase_hex(&parent.authorization_nonce, 32)
+        && lowercase_hex(&parent.revision, 40)
+        && parent.created_at_unix_ms > 0
+        && child.inventory_sha256 == parent.inventory_sha256
+        && child.authorization_nonce == parent.authorization_nonce
+        && child.revision == parent.revision
+        && child.created_at_unix_ms == parent.created_at_unix_ms
+}
+
+#[cfg(not(unix))]
+fn exact_public_reset_storage_marker(_store_root: &Path) -> bool {
+    false
 }
 fn write_initial_configured_catalog_temp(
     store_root: &Path,
