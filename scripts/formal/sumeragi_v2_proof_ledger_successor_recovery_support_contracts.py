@@ -2872,7 +2872,21 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
         ),
     )
 
-    pending_validate_child = item("effects", "validate_body")
+    require_tokens(
+        "effects",
+        item("effects", "validate_body"),
+        "pending-Kura Validate exact helper dispatch",
+        (
+            "if self.pending_tip_recovery.is_some() { return self.validate_pending_kura_body(tag, key, &effect, &ownership, &receipt); }",
+        ),
+    )
+    pending_validate_child = qualified_item(
+        "effects",
+        "validate_pending_kura_body",
+        tuple(rust_code_tokens("impl<R: EffectRuntime> V2EffectExecutor<R>")),
+        "pending-Kura Validate exact Apply child",
+        expected_attributes=("#[inline(never)]",),
+    )
     require_order(
         "effects",
         pending_validate_child,
@@ -2882,13 +2896,13 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "recovery.replay_tag() != tag",
             "recovery.durable_round() != round",
             "recovery.durable_subject() != subject",
-            "recovery.durable_receipt() != &receipt",
+            "recovery.durable_receipt() != receipt",
             "self.ensure_pending_slot()?",
             "let _next_apply_work = self.plan_work_id()?",
             "take_deferred_validated_marker()?",
-            "commit_pending_kura_validated_apply(marker, &effect, &ownership)",
+            "commit_pending_kura_validated_apply(marker, effect, ownership)",
             "restore_deferred_validated_marker(marker)",
-            "return Ok(Some(DirectValidatedApplySuccessorV1::PendingKura(successor,)))",
+            "Ok(Some(DirectValidatedApplySuccessorV1::PendingKura(successor,)))",
         ),
     )
 
