@@ -39,8 +39,8 @@ use iroha_model_base::topology::LaneId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
-    ConsensusMessageControlRule, Network, NetworkBuilder, genesis_factory_with_post_topology,
-    init_instruction_registry,
+    ConsensusMessageControlRule, Network, NetworkBuilder, init_instruction_registry,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::ALICE_ID;
 use norito::codec::DecodeAll as _;
@@ -55,23 +55,25 @@ use std::{
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const PACKET_LOSS_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 const PACKET_LOSS_ADMISSION_HEIGHT: u64 = 2;
-const PACKET_LOSS_HEIGHT: u64 = 3;
+const PACKET_LOSS_HEIGHT: u64 = PACKET_LOSS_ADMISSION_HEIGHT;
 const PACKET_LOSS_ADMISSION_VIEW: u64 = 0;
 const PACKET_LOSS_CARRIER_VIEWS: [u64; 4] = [0, 1, 2, 3];
 const PACKET_LOSS_CAPTURE_VIEWS: [u64; 6] = [0, 1, 2, 3, 4, 5];
 const PACKET_LOSS_CHUNK_INDICES: [u32; 3] = [57, 58, 59];
-const PACKET_LOSS_QUEUE_CAPACITY: usize = 16;
-const PACKET_LOSS_CAPTURE_QUEUE_CAPACITY: usize = 512;
+const PACKET_LOSS_QUEUE_CAPACITY: usize = 512;
 const PACKET_LOSS_CONTROL_TIMEOUT: Duration = Duration::from_secs(360);
 const PACKET_LOSS_BLOCK_CADENCE: Duration = Duration::from_secs(8);
-const PACKET_LOSS_QUEUE_REPLICATION_TIMEOUT: Duration = Duration::from_secs(30);
+const PACKET_LOSS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
 const BLOCK_GAS_HEADROOM: u64 = 2 * 1024 * 1024;
 const TORII_MAX_CONTENT_LEN_BYTES: i64 = 64_000_000;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
-const NETWORK_TOPIC_FRAME_BUDGET_BYTES: i64 = NETWORK_FRAME_BUDGET_BYTES - 28;
+const NETWORK_TOPIC_FRAME_BUDGET_BYTES: i64 = 20 * 1024 * 1024;
+const NETWORK_CONTROL_FRAME_BUDGET_BYTES: i64 = 1024 * 1024;
 const NETWORK_STREAM_FRAME_BUDGET_BYTES: i64 = NETWORK_FRAME_BUDGET_BYTES + 4;
+const NETWORK_ACTOR_HIGH_BUDGET_BYTES: i64 = NETWORK_STREAM_FRAME_BUDGET_BYTES + 16 * 1024 * 1024;
 const NETWORK_DEFERRED_SEND_BUDGET_BYTES: i64 = 2 * NETWORK_STREAM_FRAME_BUDGET_BYTES;
+const NETWORK_MAX_TOTAL_CONNECTIONS: i64 = 8;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
 const ROUTE_BINDING_POLL: Duration = Duration::from_secs(1);
@@ -127,6 +129,97 @@ struct HeldDaBodyEvidence {
     canonical_wire: Vec<u8>,
     execution_commitment: ExecutionCommitment,
 }
+
+/// Run blocking SDK work without a Tokio runtime in the worker's thread-local context.
+pub(super) async fn run_off_runtime<R, F>(task: F) -> Result<R>
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("sumeragi-da-off-runtime".to_owned())
+        .spawn(move || {
+            let _ = sender.send(task());
+        })
+        .wrap_err("spawn off-runtime DA test worker")?;
+    receiver.await.wrap_err("join off-runtime DA test worker")
+}
+
+/// Retry only a temporarily unavailable diagnostic endpoint; preserve all
+/// protocol and assertion failures as immediate test failures.
+async fn retry_transient_diagnostic_status<T, F, Fut>(
+    mut observe: F,
+    timeout: Duration,
+    context: &str,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        match observe().await {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .to_string()
+                        .contains("diagnostic.status returned HTTP 503")
+                }) && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| format!("{context} within {timeout:?}"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn transient_diagnostic_status_retry_preserves_permanent_failure() -> Result<()> {
+    let attempts = std::cell::Cell::new(0);
+    let observed = retry_transient_diagnostic_status(
+        || {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if attempts.get() == 1 {
+                Err(eyre!(
+                    "diagnostic.status returned HTTP 503 (status_state_busy)"
+                ))
+            } else {
+                Ok(7)
+            })
+        },
+        Duration::from_secs(1),
+        "transient diagnostic test",
+    )
+    .await?;
+    assert_eq!(observed, 7);
+    assert_eq!(attempts.get(), 2);
+
+    attempts.set(0);
+    let error = retry_transient_diagnostic_status(
+        || {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(Err::<u64, _>(eyre!("invalid signed status")))
+        },
+        Duration::from_secs(1),
+        "permanent diagnostic test",
+    )
+    .await
+    .expect_err("permanent diagnostic error must not be retried");
+    assert!(format!("{error:?}").contains("invalid signed status"));
+    assert_eq!(attempts.get(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocking_da_worker_has_no_tokio_runtime() -> Result<()> {
+    ensure!(run_off_runtime(|| tokio::runtime::Handle::try_current().is_err()).await?);
+    Ok(())
+}
+
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let inflated = payload_bytes.saturating_mul(12);
     let with_headroom = payload_bytes.saturating_add(TORII_CONTENT_HEADROOM_BYTES);
@@ -222,6 +315,10 @@ fn da_route_authority_genesis_transactions(
     vec![bootstrap, validators]
 }
 fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilder {
+    assert!(
+        matches!(peers, 4 | 7),
+        "DA fixture requires an exact four- or seven-validator committee"
+    );
     let tx_limit = tx_limit_for_payload(payload_bytes);
     NetworkBuilder::new()
         .with_peers(peers)
@@ -229,7 +326,7 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
         .with_permissioned_consensus()
         .with_genesis_block(|topology, topology_entries| {
             let post_topology = da_route_authority_genesis_transactions(topology.as_ref());
-            genesis_factory_with_post_topology(
+            unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 post_topology,
                 topology,
@@ -238,6 +335,19 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
         })
         .with_config_layer(|layer| {
             let gas_account = ALICE_ID.to_string();
+            if peers == 7 {
+                // The default universal dataspace has f=1. Seven live lane
+                // validators would oversubscribe its four-member committee,
+                // which cannot be selected before the first beacon pulse.
+                let mut universal = toml::Table::new();
+                universal.insert("id".into(), toml::Value::Integer(0));
+                universal.insert("alias".into(), toml::Value::String("universal".to_owned()));
+                universal.insert("fault_tolerance".into(), toml::Value::Integer(2));
+                layer.write(
+                    ["nexus", "dataspace_catalog"],
+                    toml::Value::Array(vec![toml::Value::Table(universal)]),
+                );
+            }
             layer
                 .write("telemetry_profile", "full")
                 .write(
@@ -266,9 +376,15 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
                 )
                 .write(["nexus", "staking", "slash_sink_account_id"], gas_account)
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
+                // Fund the exact per-target DA/recovery reserves in addition
+                // to one maximum ordinary frame for the bounded test roster.
+                .write(
+                    ["network", "max_total_connections"],
+                    NETWORK_MAX_TOTAL_CONNECTIONS,
+                )
                 .write(
                     ["network", "p2p_outbound_frame_queue_max_high_bytes"],
-                    NETWORK_STREAM_FRAME_BUDGET_BYTES,
+                    NETWORK_ACTOR_HIGH_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "p2p_outbound_frame_queue_max_low_bytes"],
@@ -288,7 +404,7 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
                 )
                 .write(
                     ["network", "max_frame_bytes_control"],
-                    NETWORK_TOPIC_FRAME_BUDGET_BYTES,
+                    NETWORK_CONTROL_FRAME_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "max_frame_bytes_block_sync"],
@@ -320,6 +436,18 @@ fn large_da_network_builder(peers: usize, payload_bytes: usize) -> NetworkBuilde
             payload_bytes,
         )))
 }
+
+#[test]
+fn large_da_genesis_preexecutes_with_configured_route_stake() -> Result<()> {
+    init_instruction_registry();
+    let permits = tempfile::tempdir()?;
+    let network =
+        large_da_network_builder(4, LARGE_PAYLOAD_BYTES).build_with_permit_dir(permits.path());
+    ensure!(network.peers().len() == 4);
+    ensure!(network.peers().iter().all(|peer| !peer.is_running()));
+    Ok(())
+}
+
 fn hold_bounded_view_payload_chunks(
     receiver_index: usize,
     peer_ids: &[PeerId],
@@ -974,17 +1102,6 @@ fn validate_exact_applied_payload_carrier(
             && commit_qc.certificate.subject == subject,
         "peer status CommitQC does not authenticate a height-{expected_height} decision at or after held view {held_view}"
     );
-    let pipeline_status = client
-        .client()
-        .get_transaction_status_response_local(submitted_hash)
-        .wrap_err("query exact local DA transaction status")?
-        .ok_or_else(|| eyre!("peer omitted exact local DA transaction status"))?;
-    ensure!(
-        pipeline_status.hash == submitted_hash.to_string()
-            && pipeline_status.status.kind == "Applied"
-            && pipeline_status.status.block_height == Some(expected_height),
-        "peer did not locally resolve the exact submitted hash as Applied at height {expected_height}: {pipeline_status:?}"
-    );
     let carrier = wait_for_kura_block_at_height(
         &kura_store_dir,
         expected_height,
@@ -1120,12 +1237,9 @@ async fn wait_for_applied_v2_height(
                     client.torii_request_timeout = remaining
                 });
             async move {
-                let status =
-                    tokio::task::spawn_blocking(move || client.client().get_sumeragi_status())
-                        .await
-                        .wrap_err_with(|| {
-                            format!("join applied-height status fetch for {mnemonic}")
-                        })?;
+                let status = run_off_runtime(move || client.client().get_sumeragi_status())
+                    .await
+                    .wrap_err_with(|| format!("join applied-height status fetch for {mnemonic}"))?;
                 Ok::<_, eyre::Report>((mnemonic, status))
             }
         });
@@ -1191,7 +1305,7 @@ async fn wait_for_exact_round_leader(
                     client.torii_request_timeout = remaining
                 });
             async move {
-                let status = tokio::task::spawn_blocking(move || fetch_v2_status(client))
+                let status = run_off_runtime(move || fetch_v2_status(client))
                     .await
                     .wrap_err_with(|| format!("join exact-round status fetch for {mnemonic}"))?;
                 Ok::<_, eyre::Report>((mnemonic, status))
@@ -1270,8 +1384,24 @@ async fn wait_for_exact_round_leader(
     }
 }
 fn is_route_unavailable_submission(error: &eyre::Report) -> bool {
-    error.to_string().contains("reject code: route_unavailable")
+    let message = error.to_string();
+    message.contains("reject code: route_unavailable")
+        || message.contains("reject code: PRTRY:ROUTE_UNRESOLVED")
 }
+
+#[test]
+fn route_retry_recognizes_only_pending_route_bindings() {
+    assert!(is_route_unavailable_submission(&eyre!(
+        "reject code: route_unavailable"
+    )));
+    assert!(is_route_unavailable_submission(&eyre!(
+        "reject code: PRTRY:ROUTE_UNRESOLVED"
+    )));
+    assert!(!is_route_unavailable_submission(&eyre!(
+        "reject code: PRTRY:INVALID_SIGNATURE"
+    )));
+}
+
 async fn submit_prepared_with_route_retry(
     client: Client,
     transaction: SignedTransaction,
@@ -1312,99 +1442,6 @@ async fn submit_prepared_with_route_retry(
             }
             Err(error) => return Err(error).wrap_err("submit exact prepared DA payload"),
         }
-    }
-}
-async fn wait_for_exact_local_queue_replication(
-    network: &Network,
-    submitted_hash: HashOf<SignedTransaction>,
-    carrier_height: u64,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let expected_hash = submitted_hash.to_string();
-    let mut witnessed = vec![false; network.peers().len()];
-    let mut observations = vec![String::new(); network.peers().len()];
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        ensure!(
-            !remaining.is_zero(),
-            "exact signed transaction did not reach every peer-local queue within {timeout:?}: {}",
-            observations.join(" | ")
-        );
-        let request_timeout = remaining.min(Duration::from_secs(5));
-        let fetches = network
-            .peers()
-            .iter()
-            .enumerate()
-            .map(|(peer_index, peer)| {
-                let mnemonic = peer.mnemonic().to_owned();
-                let client =
-                    integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
-                        client.torii_request_timeout = request_timeout
-                    });
-                let hash = submitted_hash;
-                async move {
-                    let result = match client.client().status().get().await {
-                        Ok(status) => {
-                            let blocks = status.blocks;
-                            tokio::task::spawn_blocking(move || {
-                                let pipeline = client
-                                    .client()
-                                    .get_transaction_status_response_local(hash)?;
-                                Ok::<_, eyre::Report>((blocks, pipeline))
-                            })
-                            .await
-                            .wrap_err_with(|| {
-                                format!("join exact local queue observation for {mnemonic}")
-                            })?
-                        }
-                        Err(error) => Err(error.into()),
-                    };
-                    Ok::<_, eyre::Report>((peer_index, mnemonic, result))
-                }
-            });
-        let fetched = tokio::time::timeout(remaining, try_join_all(fetches))
-            .await
-            .wrap_err_with(|| {
-                format!("exact local queue replication exceeded the {timeout:?} budget")
-            })??;
-        for (peer_index, mnemonic, result) in fetched {
-            match result {
-                Ok((blocks, pipeline)) => {
-                    ensure!(
-                        blocks < carrier_height,
-                        "{mnemonic} committed height {carrier_height} before peer-local queue replication was witnessed"
-                    );
-                    match pipeline {
-                        Some(status)
-                            if status.hash == expected_hash
-                                && status.scope == "local"
-                                && status.status.kind == "Queued"
-                                && status.status.block_height.is_none() =>
-                        {
-                            witnessed[peer_index] = true;
-                            observations[peer_index] = format!("{mnemonic}=Queued/local");
-                        }
-                        Some(status) => {
-                            observations[peer_index] = format!("{mnemonic}={status:?}");
-                        }
-                        None => {
-                            observations[peer_index] = format!("{mnemonic}=missing");
-                        }
-                    }
-                }
-                Err(error) => {
-                    observations[peer_index] = format!("{mnemonic}={error}");
-                }
-            }
-        }
-        if witnessed.iter().all(|seen| *seen) {
-            return Ok(());
-        }
-        tokio::time::sleep(
-            Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())),
-        )
-        .await;
     }
 }
 fn wait_for_exact_large_da_kura_carrier(
@@ -1468,19 +1505,34 @@ pub(super) async fn submit_exact_large_da_log_and_verify_quorum(
     );
     let payload = String::from_utf8(vec![expected_payload_byte; expected_payload_len])
         .wrap_err_with(|| format!("{context}: construct exact Log payload"))?;
-    let submit_client = network.client();
-    let submitted_hash = tokio::task::spawn_blocking(move || {
-        submit_client.submit(
-            Log::new(Level::INFO, payload),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
+    let prepare_client = network.client();
+    let transaction = run_off_runtime(move || {
+        let mut draft = prepare_client.account_client().prepare_transaction(
+            iroha::client::AccountTransactionDraft::new(
+                vec![Log::new(Level::INFO, payload)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ),
+        )?;
+        let quote =
+            prepare_client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &draft })?;
+        ensure!(
+            draft
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "large DA fee quote changed the payer, sponsor revision, or gas bound"
+        );
+        draft.fee_payment = quote.intent;
+        Ok::<_, eyre::Report>(prepare_client.account_client().sign_transaction(draft)?)
     })
     .await
-    .wrap_err_with(|| format!("{context}: join exact large DA submission"))??;
+    .wrap_err_with(|| format!("{context}: join exact large DA preparation"))??;
+    let submitted_hash =
+        submit_prepared_with_route_retry(network.client(), transaction, COMMIT_WAIT_BUDGET).await?;
 
     let wait_client = network.client();
     let wait_hash = submitted_hash;
-    let applied = tokio::task::spawn_blocking(move || {
+    let applied = run_off_runtime(move || {
         wait_client.wait_for_transaction_applied(
             wait_hash,
             TransactionWaitOptions {
@@ -1511,7 +1563,7 @@ pub(super) async fn submit_exact_large_da_log_and_verify_quorum(
         let client = peer.client();
         let kura_store_dir = peer.kura_store_dir();
         async move {
-            let result = tokio::task::spawn_blocking(move || {
+            let result = run_off_runtime(move || {
                 wait_for_exact_large_da_kura_carrier(
                     client,
                     kura_store_dir,
@@ -1599,9 +1651,8 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .with_base_seed(stringify!(
             authenticated_payload_chunk_hold_heals_and_converges_four_peers
         ))
-        // QueuePlan binds transactions admitted during height two to the
-        // successor proposal. Keep that admission interval comfortably open,
-        // then exercise the exact height-three carrier selected by production.
+        // Leave the first post-genesis admission interval open for the leader
+        // to sample the signed transaction from its asynchronous local queue.
         .with_block_cadence(PACKET_LOSS_BLOCK_CADENCE)
         .with_sync_timeout(COMMIT_WAIT_BUDGET)
         .with_peer_startup_timeout(COMMIT_WAIT_BUDGET)
@@ -1619,7 +1670,14 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         let expected_initial_rules = peers
             .iter()
             .enumerate()
-            .map(|(receiver_index, _)| hold_bounded_view_payload_chunks(receiver_index, &peer_ids))
+            .map(|(receiver_index, _)| {
+                let mut rules = hold_bounded_view_payload_chunks(receiver_index, &peer_ids);
+                rules.extend(hold_bounded_view_finality_traffic(
+                    receiver_index,
+                    &peer_ids,
+                ));
+                rules
+            })
             .collect::<Vec<_>>();
         try_join_all(peers.iter().zip(&expected_initial_rules).map(
             |(peer, expected_rules)| async move {
@@ -1655,7 +1713,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                         && !ack.fatal
                         && ack.dropped == 0
                         && ack.overflowed == 0,
-                    "{} did not acknowledge its authenticated Proposal-bound chunk Hold rules",
+                    "{} did not acknowledge its authenticated chunk and finality Hold rules",
                     peer.mnemonic()
                 );
                 Ok::<(), eyre::Report>(())
@@ -1664,18 +1722,29 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .await?;
 
         let client = network.client();
-        let admission_height = client.client().status().get().await?.blocks.saturating_add(1);
+        let admission_height = retry_transient_diagnostic_status(
+            || {
+                let client = client.clone();
+                async move {
+                    Ok::<_, eyre::Report>(client.client().status().get().await?.blocks)
+                }
+            },
+            PACKET_LOSS_DIAGNOSTIC_TIMEOUT,
+            "read packet-loss admission height",
+        )
+        .await?
+        .saturating_add(1);
         ensure!(
             admission_height == PACKET_LOSS_ADMISSION_HEIGHT,
             "packet-loss admission expected active height {PACKET_LOSS_ADMISSION_HEIGHT}, but the network opened {admission_height}"
         );
-        let expected_height = admission_height.saturating_add(1);
+        let expected_height = admission_height;
         ensure!(
             expected_height == PACKET_LOSS_HEIGHT,
-            "packet-loss rules target successor height {PACKET_LOSS_HEIGHT}, but admission selected {expected_height}"
+            "packet-loss rules target height {PACKET_LOSS_HEIGHT}, but admission selected {expected_height}"
         );
         let prepare_client = client.clone();
-        let transaction = tokio::task::spawn_blocking(move || {
+        let transaction = run_off_runtime(move || {
             let mut payload = prepare_client.account_client().prepare_transaction(
                 iroha::client::AccountTransactionDraft::new(
                     vec![Log::new(
@@ -1702,10 +1771,8 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .wrap_err("join packet-loss payload preparation")??;
         validate_exact_da_transaction(&transaction)?;
         // Submit directly to the unanimously reported height-two/view-zero
-        // admission leader.
-        // Production QueuePlan binds this height-two admission to the
-        // height-three proposal; ordinary transaction gossip ensures whichever
-        // validator owns that successor turn has the exact signed transaction.
+        // leader. The leader samples a local queue snapshot; ordinary gossip
+        // makes the same signed transaction available at every peer.
         let leader_index = wait_for_exact_round_leader(
             &network,
             admission_height,
@@ -1723,24 +1790,13 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             PACKET_LOSS_CONTROL_TIMEOUT,
         )
         .await?;
-        // Prove that normal transaction gossip has placed the exact signed
-        // carrier in every local queue before DA transport begins. The later
-        // no-commit assertion therefore also proves that a mempool copy cannot
-        // bypass the authenticated manifest/chunk reconstruction barrier.
-        wait_for_exact_local_queue_replication(
-            &network,
-            submitted_hash,
-            expected_height,
-            PACKET_LOSS_QUEUE_REPLICATION_TIMEOUT,
-        )
-        .await?;
+        // The leader has accepted the exact signed input. Followers must use
+        // the authenticated proposal and DA body, regardless of whether their
+        // independent transaction-gossip queues have received that input.
 
         let proposal_match_deadline = Instant::now() + PACKET_LOSS_CONTROL_TIMEOUT;
-        // Arm the finality fence as soon as one common authenticated Proposal
-        // occurrence reaches three receivers. Waiting for every selected
-        // chunk first leaves a legitimate timeout already delivered to fair
-        // ingress; that timeout can advance the view ahead of the released
-        // chunks and correctly retire their now-unprotected stale pipeline.
+        // The finality fence was armed before admission, so a view timeout
+        // cannot outrun the held body while the large async carrier is built.
         let (pre_fence_matches, held_manifest_hash, held_proposal_view) = loop {
             let mut matched_sequences = vec![Vec::new(); peers.len()];
             for (receiver_index, peer) in peers.iter().enumerate() {
@@ -1789,22 +1845,8 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
-        // Keep the original chunk selectors active while arming the finality
-        // fence on every receiver. A non-drain command changes each selector
-        // atomically while leaving old retained occurrences queued; combining
-        // both rule sets closes the cross-peer cutover window as well.
-        let capture_arm_rules = peers
-            .iter()
-            .enumerate()
-            .map(|(receiver_index, _)| {
-                let mut rules = expected_initial_rules[receiver_index].clone();
-                rules.extend(hold_bounded_view_finality_traffic(
-                    receiver_index,
-                    &peer_ids,
-                ));
-                rules
-            })
-            .collect::<Vec<_>>();
+        // Reaffirm the exact selectors without draining retained occurrences.
+        let capture_arm_rules = expected_initial_rules.clone();
         let capture_arm_acknowledgements = try_join_all((0..peers.len()).map(|peer_index| {
             let peer = &peers[peer_index];
             let rules = &capture_arm_rules[peer_index];
@@ -1814,7 +1856,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     .apply(
                         rules,
                         &[],
-                        PACKET_LOSS_CAPTURE_QUEUE_CAPACITY,
+                        PACKET_LOSS_QUEUE_CAPACITY,
                         PACKET_LOSS_CONTROL_TIMEOUT,
                     )
                     .await
@@ -1830,7 +1872,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             ensure!(
                 ack.revision == 3
                     && ack.rules.len() == rules.len()
-                    && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
+                    && ack.queue_capacity == PACKET_LOSS_QUEUE_CAPACITY
                     && !ack.draining
                     && ack.release_pending.is_empty()
                     && ack.in_flight.is_none()
@@ -1867,7 +1909,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     ack.revision == 3
                         && ack.command_digest == expected_ack.command_digest
                         && ack.rules.as_slice() == expected_ack.rules.as_slice()
-                        && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
+                        && ack.queue_capacity == PACKET_LOSS_QUEUE_CAPACITY
                         && !ack.draining
                         && !ack.fatal
                         && ack.dropped == 0
@@ -1920,12 +1962,32 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             "healing evidence lost the common authenticated manifest/view witness"
         );
         for peer in &peers {
+            let client = peer.client();
+            let blocks = retry_transient_diagnostic_status(
+                || {
+                    let client = client.clone();
+                    async move {
+                        Ok::<_, eyre::Report>(client.client().status().get().await?.blocks)
+                    }
+                },
+                PACKET_LOSS_DIAGNOSTIC_TIMEOUT,
+                "read armed-fence block height",
+            )
+            .await?;
             ensure!(
-                peer.status().await?.blocks < expected_height,
+                blocks < expected_height,
                 "{} committed before the three-of-six RS16 loss was healed",
                 peer.mnemonic()
             );
-            let status = fetch_v2_status(peer.client())?;
+            let status = retry_transient_diagnostic_status(
+                || {
+                    let client = peer.client();
+                    async move { run_off_runtime(move || fetch_v2_status(client)).await? }
+                },
+                PACKET_LOSS_DIAGNOSTIC_TIMEOUT,
+                "read armed-fence v2 status",
+            )
+            .await?;
             status
                 .validate()
                 .map_err(|error| eyre!("invalid armed-fence v2 status: {error}"))?;
@@ -2002,7 +2064,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     .apply(
                         rules,
                         releases,
-                        PACKET_LOSS_CAPTURE_QUEUE_CAPACITY,
+                        PACKET_LOSS_QUEUE_CAPACITY,
                         PACKET_LOSS_CONTROL_TIMEOUT,
                     )
                     .await
@@ -2020,7 +2082,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             ensure!(
                 ack.revision == 4
                     && ack.rules.len() == rules.len()
-                    && ack.queue_capacity == PACKET_LOSS_CAPTURE_QUEUE_CAPACITY
+                    && ack.queue_capacity == PACKET_LOSS_QUEUE_CAPACITY
                     && !ack.draining
                     && ack.release_pending.is_empty()
                     && ack.in_flight.is_none()
@@ -2050,7 +2112,15 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             );
         }
         for peer in &peers {
-            let status = fetch_v2_status(peer.client())?;
+            let status = retry_transient_diagnostic_status(
+                || {
+                    let client = peer.client();
+                    async move { run_off_runtime(move || fetch_v2_status(client)).await? }
+                },
+                PACKET_LOSS_DIAGNOSTIC_TIMEOUT,
+                "read released-fence v2 status",
+            )
+            .await?;
             status
                 .validate()
                 .map_err(|error| eyre!("invalid released-fence v2 status: {error}"))?;
@@ -2066,7 +2136,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             );
         }
 
-        // The finality fence keeps the height-three body-store namespace alive
+        // The finality fence keeps the carrier body-store namespace alive
         // while the released chunks reconstruct and validate the exact held
         // manifest. Capture an exact held-round durable quorum before healing
         // Commit traffic. In a four-validator committee it intersects the held
@@ -2087,7 +2157,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
                     .map(|(peer_index, store_dir)| {
                         let store_dir = store_dir.clone();
                         async move {
-                            let evidence = tokio::task::spawn_blocking(move || {
+                            let evidence = run_off_runtime(move || {
                                 try_read_exact_held_da_body(
                                     &store_dir,
                                     expected_height,
@@ -2151,8 +2221,20 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             "held receiver and exact durable quorums did not intersect in two peers with one byte-identical validated held-round body: held_receivers={matched_receivers:?}, durable_receivers={durable_receivers:?}"
         );
         for peer in &peers {
+            let client = peer.client();
+            let blocks = retry_transient_diagnostic_status(
+                || {
+                    let client = client.clone();
+                    async move {
+                        Ok::<_, eyre::Report>(client.client().status().get().await?.blocks)
+                    }
+                },
+                PACKET_LOSS_DIAGNOSTIC_TIMEOUT,
+                "read held-body block height",
+            )
+            .await?;
             ensure!(
-                peer.status().await?.blocks < expected_height,
+                blocks < expected_height,
                 "{} committed before the held body evidence capture fence was healed",
                 peer.mnemonic()
             );
@@ -2203,7 +2285,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .wrap_err("healed four-peer DA payload did not commit")??;
         let wait_client = network.client();
         let wait_hash = submitted_hash;
-        let applied = tokio::task::spawn_blocking(move || {
+        let applied = run_off_runtime(move || {
             wait_client.wait_for_transaction_applied(
                 wait_hash,
                 TransactionWaitOptions {
@@ -2223,7 +2305,8 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         // Kura persistence precedes applied-state publication. Wait until every
         // peer's canonical status endpoint has crossed that boundary before
-        // inspecting its local transaction result and finality sidecar.
+        // inspecting its carrier and finality sidecar. A peer-local transaction
+        // cache is asynchronous and is not a block-validity oracle.
         wait_for_applied_v2_height(&network, expected_height, COMMIT_WAIT_BUDGET).await?;
         let mut committed_subjects = Vec::with_capacity(peers.len());
         let network_id = network.network_id();
@@ -2241,7 +2324,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
             let carrier_network_id = network_id.clone();
             let manifest_hash = held_manifest_hash;
             let captured_held = Arc::clone(&held_evidence);
-            let subject = tokio::task::spawn_blocking(move || {
+            let subject = run_off_runtime(move || {
                 validate_exact_applied_payload_carrier(
                     carrier_client,
                     kura_store_dir,

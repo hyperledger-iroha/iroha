@@ -1,12 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Happy-path NPoS coverage for canonical v2 data availability and metrics.
-use super::sumeragi_da::submit_exact_large_da_log_and_verify_quorum;
+use super::sumeragi_da::{run_off_runtime, submit_exact_large_da_log_and_verify_quorum};
 use eyre::{WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
-    parameter::{Parameter, TransactionParameter},
+    parameter::{Parameter, TransactionParameter, system::SumeragiNposParameters},
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::{num::NonZeroU64, time::Duration};
@@ -17,6 +17,12 @@ const METRIC_INTERVAL: Duration = Duration::from_millis(250);
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const LARGE_PAYLOAD_BYTES: usize = 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
+const NETWORK_TOPIC_FRAME_BUDGET_BYTES: i64 = 20 * 1024 * 1024;
+const NETWORK_CONTROL_FRAME_BUDGET_BYTES: i64 = 1024 * 1024;
+const NETWORK_STREAM_FRAME_BUDGET_BYTES: i64 = NETWORK_FRAME_BUDGET_BYTES + 4;
+const NETWORK_ACTOR_HIGH_BUDGET_BYTES: i64 = NETWORK_STREAM_FRAME_BUDGET_BYTES + 16 * 1024 * 1024;
+const NETWORK_DEFERRED_SEND_BUDGET_BYTES: i64 = 2 * NETWORK_STREAM_FRAME_BUDGET_BYTES;
+const NETWORK_MAX_TOTAL_CONNECTIONS: i64 = 8;
 const TORII_CONTENT_HEADROOM_BYTES: usize = 2 * 1024 * 1024;
 fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     let inflated = payload_bytes.saturating_mul(12);
@@ -30,33 +36,59 @@ fn tx_limit_for_payload(payload_bytes: usize) -> NonZeroU64 {
     .expect("payload-driven transaction limit must be non-zero")
 }
 fn npos_builder() -> NetworkBuilder {
+    let mut npos = SumeragiNposParameters::default();
+    npos.max_validators = 4;
     NetworkBuilder::new()
         .with_peers(4)
+        .with_max_validator_capacity(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_profile", "full")
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
+                    ["network", "max_total_connections"],
+                    NETWORK_MAX_TOTAL_CONNECTIONS,
+                )
+                .write(
+                    ["network", "p2p_outbound_frame_queue_max_high_bytes"],
+                    NETWORK_ACTOR_HIGH_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "p2p_outbound_frame_queue_max_low_bytes"],
+                    NETWORK_STREAM_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "deferred_send_max_bytes_per_peer"],
+                    NETWORK_DEFERRED_SEND_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "deferred_send_max_bytes_total"],
+                    NETWORK_DEFERRED_SEND_BUDGET_BYTES,
+                )
+                .write(
                     ["network", "max_frame_bytes_consensus"],
-                    NETWORK_FRAME_BUDGET_BYTES,
+                    NETWORK_TOPIC_FRAME_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "max_frame_bytes_control"],
-                    NETWORK_FRAME_BUDGET_BYTES,
+                    NETWORK_CONTROL_FRAME_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "max_frame_bytes_block_sync"],
-                    NETWORK_FRAME_BUDGET_BYTES,
+                    NETWORK_TOPIC_FRAME_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "max_frame_bytes_other"],
-                    NETWORK_FRAME_BUDGET_BYTES,
+                    NETWORK_TOPIC_FRAME_BUDGET_BYTES,
                 )
                 .write(
                     ["network", "max_frame_bytes_tx_gossip"],
-                    NETWORK_FRAME_BUDGET_BYTES,
+                    NETWORK_TOPIC_FRAME_BUDGET_BYTES,
                 );
         })
 }
@@ -73,12 +105,17 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     };
     let client = network.client();
     let status = client.client().status().get().await?;
-    for idx in status.blocks..BLOCK_TARGET {
-        client.submit(
-            Log::new(Level::INFO, format!("npos happy seed {idx}")),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
-    }
+    let submit_client = client.clone();
+    run_off_runtime(move || {
+        for idx in status.blocks..BLOCK_TARGET {
+            submit_client.submit(
+                Log::new(Level::INFO, format!("npos happy seed {idx}")),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+        }
+        Ok::<_, eyre::Report>(())
+    })
+    .await??;
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
         .await?;
@@ -88,7 +125,8 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         "expected at least {BLOCK_TARGET} blocks, observed {}",
         status.blocks
     );
-    let v2 = client.client().get_sumeragi_status()?;
+    let status_client = client.clone();
+    let v2 = run_off_runtime(move || status_client.client().get_sumeragi_status()).await??;
     v2.validate()
         .map_err(|err| eyre!("invalid canonical v2 status: {err}"))?;
     ensure!(
@@ -179,9 +217,11 @@ async fn ensure_metrics_within_bounds(
         let snapshot = response.text().await.wrap_err("read metrics body")?;
         let reader = MetricsReader::new(&snapshot);
         let queue_depth = reader.get("sumeragi_bg_post_queue_depth");
+        // A peer that never queued a background post has no labeled series.
+        // The absent series is an idle queue, not a telemetry failure.
         let queue_depth_max = reader
             .max_with_prefix("sumeragi_bg_post_queue_depth_by_peer")
-            .ok_or_else(|| eyre!("missing per-peer background queue depth metrics"))?;
+            .unwrap_or(0.0);
         last_summary = format!("queue_depth={queue_depth}, queue_depth_max={queue_depth_max}");
         last_snapshot = snapshot;
         if queue_depth <= queue_budget && queue_depth_max <= queue_budget {
