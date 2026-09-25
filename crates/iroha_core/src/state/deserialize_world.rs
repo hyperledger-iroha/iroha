@@ -9058,7 +9058,6 @@ fn build_state(
         da_indexes_hydrated: PublicationRwLock::new(None),
         ivm,
         kura,
-        lane_drain_signing_guard: SyncOnceCell::new(),
         query_handle,
         oracle: default_oracle(),
         pipeline,

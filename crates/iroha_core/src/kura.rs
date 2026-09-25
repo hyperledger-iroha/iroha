@@ -669,6 +669,9 @@ pub struct Kura {
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
+    /// One anti-equivocation signer journal owner for every State using this storage instance.
+    lane_drain_signing_guard:
+        once_cell::sync::OnceCell<Arc<crate::lane_drain::LaneDrainSigningGuard>>,
     /// Per-owner read-only observation of the authenticated pre-reconcile boundary.
     #[cfg(test)]
     snapshot_finalization_resource_probe: Mutex<SnapshotFinalizationResourceProbe>,
@@ -3116,6 +3119,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3541,6 +3545,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3827,6 +3832,24 @@ impl Kura {
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
         self.store_root.clone()
+    }
+    /// Share the durable signing decision across every State backed by this exact Kura.
+    pub(crate) fn lane_drain_signing_guard(
+        &self,
+        active_incarnations: &BTreeSet<(LaneId, Hash)>,
+    ) -> std::result::Result<
+        Arc<crate::lane_drain::LaneDrainSigningGuard>,
+        crate::lane_drain::LaneDrainSigningGuardError,
+    > {
+        self.lane_drain_signing_guard
+            .get_or_try_init(|| {
+                crate::lane_drain::LaneDrainSigningGuard::open(
+                    &self.store_root,
+                    active_incarnations,
+                )
+                .map(Arc::new)
+            })
+            .map(Arc::clone)
     }
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///

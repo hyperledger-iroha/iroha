@@ -13048,8 +13048,6 @@ pub struct State {
     pub ivm: IVM,
     /// Reference to Kura subsystem.
     kura: Arc<Kura>,
-    /// One durable drain/Commit signer lock for this exact State/Kura process owner.
-    lane_drain_signing_guard: SyncOnceCell<Arc<crate::lane_drain::LaneDrainSigningGuard>>,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: LiveQueryStoreHandle,
     /// Pipeline execution preferences (dynamic prepass, parallel overlay).
@@ -28314,28 +28312,19 @@ impl State {
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
-    /// Open the shared Native drain/Commit signer lock once per State/Kura owner.
-    /// A second lane instance borrows this lock rather than acquiring a second
-    /// filesystem owner or creating a competing signing decision.
+    /// Borrow the one Native drain/Commit signer lock for this Kura instance.
+    /// Restored State families over the same Kura share the durable decision.
     pub(crate) fn lane_drain_signing_guard(
         &self,
     ) -> Result<
         Arc<crate::lane_drain::LaneDrainSigningGuard>,
         crate::lane_drain::LaneDrainSigningGuardError,
     > {
-        self.lane_drain_signing_guard
-            .get_or_try_init(|| {
-                let active_incarnations = self
-                    .lane_incarnations_snapshot()
-                    .into_iter()
-                    .collect::<BTreeSet<_>>();
-                crate::lane_drain::LaneDrainSigningGuard::open(
-                    &self.kura.store_root(),
-                    &active_incarnations,
-                )
-                .map(Arc::new)
-            })
-            .map(Arc::clone)
+        let active_incarnations = self
+            .lane_incarnations_snapshot()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        self.kura.lane_drain_signing_guard(&active_incarnations)
     }
     /// Install or clear the node-local Soracloud runtime handle.
     pub fn set_soracloud_runtime(
@@ -29772,7 +29761,6 @@ impl State {
             replay_merge_carriers: parking_lot::RwLock::new(BTreeMap::new()),
             ivm: IVM::new(0),
             kura,
-            lane_drain_signing_guard: SyncOnceCell::new(),
             query_handle,
             da_commitments: PublicationRwLock::new(
                 crate::da::commitment_store::DaCommitmentStore::default(),
