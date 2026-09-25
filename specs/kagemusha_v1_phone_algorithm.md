@@ -677,6 +677,83 @@ real evidence may advance production qualification. The public testnet
 ingress and configured authority must actually be live before a remote
 write is counted as a completed test.
 
+## Claim split needed for the phone memory gate
+
+The current structured V1 Claim is not a 128 MiB phone prover. Its configured
+minimum has 96 advice columns at `k = 16`: one Base, fourteen carrier-RLC,
+two 37-column dense-MSM lanes, and seven native-Poseidon columns. One resident
+advice evaluation bank is therefore 192 MiB. The prover also retains thirteen
+fixed and nine permutation evaluation columns at that point, a 236 MiB lower
+bound before coefficient banks, proof scratch, and the app. Compact key storage
+does not change that live memory. Keep the 128 MiB whole-process gate closed.
+
+A candidate replacement must partition the **authenticated source inventory**,
+not merely trim the two 4,090-cell carrier columns. The existing complete
+Claim permits 1,008 sources per parity, with four canonical `u128` cells per
+source and 58 bound cells in each carrier. Its deferred-batch Poseidon challenge
+commits the complete ordered source namespace, verifier-input binding, equation
+tags/selectors, and bound values *before* aggregate coefficients are formed.
+Five k15 arithmetic slices are the minimum for one dense-MSM lane per slice:
+`k15 usable = 32,768 - 9 = 32,759` rows, each source costs 130 rows and the
+job costs three, so `floor((32,759 - 3) / 130) = 251` sources per lane;
+four one-lane subclaims cover only 1,004 sources. For a fixed
+five-slice candidate, let `S` be the circuit-authenticated source count and
+slice `i` cover `[floor(i*S/5), floor((i+1)*S/5))`, for `i = 0..4`.
+At `S = 1,008` the ranges are `[0,201)`, `[201,403)`, `[403,604)`,
+`[604,806)`, `[806,1008)`. Every slice has at most 202 sources and needs at
+most `3 + 130*202 = 26,263` dense rows. A paired slice's two carriers would
+each need at most `4*202 + 58 = 866` active cells before constrained padding.
+These are row bounds, not completed circuit layouts.
+
+Each parity must first authenticate the same original ordinary parent/shard
+proofs, folds, exact verifier inputs, ordered source identities and equation
+inventory as the unsplit Claim. The new global challenge must be derived once
+from that complete authenticated inventory under a domain-separated transcript;
+all slices must use that exact challenge and prove their own source points,
+coefficients, and partial curve sum. A local challenge per slice, a host-supplied
+source digest, a freely chosen partial sum, or a hash of unauthenticated carrier
+bytes would change the relation. A binary join must verify its children,
+their adjacent index ranges and common global statement, and constrain its
+sum to the group addition of their partial sums. Its root requires range
+`[0,S)`, exact count `S`, and the identity point as the complete batched
+equation result. Duplicate, omitted, reordered, or padded nonzero sources
+must fail. The existing two-challenge common-prime carrier binding must cover
+each paired Eq/Ep slice and link every slice to the same global inventory;
+both fields must validate the other field's canonical point/scalar limbs.
+
+The arithmetic tree has exactly five Eq and five Ep slice proofs plus four
+binary joins in each field: eighteen proof instances per transition, before
+any separate source-authentication or final composition proofs. These other
+proof counts are not established yet. The accepted roots must expose the
+unchanged 97-cell external Claim statement, including release and both plan
+digests, complete SHA stage/job cursor, both chaining states, message and
+terminal roots, both protocol/audit/proof-chain digests, and all 34 history
+limbs. The final relation must recompute the typed SHA jobs and bind the
+actual terminal body through the existing terminal fold; copying a claimed
+terminal root from a child is insufficient. The 14 proof-internal carrier
+binding cells and two carrier columns may change shape only as part of a new
+reviewed circuit, never by weakening the external verifier's checks.
+
+The current Poseidon batch geometry would need at most
+`39 + 202 + 7 + 202 + 14 = 464` mandatory permutations for a 202-source
+slice if its proof-input and protocol-point contribution can be partitioned
+without adding rows. One k15 lane fits `floor(32,759/66) = 496`
+permutations, leaving only 32 for optional native transcript work; the
+existing transcript scheduler and whole-inventory source authentication do
+not meet this envelope by construction. One dense and one Poseidon lane plus
+minimum Base and RLC would require at least 56 advice columns, or 56 MiB for
+one k15 advice bank. Actual Base, key, verifier, join, and peak-process
+memory have not been measured. No subclaim or join circuit is implemented.
+
+TODO: Implement circuit-authenticated global inventory/challenge construction,
+five paired bounded slice relations, reciprocal carrier binding and exact
+binary joins; prove the complete source-to-root and terminal bindings with
+positive and omission, duplication, reorder, coefficient, partial-sum,
+cross-parity, and terminal-body mutation tests. Configure and prove both
+fields with real keys, measure every source-authentication/slice/join phase
+including key reload and handoff on target phones, and keep the 128 MiB
+whole-process gate until the maximum observed RSS is below it.
+
 ## Acceptance tests and implementation order
 
 The release gate requires the same candidate and signed provenance across
