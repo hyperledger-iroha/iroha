@@ -2418,8 +2418,10 @@ mod tests {
             "network_id".into(),
             toml::Value::String(network.to_string()),
         );
-        table["account"]["chain_discriminant"] =
-            toml::Value::Integer(i64::from(inventory.chain_discriminant));
+        table["account"].as_table_mut().unwrap().insert(
+            "chain_discriminant".into(),
+            toml::Value::Integer(i64::from(inventory.chain_discriminant)),
+        );
         let (config, _) = ClientConfig::load_bytes_with_musubi_publication(
             Path::new("beacon-client-fixture.toml"),
             toml::to_string(&table).unwrap().as_bytes(),
