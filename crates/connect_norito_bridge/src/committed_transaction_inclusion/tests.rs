@@ -269,6 +269,52 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 }
 
 #[test]
+fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_context() {
+    let (block, _) = selected_block();
+    let bundle = finality_bundle(&block);
+    let trusted_context = bundle.commitment.height_context_id;
+    let chain = json::to_json(&vec![bundle.clone()]).unwrap();
+    let anchor = crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(anchor.network_id, network());
+    assert_eq!(anchor.block_height, 1);
+    assert_eq!(anchor.height_context_id, trusted_context);
+
+    let wrong_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])));
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            wrong_context,
+            chain.as_bytes(),
+        )
+        .is_err());
+    let wrong_network =
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])));
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            wrong_network,
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .is_err());
+
+    #[cfg(unix)]
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        pin_kagemusha_testnet_authenticated_finality_chain_v1(
+            [0x71; 32],
+            network(),
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .is_err()); // A valid chain cannot install a pin without the private native owner.
+}
+
+#[test]
 fn authentic_current_row_and_four_negative_evidence_cases() {
     let (block, selected) = selected_block();
     let bundle = finality_bundle(&block);

@@ -183,12 +183,16 @@ pub use kagemusha_core_coordinator_v1::{
 };
 mod kagemusha_device_bridge_v1;
 mod kagemusha_reserve_finality_v1;
+mod kagemusha_testnet_finality_chain_v1;
 mod kagemusha_testnet_observation_v1;
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,
     connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
+#[cfg(unix)]
+pub use kagemusha_testnet_finality_chain_v1::pin_kagemusha_testnet_authenticated_finality_chain_v1;
+pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
 pub use kagemusha_testnet_observation_v1::{
     KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1, KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1,
     KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1,
