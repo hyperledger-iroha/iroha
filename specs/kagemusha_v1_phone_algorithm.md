@@ -596,10 +596,22 @@ operation anchor must first be pinned through the Rust-only trusted finality
 path; coordinates supplied by JNI cannot pin themselves. The native testnet
 finality-chain helper verifies every consecutive signed Sumeragi bundle from
 an independently authenticated first height-context ID before pinning the last
-context. The ordinary apps still need that checkpoint in independently
-authenticated native configuration and an integration that invokes
-`KagemushaTestnetNativeMintRuntimeV1::install` with the trusted first-context
-pin; neither a status hint nor the bundle response can choose it. JNI finality
+context. The native installer now requires an opaque verified bootstrap token.
+Its bounded canonical V1 package carries threshold signatures over the network,
+asset/incarnation/scale/reserve, release and attestation identities, first
+height-context ID, validity interval and sequence. The native verifier checks
+an independently provisioned authority policy and deployment selection; the
+package cannot choose its own trusted keys. It rejects expired, future,
+regressed and same-sequence changed checkpoints, while allowing an exact
+still-valid retry. Native trusted time and a retained sequence/digest pin are
+inputs; ordinary app storage does not establish rollback resistance. The
+verified token has a suspend-inclusive installation lease capped at 120 seconds
+and the checkpoint's remaining validity; loading, journal replay and publication
+must finish within it or require fresh verification. The
+installer derives every release/finality pin from that token and authenticates
+the matching release and artifacts before installing the owner. Approved
+deployment signatures and app startup integration remain required; neither a
+status hint nor the bundle response can choose the checkpoint. JNI finality
 coordinates are comparison evidence only and cannot install a pin. The
 observer's MintFold entry
 requires that original reservation, an Applied chain top-up,
@@ -709,7 +721,21 @@ At `S = 1,008` the ranges are `[0,201)`, `[201,403)`, `[403,604)`,
 `[604,806)`, `[806,1008)`. Every slice has at most 202 sources and needs at
 most `3 + 130*202 = 26,263` dense rows. A paired slice's two carriers would
 each need at most `4*202 + 58 = 866` active cells before constrained padding.
-These are row bounds, not completed circuit layouts.
+These are row bounds for the source terms. The implemented arithmetic slice
+adds a public start point with coefficient one and endpoint with coefficient
+minus one to the identity equation, using `3 + 130*204 = 26,523` dense rows.
+Its fixed 202 slots expose all original canonical point/scalar limbs, alongside
+`S`, slice index, both interval bounds, active count and endpoints: 817 public
+field cells. Bounded Euclidean remainders constrain each floor division;
+every inactive slot must contain the canonical generator and zero coefficient.
+Both parity layouts configure 55 advice, three fixed and 21 permutation columns:
+15 Base gate columns, three lookup columns and one 37-column dense lane. A single
+advice/fixed/permutation evaluation bank therefore already needs 79 MiB; these
+arithmetic layouts exclude global authentication, carrier binding and joins.
+The dense witness now computes the forbidden curve offsets once and chooses
+the first permitted generator multiple within the complete `2A+1` bound for
+`A` active digits. This removes valid-input rejection at the former arbitrary
+256-candidate limit without retrying the full trace for each candidate.
 
 Each parity must first authenticate the same original ordinary parent/shard
 proofs, folds, exact verifier inputs, ordered source identities and equation
@@ -730,8 +756,9 @@ both fields must validate the other field's canonical point/scalar limbs.
 The unsplit Claim now exposes its existing complete-source challenge through a
 typed, circuit-owned helper before coefficient aggregation, with mutation
 fixtures for both Pasta fields. This is a refactoring of the current verifier
-graph, not an independent source-authentication proof: it has no k15 slice
-relation, child-proof binding, or root join, and cannot qualify the phone gate.
+graph, not an independent source-authentication proof. The separate k15 slice
+arithmetic is not linked to that complete inventory or to child proofs and a
+root join, so neither component qualifies the phone gate.
 
 The arithmetic tree has exactly five Eq and five Ep slice proofs plus four
 binary joins in each field: eighteen proof instances per transition, before
@@ -755,7 +782,8 @@ existing transcript scheduler and whole-inventory source authentication do
 not meet this envelope by construction. One dense and one Poseidon lane plus
 minimum Base and RLC would require at least 56 advice columns, or 56 MiB for
 one k15 advice bank. Actual Base, key, verifier, join, and peak-process
-memory have not been measured. No subclaim or join circuit is implemented.
+memory have not been measured. The fixed slice arithmetic is implemented as a
+test-only prerequisite; authenticated subclaims and joins remain unimplemented.
 
 TODO: Implement a standalone circuit-authenticated global-inventory proof,
 five paired bounded slice relations, reciprocal carrier binding and exact

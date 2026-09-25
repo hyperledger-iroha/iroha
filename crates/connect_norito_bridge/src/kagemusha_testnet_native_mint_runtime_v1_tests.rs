@@ -3,14 +3,15 @@
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::kagemusha::KagemushaReleaseAuthorityPolicyV1;
 use iroha_data_model::{NetworkId, block::consensus_v2::HeightContextId};
+
+use crate::kagemusha_mobile_bootstrap_v1::{expired_test_bootstrap_v1, verified_test_bootstrap_v1};
 
 use super::{
     KagemushaRecursiveVerifierProfileV1, KagemushaTestnetDurableObservationModeV1,
     KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
     KagemushaTestnetNativeMintRuntimeV1, KagemushaTestnetStateObservationScopeV1,
-    require_matching_verified_chain_root, require_trusted_pins,
+    authenticated_observation_scope, require_matching_verified_chain_root, require_trusted_pins,
 };
 
 fn network(byte: u8) -> NetworkId {
@@ -101,32 +102,77 @@ fn recovered_finality_chain_must_use_the_native_first_context() {
 }
 
 #[test]
-fn native_mint_install_rejects_wrong_network_before_loading_release() {
-    let authority = KagemushaReleaseAuthorityPolicyV1 {
-        version: 1,
-        authority_set_id: [1; 32],
-        threshold: 1,
-        authorized_signers: Vec::new(),
-    };
+fn native_mint_install_derives_all_pins_from_verified_bootstrap() {
+    let bootstrap = verified_test_bootstrap_v1();
+    assert_eq!(
+        authenticated_observation_scope(&bootstrap).unwrap(),
+        scope()
+    );
+    assert_eq!(bootstrap.network_id(), network(3));
+    assert_eq!(bootstrap.first_context_id(), first_context(5));
+    assert!(bootstrap.trusted_authority_policy().validate().is_ok());
+}
+
+#[test]
+fn native_mint_install_still_authenticates_release_after_bootstrap() {
+    let bootstrap = verified_test_bootstrap_v1();
     let anchors = BTreeMap::new();
     let inputs = KagemushaTestnetNativeMintInstallV1 {
         manifest_archive: b"not a release",
         validation_receipt_archive: b"not a receipt",
         release_attestation_archive: b"not an attestation",
-        trusted_authority_policy: &authority,
-        scope: scope(),
+        bootstrap: &bootstrap,
         profile: unconfigured_profile(),
         artifact_root: Path::new("/unused"),
         journal_path: Path::new("/unused/journal"),
         mode: KagemushaTestnetDurableObservationModeV1::Create,
         independent_anchors: &anchors,
-        trusted_network_id: network(9),
-        trusted_first_context_id: first_context(5),
+    };
+    assert!(
+        KagemushaTestnetNativeMintRuntimeV1::install(inputs)
+            .err()
+            .is_some_and(|error| error.starts_with("invalid KAGEMUSHA release manifest:"))
+    );
+}
+
+#[test]
+fn native_mint_rejects_delayed_bootstrap_before_loading_or_creating_journal() {
+    let bootstrap = expired_test_bootstrap_v1();
+    let anchors = BTreeMap::new();
+    let storage = tempfile::tempdir().unwrap();
+    let journal = storage.path().join("private-mint");
+    let expected = bootstrap.require_unexpired().unwrap_err();
+    let inputs = KagemushaTestnetNativeMintInstallV1 {
+        manifest_archive: b"not a release",
+        validation_receipt_archive: b"not a receipt",
+        release_attestation_archive: b"not an attestation",
+        bootstrap: &bootstrap,
+        profile: unconfigured_profile(),
+        artifact_root: storage.path(),
+        journal_path: &journal,
+        mode: KagemushaTestnetDurableObservationModeV1::Create,
+        independent_anchors: &anchors,
     };
     assert_eq!(
         KagemushaTestnetNativeMintRuntimeV1::install(inputs).err(),
-        Some("testnet mint native network differs from signed-release scope".to_owned())
+        Some(expected.clone()),
     );
+    assert_eq!(
+        super::load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
+            b"not a release",
+            b"not a receipt",
+            b"not an attestation",
+            &bootstrap,
+            unconfigured_profile(),
+            storage.path(),
+            &journal,
+            KagemushaTestnetDurableObservationModeV1::Create,
+            &anchors,
+        )
+        .err(),
+        Some(expected),
+    );
+    assert!(!journal.exists());
 }
 
 #[test]

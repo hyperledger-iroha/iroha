@@ -1,7 +1,7 @@
 //! Trusted Rust-host entrypoint for an experimental testnet mint observation lane.
 //!
-//! A signed `TestnetExperiment` release, exact private mint reservation, and independently
-//! authenticated first finality context must originate with the native host. This module
+//! A signed `TestnetExperiment` release, exact private mint reservation, and authenticated
+//! bootstrap checkpoint must originate with the native host. This module
 //! exposes no C/JNI installer, private opening transport, or caller-selected finality anchor.
 //! The retained observation owner still produces no production monetary or hardware authority.
 
@@ -18,24 +18,25 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId, block::consensus_v2::HeightContextId,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
-    kagemusha::KagemushaReleaseAuthorityPolicyV1,
 };
 
 use crate::{
+    kagemusha_mobile_bootstrap_v1::KagemushaVerifiedMobileBootstrapV1,
     kagemusha_testnet_finality_chain_v1::pin_kagemusha_testnet_authenticated_finality_chain_v1,
     kagemusha_testnet_observation_v1::{
-        KagemushaTestnetDurableObservationModeV1,
+        KagemushaTestnetDurableObservationModeV1, authenticated_observation_scope,
         load_and_install_kagemusha_testnet_durable_state_observation_owner_v1,
         reserve_kagemusha_testnet_mint_before_submission_v1,
     },
 };
 
-/// Independently provisioned native configuration and signed-release inputs.
+/// Authenticated bootstrap, native storage configuration, and signed-release inputs.
 ///
 /// The manifest, receipt, attestation, and artifact directory are authenticated by the
-/// installer. The authority policy, scope, storage path, network, and first finality context
-/// must be supplied by trusted native configuration, never copied from an app request or Torii
-/// operation response. No member of this type crosses the C/JNI observer boundary.
+/// installer against the verified bootstrap. Its authority policy and expected deployment
+/// identity were independently provisioned when the native host verified the checkpoint.
+/// Storage paths and recovery mode remain native configuration. No member of this type crosses
+/// the C/JNI observer boundary.
 pub struct KagemushaTestnetNativeMintInstallV1<'a> {
     /// Threshold-signed release manifest archive.
     pub manifest_archive: &'a [u8],
@@ -43,10 +44,8 @@ pub struct KagemushaTestnetNativeMintInstallV1<'a> {
     pub validation_receipt_archive: &'a [u8],
     /// Threshold release attestation archive.
     pub release_attestation_archive: &'a [u8],
-    /// Native operator-pinned release authority policy.
-    pub trusted_authority_policy: &'a KagemushaReleaseAuthorityPolicyV1,
-    /// Native operator-pinned network, asset, reserve, and release scope.
-    pub scope: KagemushaTestnetStateObservationScopeV1,
+    /// Threshold-authenticated deployment checkpoint verified against native-pinned policy.
+    pub bootstrap: &'a KagemushaVerifiedMobileBootstrapV1,
     /// Exact release-authenticated native verifier layout.
     pub profile: KagemushaRecursiveVerifierProfileV1,
     /// Content-addressed proof artifact directory.
@@ -57,10 +56,6 @@ pub struct KagemushaTestnetNativeMintInstallV1<'a> {
     pub mode: KagemushaTestnetDurableObservationModeV1,
     /// Independently authenticated historical anchors required for recovery.
     pub independent_anchors: &'a BTreeMap<[u8; 32], KagemushaVerifiedFinalityChainV1>,
-    /// Native-pinned network, independently of the signed release and status response.
-    pub trusted_network_id: NetworkId,
-    /// Native-pinned first context for verification of every later finality bundle.
-    pub trusted_first_context_id: HeightContextId,
 }
 
 /// Proof that this process persisted one exact private reservation before submission.
@@ -101,15 +96,15 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     /// Rejects an invalid native network/context pin, unauthenticated release, changed journal,
     /// failed replay, or an already installed owner.
     pub fn install(inputs: KagemushaTestnetNativeMintInstallV1<'_>) -> Result<Self, String> {
-        require_trusted_pins(
-            inputs.scope,
-            inputs.trusted_network_id,
-            inputs.trusted_first_context_id,
-        )?;
+        inputs.bootstrap.require_unexpired()?;
+        let scope = authenticated_observation_scope(inputs.bootstrap)?;
+        let trusted_network_id = inputs.bootstrap.network_id();
+        let trusted_first_context_id = inputs.bootstrap.first_context_id();
+        require_trusted_pins(scope, trusted_network_id, trusted_first_context_id)?;
         for verified in inputs.independent_anchors.values() {
             require_matching_verified_chain_root(
-                inputs.trusted_network_id,
-                inputs.trusted_first_context_id,
+                trusted_network_id,
+                trusted_first_context_id,
                 verified.anchor().network_id,
                 verified.first_context_id(),
             )?;
@@ -118,8 +113,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
             inputs.manifest_archive,
             inputs.validation_receipt_archive,
             inputs.release_attestation_archive,
-            inputs.trusted_authority_policy,
-            inputs.scope,
+            inputs.bootstrap,
             inputs.profile,
             inputs.artifact_root,
             inputs.journal_path,
@@ -127,8 +121,8 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
             inputs.independent_anchors,
         )?;
         Ok(Self {
-            trusted_network_id: inputs.trusted_network_id,
-            trusted_first_context_id: inputs.trusted_first_context_id,
+            trusted_network_id,
+            trusted_first_context_id,
             reservations: Mutex::new(BTreeMap::new()),
         })
     }

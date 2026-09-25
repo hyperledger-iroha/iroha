@@ -14,10 +14,10 @@ use std::{
 };
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
-const MAX_LIFETIME: Duration = Duration::from_secs(120);
+pub(crate) const MAX_LIFETIME: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NativeDeadlineErrorV1 {
+pub(crate) enum NativeDeadlineErrorV1 {
     Unavailable,
     Invalid,
     Expired,
@@ -27,13 +27,13 @@ type Result<T> = std::result::Result<T, NativeDeadlineErrorV1>;
 
 /// Native-created same-process clock reading. No host timestamp constructor or wire codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NativeContinuousInstantV1 {
+pub(crate) struct NativeContinuousInstantV1 {
     process_id: u32,
     nanos: u128,
 }
 
 impl NativeContinuousInstantV1 {
-    pub(super) fn now() -> Result<Self> {
+    pub(crate) fn now() -> Result<Self> {
         let process_id = std::process::id();
         let nanos = platform_nanos()?;
         if process_id == 0 || process_id != std::process::id() {
@@ -64,7 +64,7 @@ struct DeadlineState {
 /// Clones retain the original expiry and shared monotonic floor; cloning never renews a lease.
 /// A forked process cannot reuse its parent's pending challenge even within the same boot.
 #[derive(Clone)]
-pub(super) struct NativeDeadlineV1(Arc<DeadlineState>);
+pub(crate) struct NativeDeadlineV1(Arc<DeadlineState>);
 
 impl NativeDeadlineV1 {
     pub(super) fn start(lifetime: Duration) -> Result<Self> {
@@ -77,7 +77,10 @@ impl NativeDeadlineV1 {
         u64::try_from(self.0.expires_nanos / 1_000_000).map_err(|_| NativeDeadlineErrorV1::Invalid)
     }
 
-    fn from_reading(started: NativeContinuousInstantV1, lifetime: Duration) -> Result<Self> {
+    pub(crate) fn from_reading(
+        started: NativeContinuousInstantV1,
+        lifetime: Duration,
+    ) -> Result<Self> {
         if lifetime.is_zero() || lifetime > MAX_LIFETIME || started.process_id == 0 {
             return Err(NativeDeadlineErrorV1::Invalid);
         }
@@ -93,7 +96,7 @@ impl NativeDeadlineV1 {
     }
 
     /// Check against the actual continuous clock, returning the exact successful observation.
-    pub(super) fn check(&self) -> Result<NativeContinuousInstantV1> {
+    pub(crate) fn check(&self) -> Result<NativeContinuousInstantV1> {
         let mut last_seen = self
             .0
             .last_seen
@@ -141,7 +144,7 @@ impl NativeDeadlineV1 {
     }
 
     #[cfg(test)]
-    pub(super) fn expired_for_test() -> Self {
+    pub(crate) fn expired_for_test() -> Self {
         let now = NativeContinuousInstantV1::now().unwrap();
         Self(Arc::new(DeadlineState {
             started: now,

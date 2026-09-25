@@ -48,7 +48,7 @@ mod enrolled_open;
 #[cfg(test)]
 mod enrolled_session;
 mod initial_enrollment;
-mod native_deadline;
+pub(crate) mod native_deadline;
 #[cfg(test)]
 mod session_registry;
 #[cfg(test)]

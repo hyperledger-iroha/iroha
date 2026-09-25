@@ -1,6 +1,6 @@
 //! Rust-only ordering for an Experimental testnet mint in an ordinary mobile app.
 //!
-//! This host retains independently configured release and finality roots inside Rust. The
+//! This host retains signed-bootstrap release and finality roots inside Rust. The
 //! application's JNI calls may submit and inspect an operation, but cannot install the owner,
 //! transport a private credit opening, select the finality root, or create a counted credit.
 
@@ -79,8 +79,12 @@ impl KagemushaTestnetNativePinnedMintV1<'_> {
 impl KagemushaTestnetNativeMobileHostV1 {
     /// Install the signed Experimental proof owner and then its separate durable value ledger.
     ///
-    /// Every input is trusted native-host configuration or an authenticated release package;
-    /// none is accepted through the C/JNI observation boundary. Each private journal has its
+    /// The mint inputs require an opaque verified bootstrap token: authenticate the signed
+    /// checkpoint against the native-pinned authority policy, deployment identity, trusted
+    /// time and replay floor before calling this function. The release loader checks the
+    /// manifest, receipt, attestation and proof artifacts against that exact token before
+    /// installing the owner. Storage configuration remains native-owned; none is accepted
+    /// through the C/JNI observation boundary. Each private journal has its
     /// own native-trusted create/recover mode. Fresh installation uses Create/Create. Normal
     /// restart uses Recover/Recover. Mixed modes fail closed: a missing ledger may have been
     /// rolled back, and path absence cannot prove it was never created. An interrupted first

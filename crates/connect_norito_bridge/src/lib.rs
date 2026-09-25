@@ -182,6 +182,7 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
+mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
 mod kagemusha_testnet_finality_chain_v1;
 #[cfg(unix)]
@@ -191,6 +192,13 @@ mod kagemusha_testnet_native_mobile_host_v1;
 #[cfg(unix)]
 mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
+pub use kagemusha_mobile_bootstrap_v1::{
+    KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapApprovalPayloadV1,
+    KagemushaMobileBootstrapApprovalV1, KagemushaMobileBootstrapCheckpointV1,
+    KagemushaMobileBootstrapPackageV1, KagemushaMobileBootstrapPinsV1,
+    KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
+    KagemushaVerifiedMobileBootstrapV1, verify_kagemusha_mobile_bootstrap_v1,
+};
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,

@@ -24,6 +24,8 @@
 //! MSM is the identity.  Offset selection scans the complete source order to
 //! avoid every exceptional affine addition, and the circuit independently
 //! requires a nonzero denominator for each active addition.
+use std::collections::HashSet;
+
 use ff::{Field as _, PrimeField, WithSmallOrderMulGroup};
 use halo2_base::{
     AssignedValue, Context,
@@ -66,7 +68,6 @@ pub(super) const K16_MAX_DENSE_SOURCES_V1: usize = K16_MAX_SOURCES_PER_LANE * DE
 // the two offset coordinates on the otherwise-unused bus.
 const OFFSET_X_BRIDGE_ROW: usize = 5;
 const OFFSET_Y_BRIDGE_ROW: usize = 4 + SEGMENT_BITS - 1;
-const OFFSET_RETRIES: u64 = 256;
 const LIMB_BITS: usize = 86;
 const BUS: usize = 0;
 const MODE_LOAD_X: usize = 1;
@@ -1780,41 +1781,77 @@ where
     Base<C>: BigPrimeField,
     Scalar<C>: BigPrimeField,
 {
-    for retry in 1..=OFFSET_RETRIES {
-        let offset = C::Curve::generator() * Scalar::<C>::from(retry);
-        let mut accumulator = offset;
-        let mut valid = true;
-        for source in sources {
-            let mut running_source = source.r.to_curve();
-            for bit in 0..GLV_BITS {
-                let Some(addend) = joint_digit_point::<C>(
-                    &running_source,
-                    source.bits[0][bit],
-                    source.bits[1][bit],
-                ) else {
-                    running_source = running_source.double();
-                    continue;
-                };
-                let (accumulator_x, _) = affine_coordinates::<C>(&accumulator)?;
-                let (addend_x, _) = affine_coordinates::<C>(&addend)?;
-                if accumulator_x == addend_x {
-                    valid = false;
-                    break;
-                }
-                accumulator += addend;
-                running_source = running_source.double();
+    if sources.len() > K16_MAX_DENSE_SOURCES_V1 {
+        return Err("dense MSM offset source count exceeds k16 scheduling capacity".to_owned());
+    }
+    let active_digits = sources.iter().try_fold(0_usize, |total, source| {
+        let in_source = source.bits[0]
+            .iter()
+            .zip(&source.bits[1])
+            .filter(|(first, second)| **first || **second)
+            .count();
+        total
+            .checked_add(in_source)
+            .ok_or_else(|| "dense MSM active-digit count overflow".to_owned())
+    })?;
+    let excluded_capacity = active_digits
+        .checked_mul(2)
+        .ok_or_else(|| "dense MSM excluded-offset count overflow".to_owned())?;
+    let candidate_limit = excluded_capacity
+        .checked_add(1)
+        .ok_or_else(|| "dense MSM offset candidate count overflow".to_owned())?;
+    let mut excluded = HashSet::new();
+    excluded
+        .try_reserve(excluded_capacity)
+        .map_err(|_| "dense MSM excluded-offset allocation failed".to_owned())?;
+    let mut prefix = C::Curve::identity();
+    for source in sources {
+        let Some(last_active_bit) = (0..GLV_BITS)
+            .rev()
+            .find(|bit| source.bits[0][*bit] || source.bits[1][*bit])
+        else {
+            continue;
+        };
+        let mut running_source = source.r.to_curve();
+        for bit in 0..=last_active_bit {
+            if let Some(addend) =
+                joint_digit_point::<C>(&running_source, source.bits[0][bit], source.bits[1][bit])
+            {
+                // For unoffset prefix T and active addend Q, a denominator
+                // vanishes exactly when D+T = Q or D+T = -Q. Record both
+                // forbidden offsets before advancing the unoffset prefix.
+                excluded.insert(offset_key::<C>(addend - prefix)?);
+                excluded.insert(offset_key::<C>(-addend - prefix)?);
+                prefix += addend;
             }
-            if !valid {
-                break;
-            }
-        }
-        if valid {
-            return Ok(offset);
+            running_source = running_source.double();
         }
     }
-    Err(format!(
-        "failed to find a complete affine offset in {OFFSET_RETRIES} deterministic retries"
-    ))
+    // At most 2A offsets are forbidden for A active digits. These first
+    // 2A+1 nonzero generator multiples are distinct: k16 scheduling bounds
+    // A by 2,016*128, far below the prime Pasta group order. A membership
+    // scan is linear, unlike retrying a complete affine trace per candidate.
+    let generator = C::Curve::generator();
+    let mut offset = generator;
+    for _ in 0..candidate_limit {
+        if !excluded.contains(&offset_key::<C>(offset)?) {
+            return Ok(offset);
+        }
+        offset += generator;
+    }
+    Err("dense MSM complete affine offset bound was exhausted".to_owned())
+}
+
+fn offset_key<C>(point: C::Curve) -> Result<[u8; 32], String>
+where
+    C: CurveAffineExt,
+{
+    point
+        .to_affine()
+        .to_bytes()
+        .as_ref()
+        .try_into()
+        .map_err(|_| "dense MSM offset encoding is not 32 bytes".to_owned())
 }
 fn joint_digit_point<C>(source: &C::Curve, bit_1: bool, bit_2: bool) -> Option<C::Curve>
 where
@@ -3120,6 +3157,79 @@ mod tests {
             paired_segments,
             bits,
         }
+    }
+
+    fn low_scalar_source<C>(point: C, scalar: u8) -> ConstrainedDenseSource<C>
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField,
+    {
+        let (x, y) = point.into_coordinates();
+        let mut bits = [[false; GLV_BITS]; SCALARS_PER_SOURCE];
+        for bit in 0..8 {
+            bits[0][bit] = (scalar >> bit) & 1 != 0;
+        }
+        let assigned = |value: Base<C>| AssignedValue {
+            value: Assigned::Trivial(value),
+            cell: None,
+        };
+        let mut paired_segments = [assigned(Base::<C>::ZERO); SEGMENTS_PER_SCALAR];
+        paired_segments[0] = assigned(Base::<C>::from(u64::from(scalar)));
+        ConstrainedDenseSource {
+            r: point,
+            r_x: assigned(x),
+            r_y: assigned(y),
+            paired_segments,
+            bits,
+        }
+    }
+
+    fn assert_adversarial_offset_completeness<C>()
+    where
+        C: CurveAffineExt,
+        Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
+        Scalar<C>: BigPrimeField,
+    {
+        let generator = C::generator();
+        // 7G + 202*(-G)*3 + 599G = 0. The normalized source order excludes
+        // all first 256 generator offsets, despite being a valid zero MSM.
+        let mut sources = Vec::with_capacity(204);
+        sources.push(low_scalar_source::<C>(
+            (generator.to_curve() * Scalar::<C>::from(7)).to_affine(),
+            1,
+        ));
+        let negative = (-generator.to_curve()).to_affine();
+        sources.extend((0..202).map(|_| low_scalar_source::<C>(negative, 3)));
+        sources.push(low_scalar_source::<C>(
+            (generator.to_curve() * Scalar::<C>::from(599)).to_affine(),
+            1,
+        ));
+        let offset = choose_offset::<C>(&sources).expect("complete bounded offset");
+        let mut early = generator.to_curve();
+        for _ in 1..=256 {
+            assert!(offset != early, "the old 256-candidate bound must fail");
+            early += generator.to_curve();
+        }
+        let assigned = |value: Base<C>| AssignedValue {
+            value: Assigned::Trivial(value),
+            cell: None,
+        };
+        let job = DenseMsmJob {
+            start_tag: assigned(Base::<C>::ONE),
+            source_count_tags: vec![assigned(Base::<C>::from(204))],
+            physical_lanes: vec![0],
+            sources,
+        };
+        let (rows, terminal) = build_job_lane_rows::<C>(&job, 0, 0, 0, 204, offset)
+            .expect("adversarial offset emits a complete affine trace");
+        assert_eq!(rows.len(), 204 * ROWS_PER_SOURCE + ROWS_PER_JOB);
+        assert!(terminal == offset);
+    }
+
+    #[test]
+    fn complete_offset_exists_beyond_256_candidates_in_both_pasta_fields() {
+        assert_adversarial_offset_completeness::<EqAffine>();
+        assert_adversarial_offset_completeness::<EpAffine>();
     }
     #[derive(Clone)]
     struct DenseRowsCircuit {

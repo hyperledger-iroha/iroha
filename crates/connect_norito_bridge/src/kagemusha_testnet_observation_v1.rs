@@ -37,6 +37,8 @@ use iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES
 use libc::{c_int, c_uchar};
 
 #[cfg(unix)]
+use crate::kagemusha_mobile_bootstrap_v1::KagemushaVerifiedMobileBootstrapV1;
+#[cfg(unix)]
 use crate::kagemusha_reserve_finality_v1::trusted_anchor;
 use crate::{
     ERR_BUFFER_TOO_SMALL, ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1, ERR_KAGEMUSHA_V1, ERR_NULL_PTR,
@@ -255,6 +257,23 @@ pub enum KagemushaTestnetDurableObservationModeV1 {
     Recover,
 }
 
+#[cfg(unix)]
+pub(crate) fn authenticated_observation_scope(
+    bootstrap: &KagemushaVerifiedMobileBootstrapV1,
+) -> Result<KagemushaTestnetStateObservationScopeV1, String> {
+    let asset = bootstrap.scope();
+    KagemushaTestnetStateObservationScopeV1::new(
+        *bootstrap.network_id().as_bytes(),
+        asset.asset_identity_digest,
+        asset.asset_incarnation,
+        asset.asset_scale,
+        asset.liability_pool_id,
+        bootstrap.release_id(),
+        bootstrap.release_attestation_digest(),
+    )
+    .map_err(|error| format!("invalid authenticated testnet bootstrap scope: {error}"))
+}
+
 /// Install an authenticated native verifier with one private, durable testnet lineage trial.
 ///
 /// The journal path and all release pins must come from trusted native configuration. The
@@ -271,14 +290,15 @@ pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner
     manifest_archive: &[u8],
     validation_receipt_archive: &[u8],
     release_attestation_archive: &[u8],
-    trusted_authority_policy: &KagemushaReleaseAuthorityPolicyV1,
-    scope: KagemushaTestnetStateObservationScopeV1,
+    bootstrap: &KagemushaVerifiedMobileBootstrapV1,
     profile: KagemushaRecursiveVerifierProfileV1,
     artifact_root: impl AsRef<Path>,
     journal_path: impl AsRef<Path>,
     mode: KagemushaTestnetDurableObservationModeV1,
     independent_anchors: &BTreeMap<[u8; 32], KagemushaVerifiedFinalityChainV1>,
 ) -> Result<(), String> {
+    bootstrap.require_unexpired()?;
+    let scope = authenticated_observation_scope(bootstrap)?;
     // Serialize journal creation with every installation path. A duplicate caller must
     // not initialize an orphan journal before OnceLock rejects its owner.
     let _installation_guard = TESTNET_STATE_OBSERVATION_INSTALL_LOCK_V1
@@ -291,11 +311,12 @@ pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner
         manifest_archive,
         validation_receipt_archive,
         release_attestation_archive,
-        trusted_authority_policy,
+        bootstrap.trusted_authority_policy(),
         scope,
         profile,
         artifact_root,
     )?;
+    bootstrap.require_unexpired()?;
     let owner = match mode {
         KagemushaTestnetDurableObservationModeV1::Create => {
             KagemushaTestnetProofObservationOwnerV1::create_durable(
@@ -314,6 +335,9 @@ pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner
         }
     }
     .map_err(|error| format!("cannot open KAGEMUSHA private testnet journal: {error}"))?;
+    // Artifact loading and journal replay may be lengthy. A checkpoint checked only
+    // at entry must not authorize publication after its installation lease expires.
+    bootstrap.require_unexpired()?;
     install_testnet_observation_owner_unlocked(owner, true)
         .map_err(|_| "KAGEMUSHA testnet observation owner is already installed".to_owned())
 }

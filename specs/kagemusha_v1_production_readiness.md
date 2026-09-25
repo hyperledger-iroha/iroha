@@ -38,6 +38,22 @@ Work remains confined to `/Users/takemiyamakoto/dev/iroha`, branch
 `optimizations`. The following combines source inspection with the scoped
 component validation below; it is not a security audit or hardware qualification.
 
+The September 25 native installer now derives its complete release and finality
+configuration from a threshold-authenticated mobile bootstrap token. The bounded
+canonical package pins network, asset/reserve, release, first context and freshness;
+its independent native policy cannot be selected by a downloaded response. The
+installer checks a suspend-inclusive token deadline before journal access and
+publication. A signed checkpoint still requires native trusted time and retained
+replay state, approved deployment signatures and actual app-startup integration.
+The scoped bridge suite passes 355 tests with one existing ignored test. The new
+fixed five-slice arithmetic and shared dense MSM suite pass 40 tests with two
+benchmark-only cases ignored, including both-parity full-capacity, empty-slice,
+padding and source-binding controls. The dense witness now derives a complete
+offset bound from its active additions; the previously rejecting 256-offset
+case emits a valid full trace in both fields. Each arithmetic slice configures
+55 advice, three fixed and 21 permutation columns at k15. This excludes global
+source authentication and recursive joins, so it is not a phone RSS pass.
+
 The stored IPA implementation now continues from consuming assignment through
 scalar evaluation, guarded outer multiopening and guarded inner IPA to final c/f
 writes. `finish_guarded_ipa` returns a closed internal completed-proof owner while
