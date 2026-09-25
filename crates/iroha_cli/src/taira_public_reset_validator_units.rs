@@ -500,11 +500,7 @@ mod tests {
     fn publication_is_exact_and_replay_rejects_partial_or_changed_units() {
         use std::os::unix::fs::MetadataExt as _;
 
-        let cwd = std::env::current_dir().unwrap();
-        let root = tempfile::Builder::new()
-            .prefix("validator-unit-test-")
-            .tempdir_in(cwd)
-            .unwrap();
+        let root = private_custody_test_dir("validator-unit-test-");
         let output = root.path().join("units-initial");
         let units = VALIDATOR_SLUGS
             .iter()
