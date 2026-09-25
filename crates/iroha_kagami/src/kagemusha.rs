@@ -2460,7 +2460,7 @@ mod tests {
     #[test]
     fn app_attestation_policy_digest_projection_is_exact_hex() {
         let raw = norito::json!({
-            "app_attestation_authority_policy_digest": vec![0x5a_u8; 32],
+            "app_attestation_authority_policy_digest": (vec![0x5a_u8; 32]),
         });
         let normalized = normalize_release_projection_value(raw).unwrap();
         assert_eq!(
@@ -2471,7 +2471,7 @@ mod tests {
         );
         assert!(
             normalize_release_projection_value(norito::json!({
-                "app_attestation_authority_policy_digest": vec![0x5a_u8; 31],
+                "app_attestation_authority_policy_digest": (vec![0x5a_u8; 31]),
             }))
             .is_err(),
         );
