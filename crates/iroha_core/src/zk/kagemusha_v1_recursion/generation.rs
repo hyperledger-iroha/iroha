@@ -4951,6 +4951,32 @@ pub fn prove_kagemusha_finalized_mint_from_checkpoint_v1(
         KagemushaMintAuthorityStepV1::FinalizedMint,
         certificate,
         checkpoint,
+        CheckpointReleasePurposeV1::Production,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Prove one finalized reserve top-up under a signed Experimental proof release.
+/// The caller's node lane must remain explicitly testnet-scoped.
+pub(crate) fn prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1(
+    eq: &KagemushaLoadedEqMintAuthorityArtifactsV1,
+    ep: &KagemushaLoadedEpMintAuthorityArtifactsV1,
+    hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    verifier: &super::KagemushaAuthenticatedRecursiveVerifierV1,
+    certificate: KagemushaMintCertificateWitnessV1,
+    checkpoint: &KagemushaMintAuthorityCheckpointV1,
+) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
+    prove_kagemusha_mint_authority_from_checkpoint_v1(
+        eq,
+        ep,
+        hash_eq,
+        hash_ep,
+        verifier,
+        KagemushaMintAuthorityStepV1::FinalizedMint,
+        certificate,
+        checkpoint,
+        CheckpointReleasePurposeV1::TestnetExperiment,
     )
 }
 
@@ -4979,8 +5005,42 @@ pub fn prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
         KagemushaMintAuthorityStepV1::Rotate,
         certificate,
         checkpoint,
+        CheckpointReleasePurposeV1::Production,
     )?
     .into_checkpoint(KagemushaMintAuthorityStepV1::Rotate, statement)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Advance an Experimental mint checkpoint across a signed roster boundary.
+pub(crate) fn prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1(
+    eq: &KagemushaLoadedEqMintAuthorityArtifactsV1,
+    ep: &KagemushaLoadedEpMintAuthorityArtifactsV1,
+    hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    verifier: &super::KagemushaAuthenticatedRecursiveVerifierV1,
+    certificate: KagemushaMintCertificateWitnessV1,
+    checkpoint: &KagemushaMintAuthorityCheckpointV1,
+) -> Result<KagemushaMintAuthorityCheckpointV1, KagemushaArtifactGenerationErrorV1> {
+    let statement = certificate.statement.clone();
+    prove_kagemusha_mint_authority_from_checkpoint_v1(
+        eq,
+        ep,
+        hash_eq,
+        hash_ep,
+        verifier,
+        KagemushaMintAuthorityStepV1::Rotate,
+        certificate,
+        checkpoint,
+        CheckpointReleasePurposeV1::TestnetExperiment,
+    )?
+    .into_checkpoint(KagemushaMintAuthorityStepV1::Rotate, statement)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+enum CheckpointReleasePurposeV1 {
+    Production,
+    TestnetExperiment,
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4993,6 +5053,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
     step: KagemushaMintAuthorityStepV1,
     certificate: KagemushaMintCertificateWitnessV1,
     checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    release_purpose: CheckpointReleasePurposeV1,
 ) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
     if !matches!(
         step,
@@ -5002,9 +5063,15 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
             "a durable checkpoint may advance only by rotation or finalized mint".to_owned(),
         ));
     }
-    let (eq_current, ep_current) = verifier
-        .verify_mint_authority_checkpoint(checkpoint)
-        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let (eq_current, ep_current) = match release_purpose {
+        CheckpointReleasePurposeV1::Production => {
+            verifier.verify_mint_authority_checkpoint(checkpoint)
+        }
+        CheckpointReleasePurposeV1::TestnetExperiment => {
+            verifier.verify_experimental_mint_authority_checkpoint_for_testnet(checkpoint)
+        }
+    }
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     certificate
         .validate_for_step(step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;

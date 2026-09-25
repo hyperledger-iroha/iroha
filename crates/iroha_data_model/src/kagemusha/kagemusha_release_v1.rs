@@ -1,8 +1,9 @@
 //! Authenticated artifact and internal-validation contract for KAGEMUSHA V1.
 
 use super::{
-    KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
-    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+    KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+    KAGEMUSHA_WIRE_VERSION_V1,
 };
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId};
@@ -1530,6 +1531,90 @@ pub struct KagemushaInternalValidationReceiptV1 {
     pub fuzz_cases: u64,
 }
 
+/// Asset and reserve confined to one explicitly experimental signed testnet release.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaTestnetExperimentScopeV1"
+)]
+pub struct KagemushaTestnetExperimentScopeV1 {
+    /// Normalized asset identity, excluding its separate incarnation.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub asset_identity_digest: [u8; 32],
+    /// Exact asset incarnation.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub asset_incarnation: [u8; 32],
+    /// Decimal asset scale.
+    pub asset_scale: u32,
+    /// Exact reserve-liability pool.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub liability_pool_id: [u8; 32],
+}
+
+impl KagemushaTestnetExperimentScopeV1 {
+    /// Check the bounded, non-aliasing asset and reserve pins.
+    ///
+    /// # Errors
+    /// Rejects zero, aliased, or out-of-range pins.
+    pub fn validate(self) -> Result<(), KagemushaReleaseErrorV1> {
+        if !digest_is_nonzero(self.asset_identity_digest)
+            || !digest_is_nonzero(self.asset_incarnation)
+            || !digest_is_nonzero(self.liability_pool_id)
+            || self.asset_scale > KAGEMUSHA_ASSET_SCALE_MAX_V1
+            || self.asset_identity_digest == self.liability_pool_id
+        {
+            return Err(KagemushaReleaseErrorV1::InvalidManifest);
+        }
+        Ok(())
+    }
+}
+
+/// Signed release purpose; an experimental release cannot enter production monetary admission.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleasePurposeV1"
+)]
+pub enum KagemushaReleasePurposeV1 {
+    /// Production hardware-qualified monetary release.
+    Production,
+    /// Testnet-only proof-lineage trial, bound to one asset and reserve.
+    /// TODO: independently inspect the referenced device-evidence bytes before relying on
+    /// them for any hardware qualification; this signed structural receipt grants none.
+    TestnetExperiment(KagemushaTestnetExperimentScopeV1),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReleaseValidationPathV1 {
+    Production,
+    TestnetExperiment,
+}
+
 /// Canonical release manifest accepted by kagemusha runtime code.
 #[derive(
     Debug,
@@ -1552,6 +1637,8 @@ pub struct KagemushaReleaseManifestV1 {
     pub version: u16,
     /// Exact genesis-derived network on which this release may authorize value.
     pub network_id: NetworkId,
+    /// Signed production or testnet-experimental purpose and its exact asset scope.
+    pub purpose: KagemushaReleasePurposeV1,
     /// Digest-derived release identifier.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
@@ -1738,6 +1825,7 @@ pub struct KagemushaReleaseAttestationV1 {
 struct KagemushaReleaseSubjectV1 {
     version: u16,
     network_id: NetworkId,
+    purpose: KagemushaReleasePurposeV1,
     source_tree_digest: [u8; 32],
     cargo_lock_digest: [u8; 32],
     profile_digest: [u8; 32],
@@ -2705,6 +2793,215 @@ impl KagemushaInternalValidationReceiptV1 {
         Ok(receipt)
     }
 
+    /// Decode the same V1 wire layout under the explicitly experimental testnet evidence rule.
+    ///
+    /// This does not grant production qualification. The signed manifest must separately carry
+    /// `TestnetExperiment`; production release authentication never calls this method.
+    ///
+    /// # Errors
+    /// Rejects noncanonical bytes, missing structural proof evidence, or inconsistent bindings.
+    pub fn decode_canonical_experimental_exact(
+        bytes: &[u8],
+    ) -> Result<Self, KagemushaReleaseErrorV1> {
+        let receipt: Self = decode_release_bounded_canonical(
+            bytes,
+            KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+            KagemushaReleaseErrorV1::InvalidValidationReceipt,
+        )?;
+        receipt.validate_experimental()?;
+        Ok(receipt)
+    }
+
+    /// Validate actual artifact/profile/protocol evidence for a signed testnet experiment.
+    ///
+    /// Unlike production qualification, this does not claim handset anti-rollback, 1,024
+    /// handoffs, 1,000 funded credits, thermal performance, security review, or fuzz completion.
+    /// Exact signed profile and circuit bindings, provider authority, content-addressed proof
+    /// reports, and a closed evidence root remain mandatory.
+    ///
+    /// # Errors
+    /// Rejects missing structural evidence, invalid provider authority, protocol substitution,
+    /// or production-only evidence in the experimental receipt.
+    pub fn validate_experimental(&self) -> Result<(), KagemushaReleaseErrorV1> {
+        let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
+        let absent_report = KagemushaEvidenceFileV1 {
+            sha256: [0; 32],
+            byte_len: 0,
+        };
+        let absent_aggregate = KagemushaAggregateBalanceQualificationV1 {
+            independent_payments: 0,
+            folded_credits: 0,
+            spend_payments: 0,
+            report: absent_report,
+        };
+        let absent_thermal = KagemushaThermalQualificationV1 {
+            folded_credits: 0,
+            fold_p95_ms: 0,
+            process_rss_bytes: 0,
+            operation_energy_millijoules: 0,
+            report: absent_report,
+        };
+        let absent_envelope = KagemushaEnvelopeQualificationV1 {
+            raw_complete_exchange_bytes: 0,
+            text_complete_exchange_bytes: 0,
+            handoff_p95_ms: 0,
+            report: absent_report,
+        };
+        let profiles: Vec<_> = self
+            .profile_qualifications
+            .iter()
+            .map(|qualification| qualification.profile)
+            .collect();
+        let expected_hardware_policy_digest =
+            kagemusha_hardware_policy_digest_v1(&profiles).map_err(|_| invalid())?;
+        let expected_provider_policy_root =
+            kagemusha_provider_policy_root_v1(&profiles, &self.provider_policy)?;
+        let expected_profile_digest = kagemusha_release_profile_digest_v1(
+            self.circuit_shape_report,
+            self.eq_protocol_digest,
+            self.ep_protocol_digest,
+            &self.helper_protocols,
+        )?;
+        let distinct = self
+            .profile_qualifications
+            .first()
+            .and_then(distinct_relation_protocols)
+            .ok_or_else(invalid)?;
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || [
+                self.source_tree_digest,
+                self.cargo_lock_digest,
+                self.profile_digest,
+                self.native_profile_digest,
+                self.eq_protocol_digest,
+                self.ep_protocol_digest,
+                self.artifact_set_digest,
+                self.hardware_policy_digest,
+                self.provider_policy_root,
+            ]
+            .into_iter()
+            .any(|digest| !digest_is_nonzero(digest))
+            || self.profile_digest != expected_profile_digest
+            || self.native_profile_digest == self.profile_digest
+            || self.hardware_policy_digest != expected_hardware_policy_digest
+            || self.provider_policy_root != expected_provider_policy_root
+            || !validate_helper_protocols(&self.helper_protocols)
+            || !validate_evidence_closure(self.evidence_closure)
+            || self.security_review_report != absent_report
+            || self.kat_report != absent_report
+            || self.fuzz_report != absent_report
+            || self.resource_report != absent_report
+            || self.fuzz_cases != 0
+            || !self.reproducible_builds.is_empty()
+            || !profile_protocol_digests_are_unique(
+                self.eq_protocol_digest,
+                self.ep_protocol_digest,
+                &self.helper_protocols,
+                distinct,
+            )
+            || self.profile_qualifications.is_empty()
+            || self.profile_qualifications.len() > KAGEMUSHA_RELEASE_MAX_ENABLED_PROFILES_V1
+            || !self.profile_qualifications.windows(2).all(|pair| {
+                pair[0].profile.hardware_profile_id < pair[1].profile.hardware_profile_id
+            })
+        {
+            return Err(invalid());
+        }
+        let max_rows = 1_u32 << KAGEMUSHA_HALO2_K_V1;
+        let max_proof = u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1)
+            .expect("fixed proof maximum fits u32");
+        for qualification in &self.profile_qualifications {
+            if !validate_enabled_profile(&qualification.profile)
+                || qualification.profile.qualification_digest
+                    != qualification.expected_qualification_digest()?
+                || qualification.relations.len() != KagemushaQualifiedRelationV1::ALL.len()
+                || qualification.helper_circuits.len()
+                    != KagemushaQualifiedHelperCircuitV1::ALL.len()
+                || distinct_relation_protocols(qualification) != Some(distinct)
+                || !qualification.recursive_depths.is_empty()
+                || qualification.aggregate_balance != absent_aggregate
+                || qualification.thermal != absent_thermal
+                || qualification.envelope != absent_envelope
+                || !qualification.acceptance_cases.is_empty()
+            {
+                return Err(invalid());
+            }
+            for (row, expected) in qualification
+                .relations
+                .iter()
+                .zip(KagemushaQualifiedRelationV1::ALL)
+            {
+                let expected_protocols = expected.distinct_protocol_index().map_or(
+                    (self.eq_protocol_digest, self.ep_protocol_digest),
+                    |index| distinct[index],
+                );
+                let roles = expected.expected_vk_roles();
+                if row.relation != expected
+                    || (row.eq_protocol_digest, row.ep_protocol_digest) != expected_protocols
+                    || !validate_vk_reference(row.eq_verifying_key, roles.0)
+                    || !validate_vk_reference(row.ep_verifying_key, roles.1)
+                    || row.eq_verifying_key.sha256 == row.ep_verifying_key.sha256
+                    || row.eq_circuit_rows == 0
+                    || row.eq_circuit_rows > max_rows
+                    || row.ep_circuit_rows == 0
+                    || row.ep_circuit_rows > max_rows
+                    || row.complete_proof_bytes == 0
+                    || row.complete_proof_bytes > max_proof
+                    || !validate_evidence_file(row.report)
+                {
+                    return Err(invalid());
+                }
+            }
+            for (row, protocol) in qualification
+                .helper_circuits
+                .iter()
+                .zip(&self.helper_protocols)
+            {
+                let roles = protocol.helper.expected_vk_roles();
+                if row.helper != protocol.helper
+                    || row.eq_protocol_digest != protocol.eq_protocol_digest
+                    || row.ep_protocol_digest != protocol.ep_protocol_digest
+                    || !validate_vk_reference(row.eq_verifying_key, roles.0)
+                    || !validate_vk_reference(row.ep_verifying_key, roles.1)
+                    || row.eq_verifying_key.sha256 == row.ep_verifying_key.sha256
+                    || row.eq_circuit_rows == 0
+                    || row.eq_circuit_rows > max_rows
+                    || row.ep_circuit_rows == 0
+                    || row.ep_circuit_rows > max_rows
+                    || !validate_evidence_file(row.report)
+                    || if protocol.helper.uses_internal_proof_evidence() {
+                        row.eq_proof_bytes != protocol.eq_proof_bytes
+                            || row.ep_proof_bytes != protocol.ep_proof_bytes
+                            || row.eq_proof_bytes.checked_add(row.ep_proof_bytes)
+                                != Some(row.complete_proof_bytes)
+                    } else {
+                        row.eq_proof_bytes != 0
+                            || row.ep_proof_bytes != 0
+                            || row.complete_proof_bytes == 0
+                            || row.complete_proof_bytes > max_proof
+                    }
+                {
+                    return Err(invalid());
+                }
+            }
+        }
+        if norito::encode_canonical(self).map_err(|_| invalid())?.len()
+            > KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    /// Return the signed experimental receipt identity after structural validation.
+    ///
+    /// # Errors
+    /// Rejects invalid evidence or canonical encoding.
+    pub fn canonical_experimental_digest(&self) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
+        self.validate_experimental()?;
+        digest_encoded(RECEIPT_DIGEST_DOMAIN, self)
+    }
+
     /// Validate all evidence identities and numeric release thresholds.
     ///
     /// # Errors
@@ -2960,6 +3257,9 @@ impl KagemushaReleaseManifestV1 {
     }
 
     fn validate_standalone(&self) -> Result<(), KagemushaReleaseErrorV1> {
+        if let KagemushaReleasePurposeV1::TestnetExperiment(scope) = self.purpose {
+            scope.validate()?;
+        }
         validate_artifacts(&self.artifacts)?;
         validate_enabled_profiles(&self.enabled_profiles)?;
         let expected_vk_digest = kagemusha_vk_set_digest_v1(
@@ -3009,6 +3309,7 @@ impl KagemushaReleaseManifestV1 {
         KagemushaReleaseSubjectV1 {
             version: self.version,
             network_id: self.network_id,
+            purpose: self.purpose,
             source_tree_digest: self.source_tree_digest,
             cargo_lock_digest: self.cargo_lock_digest,
             profile_digest: self.profile_digest,
@@ -3053,11 +3354,48 @@ impl KagemushaReleaseManifestV1 {
         receipt: &KagemushaInternalValidationReceiptV1,
         policy: &KagemushaReleaseAuthorityPolicyV1,
     ) -> Result<KagemushaReleaseAttestationSubjectV1, KagemushaReleaseErrorV1> {
+        self.release_attestation_subject_for_path(
+            receipt,
+            policy,
+            ReleaseValidationPathV1::Production,
+        )
+    }
+
+    /// Build the separately signed subject for one structurally evidenced testnet experiment.
+    ///
+    /// # Errors
+    /// Rejects a production purpose, incomplete structural evidence, or any binding mismatch.
+    pub fn experimental_release_attestation_subject(
+        &self,
+        receipt: &KagemushaInternalValidationReceiptV1,
+        policy: &KagemushaReleaseAuthorityPolicyV1,
+    ) -> Result<KagemushaReleaseAttestationSubjectV1, KagemushaReleaseErrorV1> {
+        self.release_attestation_subject_for_path(
+            receipt,
+            policy,
+            ReleaseValidationPathV1::TestnetExperiment,
+        )
+    }
+
+    fn release_attestation_subject_for_path(
+        &self,
+        receipt: &KagemushaInternalValidationReceiptV1,
+        policy: &KagemushaReleaseAuthorityPolicyV1,
+        path: ReleaseValidationPathV1,
+    ) -> Result<KagemushaReleaseAttestationSubjectV1, KagemushaReleaseErrorV1> {
         self.validate_standalone()?;
-        receipt.validate()?;
+        let receipt_digest = match (self.purpose, path) {
+            (KagemushaReleasePurposeV1::Production, ReleaseValidationPathV1::Production) => {
+                receipt.canonical_digest()?
+            }
+            (
+                KagemushaReleasePurposeV1::TestnetExperiment(_),
+                ReleaseValidationPathV1::TestnetExperiment,
+            ) => receipt.canonical_experimental_digest()?,
+            _ => return Err(KagemushaReleaseErrorV1::InvalidManifest),
+        };
         let authority_policy_digest = policy.canonical_digest()?;
         let artifact_set_digest = kagemusha_artifact_set_digest_v1(&self.artifacts)?;
-        let receipt_digest = receipt.canonical_digest()?;
         let manifest_digest = digest_encoded(MANIFEST_DIGEST_DOMAIN, self)?;
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
             || self.halo2_k != KAGEMUSHA_HALO2_K_V1
@@ -3154,7 +3492,43 @@ impl KagemushaReleaseManifestV1 {
         policy: &KagemushaReleaseAuthorityPolicyV1,
         attestation: &KagemushaReleaseAttestationV1,
     ) -> Result<KagemushaAuthenticatedReleaseV1, KagemushaReleaseErrorV1> {
-        let expected_subject = self.release_attestation_subject(receipt, policy)?;
+        self.authenticate_for_path(
+            receipt,
+            policy,
+            attestation,
+            ReleaseValidationPathV1::Production,
+        )
+    }
+
+    /// Authenticate an explicitly experimental signed testnet release and structural evidence.
+    ///
+    /// The returned release remains tagged `TestnetExperiment`; production Guard, Torii, and
+    /// wallet constructors must reject that purpose. No hardware qualification is inferred.
+    ///
+    /// # Errors
+    /// Rejects an invalid purpose, evidence, threshold signature, or exact release binding.
+    pub fn authenticate_experimental(
+        &self,
+        receipt: &KagemushaInternalValidationReceiptV1,
+        policy: &KagemushaReleaseAuthorityPolicyV1,
+        attestation: &KagemushaReleaseAttestationV1,
+    ) -> Result<KagemushaAuthenticatedReleaseV1, KagemushaReleaseErrorV1> {
+        self.authenticate_for_path(
+            receipt,
+            policy,
+            attestation,
+            ReleaseValidationPathV1::TestnetExperiment,
+        )
+    }
+
+    fn authenticate_for_path(
+        &self,
+        receipt: &KagemushaInternalValidationReceiptV1,
+        policy: &KagemushaReleaseAuthorityPolicyV1,
+        attestation: &KagemushaReleaseAttestationV1,
+        path: ReleaseValidationPathV1,
+    ) -> Result<KagemushaAuthenticatedReleaseV1, KagemushaReleaseErrorV1> {
+        let expected_subject = self.release_attestation_subject_for_path(receipt, policy, path)?;
         let distinct_relation_protocols = receipt
             .profile_qualifications
             .first()
@@ -3224,6 +3598,12 @@ impl KagemushaAuthenticatedReleaseV1 {
     #[must_use]
     pub fn network_id(&self) -> NetworkId {
         self.manifest.network_id
+    }
+
+    /// Return the purpose covered by the threshold-signed release identity.
+    #[must_use]
+    pub fn purpose(&self) -> KagemushaReleasePurposeV1 {
+        self.manifest.purpose
     }
 
     /// Return the exact sorted enabled hardware-profile set.

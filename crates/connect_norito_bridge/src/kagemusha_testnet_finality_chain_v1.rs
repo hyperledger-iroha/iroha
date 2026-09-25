@@ -4,10 +4,9 @@
 //! finality-bundle response. This module checks every consecutive signed bundle before the
 //! native diagnostic owner may pin the last context for a pre-reserved operation.
 
+use iroha_core::zk::kagemusha_v1_recursion::KagemushaVerifiedFinalityChainV1;
 use iroha_data_model::{
-    NetworkId,
-    block::consensus_v2::HeightContextId,
-    bridge::{BridgeFinalityBundle, BridgeFinalityVerifier},
+    NetworkId, block::consensus_v2::HeightContextId, bridge::BridgeFinalityBundle,
     isi::kagemusha_v1::KagemushaFinalityTrustAnchorV1,
 };
 
@@ -16,6 +15,25 @@ use crate::committed_transaction_inclusion::MAX_CHAIN_JSON_BYTES;
 use crate::kagemusha_testnet_observation_v1::pin_kagemusha_testnet_authenticated_finality_anchor_v1;
 
 const MAX_CHAIN_BUNDLES: usize = 4096;
+
+fn verify_chain_token_from_json_v1(
+    expected_network_id: NetworkId,
+    trusted_first_context_id: HeightContextId,
+    chain_json: &[u8],
+) -> Result<KagemushaVerifiedFinalityChainV1, String> {
+    if chain_json.is_empty() || chain_json.len() > MAX_CHAIN_JSON_BYTES {
+        return Err("KAGEMUSHA finality chain exceeds its bound".to_owned());
+    }
+    let chain_json = std::str::from_utf8(chain_json)
+        .map_err(|_| "KAGEMUSHA finality chain is not UTF-8".to_owned())?;
+    let chain: Vec<BridgeFinalityBundle> = norito::json::from_json(chain_json)
+        .map_err(|error| format!("invalid KAGEMUSHA finality chain: {error}"))?;
+    if chain.is_empty() || chain.len() > MAX_CHAIN_BUNDLES {
+        return Err("KAGEMUSHA finality chain must contain 1..4096 bundles".to_owned());
+    }
+    KagemushaVerifiedFinalityChainV1::verify(expected_network_id, trusted_first_context_id, &chain)
+        .map_err(|error| format!("KAGEMUSHA signed finality chain failed: {error}"))
+}
 
 /// Verify a consecutive Sumeragi-v2 finality chain from an independent first context.
 ///
@@ -32,33 +50,8 @@ pub fn verify_kagemusha_testnet_finality_anchor_from_chain_v1(
     trusted_first_context_id: HeightContextId,
     chain_json: &[u8],
 ) -> Result<KagemushaFinalityTrustAnchorV1, String> {
-    if chain_json.is_empty() || chain_json.len() > MAX_CHAIN_JSON_BYTES {
-        return Err("KAGEMUSHA finality chain exceeds its bound".to_owned());
-    }
-    let chain_json = std::str::from_utf8(chain_json)
-        .map_err(|_| "KAGEMUSHA finality chain is not UTF-8".to_owned())?;
-    let chain: Vec<BridgeFinalityBundle> = norito::json::from_json(chain_json)
-        .map_err(|error| format!("invalid KAGEMUSHA finality chain: {error}"))?;
-    if chain.is_empty() || chain.len() > MAX_CHAIN_BUNDLES {
-        return Err("KAGEMUSHA finality chain must contain 1..4096 bundles".to_owned());
-    }
-    let mut verifier =
-        BridgeFinalityVerifier::with_context(expected_network_id, trusted_first_context_id);
-    for (index, bundle) in chain.iter().enumerate() {
-        verifier
-            .verify_bundle(bundle)
-            .map_err(|error| format!("KAGEMUSHA finality bundle {index} failed: {error}"))?;
-    }
-    let commitment = &chain.last().expect("nonempty verified chain").commitment;
-    let anchor = KagemushaFinalityTrustAnchorV1 {
-        network_id: expected_network_id,
-        block_height: commitment.block_height,
-        height_context_id: commitment.height_context_id,
-    };
-    anchor
-        .validate()
-        .map_err(|error| format!("invalid verified KAGEMUSHA finality anchor: {error}"))?;
-    Ok(anchor)
+    verify_chain_token_from_json_v1(expected_network_id, trusted_first_context_id, chain_json)
+        .map(|verified| verified.anchor())
 }
 
 /// Verify a finality chain and pin its last context for an already reserved testnet top-up.
@@ -73,18 +66,15 @@ pub fn verify_kagemusha_testnet_finality_anchor_from_chain_v1(
 /// Rejects invalid finality, missing native owner or reservation, wrong release network, or a
 /// replacement operation pin. No diagnostic lineage advances on failure.
 #[cfg(unix)]
-pub fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
+pub(crate) fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
     operation_id: [u8; 32],
     expected_network_id: NetworkId,
     trusted_first_context_id: HeightContextId,
     chain_json: &[u8],
 ) -> Result<bool, String> {
-    let anchor = verify_kagemusha_testnet_finality_anchor_from_chain_v1(
-        expected_network_id,
-        trusted_first_context_id,
-        chain_json,
-    )?;
-    pin_kagemusha_testnet_authenticated_finality_anchor_v1(operation_id, anchor)
+    let verified =
+        verify_chain_token_from_json_v1(expected_network_id, trusted_first_context_id, chain_json)?;
+    pin_kagemusha_testnet_authenticated_finality_anchor_v1(operation_id, &verified)
 }
 
 #[cfg(test)]

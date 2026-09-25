@@ -11,7 +11,11 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami docker`↴](#kagami-docker)
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami kagemusha`↴](#kagami-kagemusha)
+* [`kagami kagemusha prepare-experimental-release-v1`↴](#kagami-kagemusha-prepare-experimental-release-v1)
 * [`kagami kagemusha authenticate-release-v1`↴](#kagami-kagemusha-authenticate-release-v1)
+* [`kagami kagemusha authenticate-experimental-release-v1`↴](#kagami-kagemusha-authenticate-experimental-release-v1)
+* [`kagami kagemusha sign-experimental-release-approval-v1`↴](#kagami-kagemusha-sign-experimental-release-approval-v1)
+* [`kagami kagemusha assemble-experimental-release-v1`↴](#kagami-kagemusha-assemble-experimental-release-v1)
 * [`kagami genesis`↴](#kagami-genesis)
 * [`kagami genesis sign`↴](#kagami-genesis-sign)
 * [`kagami genesis generate`↴](#kagami-genesis-generate)
@@ -274,7 +278,35 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 
 ###### **Subcommands:**
 
+* `prepare-experimental-release-v1` — Prepare an unsigned testnet candidate from checked artifacts and typed evidence
 * `authenticate-release-v1` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
+* `authenticate-experimental-release-v1` — Authenticate one signed proof-only testnet release and its exact 50 artifacts
+* `sign-experimental-release-approval-v1` — Sign one experimental release approval with one owner-held authority key
+* `assemble-experimental-release-v1` — Assemble independently signed approvals into one testnet attestation
+
+
+
+## `kagami kagemusha prepare-experimental-release-v1`
+
+Prepare an unsigned testnet candidate from checked artifacts and typed evidence
+
+**Usage:** `kagami kagemusha prepare-experimental-release-v1 --validation-receipt <PATH> --artifact-inventory <PATH> --artifact-root <PATH> --evidence-root <PATH> --authority-policy <PATH> --authority-review-projection <PATH> --authority-review-projection-sha256 <LOWER_HEX> --network-id <NETWORK_ID> --asset-identity-digest <LOWER_HEX> --asset-incarnation <LOWER_HEX> --asset-scale <DECIMAL> --liability-pool-id <LOWER_HEX> --output-dir <DIR>`
+
+###### **Options:**
+
+* `--validation-receipt <PATH>` — Canonical Norito typed structural-evidence receipt from a trusted evidence producer
+* `--artifact-inventory <PATH>` — Typed JSON array of all 50 role-to-content-address bindings
+* `--artifact-root <PATH>` — Canonical absolute directory of the 50 content-addressed proof artifacts
+* `--evidence-root <PATH>` — Canonical absolute directory of all SHA-256-addressed receipt evidence files
+* `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
+* `--authority-review-projection <PATH>` — Canonical projection from the separately trusted release-evidence verifier
+* `--authority-review-projection-sha256 <LOWER_HEX>` — Independently reviewed SHA-256 pin of that exact projection
+* `--network-id <NETWORK_ID>` — Exact checked genesis-derived network identity
+* `--asset-identity-digest <LOWER_HEX>` — Exact normalized asset identity digest
+* `--asset-incarnation <LOWER_HEX>` — Exact asset incarnation
+* `--asset-scale <DECIMAL>` — Decimal asset scale
+* `--liability-pool-id <LOWER_HEX>` — Exact reserve-liability pool identifier
+* `--output-dir <DIR>` — New owner-only directory for the canonical unsigned manifest and verified receipt
 
 
 
@@ -297,6 +329,74 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 * `--native-artifact-manifest <PATH>` — Canonical ABI23 c-jni native-artifact evidence manifest
 * `--native-artifact-manifest-sha256 <LOWER_HEX>` — SHA-256 pin for the exact native-artifact manifest bytes
 * `--native-artifact <PATH>` — Exact c-jni library whose bytes must match the native-artifact manifest
+
+
+
+## `kagami kagemusha authenticate-experimental-release-v1`
+
+Authenticate one signed proof-only testnet release and its exact 50 artifacts
+
+**Usage:** `kagami kagemusha authenticate-experimental-release-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --attestation <PATH> --artifact-root <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX>`
+
+###### **Options:**
+
+* `--manifest <PATH>` — Canonical Norito testnet-experimental release manifest
+* `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
+* `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
+* `--attestation <PATH>` — Canonical Norito threshold attestation over the experimental release
+* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
+* `--expected-release-id <LOWER_HEX>` — Independently pinned release identifier as lowercase hex
+* `--expected-asset-identity-digest <LOWER_HEX>` — Independently pinned asset identity digest as lowercase hex
+* `--expected-asset-incarnation <LOWER_HEX>` — Independently pinned asset incarnation as lowercase hex
+* `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
+* `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
+
+
+
+## `kagami kagemusha sign-experimental-release-approval-v1`
+
+Sign one experimental release approval with one owner-held authority key
+
+**Usage:** `kagami kagemusha sign-experimental-release-approval-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --artifact-root <PATH> --signer-private-key <PATH> --approval-output <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX>`
+
+###### **Options:**
+
+* `--manifest <PATH>` — Canonical Norito testnet-experimental release manifest
+* `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
+* `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
+* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--signer-private-key <PATH>` — One owner-held mode-0600 Kagami private-key record
+* `--approval-output <PATH>` — New owner-only file for this authority's canonical Norito approval
+* `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
+* `--expected-release-id <LOWER_HEX>` — Independently pinned release identifier as lowercase hex
+* `--expected-asset-identity-digest <LOWER_HEX>` — Independently pinned asset identity digest as lowercase hex
+* `--expected-asset-incarnation <LOWER_HEX>` — Independently pinned asset incarnation as lowercase hex
+* `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
+* `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
+
+
+
+## `kagami kagemusha assemble-experimental-release-v1`
+
+Assemble independently signed approvals into one testnet attestation
+
+**Usage:** `kagami kagemusha assemble-experimental-release-v1 --manifest <PATH> --validation-receipt <PATH> --authority-policy <PATH> --artifact-root <PATH> --approval <PATH> --attestation-output <PATH> --expected-network-id <LOWER_HEX> --expected-release-id <LOWER_HEX> --expected-asset-identity-digest <LOWER_HEX> --expected-asset-incarnation <LOWER_HEX> --expected-asset-scale <DECIMAL> --expected-liability-pool-id <LOWER_HEX>`
+
+###### **Options:**
+
+* `--manifest <PATH>` — Canonical Norito testnet-experimental release manifest
+* `--validation-receipt <PATH>` — Canonical Norito structurally evidenced experimental validation receipt
+* `--authority-policy <PATH>` — Independently trusted canonical Norito release-authority policy
+* `--artifact-root <PATH>` — Canonical absolute directory containing all 50 signed artifacts
+* `--approval <PATH>` — One canonical Norito approval; repeat for each independent authority
+* `--attestation-output <PATH>` — New owner-only file for the canonical threshold attestation
+* `--expected-network-id <LOWER_HEX>` — Independently pinned genesis-derived network identity as lowercase hex
+* `--expected-release-id <LOWER_HEX>` — Independently pinned release identifier as lowercase hex
+* `--expected-asset-identity-digest <LOWER_HEX>` — Independently pinned asset identity digest as lowercase hex
+* `--expected-asset-incarnation <LOWER_HEX>` — Independently pinned asset incarnation as lowercase hex
+* `--expected-asset-scale <DECIMAL>` — Independently pinned decimal asset scale
+* `--expected-liability-pool-id <LOWER_HEX>` — Independently pinned reserve-liability pool identifier as lowercase hex
 
 
 

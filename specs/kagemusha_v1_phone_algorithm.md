@@ -554,13 +554,34 @@ its transcripts cannot be replayed under a production release. This is one
 V1 wire layout, not a compatibility decoder or an alternative production
 security contract.
 
-The current structural device certificate and real-proof corridor are local
-test/harness fixtures, not a public Torii monetary route. Live testnet top-up
-and redemption require the configured command runtime and authenticated proof
-release; submitted operations must reach applied finality before counting as
-funded or redeemed. A testnet experimental device profile therefore needs
-explicit release/network-scoped proof and runtime installation, not a global
-hardware-admission bypass.
+The signed V1 release purpose distinguishes `Production` from
+`TestnetExperiment` and commits the exact experimental asset identity,
+incarnation, decimal scale, and reserve pool into the release ID and authority
+attestation. The production Torii runtime and wallet state context reject an
+experimental release; the testnet proof observer accepts only its exact signed
+scope. A process-local, non-spendable mint trial accepts only the opaque result
+of an Applied top-up paired with a verified MintFold and rejects changed
+retries or duplicate credits. The existing release receipt still requires
+production qualification. Kagami can explicitly prepare, threshold-sign,
+assemble and authenticate the experimental release and its distinct
+structural receipt against exact native artifact and evidence hashes. A trusted
+producer for genuine structural evidence and proof artifacts remains required
+before a signed candidate can be issued from real devices.
+
+The structural device certificate and real-proof corridor still require
+genuine release evidence and artifact generation. An explicit Experimental
+node top-up path is source-staged, but it has not yet been validated with a
+real signed release and four-validator Applied finality evidence. Redemption
+and offline peer value movement are not qualified by that top-up path. Node
+admission requires the explicit
+`settlement.kagemusha.allow_testnet_experimental_release = true` opt-in;
+its default is false. This source-stage switch is not proof of live Applied
+finality or genuine device evidence. Live testnet top-up and redemption
+require the configured command runtime and
+authenticated proof release; submitted operations must reach Applied finality
+before counting as funded or redeemed. A testnet experimental device profile
+therefore needs explicit release/network-scoped proof and runtime installation,
+not a global hardware-admission bypass.
 The native testnet State observer requires operator-pinned network, asset
 identity, asset incarnation, scale, reserve liability pool, and authenticated
 release; it verifies the actual paired State proof and returns only an
@@ -570,21 +591,45 @@ fsyncs the exact confidential mint reservation before online submission and
 replays every retained State proof and Applied mint against the concrete signed
 release and independently resupplied finality anchors after restart. An exact
 operation anchor must first be pinned through the Rust-only trusted finality
-path; coordinates supplied by JNI cannot pin themselves. Its
-MintFold entry requires that original reservation, an Applied chain top-up,
+path; coordinates supplied by JNI cannot pin themselves. The native testnet
+finality-chain helper verifies every consecutive signed Sumeragi bundle from
+an independently authenticated first height-context ID before pinning the last
+context. The ordinary apps still need that checkpoint in independently
+authenticated native configuration and an integration that invokes
+`KagemushaTestnetNativeMintRuntimeV1::install` with the trusted first-context
+pin; neither a status hint nor the bundle response can choose it. JNI finality
+coordinates are comparison evidence only and cannot install a pin. The
+observer's MintFold entry
+requires that original reservation, an Applied chain top-up,
 both release-authenticated mint proofs, exact linkage to the paired State proof
 and a unique credit ID; exact mint and non-mint retries return their original
 unqualified observations, while changed transcripts are rejected. The mobile
 JNI carries the original Torii status JSON, independent
 finality coordinates and paired proof bytes, never the private credit opening.
-No ordinary-app native provider currently installs and populates this journal,
-and it grants no durable monetary capability; the terminal hardware fold and
-monetary admission remain separate. File permissions protect the journal's
+The durable owner can project a positive, proof-verified testnet value record
+only for a retained Applied top-up with the exact reservation, signed release
+scope, unique credit ID and independently pinned finality anchor. Its native
+C and Android JNI entrypoints accept only the operation ID; the returned
+Norito archive is copyable inspection evidence, not a spend credential.
+A distinct Rust-only, append-only testnet mint-credit registry consumes the
+opaque native admission, fsyncs each unique positive credit, and rederives
+every retained credit from the durable proof owner on recovery. Exact retries
+are idempotent; changed operation evidence, duplicate credit IDs, and scope
+changes fail. A Rust-only native host API opens this ledger under the installed
+durable owner and credits a finalized top-up by operation ID while holding that
+owner's lock. Its C mobile endpoint accepts only that 32-byte operation ID and
+returns a bounded canonical Norito archive with the counted credit and ledger
+total. Callers cannot pass a copied archive as authority. Native host
+installation from independently authenticated app configuration, wallet
+account crediting, and testnet spending are still staged; the registry does
+not enter production monetary state or attest hardware.
+The terminal hardware fold and production admission
+remain separate. File permissions protect the journal's
 confidential opening from other ordinary processes; this is not secure-element
-storage. The private WAL detects malformed or
-partially written frames but has no trusted hardware head, so an attacker able
-to replace it with an earlier complete prefix can roll this testnet observation
-back. It must never serve as the phone's anti-rollback monetary counter.
+storage. Both private WALs detect malformed or partially written frames but
+have no trusted hardware head, so an attacker able to replace either with an
+earlier complete prefix can roll its testnet observation or counted-credit
+history back. Neither may serve as the phone's anti-rollback monetary counter.
 The signed release manifest includes the exact genesis-derived network ID.
 Node startup, native proof verification, enrollment and testnet observation
 reject a release signed for another network before admitting its artifacts or

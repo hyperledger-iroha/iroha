@@ -479,6 +479,56 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
     }
 }
 
+fn reduce_to_experimental_receipt(receipt: &mut KagemushaInternalValidationReceiptV1) {
+    let absent_report = KagemushaEvidenceFileV1 {
+        sha256: [0; 32],
+        byte_len: 0,
+    };
+    receipt.security_review_report = absent_report;
+    receipt.kat_report = absent_report;
+    receipt.fuzz_report = absent_report;
+    receipt.resource_report = absent_report;
+    receipt.fuzz_cases = 0;
+    receipt.reproducible_builds.clear();
+    for qualification in &mut receipt.profile_qualifications {
+        qualification.recursive_depths.clear();
+        qualification.aggregate_balance = KagemushaAggregateBalanceQualificationV1 {
+            independent_payments: 0,
+            folded_credits: 0,
+            spend_payments: 0,
+            report: absent_report,
+        };
+        qualification.thermal = KagemushaThermalQualificationV1 {
+            folded_credits: 0,
+            fold_p95_ms: 0,
+            process_rss_bytes: 0,
+            operation_energy_millijoules: 0,
+            report: absent_report,
+        };
+        qualification.envelope = KagemushaEnvelopeQualificationV1 {
+            raw_complete_exchange_bytes: 0,
+            text_complete_exchange_bytes: 0,
+            handoff_p95_ms: 0,
+            report: absent_report,
+        };
+        qualification.acceptance_cases.clear();
+        qualification.relations[0].prove_p95_ms = KAGEMUSHA_PROVE_P95_MAX_MS_V1 + 1;
+        *qualification = qualification
+            .clone()
+            .seal_qualification_digest()
+            .expect("reseal experimental proof bindings");
+    }
+    let enabled_profiles: Vec<_> = receipt
+        .profile_qualifications
+        .iter()
+        .map(|qualification| qualification.profile)
+        .collect();
+    receipt.hardware_policy_digest =
+        kagemusha_hardware_policy_digest_v1(&enabled_profiles).unwrap();
+    receipt.provider_policy_root =
+        kagemusha_provider_policy_root_v1(&enabled_profiles, &receipt.provider_policy).unwrap();
+}
+
 fn provider_policy(profiles: &[KagemushaEnabledProfileV1]) -> Vec<KagemushaProviderPolicyEntryV1> {
     profiles
         .iter()
@@ -572,6 +622,7 @@ fn manifest(
     KagemushaReleaseManifestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         network_id: release_network(0x21),
+        purpose: KagemushaReleasePurposeV1::Production,
         release_id: [0; 32],
         source_tree_digest: receipt.source_tree_digest,
         cargo_lock_digest: receipt.cargo_lock_digest,
@@ -667,6 +718,10 @@ fn authenticates_complete_typed_evidence_release() {
     assert_eq!(authenticated.release_id(), decoded_manifest.release_id);
     assert_eq!(authenticated.network_id(), decoded_manifest.network_id);
     assert_eq!(
+        authenticated.purpose(),
+        KagemushaReleasePurposeV1::Production
+    );
+    assert_eq!(
         authenticated.native_profile_digest(),
         receipt.native_profile_digest
     );
@@ -711,6 +766,252 @@ fn authenticates_complete_typed_evidence_release() {
             .role,
         KagemushaArtifactRoleV1::InnerStateVkEp
     );
+}
+
+#[test]
+fn signed_experimental_purpose_binds_one_testnet_asset_and_reserve() {
+    let artifacts = artifacts();
+    let mut receipt = receipt(&artifacts);
+    let production = manifest(artifacts, &receipt);
+    let keys = authority_keys();
+    let policy = authority_policy(&keys, 2);
+    let production_attestation = release_attestation(&production, &receipt, &policy, &keys[..2]);
+    reduce_to_experimental_receipt(&mut receipt);
+    let enabled_profiles: Vec<_> = receipt
+        .profile_qualifications
+        .iter()
+        .map(|qualification| qualification.profile)
+        .collect();
+    receipt
+        .validate_experimental()
+        .expect("structural evidence");
+    assert!(receipt.validate().is_err());
+    let receipt_bytes = norito::encode_canonical(&receipt).unwrap();
+    assert_eq!(
+        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes),
+        Ok(receipt.clone())
+    );
+    assert!(KagemushaInternalValidationReceiptV1::decode_canonical_exact(&receipt_bytes).is_err());
+    let scope = KagemushaTestnetExperimentScopeV1 {
+        asset_identity_digest: [0x61; 32],
+        asset_incarnation: [0x62; 32],
+        asset_scale: 2,
+        liability_pool_id: [0x63; 32],
+    };
+    scope.validate().expect("valid experimental scope");
+    let mut experiment = production.clone();
+    experiment.purpose = KagemushaReleasePurposeV1::TestnetExperiment(scope);
+    experiment.hardware_policy_digest = receipt.hardware_policy_digest;
+    experiment.validation_receipt_digest = receipt.canonical_experimental_digest().unwrap();
+    experiment.enabled_profiles = enabled_profiles;
+    let experiment = experiment.seal().expect("reseal changed purpose");
+    assert_ne!(experiment.release_id, production.release_id);
+    assert!(
+        experiment
+            .authenticate_experimental(&receipt, &policy, &production_attestation)
+            .is_err()
+    );
+    assert!(
+        experiment
+            .authenticate(&receipt, &policy, &production_attestation)
+            .is_err()
+    );
+    let subject = experiment
+        .experimental_release_attestation_subject(&receipt, &policy)
+        .expect("experimental signed subject");
+    let payload = subject.approval_payload();
+    let attestation = KagemushaReleaseAttestationV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        subject,
+        approvals: keys[..2]
+            .iter()
+            .map(|key| KagemushaReleaseApprovalV1 {
+                public_key: key.public_key().clone(),
+                signature: SignatureOf::try_new(key.private_key(), &payload).unwrap(),
+            })
+            .collect(),
+    };
+    let authenticated = experiment
+        .authenticate_experimental(&receipt, &policy, &attestation)
+        .expect("independently signed experimental release");
+    assert_eq!(
+        authenticated.purpose(),
+        KagemushaReleasePurposeV1::TestnetExperiment(scope)
+    );
+    for changed_scope in [
+        KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: [0x64; 32],
+            ..scope
+        },
+        KagemushaTestnetExperimentScopeV1 {
+            liability_pool_id: [0x65; 32],
+            ..scope
+        },
+    ] {
+        let mut changed = experiment.clone();
+        changed.purpose = KagemushaReleasePurposeV1::TestnetExperiment(changed_scope);
+        let changed = changed.seal().expect("valid changed scope");
+        assert!(
+            changed
+                .authenticate_experimental(&receipt, &policy, &attestation)
+                .is_err(),
+            "an old threshold attestation cannot authorize a different asset or reserve"
+        );
+    }
+    for bad in [
+        KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: [0; 32],
+            ..scope
+        },
+        KagemushaTestnetExperimentScopeV1 {
+            asset_incarnation: [0; 32],
+            ..scope
+        },
+        KagemushaTestnetExperimentScopeV1 {
+            asset_scale: KAGEMUSHA_ASSET_SCALE_MAX_V1 + 1,
+            ..scope
+        },
+        KagemushaTestnetExperimentScopeV1 {
+            liability_pool_id: scope.asset_identity_digest,
+            ..scope
+        },
+    ] {
+        assert_eq!(
+            bad.validate(),
+            Err(KagemushaReleaseErrorV1::InvalidManifest)
+        );
+        let mut invalid = experiment.clone();
+        invalid.purpose = KagemushaReleasePurposeV1::TestnetExperiment(bad);
+        let invalid = invalid
+            .seal()
+            .expect("encode invalid scope for negative test");
+        assert_eq!(
+            KagemushaReleaseManifestV1::decode_canonical_exact(
+                &norito::encode_canonical(&invalid).unwrap()
+            ),
+            Err(KagemushaReleaseErrorV1::InvalidManifest)
+        );
+    }
+}
+
+#[test]
+fn experimental_receipt_rejects_production_only_evidence() {
+    let mut baseline = receipt(&artifacts());
+    reduce_to_experimental_receipt(&mut baseline);
+    baseline
+        .validate_experimental()
+        .expect("zero production-only evidence is accepted");
+
+    let mutations: &[(&str, fn(&mut KagemushaInternalValidationReceiptV1))] = &[
+        ("security review digest", |r| {
+            r.security_review_report.sha256 = [1; 32]
+        }),
+        ("security review length", |r| {
+            r.security_review_report.byte_len = 1
+        }),
+        ("KAT report", |r| r.kat_report = evidence(7)),
+        ("fuzz report", |r| r.fuzz_report = evidence(8)),
+        ("resource report", |r| r.resource_report = evidence(9)),
+        ("fuzz cases", |r| r.fuzz_cases = 1),
+        ("reproducible build", |r| {
+            r.reproducible_builds.push(KagemushaReproducibleBuildV1 {
+                builder_id: [0xD1; 32],
+                artifact_set_digest: r.artifact_set_digest,
+                report: evidence(0xD3),
+            });
+        }),
+        ("recursive depth", |r| {
+            r.profile_qualifications[0].recursive_depths.push(
+                KagemushaRecursiveDepthQualificationV1 {
+                    depth: 8,
+                    verified_handoffs: 8,
+                    complete_proof_bytes: 6_000,
+                    raw_complete_exchange_bytes: 9_000,
+                    text_complete_exchange_bytes: 12_000,
+                    report: evidence(0x31),
+                },
+            );
+        }),
+        ("acceptance case", |r| {
+            r.profile_qualifications[0]
+                .acceptance_cases
+                .push(KagemushaAcceptanceCaseEvidenceV1 {
+                    case: KagemushaAcceptanceCaseV1::ALL[0],
+                    validator_count: 0,
+                    report: evidence(0x61),
+                });
+        }),
+        ("aggregate payment count", |r| {
+            r.profile_qualifications[0]
+                .aggregate_balance
+                .independent_payments = 1
+        }),
+        ("aggregate folded credits", |r| {
+            r.profile_qualifications[0].aggregate_balance.folded_credits = 1
+        }),
+        ("aggregate spend", |r| {
+            r.profile_qualifications[0].aggregate_balance.spend_payments = 1
+        }),
+        ("aggregate report", |r| {
+            r.profile_qualifications[0].aggregate_balance.report = evidence(0x40)
+        }),
+        ("thermal folded credits", |r| {
+            r.profile_qualifications[0].thermal.folded_credits = 1
+        }),
+        ("thermal proof time", |r| {
+            r.profile_qualifications[0].thermal.fold_p95_ms = 1
+        }),
+        ("thermal memory", |r| {
+            r.profile_qualifications[0].thermal.process_rss_bytes = 1
+        }),
+        ("thermal energy", |r| {
+            r.profile_qualifications[0]
+                .thermal
+                .operation_energy_millijoules = 1
+        }),
+        ("second-profile thermal energy", |r| {
+            r.profile_qualifications[1]
+                .thermal
+                .operation_energy_millijoules = 1
+        }),
+        ("thermal report", |r| {
+            r.profile_qualifications[0].thermal.report = evidence(0x41)
+        }),
+        ("envelope raw size", |r| {
+            r.profile_qualifications[0]
+                .envelope
+                .raw_complete_exchange_bytes = 1
+        }),
+        ("envelope text size", |r| {
+            r.profile_qualifications[0]
+                .envelope
+                .text_complete_exchange_bytes = 1
+        }),
+        ("envelope handoff time", |r| {
+            r.profile_qualifications[0].envelope.handoff_p95_ms = 1
+        }),
+        ("envelope report", |r| {
+            r.profile_qualifications[0].envelope.report = evidence(0x42)
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut changed = baseline.clone();
+        mutate(&mut changed);
+        for index in 0..changed.profile_qualifications.len() {
+            reseal_profile_qualification(&mut changed, index);
+        }
+        assert_eq!(
+            changed.validate_experimental(),
+            Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+            "{label} must not claim production-only evidence"
+        );
+        let encoded = norito::encode_canonical(&changed).unwrap();
+        assert_eq!(
+            KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&encoded),
+            Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+            "{label} must be rejected during canonical decode"
+        );
+    }
 }
 
 #[test]

@@ -42,6 +42,8 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+    "connect_norito_kagemusha_testnet_value_admit_v1",
+    "connect_norito_kagemusha_testnet_value_credit_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -55,7 +57,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 31
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 33
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -63,7 +65,11 @@ def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
         ]
         expected = KAGEMUSHA_V1_C_SYMBOLS
         if sdk == "csharp" and MODULE.os.name == "nt":
-            expected = expected - {"connect_norito_kagemusha_testnet_finalized_mint_observe_v1"}
+            expected = expected - {
+                "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+                "connect_norito_kagemusha_testnet_value_admit_v1",
+                "connect_norito_kagemusha_testnet_value_credit_v1",
+            }
         assert len(required) == len(expected)
         assert set(required) == expected
 
@@ -134,6 +140,12 @@ def test_android_diagnostic_jni_exports_survive_minification_and_artifact_inspec
         "org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetFinalizedMintObservationJniV1": (
             "nativeContractV1", "nativeObserveV1",
         ),
+        "org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetValueAdmissionJniV1": (
+            "nativeContractV1", "nativeAdmitV1",
+        ),
+        "org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetValueCreditJniV1": (
+            "nativeContractV1", "nativeCreditV1",
+        ),
         "org.hyperledger.iroha.sdk.offline.probe.Pixel6TestnetDiagnosticSelectionJniV1": (
             "nativeContractV1", "nativeCreateV1",
         ),
@@ -191,6 +203,8 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_close_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
             "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+            "connect_norito_kagemusha_testnet_value_admit_v1",
+            "connect_norito_kagemusha_testnet_value_credit_v1",
             "connect_norito_kagemusha_device_command_response_v1_verify",
             "connect_norito_kagemusha_reserve_finality_hint_v1",
             "connect_norito_kagemusha_reserve_finality_verify_v1",

@@ -533,6 +533,7 @@ fn manifest(
     KagemushaReleaseManifestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         network_id,
+        purpose: KagemushaReleasePurposeV1::Production,
         release_id: [0; 32],
         source_tree_digest: receipt.source_tree_digest,
         cargo_lock_digest: receipt.cargo_lock_digest,

@@ -8654,6 +8654,10 @@ pub struct Settlement {
 /// content address and compiled protocol identity.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Kagemusha {
+    /// Permit a signed TestnetExperiment proof release on this explicitly configured node.
+    /// Production releases do not need this permission.
+    #[config(default = "false")]
+    pub allow_testnet_experimental_release: bool,
     /// Canonical Norito release manifest.
     pub release_manifest_path: Option<PathBuf>,
     /// Canonical Norito internal qualification receipt.
@@ -8871,6 +8875,7 @@ impl Kagemusha {
         actual::Kagemusha {
             reserve_accounts: BTreeMap::new(),
             proof_release,
+            allow_testnet_experimental_release: self.allow_testnet_experimental_release,
         }
     }
 }

@@ -21,18 +21,17 @@ use iroha_core::zk::kagemusha_v1_recursion::{
     KagemushaDirectoryArtifactResolverV1, KagemushaOperationV1,
     KagemushaRecursiveVerifierProfileV1, KagemushaStateRelationPublicInputsV1,
     KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
+    KagemushaTestnetValueAdmissionV1, KagemushaVerifiedFinalityChainV1,
 };
 use iroha_core::zk::kagemusha_v1_state::KagemushaStateProofReleaseV1;
 #[cfg(unix)]
 use iroha_core::zk::kagemusha_v1_state::MintInboxReservationV1;
 #[cfg(unix)]
-use iroha_data_model::isi::kagemusha_v1::{
-    KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1,
-};
+use iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KagemushaInternalValidationReceiptV1,
     KagemushaPairedProofV1, KagemushaReleaseAttestationV1, KagemushaReleaseAuthorityPolicyV1,
-    KagemushaReleaseManifestV1,
+    KagemushaReleaseManifestV1, KagemushaReleasePurposeV1,
 };
 use iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1;
 use libc::{c_int, c_uchar};
@@ -54,6 +53,8 @@ pub const KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1: usize =
 pub const KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1: usize = 32;
 /// Maximum canonical Norito diagnostic finalized-mint observation response.
 pub const KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1: usize = 512;
+/// Maximum canonical Norito archive for one explicitly experimental value admission.
+pub const KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1: usize = 768;
 
 /// Unsigned, non-authorizing canonical diagnostic data returned after native verification.
 ///
@@ -93,6 +94,36 @@ pub struct KagemushaTestnetFinalizedMintObservationArchiveV1 {
     operation_id: [u8; 32],
     credit_id: [u8; 32],
     mint_envelope_digest: [u8; 32],
+}
+
+/// Copyable testnet value-admission evidence returned by the durable native owner.
+///
+/// A successful FFI call confirms that native memory holds the exact Applied top-up, paired
+/// MintFold proof, pre-submission reservation, and independent finality pin. This archive is
+/// inspectable and forgeable after copying; testnet ledgers must deduplicate its operation and
+/// credit IDs and must not accept the archive itself as a production spend capability.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, norito::Decode, norito::Encode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "connect_norito_bridge::KagemushaTestnetValueAdmissionArchiveV1")]
+pub struct KagemushaTestnetValueAdmissionArchiveV1 {
+    version: u16,
+    hardware_qualified: bool,
+    network_id: [u8; 32],
+    release_id: [u8; 32],
+    release_attestation_digest: [u8; 32],
+    asset_identity_digest: [u8; 32],
+    asset_incarnation: [u8; 32],
+    asset_scale: u32,
+    liability_pool_id: [u8; 32],
+    operation_id: [u8; 32],
+    credit_id: [u8; 32],
+    amount: u128,
+    mint_envelope_digest: [u8; 32],
+    candidate_envelope_digest: [u8; 32],
+    successor_state_commitment: [u8; 32],
+    finality_block_height: u64,
+    finality_height_context_id: [u8; 32],
 }
 
 struct KagemushaTestnetObservationInstallationV1 {
@@ -147,10 +178,20 @@ fn require_scope_release_pins(
     authenticated_network_id: [u8; 32],
     authenticated_release_id: [u8; 32],
     authenticated_attestation_digest: [u8; 32],
+    authenticated_purpose: KagemushaReleasePurposeV1,
 ) -> Result<(), String> {
+    let purpose_matches = matches!(
+        authenticated_purpose,
+        KagemushaReleasePurposeV1::TestnetExperiment(experimental)
+            if experimental.asset_identity_digest == scope.asset_identity_digest()
+                && experimental.asset_incarnation == scope.asset_incarnation()
+                && experimental.asset_scale == scope.asset_scale()
+                && experimental.liability_pool_id == scope.liability_pool_id()
+    );
     if authenticated_network_id != scope.network_id()
         || authenticated_release_id != scope.release_id()
         || authenticated_attestation_digest != scope.release_attestation_digest()
+        || !purpose_matches
     {
         return Err("KAGEMUSHA release differs from operator-pinned testnet scope".to_owned());
     }
@@ -226,7 +267,7 @@ pub enum KagemushaTestnetDurableObservationModeV1 {
 /// Rejects unauthenticated artifacts, a changed scope/release, an absent or conflicting
 /// journal, missing independent finality anchors, failed replay, or an already installed owner.
 #[cfg(unix)]
-pub fn load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
+pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
     manifest_archive: &[u8],
     validation_receipt_archive: &[u8],
     release_attestation_archive: &[u8],
@@ -236,7 +277,7 @@ pub fn load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
     artifact_root: impl AsRef<Path>,
     journal_path: impl AsRef<Path>,
     mode: KagemushaTestnetDurableObservationModeV1,
-    independent_anchors: &BTreeMap<[u8; 32], KagemushaFinalityTrustAnchorV1>,
+    independent_anchors: &BTreeMap<[u8; 32], KagemushaVerifiedFinalityChainV1>,
 ) -> Result<(), String> {
     // Serialize journal creation with every installation path. A duplicate caller must
     // not initialize an orphan journal before OnceLock rejects its owner.
@@ -291,20 +332,22 @@ fn load_authenticated_testnet_verifier(
         .map_err(|error| format!("invalid operator-pinned KAGEMUSHA authority policy: {error}"))?;
     let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(manifest_archive)
         .map_err(|error| format!("invalid KAGEMUSHA release manifest: {error}"))?;
-    let receipt =
-        KagemushaInternalValidationReceiptV1::decode_canonical_exact(validation_receipt_archive)
-            .map_err(|error| format!("invalid KAGEMUSHA release validation receipt: {error}"))?;
+    let receipt = KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(
+        validation_receipt_archive,
+    )
+    .map_err(|error| format!("invalid KAGEMUSHA release validation receipt: {error}"))?;
     let attestation =
         KagemushaReleaseAttestationV1::decode_canonical_exact(release_attestation_archive)
             .map_err(|error| format!("invalid KAGEMUSHA release attestation: {error}"))?;
     let release = manifest
-        .authenticate(&receipt, trusted_authority_policy, &attestation)
+        .authenticate_experimental(&receipt, trusted_authority_policy, &attestation)
         .map_err(|error| format!("unauthenticated KAGEMUSHA release: {error}"))?;
     require_scope_release_pins(
         scope,
         *release.network_id().as_bytes(),
         release.release_id(),
         release.attestation_digest(),
+        release.purpose(),
     )?;
     let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(&release)
         .map_err(|error| format!("invalid KAGEMUSHA State proof release: {error}"))?;
@@ -319,8 +362,10 @@ fn load_authenticated_testnet_verifier(
     let mut verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
         .map_err(|error| format!("cannot load KAGEMUSHA native verifier: {error}"))?;
     verifier
-        .authorize_monetary_release(Arc::new(release))
-        .map_err(|error| format!("cannot authorize KAGEMUSHA proof release: {error}"))?;
+        .authorize_experimental_proof_release(Arc::new(release))
+        .map_err(|error| {
+            format!("cannot authorize KAGEMUSHA experimental proof release: {error}")
+        })?;
     Ok(verifier)
 }
 
@@ -353,7 +398,7 @@ pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
         .map_err(|error| format!("KAGEMUSHA testnet mint reservation rejected: {error}"))
 }
 
-/// Pin a separately authenticated finality context to one durably reserved testnet top-up.
+/// Pin a verified signed finality chain to one durably reserved testnet top-up.
 ///
 /// This Rust-only call must be made by a native finality source that has verified the actual
 /// chain height context independently of the submitted Torii operation response. The bridge
@@ -366,9 +411,9 @@ pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
 /// Rejects a missing durable owner or reservation, wrong network, malformed anchor,
 /// replacement pin, or poisoned owner.
 #[cfg(unix)]
-pub fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
+pub(crate) fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
     operation_id: [u8; 32],
-    trust_anchor: KagemushaFinalityTrustAnchorV1,
+    verified_chain: &KagemushaVerifiedFinalityChainV1,
 ) -> Result<bool, String> {
     let installed = TESTNET_STATE_OBSERVATION_OWNER_V1
         .get()
@@ -381,8 +426,36 @@ pub fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
     }
     installed
         .owner
-        .pin_authenticated_finality_anchor(operation_id, trust_anchor)
+        .pin_authenticated_finality_anchor(operation_id, verified_chain)
         .map_err(|error| format!("KAGEMUSHA testnet finality anchor rejected: {error}"))
+}
+
+/// Run one native-only mint-credit operation while the durable proof owner is held.
+///
+/// No C/JNI caller can supply or serialize the opaque value-admission token. Holding
+/// the owner lock through the consumer prevents an observation/recovery race between
+/// rederiving the Applied proof and durably counting its credit.
+#[cfg(unix)]
+pub(crate) fn with_kagemusha_testnet_durable_credit_owner_v1<T>(
+    consume: impl FnOnce(&KagemushaTestnetProofObservationOwnerV1) -> Result<T, String>,
+) -> Result<T, String> {
+    let owner = TESTNET_STATE_OBSERVATION_OWNER_V1
+        .get()
+        .ok_or_else(|| "KAGEMUSHA durable testnet observation owner is unavailable".to_owned())?;
+    let installed = owner
+        .lock()
+        .map_err(|_| "KAGEMUSHA durable testnet observation owner is poisoned".to_owned())?;
+    require_durable_credit_owner_v1(installed.durable)?;
+    consume(&installed.owner)
+}
+
+#[cfg(unix)]
+fn require_durable_credit_owner_v1(durable: bool) -> Result<(), String> {
+    if durable {
+        Ok(())
+    } else {
+        Err("KAGEMUSHA durable testnet observation owner is unavailable".to_owned())
+    }
 }
 
 /// Verify and append one real paired State proof to the installed testnet trial.
@@ -692,6 +765,110 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     0
 }
 
+/// Admit one previously verified Applied mint as scoped value in the experimental testnet lane.
+///
+/// The caller supplies only the operation ID. The durable native owner retrieves the exact
+/// proof, reservation, signed release, and independently pinned finality context retained in
+/// its journal. A copied output archive is inspection data; a testnet ledger must call this
+/// boundary and deduplicate operation/credit IDs instead of trusting submitted archive bytes.
+///
+/// # Safety
+/// Non-null pointers must reference their declared accessible spans; the output span must be
+/// writable, and `output_len` must be naturally aligned and disjoint from input and output.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
+    operation_id_ptr: *const c_uchar,
+    operation_id_len: usize,
+    output_ptr: *mut c_uchar,
+    output_capacity: usize,
+    output_len: *mut usize,
+) -> c_int {
+    if output_len.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let length_start = output_len as usize;
+    let Some(length_end) = length_start.checked_add(size_of::<usize>()) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    let input_start = operation_id_ptr as usize;
+    let output_start = output_ptr as usize;
+    let Some(input_end) = input_start.checked_add(operation_id_len) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    let Some(output_end) = output_start.checked_add(output_capacity) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    if !length_start.is_multiple_of(align_of::<usize>())
+        || (input_start < length_end && length_start < input_end)
+        || (output_start < length_end && length_start < output_end)
+        || (input_start < output_end && output_start < input_end)
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    unsafe { *output_len = 0 };
+    if operation_id_ptr.is_null() || output_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    if operation_id_len != 32 {
+        return ERR_KAGEMUSHA_V1;
+    }
+    if output_capacity < KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    let Some(owner) = TESTNET_STATE_OBSERVATION_OWNER_V1.get() else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
+    let operation_id: [u8; 32] = unsafe { slice::from_raw_parts(operation_id_ptr, 32) }
+        .try_into()
+        .expect("fixed operation ID length");
+    let archive = catch_unwind(AssertUnwindSafe(|| {
+        let installed = owner.lock().map_err(|_| ())?;
+        if !installed.durable {
+            return Err(());
+        }
+        let admission: KagemushaTestnetValueAdmissionV1 = installed
+            .owner
+            .admit_finalized_testnet_value(operation_id)
+            .map_err(|_| ())?;
+        let scope = admission.scope();
+        let anchor = admission.finality_anchor();
+        let context_id: [u8; 32] = *anchor.height_context_id.0.as_ref();
+        let record = KagemushaTestnetValueAdmissionArchiveV1 {
+            version: 1,
+            hardware_qualified: false,
+            network_id: scope.network_id(),
+            release_id: scope.release_id(),
+            release_attestation_digest: scope.release_attestation_digest(),
+            asset_identity_digest: scope.asset_identity_digest(),
+            asset_incarnation: scope.asset_incarnation(),
+            asset_scale: scope.asset_scale(),
+            liability_pool_id: scope.liability_pool_id(),
+            operation_id: admission.operation_id(),
+            credit_id: admission.credit_id(),
+            amount: admission.amount(),
+            mint_envelope_digest: admission.mint_envelope_digest(),
+            candidate_envelope_digest: admission.candidate_envelope_digest(),
+            successor_state_commitment: admission.successor_state_commitment(),
+            finality_block_height: anchor.block_height,
+            finality_height_context_id: context_id,
+        };
+        let archive = norito::encode_canonical(&record).map_err(|_| ())?;
+        if archive.len() > KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 {
+            return Err(());
+        }
+        Ok(archive)
+    }));
+    let Ok(Ok(archive)) = archive else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    unsafe {
+        ptr::copy_nonoverlapping(archive.as_ptr(), output_ptr, archive.len());
+        *output_len = archive.len();
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,13 +925,6 @@ mod tests {
             [0x5a; KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1]
         );
         assert_eq!(output_len, 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rust_only_anchor_pin_requires_a_durable_owner_before_accepting_coordinates() {
-        let anchor = trusted_anchor([3; 32], 7, [5; 32]).expect("exact marked hashes");
-        assert!(pin_kagemusha_testnet_authenticated_finality_anchor_v1([7; 32], anchor).is_err());
     }
 
     #[cfg(unix)]
@@ -1034,15 +1204,118 @@ mod tests {
         assert!(!decoded.hardware_qualified);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn testnet_value_admission_archive_is_scoped_and_requires_native_owner() {
+        let record = KagemushaTestnetValueAdmissionArchiveV1 {
+            version: 1,
+            hardware_qualified: false,
+            network_id: [1; 32],
+            release_id: [2; 32],
+            release_attestation_digest: [3; 32],
+            asset_identity_digest: [4; 32],
+            asset_incarnation: [5; 32],
+            asset_scale: 2,
+            liability_pool_id: [6; 32],
+            operation_id: [7; 32],
+            credit_id: [8; 32],
+            amount: 9,
+            mint_envelope_digest: [10; 32],
+            candidate_envelope_digest: [11; 32],
+            successor_state_commitment: [12; 32],
+            finality_block_height: 13,
+            finality_height_context_id: [14; 32],
+        };
+        let encoded = norito::encode_canonical(&record).expect("canonical value archive");
+        assert!(encoded.len() <= KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1);
+        let decoded: KagemushaTestnetValueAdmissionArchiveV1 =
+            norito::decode_canonical(&encoded).expect("canonical value archive roundtrip");
+        assert_eq!(decoded, record);
+        assert!(!decoded.hardware_qualified);
+
+        let mut output = [0x5a_u8; KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1];
+        let mut output_len = 123;
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_testnet_value_admit_v1(
+                    record.operation_id.as_ptr(),
+                    31,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut output_len,
+                )
+            },
+            ERR_KAGEMUSHA_V1
+        );
+        assert_eq!(output_len, 0);
+        assert!(output.iter().all(|byte| *byte == 0x5a));
+        assert_ne!(
+            unsafe {
+                connect_norito_kagemusha_testnet_value_admit_v1(
+                    record.operation_id.as_ptr(),
+                    32,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut output_len,
+                )
+            },
+            0,
+            "no retained Applied mint may be admitted from an uninstalled owner"
+        );
+    }
+
     #[test]
     fn release_scope_requires_all_independently_pinned_identities() {
         let scope = KagemushaTestnetStateObservationScopeV1::new(
             [1; 32], [4; 32], [5; 32], 2, [6; 32], [2; 32], [3; 32],
         )
         .expect("distinct operator pins");
-        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [3; 32]).is_ok());
-        assert!(require_scope_release_pins(scope, [4; 32], [2; 32], [3; 32]).is_err());
-        assert!(require_scope_release_pins(scope, [1; 32], [4; 32], [3; 32]).is_err());
-        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [4; 32]).is_err());
+        let purpose = KagemushaReleasePurposeV1::TestnetExperiment(
+            iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [4; 32],
+                asset_incarnation: [5; 32],
+                asset_scale: 2,
+                liability_pool_id: [6; 32],
+            },
+        );
+        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [3; 32], purpose).is_ok());
+        assert!(require_scope_release_pins(scope, [4; 32], [2; 32], [3; 32], purpose).is_err());
+        assert!(require_scope_release_pins(scope, [1; 32], [4; 32], [3; 32], purpose).is_err());
+        assert!(require_scope_release_pins(scope, [1; 32], [2; 32], [4; 32], purpose).is_err());
+        assert!(
+            require_scope_release_pins(
+                scope,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                KagemushaReleasePurposeV1::Production
+            )
+            .is_err()
+        );
+        assert!(
+            require_scope_release_pins(
+                scope,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                KagemushaReleasePurposeV1::TestnetExperiment(
+                    iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1 {
+                        asset_identity_digest: [7; 32],
+                        asset_incarnation: [5; 32],
+                        asset_scale: 2,
+                        liability_pool_id: [6; 32],
+                    }
+                )
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn testnet_value_credit_owner_rejects_process_only_installation() {
+        assert!(require_durable_credit_owner_v1(false).is_err());
+        assert!(require_durable_credit_owner_v1(true).is_ok());
+        assert!(with_kagemusha_testnet_durable_credit_owner_v1(|_| Ok(())).is_err());
     }
 }

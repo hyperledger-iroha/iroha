@@ -9,6 +9,7 @@ use std::sync::Arc;
 use iroha_data_model::NetworkId;
 use iroha_data_model::kagemusha::{
     KagemushaAuthenticatedReleaseV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+    KagemushaReleasePurposeV1,
 };
 use norito::{Decode, Encode};
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -28,6 +29,17 @@ fn require_signed_transaction_network_v1(
     if release_network != lane_network {
         return Err(
             "Kagemusha hardware transaction lane differs from signed release network".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn require_production_transaction_release_v1(
+    purpose: KagemushaReleasePurposeV1,
+) -> Result<(), String> {
+    if purpose != KagemushaReleasePurposeV1::Production {
+        return Err(
+            "experimental Kagemusha release cannot authorize hardware transactions".to_owned(),
         );
     }
     Ok(())
@@ -299,6 +311,7 @@ impl KagemushaHardwareTransactionVerifierV1 {
         profile_id: [u8; 32],
         transport: Arc<dyn KagemushaHardwareCheckpointTransportV1>,
     ) -> Result<Self, String> {
+        require_production_transaction_release_v1(release.purpose())?;
         require_signed_transaction_network_v1(release.network_id(), lane.network_id)?;
         if release.enabled_profile(profile_id).is_none()
             || lane.device_lane_id == [0; 32]
@@ -485,6 +498,27 @@ mod tests {
         ));
         assert!(require_signed_transaction_network_v1(release, release).is_ok());
         assert!(require_signed_transaction_network_v1(release, foreign).is_err());
+    }
+
+    #[test]
+    fn hardware_transaction_owner_requires_production_purpose() {
+        use iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1;
+
+        assert!(
+            require_production_transaction_release_v1(KagemushaReleasePurposeV1::Production)
+                .is_ok()
+        );
+        assert!(
+            require_production_transaction_release_v1(
+                KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                    asset_identity_digest: [1; 32],
+                    asset_incarnation: [2; 32],
+                    asset_scale: 2,
+                    liability_pool_id: [3; 32],
+                },)
+            )
+            .is_err()
+        );
     }
 
     #[test]

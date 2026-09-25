@@ -184,19 +184,33 @@ pub use kagemusha_core_coordinator_v1::{
 mod kagemusha_device_bridge_v1;
 mod kagemusha_reserve_finality_v1;
 mod kagemusha_testnet_finality_chain_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_mint_runtime_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,
     connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
-#[cfg(unix)]
-pub use kagemusha_testnet_finality_chain_v1::pin_kagemusha_testnet_authenticated_finality_chain_v1;
 pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mint_runtime_v1::{
+    KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
+    KagemushaTestnetNativeMintRuntimeV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_value_ledger_v1::{
+    KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1, KagemushaTestnetMintLedgerCreditArchiveV1,
+    connect_norito_kagemusha_testnet_value_credit_v1, credit_kagemusha_testnet_native_value_v1,
+    install_kagemusha_testnet_native_value_ledger_v1,
+};
 pub use kagemusha_testnet_observation_v1::{
     KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1, KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1,
     KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1,
     KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1,
     KagemushaTestnetFinalizedMintObservationArchiveV1, KagemushaTestnetObservationInstallErrorV1,
     KagemushaTestnetStateObservationArchiveV1,
     connect_norito_kagemusha_testnet_state_proof_observe_v1,
@@ -205,10 +219,9 @@ pub use kagemusha_testnet_observation_v1::{
 };
 #[cfg(unix)]
 pub use kagemusha_testnet_observation_v1::{
-    KagemushaTestnetDurableObservationModeV1,
+    KagemushaTestnetDurableObservationModeV1, KagemushaTestnetValueAdmissionArchiveV1,
     connect_norito_kagemusha_testnet_finalized_mint_observe_v1,
-    load_and_install_kagemusha_testnet_durable_state_observation_owner_v1,
-    pin_kagemusha_testnet_authenticated_finality_anchor_v1,
+    connect_norito_kagemusha_testnet_value_admit_v1,
     reserve_kagemusha_testnet_mint_before_submission_v1,
 };
 #[cfg(any(test, feature = "dev-tools"))]

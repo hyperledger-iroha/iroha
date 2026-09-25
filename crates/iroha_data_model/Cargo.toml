@@ -14,7 +14,7 @@ workspace = true
 
 [features]
 default = ["application-model"]
-dev-tools = []
+dev-tools = ["dep:tempfile"]
 # Public application model; node-only additions are requested by node crates.
 application-model = ["governance", "pqc", "bls", "gost", "sm"]
 bridge = []
@@ -81,6 +81,7 @@ bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 trybuild = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Storage round-trip integration belongs to tests, not the model dependency graph.
@@ -138,6 +139,11 @@ required-features = ["dev-tools", "test-fixtures", "transparent_api"]
 name = "privacy_exact12_fixtures"
 path = "src/bin/privacy_exact12_fixtures.rs"
 required-features = ["dev-tools", "privacy-exact12-conformance"]
+
+[[bin]]
+name = "kagemusha_verified_receipt_v1"
+path = "src/bin/kagemusha_verified_receipt_v1.rs"
+required-features = ["dev-tools"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

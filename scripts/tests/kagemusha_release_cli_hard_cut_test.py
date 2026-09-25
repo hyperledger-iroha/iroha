@@ -65,10 +65,20 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         command_names = re.findall(r'#\[command\(name = "([^"]+)"\)\]', command_source)
         self.assertEqual(
             command_names,
-            ["authenticate-release-v1"],
+            [
+                "prepare-experimental-release-v1",
+                "authenticate-release-v1",
+                "authenticate-experimental-release-v1",
+                "sign-experimental-release-approval-v1",
+                "assemble-experimental-release-v1",
+            ],
         )
         self.assertIn(
             "Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer)",
+            command_source,
+        )
+        self.assertIn(
+            "Command::AuthenticateExperimentalReleaseV1(args)",
             command_source,
         )
         for retired_command in (
@@ -207,6 +217,40 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
             '"lane_id"',
         ):
             self.assertNotIn(retired_binding, report)
+
+    def test_experimental_release_requires_separate_signature_and_operator_scope(self) -> None:
+        source = COMMAND.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+        self.assertIn("decode_canonical_experimental_exact", source)
+        self.assertIn(".authenticate_experimental(&receipt, &policy, &attestation)", source)
+        self.assertIn("validate_experimental_operator_pins_v1", source)
+        self.assertIn("rehash_all_release_artifacts_v1(&manifest.artifacts", source)
+        for pin in (
+            "expected_network_id",
+            "expected_release_id",
+            "expected_asset_identity_digest",
+            "expected_asset_incarnation",
+            "expected_asset_scale",
+            "expected_liability_pool_id",
+        ):
+            self.assertIn(pin, source)
+        self.assertIn('"hardware_qualified", &false', source)
+        self.assertIn('"monetary_admission", &false', source)
+        self.assertIn('"runtime_loaded", &false', source)
+        self.assertIn(".experimental_release_attestation_subject(receipt, policy)", source)
+        self.assertIn("crate::secure_fs::read_private_file(path)", source)
+        self.assertIn("SignatureOf::try_new(signing_key.private_key(), &payload)", source)
+        self.assertIn(".authenticate_experimental(&receipt, &policy, &attestation)", source)
+        self.assertIn("crate::secure_fs::write_private_file_atomic", source)
+        self.assertNotIn("signer_private_keys: Vec", source)
+        self.assertIn("experimental_receipt_evidence_files_v1", source)
+        self.assertIn("rehash_experimental_receipt_evidence_v1", source)
+        self.assertIn("KagemushaReleasePurposeV1::TestnetExperiment(scope)", source)
+        self.assertIn(".canonical_experimental_digest()", source)
+        self.assertRegex(
+            source,
+            r"validate_authority_review_projection_v1\(\s*&projection_bytes,\s*&manifest,\s*&receipt,\s*AuthorityReviewPurposeV1::TestnetExperiment",
+        )
+        self.assertIn('"prepared_unsigned_experimental_candidate"', source)
 
 
 if __name__ == "__main__":

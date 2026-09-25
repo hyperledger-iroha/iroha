@@ -15,6 +15,8 @@ mod app_attest_assertion_fold;
 mod app_attest_state_guard_stage;
 #[path = "apple_compact_credential_id.rs"]
 mod apple_compact_credential_id;
+#[path = "keymint_one_use_head_stage.rs"]
+mod keymint_one_use_head_stage;
 
 use ff::Field as _;
 

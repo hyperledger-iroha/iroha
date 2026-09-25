@@ -303,6 +303,16 @@ fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_c
         )
         .is_err());
 
+    // Repeating a valid signed bundle cannot advance a consecutive chain.
+    let repeated = json::to_json(&vec![bundle.clone(), bundle]).unwrap();
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            trusted_context,
+            repeated.as_bytes(),
+        )
+        .is_err());
+
     #[cfg(unix)]
     assert!(crate::kagemusha_testnet_finality_chain_v1::
         pin_kagemusha_testnet_authenticated_finality_chain_v1(

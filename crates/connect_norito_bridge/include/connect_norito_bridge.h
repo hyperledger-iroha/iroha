@@ -620,6 +620,33 @@ int32_t connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
     const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
     const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
     uint8_t* output_observation, size_t output_capacity, size_t* output_length);
+
+// Return the exact positive amount admitted by the installed durable testnet
+// owner for one already observed Applied top-up and paired MintFold proof.
+// The owner must retain its pre-send reservation and independently pinned
+// finality context. The caller supplies only the operation ID, not an anchor.
+// The canonical Norito KagemushaTestnetValueAdmissionArchiveV1 is inspectable
+// evidence; copying it does not grant a production spend capability. A testnet
+// ledger must credit each operation and proof-bound credit ID at most once.
+// Full output capacity is required, and output_length must be naturally
+// aligned and disjoint from the input and output spans.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 768
+int32_t connect_norito_kagemusha_testnet_value_admit_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    uint8_t* output_admission, size_t output_capacity, size_t* output_length);
+
+// Durably credit one already observed Applied top-up to the installed native
+// Experimental testnet value ledger. A trusted Rust host must first install the
+// signed-release durable proof owner and its separate private credit ledger.
+// The caller supplies only the operation ID. The canonical Norito
+// KagemushaTestnetMintLedgerCreditArchiveV1 reports the counted credit and
+// total admitted value; it is copyable inspection data, not a spend credential
+// or production hardware qualification. Full output capacity is mandatory.
+// output_length must be naturally aligned and disjoint from input/output spans.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1 512
+int32_t connect_norito_kagemusha_testnet_value_credit_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    uint8_t* output_credit, size_t output_capacity, size_t* output_length);
 #endif
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
