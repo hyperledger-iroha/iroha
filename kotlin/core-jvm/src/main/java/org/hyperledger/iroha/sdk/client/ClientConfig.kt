@@ -35,6 +35,7 @@ class ClientConfig private constructor(builder: Builder) {
     private val crashTelemetryEnabled: Boolean = builder.crashTelemetryEnabled
     private val crashMetadataProvider: MetadataProvider = builder.crashMetadataProvider
     private val crashTelemetryHandler: CrashTelemetryHandler?
+    private val allowLocalDevelopmentHttp: Boolean = builder.allowLocalDevelopmentHttp
 
     init {
         val resolvedExporterName = builder.resolveTelemetryExporterName()
@@ -75,6 +76,8 @@ class ClientConfig private constructor(builder: Builder) {
     fun defaultHeaders(): Map<String, String> = defaultHeaders
     /** Wire-format preference used for dual-format Torii routes. */
     fun wireFormatPreference(): WireFormatPreference = wireFormatPreference
+    /** Whether signed requests may use plain http to loopback hosts and the Android emulator host alias. */
+    fun allowLocalDevelopmentHttp(): Boolean = allowLocalDevelopmentHttp
     /** Registered observers that receive request lifecycle callbacks. */
     fun observers(): List<ClientObserver> = observers
     /** Policy available to caller-managed replay-safe reads; signed submissions ignore it. */
@@ -106,6 +109,7 @@ class ClientConfig private constructor(builder: Builder) {
             .setTelemetryExporterName(telemetryExporterName).setNetworkContextProvider(networkContextProvider)
             .setDeviceProfileProvider(deviceProfileProvider).setCrashTelemetryMetadataProvider(crashMetadataProvider)
             .setCrashTelemetryEnabled(crashTelemetryEnabled)
+            .setAllowLocalDevelopmentHttp(allowLocalDevelopmentHttp)
         localSigningContext?.let(builder::setLocalSigningContext)
         operatorSigningContext?.let(builder::setOperatorSigningContext)
         return builder
@@ -162,6 +166,7 @@ class ClientConfig private constructor(builder: Builder) {
         internal var deviceProfileProvider: DeviceProfileProvider = DeviceProfileProvider.disabled()
         internal var crashTelemetryEnabled: Boolean = false
         internal var crashMetadataProvider: MetadataProvider = CrashTelemetryHandler.defaultMetadataProvider()
+        internal var allowLocalDevelopmentHttp: Boolean = false
 
         /** Enables local draft signing with one immutable, caller-owned network context. */
         fun setLocalSigningContext(context: LocalSigningContext): Builder {
@@ -180,6 +185,12 @@ class ClientConfig private constructor(builder: Builder) {
         fun clearDefaultHeaders(): Builder { defaultHeaders.clear(); return this }
         fun setDefaultHeaders(headers: Map<String, String>?): Builder { clearDefaultHeaders(); headers?.forEach { (k, v) -> putDefaultHeader(k, v) }; return this }
         fun setWireFormatPreference(preference: WireFormatPreference): Builder { this.wireFormatPreference = preference; return this }
+        /**
+         * Allows [HttpClientTransport] signed requests over plain http only when the base URL host is
+         * loopback (`127.0.0.0/8`, `::1`, `localhost`) or the Android emulator host alias `10.0.2.2`.
+         * Remote http hosts stay refused. Intended for local development nodes; off by default.
+         */
+        fun setAllowLocalDevelopmentHttp(allow: Boolean): Builder { this.allowLocalDevelopmentHttp = allow; return this }
         fun addObserver(observer: ClientObserver): Builder { observers.add(observer); return this }
         fun clearObservers(): Builder { observers.clear(); return this }
         fun setObservers(observers: List<ClientObserver>?): Builder { clearObservers(); observers?.forEach { addObserver(it) }; return this }

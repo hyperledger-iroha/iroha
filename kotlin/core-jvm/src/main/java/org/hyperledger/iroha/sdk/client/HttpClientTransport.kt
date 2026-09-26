@@ -1904,6 +1904,7 @@ class HttpClientTransport private constructor(
             target,
             operatorHeaders,
             null,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }
@@ -1956,6 +1957,7 @@ class HttpClientTransport private constructor(
                 target,
                 canonicalHeaders,
                 null,
+                allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
             )
         }
         return builder.build()
@@ -1997,6 +1999,7 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }
@@ -2032,6 +2035,7 @@ class HttpClientTransport private constructor(
             target,
             canonicalHeaders,
             body,
+            allowLocalDevelopmentHttp = config.allowLocalDevelopmentHttp(),
         )
         return builder.build()
     }

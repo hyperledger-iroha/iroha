@@ -288,6 +288,12 @@ signing failures without retrying. Auth contexts do not expose private-key prope
 The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
 path account to be the same exact canonical I105 account as the signer.
+Signed requests are refused over plain http. For a local development node, call
+`ClientConfig.Builder.setAllowLocalDevelopmentHttp(true)` to allow http only when the base URL host is
+loopback (`127.0.0.0/8`, `::1`, `localhost`) or a private IPv4 address (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), which covers the Android emulator alias `10.0.2.2` and devices on the same local
+network; all other http hosts stay refused. The option is off by default and is meant for development
+builds only.
 
 Nearby's `IrohaPeerNearbySessionV1` owns the authenticated IPM1 boundary for Kotlin and Java.
 `seal` accepts an `IrohaPeerWireMessageV1`; `open` returns a verified message for the session's

@@ -1,8 +1,12 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+
+private val IPV4_LITERAL = Regex("""^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$""")
 
 /** Shared transport-safety checks for SDK requests that carry credentials or raw private keys. */
 internal object TransportSecurity {
@@ -35,8 +39,10 @@ internal object TransportSecurity {
         targetUri: URI,
         headers: Map<String, String>?,
         body: ByteArray?,
+        allowLocalDevelopmentHttp: Boolean = false,
     ) {
         if (!isSensitive(headers, body)) return
+        if (allowLocalDevelopmentHttp && isLocalDevelopmentHttp(baseUri, targetUri)) return
         val targetScheme = normalize(targetUri.scheme)
         require(targetScheme == "https") {
             "$context refuses insecure transport over ${renderScheme(targetScheme)}; use https."
@@ -80,6 +86,20 @@ internal object TransportSecurity {
         if (body == null || body.isEmpty()) return false
         val rendered = String(body, StandardCharsets.UTF_8).lowercase(Locale.ROOT)
         return sensitiveBodyFields.any(rendered::contains)
+    }
+
+    private fun isLocalDevelopmentHttp(baseUri: URI, targetUri: URI): Boolean =
+        normalize(baseUri.scheme) == "http" &&
+            normalize(targetUri.scheme) == "http" &&
+            sameAuthority(baseUri, targetUri, "http") &&
+            isLocalDevelopmentHost(normalize(targetUri.host))
+
+    private fun isLocalDevelopmentHost(host: String): Boolean {
+        if (host == "localhost") return true
+        val literal = host.removePrefix("[").removeSuffix("]")
+        if (!IPV4_LITERAL.matches(literal) && !literal.contains(':')) return false
+        val address = InetAddress.getByName(literal)
+        return address.isLoopbackAddress || (address is Inet4Address && address.isSiteLocalAddress)
     }
 
     private fun expectedWebSocketScheme(baseUri: URI): String =
