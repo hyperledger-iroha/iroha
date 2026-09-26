@@ -23954,10 +23954,8 @@ pub mod tests {
             .collect::<Vec<_>>();
         let validator_count =
             u32::try_from(validator_set.len()).expect("queue drain validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("queue drain quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("queue drain quorum fits u32");
         let drain_state = LaneDrainStateV1 {
             version: 1,
             intent: LaneDrainIntentV1 {

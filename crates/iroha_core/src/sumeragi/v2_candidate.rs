@@ -2719,10 +2719,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         validator_set.sort();
         let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("validator quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("validator quorum fits u32");
         let entrypoint_hash = Hash::from(transaction.hash_as_entrypoint());
         let previous_lane_block_height = lane_block_height.saturating_sub(1);
         let mut descriptor = LaneBlockDescriptorV1 {

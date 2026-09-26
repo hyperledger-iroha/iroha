@@ -57,7 +57,6 @@ use iroha_core::{
     kura::Kura,
     merge::{MergeLedgerCandidate, merge_qc_message_digest},
     state::derive_committee_key_id,
-    sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
 use iroha_data_model::{
@@ -1177,7 +1176,7 @@ fn committed_lane_block_has_expected_quorum(
     let Ok(commit_qc_signer_count) = usize::try_from(block.commit_qc_signer_count) else {
         return false;
     };
-    let expected_quorum = commit_quorum_from_len(expected_validator_count).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(expected_validator_count).max(1);
     validator_count == expected_validator_count
         && min_quorum == expected_quorum
         && prepare_qc_signer_count == expected_quorum
@@ -1194,7 +1193,7 @@ fn lane_payload_ownership_has_expected_quorum(
     let Ok(min_quorum) = usize::try_from(ownership.lane_block_descriptor_min_quorum) else {
         return false;
     };
-    let expected_quorum = commit_quorum_from_len(expected_validator_count).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(expected_validator_count).max(1);
     validator_count == expected_validator_count
         && ownership.lane_block_descriptor_validator_set.len() == expected_validator_count
         && min_quorum == expected_quorum
@@ -2949,7 +2948,7 @@ fn wait_for_committed_tx_outcome_across_clients(
     while started.elapsed() <= timeout_duration {
         let clients = clients_factory();
         let client_count = clients.len();
-        let quorum_required = commit_quorum_from_len(client_count).max(1);
+        let quorum_required = iroha_sumeragi::types::quorum(client_count).max(1);
         let mut observed_outcomes = Vec::new();
         last_observed.clear();
         for (index, client) in clients.into_iter().enumerate() {
@@ -4392,7 +4391,7 @@ fn wait_for_active_autoscale_diagnostics_convergence(
                                 && row.validator_count
                                     == u32::try_from(VALIDATORS_PER_LANE).unwrap_or(u32::MAX)
                                 && usize::try_from(row.min_quorum).ok()
-                                    == Some(commit_quorum_from_len(VALIDATORS_PER_LANE))
+                                    == Some(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
                                 && row.prepare_qc_signer_count == row.min_quorum
                                 && row.commit_qc_signer_count == row.min_quorum
                         })
@@ -4502,7 +4501,7 @@ fn validate_autoscale_drain_certificate(
         usize::try_from(intent.validator_count).ok() == Some(intent.validator_set.len())
             && intent.validator_set_hash == HashOf::new(&intent.validator_set)
             && usize::try_from(intent.min_quorum).ok()
-                == Some(commit_quorum_from_len(intent.validator_set.len()))
+                == Some(iroha_sumeragi::types::quorum(intent.validator_set.len()))
             && certificate.validator_set == intent.validator_set,
         "lane-3 drain certificate substituted or mis-described its committee"
     );
@@ -4567,7 +4566,7 @@ fn validate_autoscale_drain_certificate(
         }
     }
     ensure!(
-        signer_indices.len() == commit_quorum_from_len(certificate.validator_set.len())
+        signer_indices.len() == iroha_sumeragi::types::quorum(certificate.validator_set.len())
             && certificate.signer_proofs.len() == signer_indices.len(),
         "lane-3 drain certificate lacks exact quorum or has unaligned signer proofs"
     );
@@ -4775,7 +4774,7 @@ fn validate_autoscale_merge_qc(
         }
     }
     ensure!(
-        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len())
+        signer_indices.len() == iroha_sumeragi::types::quorum(qc.validator_set.len())
             && qc.signer_proofs.len() == signer_indices.len(),
         "merge QC lacks exact quorum or has unaligned signer proofs"
     );
@@ -4859,7 +4858,7 @@ fn validate_autoscale_retirement_evidence(
             && certificate.validator_set.len() == VALIDATORS_PER_LANE
             && usize::try_from(intent.validator_count).ok() == Some(VALIDATORS_PER_LANE)
             && usize::try_from(intent.min_quorum).ok()
-                == Some(commit_quorum_from_len(VALIDATORS_PER_LANE)),
+                == Some(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE)),
         "drain certificate committee/frontier shape is not the exact 4-validator lane proof"
     );
     let signer_count = certificate
@@ -4868,7 +4867,7 @@ fn validate_autoscale_retirement_evidence(
         .map(|byte| byte.count_ones() as usize)
         .sum::<usize>();
     ensure!(
-        signer_count == commit_quorum_from_len(VALIDATORS_PER_LANE)
+        signer_count == iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE)
             && certificate.signer_proofs.len() == signer_count,
         "drain certificate does not carry an aligned lane quorum"
     );
@@ -7409,7 +7408,6 @@ mod tests {
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
-    use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::json::Value as JsonValue;
@@ -8228,7 +8226,7 @@ mod tests {
         let lane_id = LaneId::new(AUTOSCALE_LANE_INDEX);
         let dataspace_id = DataSpaceId::new(NEXUS_ID_U64);
         let incarnation = test_hash(0xA8);
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let mut pruned_older = sample_committed_lane_block(
             lane_id,
@@ -8545,7 +8543,7 @@ mod tests {
     }
     #[test]
     fn committed_lane_block_quorum_requires_exact_lane_committee() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let valid = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8575,7 +8573,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_domain_progress_requires_exact_dataspace_and_qc_quorum() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let mut under_quorum = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8653,7 +8651,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_domain_application_progress_requires_applied_latest_row() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let applied_lower = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8737,7 +8735,7 @@ mod tests {
     }
     #[test]
     fn applied_lane_domain_progress_accepts_lower_applied_certified_row() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let applied_lower = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8879,7 +8877,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_domain_progress_rejects_ambiguous_latest_committed_rows() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let valid = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8922,7 +8920,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_domain_progress_rejects_malformed_latest_committed_row() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let valid = sample_committed_lane_block(
             LaneId::new(DS1_LANE_INDEX),
@@ -8958,7 +8956,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_payload_ownership_progress_requires_exact_replayable_quorum() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let under_quorum = sample_lane_payload_ownership(
             LaneId::new(DS1_LANE_INDEX),
@@ -9028,7 +9026,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_payload_ownership_progress_rejects_malformed_latest_replay_row() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let valid = sample_lane_payload_ownership(
             LaneId::new(DS1_LANE_INDEX),
@@ -9061,7 +9059,7 @@ mod tests {
     }
     #[test]
     fn latest_lane_payload_ownership_progress_rejects_ambiguous_latest_replay_identity() {
-        let quorum = u32::try_from(commit_quorum_from_len(VALIDATORS_PER_LANE))
+        let quorum = u32::try_from(iroha_sumeragi::types::quorum(VALIDATORS_PER_LANE))
             .expect("fixture quorum fits u32");
         let valid = sample_lane_payload_ownership(
             LaneId::new(DS1_LANE_INDEX),

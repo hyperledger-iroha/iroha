@@ -2639,10 +2639,8 @@ fn geometry_lane_proposal_and_ownership(
     validator_set: Vec<PeerId>,
 ) -> (LaneBlockProposalV1, SumeragiLanePayloadOwnership) {
     let validator_count = u32::try_from(validator_set.len()).expect("geometry committee count");
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .expect("geometry committee quorum");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .expect("geometry committee quorum");
     let mut ownership = SumeragiLanePayloadOwnership {
         proposal_height,
         proposal_view,

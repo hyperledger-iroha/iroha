@@ -37,6 +37,7 @@ the cutover. Why and how it was built: [2026-09-25 record](../docs/history/2026-
 | S6 | AMX two-phase commit | Open | Begin, prepare/escrow, relay, decision by deadline, settle; foreign-committee tracking and handoff proofs (spec §11); O-AMX oracle in the simulator. |
 | S7 | Taira reset and qualification | Open | Fresh genesis and operator runbook (spec §14.5); 24 h soak at n = 4 and n = 22 with 10–30 % loss, delay spikes, `kill -9` and disk-full injection; O-AGR, O-SIGN, O-LIVE and O-PERF computed from node logs. Release gate. |
 | S8 | Evidence and committee scheduling | Open | Evidence → penalties; NPoS election schedules committees with the lag-2 rule (spec §10). |
+| S9 | Full state root in `R` | Open | `R`'s post-state root commits to the complete World state (a Merkleized state or an incremental full-state accumulator), not only to the witnessed write set, and an event root is added; replaces the deviation recorded in spec Appendix E, E51. |
 
 S2 and S3 come before S4. S5 and S6 build on S4. S7 gates the release.
 

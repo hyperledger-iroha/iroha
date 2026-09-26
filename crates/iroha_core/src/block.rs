@@ -1391,8 +1391,7 @@ fn validate_native_amx_attestation_qc(
             signer_pops.push(signer_pop.to_vec());
         }
     }
-    let required_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(qc.validator_set().len()).max(1);
+    let required_quorum = iroha_sumeragi::types::quorum(qc.validator_set().len()).max(1);
     if body_min_quorum != required_quorum {
         return Err("native AMX attestation signed quorum policy mismatch".to_owned());
     }
@@ -8871,7 +8870,7 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let signer_count = signers.len();
-            let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
+            let required = iroha_sumeragi::types::quorum(roster_len);
             if signer_count != required {
                 return Err(Self::execution_context_error(format!(
                     "certified merge reference signer count mismatch: expected exactly {required}, got {signer_count}"
@@ -9303,14 +9302,12 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} validator count overflows u32"
                     ))
                 })?;
-                let min_quorum = u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-                )
-                .map_err(|_| {
-                    Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} quorum overflows u32"
-                    ))
-                })?;
+                let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                    .map_err(|_| {
+                        Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} quorum overflows u32"
+                        ))
+                    })?;
                 let previous_lane_block_height =
                     ownership.lane_block_height.checked_sub(1).ok_or_else(|| {
                         Self::execution_context_error(format!(
@@ -9998,14 +9995,12 @@ pub(crate) mod valid {
                         "autonomous lane payload envelope {index} validator count overflows u32"
                     ))
                 })?;
-                let min_quorum = u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-                )
-                .map_err(|_| {
-                    Self::execution_context_error(format!(
-                        "autonomous lane payload envelope {index} quorum overflows u32"
-                    ))
-                })?;
+                let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                    .map_err(|_| {
+                        Self::execution_context_error(format!(
+                            "autonomous lane payload envelope {index} quorum overflows u32"
+                        ))
+                    })?;
                 let expected_qc_mode_tag = LaneRelayEnvelope::lane_qc_mode_tag_for(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
@@ -13264,10 +13259,8 @@ pub(crate) mod valid {
             validator_set.sort();
             let validator_count =
                 u32::try_from(validator_set.len()).expect("validator count fits u32");
-            let min_quorum = u32::try_from(
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-            )
-            .expect("quorum fits u32");
+            let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                .expect("quorum fits u32");
             let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
                 lane_id,
                 dataspace_id,
@@ -14625,11 +14618,10 @@ pub(crate) mod valid {
             descriptor_validator_set.dedup();
             let validator_count = u32::try_from(descriptor_validator_set.len())
                 .expect("test validator count fits u32");
-            let min_quorum =
-                u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                    descriptor_validator_set.len(),
-                ))
-                .expect("test quorum fits u32");
+            let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(
+                descriptor_validator_set.len(),
+            ))
+            .expect("test quorum fits u32");
             let previous_lane_block_height = lane_block_height
                 .checked_sub(1)
                 .expect("test lane block height is non-zero");
@@ -25183,8 +25175,7 @@ pub(crate) mod tests {
         let descriptor = &coordinator_proposal.descriptor;
         let participant_is_coordinator = participant.lane_id == descriptor.lane_id
             && participant.dataspace_id == descriptor.dataspace_id;
-        let participant_min_quorum =
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+        let participant_min_quorum = iroha_sumeragi::types::quorum(validator_set.len()).max(1);
         let (
             participant_lane_incarnation,
             participant_previous_block_height,
@@ -25293,8 +25284,7 @@ pub(crate) mod tests {
         block_height: u64,
         keypairs: &[KeyPair],
     ) -> NativeAmxReceipt {
-        let signer_count =
-            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()).max(1);
+        let signer_count = iroha_sumeragi::types::quorum(keypairs.len()).max(1);
         signed_native_amx_receipt_with_signer_count(
             source_id,
             tx_entrypoint_hash,
@@ -25449,8 +25439,7 @@ pub(crate) mod tests {
         );
         let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
         source_id.copy_from_slice(entrypoint_hash.as_ref());
-        let signer_count =
-            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()).max(1);
+        let signer_count = iroha_sumeragi::types::quorum(keypairs.len()).max(1);
         let receipt = signed_native_amx_receipt_for_coordinator(
             source_id,
             entrypoint_hash,
@@ -25510,9 +25499,7 @@ pub(crate) mod tests {
                     .expect("fixture lane-validator PoP")
             })
             .collect::<Vec<_>>();
-        let quorum = crate::sumeragi::network_topology::commit_quorum_from_len(
-            descriptor.validator_set.len(),
-        );
+        let quorum = iroha_sumeragi::types::quorum(descriptor.validator_set.len());
         let selected_keypairs = ordered_keypairs
             .into_iter()
             .take(quorum)
@@ -26487,11 +26474,9 @@ pub(crate) mod tests {
                 body.participant_validator_set_hash = validator_set_hash;
                 body.participant_validator_count =
                     u32::try_from(validator_set.len()).expect("fixture validator count");
-                body.participant_min_quorum = u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
-                        .max(1),
-                )
-                .expect("fixture participant quorum");
+                body.participant_min_quorum =
+                    u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+                        .expect("fixture participant quorum");
                 *qc = NativeAmxAttestationQcV2::try_new(
                     body,
                     qc.validator_set_hash_version,

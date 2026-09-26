@@ -22,7 +22,6 @@ use super::{
         LaneHistoricalRecoveryKindV1, LaneHistoricalRecoveryPayloadV1,
         LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
     },
-    network_topology::commit_quorum_from_len,
     output_guard::ConsensusOutputGuard,
     v2::VerifiedHeightContext,
     v2_apply::{
@@ -3157,8 +3156,8 @@ impl PendingAutonomousReservationBatch {
                 "pre-Kura direct release validator count exceeds u8".to_owned(),
             )
         })?;
-        let expected_quorum =
-            u32::try_from(commit_quorum_from_len(validator_count)).map_err(|_| {
+        let expected_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_count))
+            .map_err(|_| {
                 V2LaneWorkError::InvalidContext(
                     "pre-Kura direct release quorum exceeds u32".to_owned(),
                 )
@@ -22746,10 +22745,8 @@ pub(super) mod tests {
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_count: u32::try_from(validator_set.len())
                     .expect("fixture committee count fits u32"),
-                min_quorum: u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-                )
-                .expect("fixture drain quorum fits u32"),
+                min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                    .expect("fixture drain quorum fits u32"),
                 validator_set,
             },
             final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
@@ -29359,10 +29356,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let validator_count =
             u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-        let min_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-        )
-        .expect("fixture quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+            .expect("fixture quorum fits u32");
         let previous_lane_block_height = lane_block_height.saturating_sub(1);
         let mut ownership = SumeragiLanePayloadOwnership {
             proposal_height,
@@ -29593,7 +29588,7 @@ pub(super) mod tests {
             keys,
             block,
             execution_commitment,
-            (0..crate::sumeragi::network_topology::commit_quorum_from_len(keys.len()).max(1))
+            (0..iroha_sumeragi::types::quorum(keys.len()).max(1))
                 .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
                 .collect(),
             [
@@ -30548,11 +30543,8 @@ pub(super) mod tests {
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: u32::try_from(
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
-                    .max(1),
-            )
-            .expect("fixture quorum"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+                .expect("fixture quorum"),
             validator_set,
             qc_mode_tag: "permissioned:v2-lane-work".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),

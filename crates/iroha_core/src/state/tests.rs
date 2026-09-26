@@ -10833,7 +10833,7 @@ fn autoscale_drain_state_for_test(
     commitment: Option<LaneDrainCommitmentV1>,
 ) -> LaneDrainStateV1 {
     let_row! { validator_count = u32::try_from(validator_set.len()).expect("test validator count fits u32") };
-    let_row! { min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len( validator_set.len(), )) .expect("test quorum fits u32") };
+    let_row! { min_quorum = u32::try_from(iroha_sumeragi::types::quorum( validator_set.len(), )) .expect("test quorum fits u32") };
     LaneDrainStateV1 {
         version: 1,
         intent: LaneDrainIntentV1 {
@@ -26451,7 +26451,7 @@ fn finalize_lane_relay_batch_for_state_test(
         .validate()
         .expect("valid relay execution commitment");
     let_row! { round = wire::ConsensusRound { context_id: context.id(), height, view: block.header().view_change_index(), } };
-    let exact_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(validators.len());
+    let exact_quorum = iroha_sumeragi::types::quorum(validators.len());
     let_row! { mut commit_qc = wire::QuorumCertificate { round, proposal_round: round, phase: wire::GlobalPhase::Commit, subject, execution_commitment, signers: (0..exact_quorum) .map(|index| u32::try_from(index).expect("relay signer index fits u32")) .collect(), aggregate_signature: vec![1], } };
     let_row! { preimage = commit_qc .signer_preimage(&context, 0) .expect("derive relay finality signer preimage") };
     let_row! { signatures = validators .iter() .take(exact_quorum) .map(|(_, keypair)| { Signature::try_new(keypair.private_key(), &preimage) .expect("sign relay finality vote") .payload() .to_vec() }) .collect::<Vec<_>>() };
@@ -29283,7 +29283,7 @@ state_test! { sync autoscale_lane_committee_pins_spread_lanes_and_survive_roster
         "lane-bound seed domains must distribute work across a larger validator pool"
     );
     assert_eq!(
-        crate::sumeragi::network_topology::commit_quorum_from_len(committee_a.len()),
+        iroha_sumeragi::types::quorum(committee_a.len()),
         3,
         "f=1 committees must retain the canonical 2f+1 commit quorum"
     );
@@ -29363,7 +29363,7 @@ state_test! { sync nexus_lane_committee_size_rejects_overflow_and_validator_cap_
 state_test! { sync autoscale_lane_committee_quorums_have_f_plus_one_overlap
     for fault_tolerance in 1_usize..=16 {
         let committee_size = fault_tolerance * 3 + 1;
-        let quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
+        let quorum = iroha_sumeragi::types::quorum(committee_size);
         let_row! { minimum_overlap = quorum .checked_mul(2) .and_then(|twice_quorum| twice_quorum.checked_sub(committee_size)) .expect("canonical quorum must exceed half the committee") };
         assert_eq!(
             minimum_overlap,

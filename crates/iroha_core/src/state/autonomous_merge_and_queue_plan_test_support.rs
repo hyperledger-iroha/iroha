@@ -293,10 +293,8 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     );
     let validator_count =
         u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .expect("fixture quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .expect("fixture quorum fits u32");
     let lane_block_height = 1;
     let lane_block_view = 0;
     let entrypoint_hash = Hash::from(entrypoint.hash());
@@ -652,8 +650,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             height,
             view: block.header().view_change_index(),
         };
-        let signer_count =
-            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len());
+        let signer_count = iroha_sumeragi::types::quorum(keypairs.len());
         let signers = (0..signer_count)
             .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
             .collect::<Vec<_>>();

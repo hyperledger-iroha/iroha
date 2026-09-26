@@ -2337,6 +2337,7 @@ fn canonical_wsv_cell_value<'a>(
     const WORLD_CELL_FIELDS: &[&str] = &[
         "parameters",
         "peers",
+        "consensus_schedule",
         "viral_reward_budget",
         "viral_campaign_budget",
         "executor",
@@ -5145,6 +5146,7 @@ fn normalize_mv_cell_fields_in_state_value(value: &mut json::Value) {
     for key in [
         "parameters",
         "peers",
+        "consensus_schedule",
         "viral_reward_budget",
         "viral_campaign_budget",
         "executor",

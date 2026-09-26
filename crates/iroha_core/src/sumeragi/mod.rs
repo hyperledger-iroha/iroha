@@ -474,6 +474,10 @@ mod epoch_schedule_tests {
         ));
     }
 }
+/// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
+pub mod block_store;
+/// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
+pub mod commitment;
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
 /// The node driver of the sans-IO Sumeragi core (`iroha_sumeragi`), not yet started by the
@@ -486,6 +490,8 @@ pub mod network_topology;
 pub(crate) mod output_guard;
 pub(crate) mod penalties;
 pub(crate) mod safety_wal;
+/// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
+pub mod schedule;
 pub(crate) mod serviced_candidate_store;
 pub(crate) mod stake_snapshot;
 pub(crate) mod v2;

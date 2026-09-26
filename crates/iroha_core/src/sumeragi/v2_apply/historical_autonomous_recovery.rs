@@ -279,9 +279,8 @@ fn preflight_historical_autonomous_lane_recovery_inner(
         ));
     }
     let validator_count = u32::try_from(expected_validators.len())?;
-    let min_quorum = u32::try_from(
-        super::network_topology::commit_quorum_from_len(expected_validators.len()).max(1),
-    )?;
+    let min_quorum =
+        u32::try_from(iroha_sumeragi::types::quorum(expected_validators.len()).max(1))?;
     let base_mode_tag = match input.historical_context.mode {
         wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
         wire::ConsensusMode::Npos => wire::NPOS_TAG,

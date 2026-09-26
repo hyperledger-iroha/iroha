@@ -179,9 +179,9 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         )),
         lane_block_descriptor_validator_count: u32::try_from(validator_set.len())
             .expect("test validator count fits u32"),
-        lane_block_descriptor_min_quorum: u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-        )
+        lane_block_descriptor_min_quorum: u32::try_from(iroha_sumeragi::types::quorum(
+            validator_set.len(),
+        ))
         .expect("test validator quorum fits u32"),
         lane_block_descriptor_validator_set: validator_set,
         payload_ownership_hash: Hash::new(b"native AMX settlement ownership placeholder"),
@@ -202,7 +202,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         &plan,
         coordinator_proposal,
         &keypairs,
-        crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()),
+        iroha_sumeragi::types::quorum(keypairs.len()),
     );
     let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
         .with_native_amx_receipt(receipt.clone());

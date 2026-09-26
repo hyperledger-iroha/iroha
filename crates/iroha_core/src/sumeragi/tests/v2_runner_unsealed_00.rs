@@ -333,9 +333,7 @@ fn decided_recovery_certified_request(
                     1,
                     Hash::new(b"runner recovery executed block"),
                 ),
-            signers: (0..super::super::network_topology::commit_quorum_from_len(
-                context.roster.len(),
-            ))
+            signers: (0..iroha_sumeragi::types::quorum(context.roster.len()))
                 .map(|index| u32::try_from(index).expect("small runner roster index"))
                 .collect(),
             aggregate_signature: vec![0xA5; 48],

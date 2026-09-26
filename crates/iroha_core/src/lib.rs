@@ -2019,10 +2019,8 @@ mod tests {
         validator_set.sort();
         let validator_count =
             u32::try_from(validator_set.len()).expect("maximum committee count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("maximum committee quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("maximum committee quorum fits u32");
         let body = LaneDrainCertificateBodyV1 {
             version: 1,
             intent: LaneDrainIntentV1 {

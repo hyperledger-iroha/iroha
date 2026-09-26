@@ -31,7 +31,6 @@ use iroha::{
         transaction::{Executable, SignedTransaction},
     },
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
@@ -1581,7 +1580,7 @@ pub(super) async fn submit_exact_large_da_log_and_verify_quorum(
         }
     }))
     .await?;
-    let required = commit_quorum_from_len(network.peers().len()).max(1);
+    let required = iroha_sumeragi::types::quorum(network.peers().len()).max(1);
     let mut subjects = Vec::with_capacity(peer_results.len());
     let mut failures = Vec::new();
     for (peer_name, result) in peer_results {

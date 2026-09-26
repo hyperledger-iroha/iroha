@@ -368,7 +368,7 @@ mod model {
         ///
         /// Under Sumeragi this is the target block time `ChainParams.block_time` (§9.3 of
         /// `specs/sumeragi.md`).
-        // TODO(WP5): once the v2 handshake no longer freezes the cadence, give it a mutable
+        // TODO(WP8): once the v2 handshake no longer freezes the cadence, give it a mutable
         // `SumeragiParameter` variant scheduled at `h + 2` like the other chain parameters.
         #[norito(default = "defaults::sumeragi::block_cadence_ms")]
         pub block_cadence_ms: NonZeroU64,
@@ -652,10 +652,9 @@ mod model {
     /// committed in the state after height `h` and take effect at `h + 2` (§10.1 of
     /// `specs/sumeragi.md`). `DemotionWindow` is a genesis constant: it is accepted only in the
     /// genesis block ([`Self::is_genesis_only`]).
-    // TODO(WP5): iroha_core must validate the chain parameters with
-    // `iroha_sumeragi::pacemaker::validate_chain`, schedule them through the lag-2 consensus
-    // schedule and reject `DemotionWindow` above the genesis height; until then the node applies
-    // none of the Sumeragi chain-parameter variants.
+    // `iroha_core::sumeragi::schedule` validates a change of the chain parameters with
+    // `iroha_sumeragi::pacemaker::validate_chain`, schedules it through the lag-2 consensus
+    // schedule and rejects `DemotionWindow` above the genesis height.
     pub enum SumeragiParameter {
         /// Maximum admitted clock drift. Block cadence is frozen in genesis and
         /// therefore deliberately has no mutable parameter variant.

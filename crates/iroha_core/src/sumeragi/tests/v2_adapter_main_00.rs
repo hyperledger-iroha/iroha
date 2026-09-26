@@ -264,7 +264,7 @@ fn production_serve_requests_for_execution_commitment(
     let non_local = (0..keys.len())
         .filter(|index| *index != local)
         .collect::<Vec<_>>();
-    let exact_quorum = super::super::network_topology::commit_quorum_from_len(keys.len());
+    let exact_quorum = iroha_sumeragi::types::quorum(keys.len());
     let mut local_quorum = std::iter::once(local)
         .chain((0..keys.len()).filter(|index| *index != local))
         .take(exact_quorum)

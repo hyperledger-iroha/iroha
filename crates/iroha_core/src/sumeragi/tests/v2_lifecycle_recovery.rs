@@ -236,10 +236,8 @@ fn lifecycle_payload_for_validators_with_count_and_lane(
         .iter()
         .map(|entrypoint| Hash::from(entrypoint.hash()))
         .collect::<Vec<_>>();
-    let min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-    )
-    .expect("lifecycle validator quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+        .expect("lifecycle validator quorum fits u32");
     let mut descriptor = LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,

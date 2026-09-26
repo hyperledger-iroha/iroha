@@ -20807,6 +20807,20 @@ pub mod isi {
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
+            if let Parameter::Sumeragi(change) = self.inner() {
+                // Sumeragi chain parameters take effect at `h + 2` through the consensus
+                // schedule; the demotion window is a genesis constant (`specs/sumeragi.md` §10.1).
+                crate::sumeragi::schedule::validate_parameter_change(
+                    state_transaction.world.parameters.get().sumeragi(),
+                    change,
+                    state_transaction._curr_block.is_genesis(),
+                )
+                .map_err(|error| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(error.to_string()),
+                    )
+                })?;
+            }
             if let Parameter::Custom(custom) = self.inner() {
                 if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -21099,6 +21113,13 @@ pub mod isi {
             }
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
+                Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+                Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
+                Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
+                Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
+                Sumeragi(sumeragi.empty_after_views) => SumeragiParameter::EmptyAfterViews,
+                Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
+                Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
                 Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
                 Block(block.execution_output) => BlockParameter::ExecutionOutput,
@@ -39279,6 +39300,47 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "max clock drift is the mutable first-release Sumeragi parameter");
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
+        });
+        world_test!(set_parameter_validates_sumeragi_chain_parameters_and_genesis_constants {
+            // Genesis (height 1) accepts the demotion window and defers the §9.4 combination
+            // check to the genesis schedule.
+            {
+                blank_state_transaction!(state, block, state_block, stx);
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::DemotionWindow(
+                    NonZeroU64::new(64).expect("non-zero"),
+                )))
+                .expect_execute(&ALICE_ID, &mut stx, "demotion window in genesis");
+                assert_eq!(stx.world.parameters.get().sumeragi().demotion_window.get(), 64);
+            }
+            let state = blank_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).expect("non-zero"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let idle = |ms: u64| {
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
+                    NonZeroU64::new(ms).expect("non-zero"),
+                )))
+            };
+            idle(7_000).expect_execute(&ALICE_ID, &mut stx, "a valid chain parameter change");
+            assert_eq!(
+                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                7_000
+            );
+            // Below the block time: §9.4 validation fails and nothing changes.
+            let error = idle(999).expect_execute_err(&ALICE_ID, &mut stx, "idle below block time");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert_eq!(
+                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                7_000
+            );
+            // The demotion window is a genesis constant.
+            let window = stx.world.parameters.get().sumeragi().demotion_window;
+            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DemotionWindow(
+                NonZeroU64::new(64).expect("non-zero"),
+            )))
+            .expect_execute_err(&ALICE_ID, &mut stx, "demotion window after genesis");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert_eq!(stx.world.parameters.get().sumeragi().demotion_window, window);
         });
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;

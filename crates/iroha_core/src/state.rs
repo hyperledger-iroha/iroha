@@ -1281,6 +1281,7 @@ macro_rules! with_world_overlay_fields {
             [
             parameters,
             peers,
+            consensus_schedule,
             consensus_keys,
             consensus_keys_by_pk,
             domain_committees,
@@ -5531,6 +5532,9 @@ pub struct WorldData {
     pub(crate) parameters: Cell<Parameters>,
     /// Identifications of discovered peers.
     pub(crate) peers: Cell<Peers>,
+    /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
+    /// §10.1), advanced by the executor after every block.
+    pub(crate) consensus_schedule: Cell<crate::sumeragi::schedule::ConsensusSchedule>,
     /// Registered domains.
     pub(crate) domains: Storage<DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -6338,6 +6342,9 @@ pub struct WorldBlockFields<'world> {
     pub parameters: CellField<'world, Parameters>,
     /// Identifications of discovered peers.
     pub(crate) peers: CellField<'world, Peers>,
+    /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
+    /// §10.1), advanced by the executor after every block.
+    pub(crate) consensus_schedule: CellField<'world, crate::sumeragi::schedule::ConsensusSchedule>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageField<'world, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -7515,6 +7522,7 @@ impl WorldBlock<'_> {
         cell!(
             parameters,
             peers,
+            consensus_schedule,
             viral_reward_budget,
             viral_campaign_budget,
             executor_data_model,
@@ -7816,6 +7824,10 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
     pub(crate) peers: CellTransaction<'block, 'world, Peers>,
+    /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
+    /// §10.1), advanced by the executor after every block.
+    pub(crate) consensus_schedule:
+        CellTransaction<'block, 'world, crate::sumeragi::schedule::ConsensusSchedule>,
     /// Registered consensus/committee keys.
     pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
@@ -9956,6 +9968,9 @@ pub struct WorldView<'world> {
     pub(crate) parameters: CellView<'world, Parameters>,
     /// Identifications of discovered peers.
     pub(crate) peers: CellView<'world, Peers>,
+    /// Lag-2 Sumeragi height-configuration schedule `(t, t + 1, t + 2)` (`specs/sumeragi.md`
+    /// §10.1), advanced by the executor after every block.
+    pub(crate) consensus_schedule: CellView<'world, crate::sumeragi::schedule::ConsensusSchedule>,
     /// Registered domains.
     pub(crate) domains: StorageView<'world, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
@@ -22332,6 +22347,8 @@ macro_rules! world_ro_accessors {
         world_ro_accessors!(@items $mode;
             /// Global parameters registry.
             ref parameters: Parameters;
+            /// Lag-2 Sumeragi height-configuration schedule (read-only).
+            ref consensus_schedule: crate::sumeragi::schedule::ConsensusSchedule;
             /// Dataspace alias catalog used to qualify domain-scoped aliases.
             ref dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog;
         );
@@ -26420,6 +26437,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             dataspace_catalog_sink: _,
             parameters: _,
             peers: _,
+            consensus_schedule: _,
             domain_committees: _,
             domain_endorsement_policies: _,
             domain_endorsements: _,
@@ -26998,6 +27016,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.kaigi_relay_registry.apply();
         self.kaigi_account_dependencies.apply();
         self.peers.apply();
+        self.consensus_schedule.apply();
         self.parameters.apply();
     }
     /// Get `Domain` with an ability to modify it.
@@ -36220,10 +36239,7 @@ impl State {
         }
         let committee = state.intent.validator_set.clone();
         let validator_count = u32::try_from(committee.len()).ok()?;
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            committee.len(),
-        ))
-        .ok()?;
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(committee.len())).ok()?;
         if state.intent.validator_set_hash != HashOf::new(&committee)
             || state.intent.validator_count != validator_count
             || state.intent.min_quorum != min_quorum
@@ -45932,7 +45948,7 @@ impl State {
                 signers.push(idx);
             }
         }
-        let required = crate::sumeragi::network_topology::commit_quorum_from_len(roster_len);
+        let required = iroha_sumeragi::types::quorum(roster_len);
         if signers.len() != required {
             return Err(MergeLedgerCommitError::MergeQCSignerCountMismatch {
                 observed: signers.len(),
@@ -49116,8 +49132,7 @@ fn validate_autoscale_lane_committee_shape(
 ) -> Result<(), &'static str> {
     let validator_count = usize::try_from(committee.validator_count)
         .map_err(|_| "autoscale committee validator count does not fit memory")?;
-    let expected_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_count);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_count);
     if committee.version != 1
         || committee.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || validator_count == 0
@@ -49226,12 +49241,10 @@ fn autoscale_lane_committee_from_validator_set(
     let validator_count = u32::try_from(validator_set.len()).map_err(|_| {
         LaneLifecycleError::Storage("autoscale committee length does not fit u32".to_owned())
     })?;
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .map_err(|_| {
-        LaneLifecycleError::Storage("autoscale committee quorum does not fit u32".to_owned())
-    })?;
+    let min_quorum =
+        u32::try_from(iroha_sumeragi::types::quorum(validator_set.len())).map_err(|_| {
+            LaneLifecycleError::Storage("autoscale committee quorum does not fit u32".to_owned())
+        })?;
     let committee = AutoscaleLaneCommitteeV1 {
         version: 1,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,

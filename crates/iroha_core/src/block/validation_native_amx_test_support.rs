@@ -566,10 +566,8 @@ fn native_amx_test_coordinator_proposal_at_view(
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set_hash: HashOf::new(&validator_set),
         validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-        min_quorum: u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-        )
-        .expect("fixture quorum"),
+        min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+            .expect("fixture quorum"),
         validator_set,
         qc_mode_tag: "native-amx:test-coordinator".to_owned(),
         descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
