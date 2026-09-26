@@ -4482,6 +4482,16 @@ impl NetworkRelayShared {
                         retention_guard,
                     ))
             }
+            Sumeragi(_) => {
+                // Sumeragi frames belong to the consensus driver's own P2P route
+                // (`SubscriberRoute::Sumeragi`); the v2 relay never handles them.
+                iroha_logger::debug!(
+                    %peer,
+                    via = %authenticated_via,
+                    "Sumeragi frame reached the general relay; dropped"
+                );
+                return false;
+            }
             msg @ (ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
             | QueuePlanAdmissionPublication(_)

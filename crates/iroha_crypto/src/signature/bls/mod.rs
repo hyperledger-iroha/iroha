@@ -150,6 +150,18 @@ pub fn verify_aggregate_multi_message_small(
 pub fn aggregate_same_message_normal(signatures: &[&[u8]]) -> Result<Vec<u8>, crate::Error> {
     implementation::BlsImpl::<normal::NormalConfiguration>::aggregate_signatures(signatures)
 }
+/// Verify one pre-aggregated signature over distinct messages signed by groups of parsed keys
+/// (normal variant). The caller has verified every key's proof of possession, the distinctness
+/// of the messages and the uniqueness of the keys inside each group.
+pub(crate) fn verify_preaggregated_multi_message_normal(
+    groups: &[(&[&BlsNormalPublicKey], &[u8])],
+    aggregated_signature: &[u8],
+) -> Result<(), crate::Error> {
+    implementation::BlsImpl::<normal::NormalConfiguration>::verify_preaggregated_multi_message(
+        groups,
+        aggregated_signature,
+    )
+}
 /// Verify a pre-aggregated signature for the same-message case (normal variant).
 #[cfg(feature = "bls")]
 pub(crate) fn verify_preaggregated_same_message_normal(

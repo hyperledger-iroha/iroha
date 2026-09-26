@@ -283,6 +283,7 @@ const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 16;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 17;
+const NETWORK_MESSAGE_SUMERAGI_TAG: u32 = 18;
 /// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
 pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
     iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
@@ -957,6 +958,10 @@ pub enum NetworkMessage {
     /// Exact Kura-durable QueuePlan admission certificate handed to the global leader.
     #[codec(index = 17)]
     QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
+    /// One Sumeragi consensus frame: the exact `iroha_sumeragi` `WireMessage` encoding and its
+    /// instance id. Only the consensus driver decodes it (`sumeragi::net`).
+    #[codec(index = 18)]
+    Sumeragi(Arc<sumeragi::net::SumeragiFrame>),
 }
 impl NetworkMessage {
     /// Returns `true` when the message is handled by Torii's proxy-plane P2P
@@ -1061,6 +1066,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 T::Health
             }
             NetworkMessage::Connect(_) => T::Connect,
+            NetworkMessage::Sumeragi(frame) => frame.topic(),
         }
     }
     fn admission_class(&self) -> iroha_p2p::network::message::TransportAdmissionClass {
@@ -1092,7 +1098,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | Self::ToriiProxyResponse(_)
             | Self::StreamingControl(_)
             | Self::QueuePlanAdmissionPublication(_)
-            | Self::QueuePlanAdmissionCertificate(_) => A::ordinary_for_topic(self.topic()),
+            | Self::QueuePlanAdmissionCertificate(_)
+            | Self::Sumeragi(_) => A::ordinary_for_topic(self.topic()),
         }
     }
     fn inbound_admission_class(
@@ -1124,6 +1131,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | Self::ToriiProxyResponse(_)
             | Self::QueuePlanAdmissionPublication(_) => SubscriberRoute::ToriiProxy,
             Self::Connect(_) => SubscriberRoute::Connect,
+            Self::Sumeragi(_) => SubscriberRoute::Sumeragi,
             _ => SubscriberRoute::General,
         }
     }
@@ -1135,6 +1143,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::SumeragiBlock(_) | Self::CertifiedMergeSidecar(_) => {
                 ProgressReconstruction::Retransmit
             }
+            // The Sumeragi core retransmits its state ("state, not custody", spec §6.11).
+            Self::Sumeragi(_) => ProgressReconstruction::Retransmit,
             // Lane/merge producers rebuild their bounded handoff after
             // temporary actor pressure. Transport must keep the accepted
             // exact occurrence until writer flush; none of these payloads may
@@ -1160,7 +1170,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 0 | 4 | 6 | 16) {
+        let field = if matches!(tag, 0 | 4 | 6 | 16 | NETWORK_MESSAGE_SUMERAGI_TAG) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
@@ -1179,6 +1189,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             10..=11 => Topic::Health,
             12 => Topic::Connect,
             13..=16 => Topic::Control,
+            NETWORK_MESSAGE_SUMERAGI_TAG => sumeragi::net::inbound_frame_topic(field, flags)?,
             _ => {
                 return Err(norito::core::Error::Message(
                     "unknown core network-message discriminant".to_owned(),
@@ -1340,6 +1351,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     64,
                 )))
             }
+            NETWORK_MESSAGE_SUMERAGI_TAG => {
+                let (_, remaining) = inbound_enum_parts(payload)?;
+                let field = inbound_owned_enum_field(remaining, flags)?;
+                sumeragi::net::inbound_decode_limits(field, framed_len, flags).map(Some)
+            }
             _ => Ok(None),
         }
     }
@@ -1348,6 +1364,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::SumeragiBlock(message) => {
                 message.as_ref().as_message().ensure_live_outbound().is_ok()
             }
+            // Never send a frame the receivers could not classify.
+            Self::Sumeragi(frame) => frame.class().is_some(),
             _ => true,
         }
     }
@@ -1837,8 +1855,12 @@ mod tests {
         }
         let flags = ncore::default_encode_flags();
         assert!(
+            <NetworkMessage as ClassifyTopic>::inbound_topic(&19_u32.to_le_bytes(), flags).is_err(),
+            "the first tag after the compact range (18 is the Sumeragi frame) must fail before typed decode"
+        );
+        assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&18_u32.to_le_bytes(), flags).is_err(),
-            "the first tag after the compact first-release range must fail before typed decode"
+            "a Sumeragi tag without its frame must fail before typed decode"
         );
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&99_u32.to_le_bytes(), flags).is_err(),

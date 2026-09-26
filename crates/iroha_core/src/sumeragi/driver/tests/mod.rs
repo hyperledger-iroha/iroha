@@ -5,11 +5,13 @@
 //! O-AGR, O-SIGN, O-PBS, O-LIVE, O-MEM with the driver's queues, plus the O2 kill at every write
 //! completion and an O4 answer oracle), and threaded runs of the full driver over the fake
 //! backends (O9 with two instances in one process, panicking backends, a stopped worker, a
-//! serving flood, O10 after a committed parameter change).
+//! serving flood, O10 after a committed parameter change), and the full driver over the
+//! production file stores with injected `ENOSPC`/`EIO`.
 
 pub(super) mod fakes;
 
 mod conformance;
+mod file_stores;
 mod kernel;
 mod sched;
 mod sim_host;

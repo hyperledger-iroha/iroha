@@ -478,17 +478,27 @@ mod epoch_schedule_tests {
 pub mod block_store;
 /// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
 pub mod commitment;
+/// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
+pub mod bodies;
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
+/// Production cryptography of the Sumeragi driver: `H = iroha_crypto::Hash`, BLS-normal
+/// signatures with admitted proofs of possession, and the node's signer.
+pub mod crypto;
 /// The node driver of the sans-IO Sumeragi core (`iroha_sumeragi`), not yet started by the
 /// node (the v2 runtime still runs until the cutover).
 pub mod driver;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
 pub mod message;
+/// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
+/// ingress.
+pub mod net;
 pub mod network_topology;
 pub(crate) mod output_guard;
 pub(crate) mod penalties;
+/// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
+pub mod records;
 pub(crate) mod safety_wal;
 /// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
 pub mod schedule;

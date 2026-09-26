@@ -27,8 +27,10 @@
 //! worker that cannot be reached, stops the instance: the observer is told
 //! ([`Observer::stopped`]) and the handle reports it (`ready()` false, [`DriverHandle::stopped`]).
 //!
-//! TODO(WP5): production backends (P2P `Net`, file record and body stores, Kura block store,
-//! State executor and builder), `Init` from replay, and the node's instance router.
+//! Production backends: the P2P `Net` and ingress router (`sumeragi::net`), the file record and
+//! body stores (`sumeragi::records`, `sumeragi::bodies`) and the BLS crypto and signer
+//! (`sumeragi::crypto`). TODO(WP5): the Kura block store, the State executor and builder,
+//! `Init` from replay, and the node wiring.
 
 pub mod barrier;
 pub mod exec;

@@ -578,6 +578,147 @@ mod tests {
             "fallback wrapper must not bypass identity aggregate rejection"
         );
     }
+    /// `n` BLS-normal key pairs with their `PoP`-verified public keys.
+    #[cfg(feature = "bls")]
+    fn pop_verified_keys(n: u8) -> Vec<(BlsNormalPopVerifiedKey, PrivateKey)> {
+        (0..n)
+            .map(|i| {
+                let (pk, sk) =
+                    checked_seed_keypair(&[0x40 + i; 32], Algorithm::BlsNormal).into_parts();
+                let pop = bls_normal_pop_prove(&sk).expect("pop");
+                (BlsNormalPopVerifiedKey::new(&pk, &pop).expect("pop verifies"), sk)
+            })
+            .collect()
+    }
+    /// The aggregate of every key of every group signing its group's message.
+    #[cfg(feature = "bls")]
+    fn multi_message_aggregate(groups: &[(&[&PrivateKey], &[u8])]) -> Vec<u8> {
+        let signatures: Vec<Signature> = groups
+            .iter()
+            .flat_map(|(keys, message)| keys.iter().map(|sk| checked_signature(sk, message)))
+            .collect();
+        let payloads: Vec<&[u8]> = signatures.iter().map(Signature::payload).collect();
+        bls_normal_aggregate_signatures(&payloads).expect("aggregate")
+    }
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_preaggregated_multi_message_accepts_valid_groups() {
+        let keys = pop_verified_keys(5);
+        let (k, s): (Vec<&BlsNormalPopVerifiedKey>, Vec<&PrivateKey>) =
+            keys.iter().map(|(k, s)| (k, s)).unzip();
+        let (m0, m1, m2) = (&b"timeout hq=none"[..], &b"timeout hq=3"[..], &b"timeout hq=4"[..]);
+        let agg = multi_message_aggregate(&[(&s[0..2], m0), (&s[2..4], m1), (&s[4..5], m2)]);
+        bls_normal_verify_preaggregated_multi_message(
+            &[(&k[0..2], m0), (&k[2..4], m1), (&k[4..5], m2)],
+            &agg,
+        )
+        .expect("valid multi-message aggregate");
+        // Group order does not matter; one group is the same-message case.
+        bls_normal_verify_preaggregated_multi_message(
+            &[(&k[4..5], m2), (&k[0..2], m0), (&k[2..4], m1)],
+            &agg,
+        )
+        .expect("groups in another order");
+        let same = multi_message_aggregate(&[(&s[..], m0)]);
+        bls_normal_verify_preaggregated_multi_message(&[(&k[..], m0)], &same)
+            .expect("one group");
+        let pks: Vec<&PublicKey> = k.iter().map(|key| key.public_key()).collect();
+        let pops: Vec<Vec<u8>> = s
+            .iter()
+            .map(|sk| bls_normal_pop_prove(sk).expect("pop"))
+            .collect();
+        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
+        bls_normal_verify_preaggregated_same_message(m0, &same, &pks, &pop_refs)
+            .expect("agrees with the same-message primitive");
+    }
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_preaggregated_multi_message_rejects_wrong_message_or_group() {
+        let keys = pop_verified_keys(4);
+        let (k, s): (Vec<&BlsNormalPopVerifiedKey>, Vec<&PrivateKey>) =
+            keys.iter().map(|(k, s)| (k, s)).unzip();
+        let (m0, m1) = (&b"message zero"[..], &b"message one"[..]);
+        let agg = multi_message_aggregate(&[(&s[0..2], m0), (&s[2..4], m1)]);
+        let verify = |groups: &[(&[&BlsNormalPopVerifiedKey], &[u8])]| {
+            bls_normal_verify_preaggregated_multi_message(groups, &agg)
+        };
+        assert!(verify(&[(&k[0..2], m0), (&k[2..4], m1)]).is_ok());
+        // Wrong message.
+        assert!(verify(&[(&k[0..2], m0), (&k[2..4], b"message two")]).is_err());
+        assert!(verify(&[(&k[0..2], m1), (&k[2..4], m0)]).is_err());
+        // Wrong group: a signer moved to the other message, or missing, or added.
+        let moved_a = [k[0], k[1], k[2]];
+        let moved_b = [k[3]];
+        assert!(verify(&[(&moved_a, m0), (&moved_b, m1)]).is_err());
+        assert!(verify(&[(&k[0..1], m0), (&k[2..4], m1)]).is_err());
+        assert!(verify(&[(&k[0..2], m0), (&k[1..4], m1)]).is_err());
+        // A group is missing.
+        assert!(verify(&[(&k[0..2], m0)]).is_err());
+        // A tampered signature.
+        let mut bad = agg.clone();
+        bad[5] ^= 0x01;
+        assert!(
+            bls_normal_verify_preaggregated_multi_message(&[(&k[0..2], m0), (&k[2..4], m1)], &bad)
+                .is_err()
+        );
+    }
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_preaggregated_multi_message_rejects_empty_and_malformed_input() {
+        let keys = pop_verified_keys(3);
+        let (k, s): (Vec<&BlsNormalPopVerifiedKey>, Vec<&PrivateKey>) =
+            keys.iter().map(|(k, s)| (k, s)).unzip();
+        let (m0, m1) = (&b"zero"[..], &b"one"[..]);
+        let agg = multi_message_aggregate(&[(&s[0..2], m0), (&s[2..3], m1)]);
+        // No group; an empty group.
+        assert!(bls_normal_verify_preaggregated_multi_message(&[], &agg).is_err());
+        assert!(
+            bls_normal_verify_preaggregated_multi_message(
+                &[(&k[0..2], m0), (&k[2..3], m1), (&[], b"empty")],
+                &agg
+            )
+            .is_err()
+        );
+        // A message shared by two groups; a key twice in a group.
+        let one = multi_message_aggregate(&[(&s[0..3], m0)]);
+        assert!(
+            bls_normal_verify_preaggregated_multi_message(&[(&k[0..2], m0), (&k[2..3], m0)], &one)
+                .is_err()
+        );
+        let twice = [k[0], k[0]];
+        let doubled = multi_message_aggregate(&[(&[s[0], s[0]], m0)]);
+        assert!(bls_normal_verify_preaggregated_multi_message(&[(&twice, m0)], &doubled).is_err());
+        // Empty, all-zero and truncated signatures.
+        for signature in [&[][..], &[0_u8; 96][..], &agg[..95]] {
+            assert!(
+                bls_normal_verify_preaggregated_multi_message(
+                    &[(&k[0..2], m0), (&k[2..3], m1)],
+                    signature
+                )
+                .is_err()
+            );
+        }
+    }
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_pop_verified_key_requires_a_valid_pop() {
+        let (pk, sk) = checked_seed_keypair(&[0x51; 32], Algorithm::BlsNormal).into_parts();
+        let (other_pk, other_sk) =
+            checked_seed_keypair(&[0x52; 32], Algorithm::BlsNormal).into_parts();
+        let pop = bls_normal_pop_prove(&sk).expect("pop");
+        let key = BlsNormalPopVerifiedKey::new(&pk, &pop).expect("valid pop");
+        assert_eq!(key.public_key(), &pk);
+        assert_eq!(key.payload(), pk.to_bytes().1);
+        assert_eq!(key.payload().len(), 48);
+        assert_eq!(key.clone(), key);
+        assert!(format!("{key:?}").starts_with("BlsNormalPopVerifiedKey"));
+        let other_pop = bls_normal_pop_prove(&other_sk).expect("pop");
+        assert!(BlsNormalPopVerifiedKey::new(&pk, &other_pop).is_err());
+        assert!(BlsNormalPopVerifiedKey::new(&other_pk, &pop).is_err());
+        assert!(BlsNormalPopVerifiedKey::new(&pk, &[]).is_err());
+        let (ed, _) = checked_seed_keypair(&[0x53; 32], Algorithm::Ed25519).into_parts();
+        assert!(BlsNormalPopVerifiedKey::new(&ed, &pop).is_err());
+    }
     #[cfg(feature = "bls")]
     #[test]
     fn bls_small_aggregate_fast_accepts_valid_and_rejects_bad() {

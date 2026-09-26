@@ -254,12 +254,52 @@ fn append<R: RecordStore + ?Sized>(
     Ok(())
 }
 
+/// The store-id check of §7.4 rule 3 over the installation log `log` (read from `store`): if the
+/// log has entries and the id next to the record files differs from the newest entry's (or is
+/// missing), every key of the log is durably marked imported and `true` is returned.
+///
+/// The marks are one event: they are appended first, all carrying one fresh id, and the id file
+/// is written last. A crash anywhere in between leaves the mismatch in place, so the next start
+/// marks again; no key keeps a stale "generated" entry behind a matching id (spec Appendix E,
+/// E53).
+///
+/// # Errors
+/// A store failure.
+pub fn reconcile_store_id<R: RecordStore + ?Sized>(
+    store: &R,
+    log: &mut Vec<LogEntry>,
+    fresh_id: &mut dyn FnMut() -> u128,
+) -> std::io::Result<bool> {
+    let newest = log.last().map(LogEntry::store_id);
+    if log.is_empty() || newest == store.store_id()? {
+        return Ok(false);
+    }
+    let mut seen: Vec<PublicKey> = Vec::new();
+    for entry in log.iter() {
+        if !seen.contains(entry.key()) {
+            seen.push(entry.key().clone());
+        }
+    }
+    let store_id = fresh_id();
+    for key in seen {
+        let entry = LogEntry::Key {
+            key,
+            generated: false,
+            store_id,
+        };
+        store.append_log(&entry)?;
+        log.push(entry);
+    }
+    store.set_store_id(store_id)?;
+    Ok(true)
+}
+
 /// The §7.4 record-provenance steps when instance `instance` starts with `keys` (configured and
 /// retired, `(key, retired)`), then what is on disk for each key:
 ///
-/// 1. store-id check (rule 3): if the id next to the record files differs from the newest log
-///    entry's, or one of them is missing while the log has entries, every key of the log is
-///    durably marked imported;
+/// 1. store-id check (rule 3, [`reconcile_store_id`]): if the id next to the record files
+///    differs from the newest log entry's, or one of them is missing while the log has entries,
+///    every key of the log is durably marked imported;
 /// 2. a key without a key entry is recorded as imported;
 /// 3. installation event (rule 2) of every `(instance, key)` the log lacks: the initial record
 ///    `{instance, key, height: genesis_height}` is written first — only for a key generated on
@@ -278,27 +318,7 @@ pub fn install_records<R: RecordStore + ?Sized>(
     fresh_id: &mut dyn FnMut() -> u128,
 ) -> std::io::Result<Vec<(PublicKey, RecordState, bool)>> {
     let mut log = store.log()?;
-    let newest = log.last().map(LogEntry::store_id);
-    if !log.is_empty() && newest != store.store_id()? {
-        let mut seen: Vec<PublicKey> = Vec::new();
-        for entry in &log {
-            if !seen.contains(entry.key()) {
-                seen.push(entry.key().clone());
-            }
-        }
-        for key in seen {
-            append(
-                store,
-                |store_id| LogEntry::Key {
-                    key,
-                    generated: false,
-                    store_id,
-                },
-                fresh_id,
-                &mut log,
-            )?;
-        }
-    }
+    reconcile_store_id(store, &mut log, fresh_id)?;
     let mut out = Vec::with_capacity(keys.len());
     for (key, retired) in keys {
         let known = log
@@ -525,6 +545,47 @@ mod tests {
         records.fail_next(1);
         let back = perform(&records, &bodies, &crypto, Write::Record(r.clone()));
         assert_eq!(back, Err(Write::Record(r)));
+    }
+
+    /// The store-id check marks every key of a mismatched log imported as one event: the marks
+    /// carry one fresh id, and the id file is written after them.
+    #[test]
+    fn reconcile_marks_every_key_then_writes_the_id() {
+        let store = FakeRecords::default();
+        let mut next = 10u128;
+        let mut fresh = || {
+            next += 1;
+            next
+        };
+        let mut log = Vec::new();
+        assert!(!reconcile_store_id(&store, &mut log, &mut fresh).unwrap());
+        let (a, b) = (
+            PublicKey::new(vec![1; 32]).unwrap(),
+            PublicKey::new(vec![2; 32]).unwrap(),
+        );
+        store.install_key(&a, true, 1);
+        store.install_key(&b, true, 2);
+        let mut log = store.log().unwrap();
+        assert!(
+            !reconcile_store_id(&store, &mut log, &mut fresh).unwrap(),
+            "ids match"
+        );
+        store.replace_records();
+        let mut log = store.log().unwrap();
+        assert!(reconcile_store_id(&store, &mut log, &mut fresh).unwrap());
+        assert_eq!(log, store.log().unwrap());
+        let marks: Vec<&LogEntry> = log[2..].iter().collect();
+        assert_eq!(marks.len(), 2);
+        assert!(marks.iter().all(|e| matches!(
+            e,
+            LogEntry::Key {
+                generated: false,
+                store_id: 11,
+                ..
+            }
+        )));
+        assert_eq!(store.store_id().unwrap(), Some(11));
+        assert!(!reconcile_store_id(&store, &mut log, &mut fresh).unwrap());
     }
 
     /// §7.4 record provenance: the initial record only for a generated key (or with the
