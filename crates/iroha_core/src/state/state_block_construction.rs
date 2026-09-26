@@ -301,6 +301,7 @@ impl State {
                 gas_limit_per_block: gas_limit_per_block.take().expect("prepared State input"),
                 frozen_execution_output_capacity: None,
                 execution_output_plan: None,
+                sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep::Off,
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 state_write_lock: &self.state_write_lock,

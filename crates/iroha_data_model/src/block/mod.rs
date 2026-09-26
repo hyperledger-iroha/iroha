@@ -248,6 +248,20 @@ impl SignedBlock {
             commit_certificate: None,
         }
     }
+    /// Create a block with no block signature: a Sumeragi proposal, authenticated by the
+    /// certified consensus header that binds its bytes rather than by a block signature.
+    #[cfg(feature = "transparent_api")]
+    #[must_use]
+    pub fn unsigned_with_payload(mut payload: BlockPayload) -> SignedBlock {
+        payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
+        payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
+        SignedBlock {
+            signatures: BTreeSet::new(),
+            payload,
+            result: None,
+            commit_certificate: None,
+        }
+    }
     /// Create a block with a given signature and payload.
     #[cfg(feature = "transparent_api")]
     pub fn presigned_with_payload(

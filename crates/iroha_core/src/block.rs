@@ -3783,6 +3783,43 @@ mod chained {
             );
             Ok(WithEvents::new(builder.into_new_block(signature)))
         }
+        /// Finish this block without a block signature (`specs/sumeragi.md` §3.2): the
+        /// canonical resultless proposal a Sumeragi leader proposes, which its certified core
+        /// header authenticates, and the block every node synthesizes for `EMPTY` (so it must
+        /// not depend on any key).
+        #[must_use]
+        pub fn into_unsigned_proposal(self) -> SignedBlock {
+            let mut builder = self;
+            if builder.0.da_proof_policies.is_none()
+                && builder.0.header.da_proof_policies_hash().is_none()
+            {
+                let default_policies = crate::da::proof_policy_bundle(
+                    &iroha_config::parameters::actual::LaneConfig::default(),
+                );
+                builder = builder.with_da_proof_policies(Some(default_policies));
+            }
+            let Chained {
+                header,
+                transactions,
+                da_commitments,
+                da_proof_policies,
+                da_pin_intents,
+                npos_consensus_effects,
+                execution_context,
+            } = builder.0;
+            SignedBlock::unsigned_with_payload(BlockPayload {
+                header,
+                external_entrypoints: transactions
+                    .into_iter()
+                    .map(AcceptedTransaction::into_entrypoint)
+                    .collect(),
+                execution_context,
+                da_commitments,
+                da_proof_policies,
+                da_pin_intents,
+                npos_consensus_effects,
+            })
+        }
         /// Sign this block and get [`NewBlock`] using the provided validator index.
         pub fn sign_with_index(
             self,
@@ -4409,8 +4446,31 @@ pub(crate) mod valid {
             block_cadence: Duration,
             context: SumeragiV2ValidationContext,
         },
+        /// A block ordered by the Sumeragi core (`specs/sumeragi.md` §4): the certified
+        /// core header binds the payload, so block signatures are not checked; empty blocks
+        /// are valid (heartbeat and `EMPTY`); block time is canonical from the parent and
+        /// the cadence; nothing depends on a v2 height context.
+        Sumeragi {
+            block_cadence: Duration,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+        },
+        /// The signed genesis of a Sumeragi chain: [`Self::SignedGenesis`] that also installs
+        /// the consensus schedule.
+        SumeragiGenesis {
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+        },
     }
     impl ConsensusValidationProfile {
+        /// The genesis height when the block advances the Sumeragi schedule
+        /// (`specs/sumeragi.md` §10).
+        const fn sumeragi_schedule(&self) -> Option<u64> {
+            match self {
+                Self::Sumeragi { .. } | Self::SumeragiGenesis { .. } => {
+                    Some(crate::sumeragi::startup::GENESIS_HEIGHT)
+                }
+                _ => None,
+            }
+        }
         #[cfg(test)]
         /// Return whether validation may publish best-effort pipeline recovery metadata.
         ///
@@ -4421,15 +4481,24 @@ pub(crate) mod valid {
             matches!(self, Self::SumeragiV2 { .. })
         }
         const fn enforce_local_wall_clock(&self) -> bool {
-            matches!(self, Self::SignedGenesis { .. })
+            matches!(self, Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. })
         }
         const fn v2_block_cadence(&self) -> Option<Duration> {
             match self {
                 Self::SumeragiV2 { block_cadence, .. }
                 | Self::NativePreparation { block_cadence, .. }
-                | Self::VerifiedReplay { block_cadence, .. } => Some(*block_cadence),
-                Self::SignedGenesis { .. } => None,
+                | Self::VerifiedReplay { block_cadence, .. }
+                | Self::Sumeragi { block_cadence, .. } => Some(*block_cadence),
+                Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. } => None,
             }
+        }
+        /// Whether a block must carry proposal work (the v2 gate). Sumeragi accepts empty
+        /// blocks: a leader can always propose (`specs/sumeragi.md` §4.4).
+        const fn enforces_proposal_work(&self) -> bool {
+            !matches!(
+                self,
+                Self::Sumeragi { .. } | Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. }
+            )
         }
         const fn snapshot_bootstrap(
             &self,
@@ -4439,7 +4508,9 @@ pub(crate) mod valid {
                     context.snapshot_bootstrap
                 }
                 Self::VerifiedReplay { authority, .. } => authority.context.snapshot_bootstrap,
-                Self::SignedGenesis { .. } => None,
+                Self::SignedGenesis { .. }
+                | Self::Sumeragi { .. }
+                | Self::SumeragiGenesis { .. } => None,
             }
         }
         const fn v2_context(&self) -> Option<&SumeragiV2ValidationContext> {
@@ -4448,7 +4519,9 @@ pub(crate) mod valid {
                     Some(context)
                 }
                 Self::VerifiedReplay { authority, .. } => Some(&authority.context),
-                Self::SignedGenesis { .. } => None,
+                Self::SignedGenesis { .. }
+                | Self::Sumeragi { .. }
+                | Self::SumeragiGenesis { .. } => None,
             }
         }
         const fn authoritative_consensus_mode(
@@ -4460,6 +4533,9 @@ pub(crate) mod valid {
                     context.consensus_mode
                 }
                 Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
+                Self::Sumeragi { consensus_mode, .. } | Self::SumeragiGenesis { consensus_mode } => {
+                    *consensus_mode
+                }
             }
         }
     }
@@ -6879,6 +6955,40 @@ pub(crate) mod valid {
                 None,
             )
         }
+        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis_keep_voting_block`]
+        /// that also installs the consensus schedule (`specs/sumeragi.md` §10).
+        pub(crate) fn validate_sumeragi_genesis<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            if !block.header().is_genesis() {
+                return WithEvents::new(Err((
+                    Box::new(block),
+                    Box::new(BlockValidationError::InvalidGenesis(
+                        InvalidGenesisError::InvalidHeader,
+                    )),
+                )));
+            }
+            let mut voting_block = None;
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                genesis_account,
+                time_source,
+                state,
+                &mut voting_block,
+                false,
+                None,
+                false,
+                ConsensusValidationProfile::SumeragiGenesis { consensus_mode },
+                false,
+                None,
+            )
+        }
         /// Validate a unit fixture through the current Sumeragi-v2 profile.
         ///
         /// This adapter retains the fixture controls needed by checkpoint and validation-cache
@@ -6933,6 +7043,41 @@ pub(crate) mod valid {
         /// Transaction signatures, stateless checks, state-dependent invariants,
         /// and deterministic execution all remain mandatory. Genesis additionally
         /// retains its configured-authority block signature over the ordered intents.
+        /// Validate and execute a block ordered by the Sumeragi core (`specs/sumeragi.md` §4)
+        /// against the committed parent, keeping the executed overlay.
+        ///
+        /// The certified core header binds the payload bytes, so block signatures are not
+        /// checked; empty blocks are valid; block time must be canonical from the parent and
+        /// `block_cadence`. Transaction signatures, stateless checks, state-dependent
+        /// invariants and deterministic execution all remain mandatory.
+        pub(crate) fn validate_sumeragi_block<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            block_cadence: Duration,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            state: &'state State,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            let mut voting_block = None;
+            let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                genesis_account,
+                &time_source,
+                state,
+                &mut voting_block,
+                false,
+                None,
+                true,
+                ConsensusValidationProfile::Sumeragi {
+                    block_cadence,
+                    consensus_mode,
+                },
+                true,
+                None,
+            )
+        }
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
             block: SignedBlock,
@@ -7698,20 +7843,28 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_npos_effects_with_state(
-                &block,
-                state,
-                Some(validation_profile.authoritative_consensus_mode()),
-                validation_profile
-                    .v2_context()
-                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
-            ) {
+            let consensus_effects = if validation_profile.sumeragi_schedule().is_some() {
+                Self::validate_sumeragi_consensus_effects(&block)
+            } else {
+                Self::validate_npos_effects_with_state(
+                    &block,
+                    state,
+                    Some(validation_profile.authoritative_consensus_mode()),
+                    validation_profile
+                        .v2_context()
+                        .and_then(SumeragiV2ValidationContext::authenticated_height_context),
+                )
+            };
+            if let Err(error) = consensus_effects {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Some(block_cadence) = validation_profile.v2_block_cadence() {
+            if let Some(block_cadence) = validation_profile
+                .v2_block_cadence()
+                .filter(|_| validation_profile.enforces_proposal_work())
+            {
                 let time_trigger_clock_progress_required = block
                     .header()
                     .creation_time()
@@ -7819,7 +7972,12 @@ pub(crate) mod valid {
                     _ => None,
                 },
             ) {
-                Ok(state_block) => state_block,
+                Ok(mut state_block) => {
+                    if let Some(genesis_height) = validation_profile.sumeragi_schedule() {
+                        state_block.request_sumeragi_schedule(genesis_height);
+                    }
+                    state_block
+                }
                 Err(error) => {
                     record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                     if !matches!(
@@ -7998,6 +8156,23 @@ pub(crate) mod valid {
             Self::canonical_v2_block_time_from_parent_time(
                 block,
                 prev_block.header().creation_time(),
+                block_cadence,
+            )
+        }
+        /// The canonical creation time of a Sumeragi block over a parent created at
+        /// `parent_creation_time`: at least one cadence later and strictly after every timed
+        /// network input (`specs/sumeragi.md` Appendix E: parent + cadence rule).
+        ///
+        /// # Errors
+        /// The time overflows.
+        pub(crate) fn sumeragi_block_time(
+            block: &SignedBlock,
+            parent_creation_time: Duration,
+            block_cadence: Duration,
+        ) -> Result<Duration, BlockValidationError> {
+            Self::canonical_v2_block_time_from_parent_time(
+                block,
+                parent_creation_time,
                 block_cadence,
             )
         }
@@ -8394,6 +8569,20 @@ pub(crate) mod valid {
                     Ok(())
                 }
             }
+        }
+        /// Sumeragi blocks carry no consensus effects: evidence, penalties and the beacon are
+        /// not block payload (`specs/sumeragi.md` §4).
+        // TODO(WP8a): the effects section is deleted with v2.
+        fn validate_sumeragi_consensus_effects(
+            block: &SignedBlock,
+        ) -> Result<(), BlockValidationError> {
+            if block.header().npos_effects_hash().is_some() || block.npos_consensus_effects().is_some()
+            {
+                return Err(Self::npos_effects_error(
+                    "Sumeragi blocks carry no consensus effects",
+                ));
+            }
+            Ok(())
         }
         fn validate_npos_effects_with_state(
             block: &SignedBlock,
@@ -11798,6 +11987,9 @@ pub(crate) mod valid {
             let finalize = |state: &mut StateBlock<'_>,
                             source: &SignedBlock,
                             routes: &[crate::queue::RoutingDecision]| {
+                // The Sumeragi schedule is World state: advance it before the seal fixes the
+                // block's World delta.
+                state.advance_requested_sumeragi_schedule();
                 Self::finalize_owned_execution_metadata(
                     source,
                     state,

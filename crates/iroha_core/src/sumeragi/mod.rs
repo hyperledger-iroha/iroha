@@ -480,6 +480,14 @@ pub mod block_store;
 pub mod commitment;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
 pub mod bodies;
+/// The node's executor: executes, applies and builds blocks on the committed State.
+pub mod executor;
+/// Block payloads: the leader's proposal builder and the deterministic `EMPTY` block.
+pub mod payload;
+/// Startup: genesis apply and replay, and the core's `Init`.
+pub mod startup;
+/// The node's Sumeragi instance: startup, production backends and the driver.
+pub mod node;
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
 /// Production cryptography of the Sumeragi driver: `H = iroha_crypto::Hash`, BLS-normal

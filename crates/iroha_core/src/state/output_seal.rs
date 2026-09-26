@@ -100,6 +100,49 @@ impl StateBlock<'_> {
         }
     }
 
+    /// Authorize this exact execution of a block the Sumeragi core committed: its witness
+    /// is the one sealed at execution, and Kura already holds the block with exactly this
+    /// commit certificate (the durable boundary, `specs/sumeragi.md` §12.3 O3).
+    pub(crate) fn authorize_sumeragi_output_publication(
+        &mut self,
+        block: &crate::block::CommittedBlock,
+        witness: &iroha_data_model::block::consensus::ExecWitness,
+        certificate: &iroha_data_model::block::CommitCertificate,
+    ) -> Result<(), String> {
+        self.verify_execution_output_seal(block.as_ref())?;
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.as_ref()
+        else {
+            return Err("publication requires the original sealed output owner".into());
+        };
+        if sealed.witness_hash != Some(HashOf::new(witness)) {
+            return Err("publication witness differs from the actual captured witness".into());
+        }
+        let height = usize::try_from(block.as_ref().header().height().get())
+            .ok()
+            .and_then(core::num::NonZeroUsize::new)
+            .ok_or("block height does not fit the store")?;
+        let durable = self
+            .state_ref
+            .kura
+            .get_block(height)
+            .ok_or("the committed block has not been durably stored")?;
+        if durable.hash() != block.as_ref().hash() || durable.commit_certificate() != Some(certificate)
+        {
+            return Err("the durable block or its certificate differs from the committed one".into());
+        }
+        let Some(ExecutionOutputPlanState::Sealed(sealed)) = self.execution_output_plan.take()
+        else {
+            unreachable!("exclusive borrow retains the checked seal")
+        };
+        self.execution_output_plan = Some(ExecutionOutputPlanState::Authorized(
+            AuthorizedExecutionOutputs {
+                sealed,
+                finality_hash: HashOf::new(certificate).into(),
+            },
+        ));
+        Ok(())
+    }
+
     /// Authorize this exact execution only after its witness, result wire and
     /// verified finality have crossed the canonical durable Kura boundary.
     pub(crate) fn authorize_execution_output_publication(
@@ -171,6 +214,44 @@ impl StateBlock<'_> {
             crate::state::MergeLedgerCommitError,
         >,
     ) -> Result<Vec<iroha_data_model::events::EventBox>, crate::state::MergeLedgerCommitError> {
+        let Some(artifact) = block.verified_v2_finality_artifact() else {
+            self.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            return Err(crate::state::MergeLedgerCommitError::ExecutionBatchInvalid(
+                "publication lost verified finality".into(),
+            ));
+        };
+        let finality_hash = Hash::from(HashOf::new(artifact));
+        self.finalize_execution_outputs_with_finality(block, finality_hash, prepare)
+    }
+
+    /// [`Self::finalize_authorized_execution_outputs`] for a Sumeragi commit: the
+    /// authorization binds `certificate`.
+    pub(in crate::state) fn finalize_sumeragi_execution_outputs(
+        &mut self,
+        block: &crate::block::CommittedBlock,
+        certificate: &iroha_data_model::block::CommitCertificate,
+        prepare: impl FnOnce(
+            &mut Self,
+        ) -> Result<
+            Vec<iroha_data_model::events::EventBox>,
+            crate::state::MergeLedgerCommitError,
+        >,
+    ) -> Result<Vec<iroha_data_model::events::EventBox>, crate::state::MergeLedgerCommitError> {
+        let finality_hash = Hash::from(HashOf::new(certificate));
+        self.finalize_execution_outputs_with_finality(block, finality_hash, prepare)
+    }
+
+    fn finalize_execution_outputs_with_finality(
+        &mut self,
+        block: &crate::block::CommittedBlock,
+        finality_hash: Hash,
+        prepare: impl FnOnce(
+            &mut Self,
+        ) -> Result<
+            Vec<iroha_data_model::events::EventBox>,
+            crate::state::MergeLedgerCommitError,
+        >,
+    ) -> Result<Vec<iroha_data_model::events::EventBox>, crate::state::MergeLedgerCommitError> {
         let invalid = crate::state::MergeLedgerCommitError::ExecutionBatchInvalid;
         let Some(ExecutionOutputPlanState::Authorized(authorized)) = self
             .execution_output_plan
@@ -186,9 +267,6 @@ impl StateBlock<'_> {
             finished: false,
         };
         let state = &mut *owner.state;
-        let artifact = block
-            .verified_v2_finality_artifact()
-            .ok_or_else(|| invalid("publication lost verified finality".into()))?;
         if state.native_lane_stage.is_some() {
             state
                 .validate_native_output_source(block.as_ref())
@@ -198,7 +276,7 @@ impl StateBlock<'_> {
             .as_ref()
             .encode_wire()
             .map_err(|error| invalid(error.to_string()))?;
-        if authorized.finality_hash != Hash::from(HashOf::new(artifact))
+        if authorized.finality_hash != finality_hash
             || authorized.sealed.proposal != block.as_ref().hash()
             || state._curr_block != block.as_ref().header()
             || u64::try_from(wire.len()).ok() != Some(authorized.sealed.wire_bytes)

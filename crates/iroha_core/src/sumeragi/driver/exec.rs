@@ -178,6 +178,8 @@ pub struct ExecSched {
     retry_at: Option<Millis>,
     backoff: Backoff,
     pending_ready: Option<u64>,
+    /// An includable transaction arrived while a build ran: its queue snapshot may predate it.
+    arrived_during_build: bool,
     events: Vec<Event>,
 }
 
@@ -201,6 +203,7 @@ impl ExecSched {
             retry_at: None,
             backoff,
             pending_ready: None,
+            arrived_during_build: false,
             events: Vec::new(),
         }
     }
@@ -292,10 +295,13 @@ impl ExecSched {
     }
 
     /// An includable transaction arrived: `PayloadReady{req}` if the latest build was `EMPTY`
-    /// (at most once per request).
+    /// (at most once per request). During a build the arrival is remembered: an `EMPTY` answer
+    /// may have read the queue before it, and is followed by `PayloadReady` at once (E55).
     pub fn transactions_available(&mut self) {
         if let Some(req) = self.pending_ready.take() {
             self.events.push(Event::PayloadReady { req });
+        } else if matches!(self.running, Some(Running::Build(_))) {
+            self.arrived_during_build = true;
         }
     }
 
@@ -326,6 +332,7 @@ impl ExecSched {
         {
             self.build = None;
             self.running = Some(Running::Build(build.req));
+            self.arrived_during_build = false;
             return Some(ExecOp::Build {
                 req: build.req,
                 height: build.height,
@@ -494,12 +501,20 @@ impl ExecSched {
                 }
             },
             (Running::Build(req), ExecDone::Built { payload, attest }) => {
-                self.pending_ready = payload.is_empty().then_some(req);
+                let empty = payload.is_empty();
+                let arrived = std::mem::take(&mut self.arrived_during_build);
+                self.pending_ready = (empty && !arrived).then_some(req);
                 self.events.push(Event::PayloadBuilt {
                     req,
                     payload,
                     attest,
                 });
+                // A non-empty answer may come after the core timed `req` out to `EMPTY` and
+                // began the heartbeat wait: the transactions it carries are includable (E55).
+                // The core ignores `PayloadReady` unless it is waiting on `req`.
+                if !empty || arrived {
+                    self.events.push(Event::PayloadReady { req });
+                }
             }
             (Running::Discard, ExecDone::Discarded) | (Running::Reject, ExecDone::Rejected) => {}
             (running, done) => {

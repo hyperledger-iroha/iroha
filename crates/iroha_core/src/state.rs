@@ -14218,6 +14218,8 @@ pub struct StateBlockFields<'state> {
     frozen_execution_output_capacity:
         Option<Result<output_capacity::FrozenExecutionOutputCapacity, String>>,
     execution_output_plan: Option<output_capacity::ExecutionOutputPlanState>,
+    /// The Sumeragi schedule step of this block (run by the output seal's finalizer).
+    pub(crate) sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -56897,6 +56899,29 @@ impl<'state> StateBlock<'state> {
             let (events, authorization) = state.apply_without_execution_inner(
                 block,
                 topology,
+                ApplyTopologyAuthority::V2Finality,
+            );
+            authorization.map(|()| events)
+        })
+    }
+    /// Apply the effects of a block the Sumeragi core committed (`specs/sumeragi.md` §6.8):
+    /// `committee` is `C_h` of the lag-2 schedule, which the certified CommitQC was verified
+    /// against, so it is the block's topology.
+    ///
+    /// # Errors
+    /// The block's deterministic carrier metadata or outputs cannot be applied.
+    pub(crate) fn apply_without_execution_with_sumeragi_commit(
+        &mut self,
+        block: &CommittedBlock,
+        certificate: &iroha_data_model::block::CommitCertificate,
+        committee: Vec<PeerId>,
+    ) -> Result<Vec<EventBox>, MergeLedgerCommitError> {
+        self.finalize_sumeragi_execution_outputs(block, certificate, |state| {
+            // TODO(WP8e): rename the authority when the v2 finality path is deleted; its only
+            // effect here is that `committee` becomes the commit topology.
+            let (events, authorization) = state.apply_without_execution_inner(
+                block,
+                committee,
                 ApplyTopologyAuthority::V2Finality,
             );
             authorization.map(|()| events)

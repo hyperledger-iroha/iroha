@@ -288,6 +288,46 @@ fn build_after_parent_apply_and_payload_ready() {
     assert!(rig.sched.take_events().is_empty(), "no EMPTY build pending");
 }
 
+/// A transaction arriving while a build runs (its queue read may predate it) is not lost: an
+/// `EMPTY` answer is followed by `PayloadReady` at once (E4).
+#[test]
+fn arrival_during_a_build_follows_an_empty_answer() {
+    let mut rig = Rig::new();
+    let (b1, _, r1) = child(1, (G, RG), 1);
+    rig.sched.commit(b1.clone(), commit_qc(&b1, r1));
+    rig.drain();
+    rig.events.clear();
+    rig.sched.build(7, 2, 0, 1024, 100);
+    let op = rig.start().expect("the build starts");
+    rig.sched.transactions_available();
+    assert!(rig.sched.take_events().is_empty(), "nothing is pending yet");
+    rig.finish(op);
+    assert_eq!(
+        rig.events
+            .iter()
+            .filter(|e| matches!(e, Event::PayloadBuilt { .. } | Event::PayloadReady { .. }))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            Event::PayloadBuilt {
+                req: 7,
+                payload: Vec::new(),
+                attest: false,
+            },
+            Event::PayloadReady { req: 7 },
+        ]
+    );
+    rig.sched.transactions_available();
+    assert!(rig.sched.take_events().is_empty(), "at most once per request");
+    // Without an arrival the answer waits for one, as before.
+    rig.events.clear();
+    rig.sched.build(8, 2, 1, 1024, 100);
+    rig.drain();
+    assert!(!rig.events.iter().any(|e| matches!(e, Event::PayloadReady { .. })));
+    rig.sched.transactions_available();
+    assert_eq!(rig.sched.take_events(), vec![Event::PayloadReady { req: 8 }]);
+}
+
 /// Requests of heights applied meanwhile are answered on the apply (never left waiting), and
 /// new ones at once.
 #[test]

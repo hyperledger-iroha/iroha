@@ -340,6 +340,9 @@ pub enum ScheduleError {
     /// A height does not fit `u64`.
     #[error("height overflow")]
     HeightOverflow,
+    /// The block's execution did not reach the output seal, so the requested step never ran.
+    #[error("the block's execution did not advance the schedule")]
+    NotAdvanced,
 }
 
 /// The core consensus key of a validator peer: the raw 48-byte BLS-normal public key (§3.1).
@@ -406,6 +409,26 @@ pub fn scheduled_committee(
     )
 }
 
+/// The committee members of `config` with their live validator proofs of possession, for the
+/// driver's cryptography to admit (`specs/sumeragi.md` §1.6); members without a live PoP are
+/// left out (their keys stay unadmitted and certificates naming them fail).
+#[must_use]
+pub fn committee_pops(world: &impl WorldReadOnly, config: &ScheduledConfig) -> Vec<(PeerId, Vec<u8>)> {
+    config
+        .committee
+        .iter()
+        .filter_map(|peer| {
+            live_consensus_key_pop_for_peer_with_role(
+                world,
+                peer,
+                config.height,
+                ConsensusKeyRole::Validator,
+            )
+            .map(|pop| (peer.clone(), pop))
+        })
+        .collect()
+}
+
 /// The configuration the state `world` schedules for height `height`, checked to map to a core
 /// [`HeightConfig`] (non-empty committee of at most `MAX_COMMITTEE_SIZE` BLS-normal keys, valid
 /// chain parameters).
@@ -465,6 +488,52 @@ pub fn advance(
     };
     *block.world.consensus_schedule.get_mut() = schedule;
     Ok(next)
+}
+
+/// The schedule step of the block a [`StateBlock`] executes.
+///
+/// The schedule is World state, so the step runs inside the execution output seal's finalizer
+/// (the seal fixes the World delta the block publishes): the Sumeragi executor requests it
+/// before validating the block and takes its outcome afterwards.
+#[derive(Debug, Default)]
+pub enum ScheduleStep {
+    /// Not a Sumeragi block (tools, replay helpers): the schedule is left alone.
+    #[default]
+    Off,
+    /// Advance after execution, with this genesis height.
+    Requested {
+        /// The chain's genesis height.
+        genesis_height: u64,
+    },
+    /// The outcome of [`advance`].
+    Done(Result<ScheduledConfig, ScheduleError>),
+}
+
+impl StateBlock<'_> {
+    /// Request the schedule step of the block this overlay executes next.
+    pub(crate) fn request_sumeragi_schedule(&mut self, genesis_height: u64) {
+        self.sumeragi_schedule = ScheduleStep::Requested { genesis_height };
+    }
+
+    /// Run a requested schedule step (the output seal's finalizer).
+    pub(crate) fn advance_requested_sumeragi_schedule(&mut self) {
+        if let ScheduleStep::Requested { genesis_height } = self.sumeragi_schedule {
+            self.sumeragi_schedule = ScheduleStep::Done(advance(self, genesis_height));
+        }
+    }
+
+    /// The outcome of the requested step: the configuration of `h + 2`.
+    ///
+    /// # Errors
+    /// The step failed, or it never ran ([`ScheduleError::NotAdvanced`]).
+    pub(crate) fn take_sumeragi_schedule(&mut self) -> Result<ScheduledConfig, ScheduleError> {
+        match std::mem::take(&mut self.sumeragi_schedule) {
+            ScheduleStep::Done(outcome) => outcome,
+            ScheduleStep::Off | ScheduleStep::Requested { .. } => {
+                Err(ScheduleError::NotAdvanced)
+            }
+        }
+    }
 }
 
 /// Check a `SetParameter` of a Sumeragi parameter against the current parameters: the demotion
