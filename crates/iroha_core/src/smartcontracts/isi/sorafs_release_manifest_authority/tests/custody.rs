@@ -3,7 +3,8 @@ use super::*;
 use crate::{
     query::{
         release_manifest_authority::{
-            ReleaseManifestCustodyErrorV1, read_release_manifest_custody_at_v1,
+            ReleaseManifestCustodyErrorV1, read_current_release_manifest_custody_block_finality_v1,
+            read_release_manifest_custody_at_v1,
         },
         signer_custody_history::{
             self as history, ControlAction, ControlTransition, CustodyPurpose, HistoryError,
@@ -13,12 +14,13 @@ use crate::{
     state::StateReadOnly,
 };
 use iroha_data_model::block::builder::BlockBuilder;
+use iroha_sccp::sccp_finalize_taira_block_test_fixture_v1;
 use sorafs_manifest::signer::{
     custody::{SignerCustodyAuthorityV1, SignerCustodyBindingV1},
     custody_control::SignerCustodyPolicyV1,
     protocol::SignerKeyAlgorithmV1,
 };
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 fn software_policy(f: &Fixture) -> SignerCustodyPolicyV1 {
     let signer = KeyPair::try_from_seed(vec![9; 32], Algorithm::Ed25519).expect("signer key");
@@ -72,7 +74,7 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
     block
         .commit_world_overlay_for_testing()
         .expect("commit fixture world");
-    let signed = BlockBuilder::new(header)
+    let mut signed = BlockBuilder::new(header)
         .try_build_with_signature(
             0,
             KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519)
@@ -80,6 +82,18 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
                 .private_key(),
         )
         .expect("fixture block");
+    signed
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
+        )
+        .expect("complete fixture block outputs");
     let hash = signed.hash();
     let header = signed.header().clone();
     state
@@ -374,5 +388,105 @@ fn role13_custody_rotation_cannot_reuse_retired_signer_key() {
     assert_eq!(
         read_release_manifest_custody_at_v1(&f.state.view(), &original.binding, 2),
         Err(ReleaseManifestCustodyErrorV1::BindingMismatch)
+    );
+}
+
+#[test]
+fn role13_current_raw_custody_requires_exact_block_finality_and_remains_non_authoritative() {
+    let mut f = fixture();
+    let policy = software_policy(&f);
+    let bytes = history::encode(&policy).expect("canonical software policy");
+    let manager = f.manager.clone();
+    transact(&mut f.state, 1_000, |tx| {
+        let writes = history::prepare_control::<ManifestPurpose>(
+            tx,
+            &manager,
+            None,
+            ControlTransition {
+                deployment: DEPLOYMENT,
+                expected_revision: 0,
+                expected_digest: [0; 32],
+                request_digest: [91; 32],
+                action: ControlAction::Configure(&bytes),
+            },
+        )
+        .expect("fixture-only custody preparation");
+        for (path, value) in writes {
+            tx.world.smart_contract_state.insert(path, value);
+        }
+    });
+    let read = |f: &Fixture, binding: &SignerCustodyBindingV1, height| {
+        read_current_release_manifest_custody_block_finality_v1(&f.state.view(), binding, height)
+    };
+    assert_eq!(
+        read(&f, &policy.binding, 1),
+        Err(ReleaseManifestCustodyErrorV1::FinalityUnavailable),
+        "a committed row and durable block do not replace the CommitQC"
+    );
+    let block = f
+        .state
+        .kura()
+        .get_block(NonZeroUsize::new(1).unwrap())
+        .unwrap();
+    let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
+    let mut forked = finalized.proof().finality_artifact.clone();
+    forked.block_hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+        b"forked release-manifest fixture block",
+    ));
+    assert!(f.state.kura().store_v2_finality_artifact(&forked).is_err());
+    assert_eq!(
+        read(&f, &policy.binding, 1),
+        Err(ReleaseManifestCustodyErrorV1::FinalityUnavailable),
+        "a forked certificate cannot finalize the raw row"
+    );
+    let receipt = f
+        .state
+        .kura()
+        .store_v2_finality_artifact(&finalized.proof().finality_artifact)
+        .expect("exact software-signed four-validator finality");
+    assert_eq!(receipt.height(), 1);
+    assert_eq!(
+        receipt.block_hash(),
+        finalized.proof().finality_artifact.block_hash
+    );
+    let current = read(&f, &policy.binding, 1)
+        .expect("same-State Kura/QC block finality")
+        .expect("fixture-only raw custody row");
+    assert_eq!(current.custody().control_record.deployment_id, DEPLOYMENT);
+    assert_eq!(current.block_finality().height(), 1);
+    assert_eq!(
+        current.block_finality().block_hash(),
+        current.custody().custody_anchor.block_hash
+    );
+    assert!(
+        !history::prefix_has_any::<ManifestPurpose>(
+            f.state.view().world(),
+            DEPLOYMENT,
+            "operation"
+        )
+        .unwrap(),
+        "block finality does not create a role-13 operation journal"
+    );
+    let mut foreign_deployment = policy.binding.clone();
+    foreign_deployment.purpose = SignerPurposeBindingV1::ReleaseManifest {
+        deployment_id: "release-secondary".into(),
+    };
+    assert!(read(&f, &foreign_deployment, 1).unwrap().is_none());
+    let mut foreign_network = policy.binding.clone();
+    foreign_network.network_id = [0xA5; 32];
+    assert_eq!(
+        read(&f, &foreign_network, 1),
+        Err(ReleaseManifestCustodyErrorV1::BindingMismatch)
+    );
+    transact(&mut f.state, 2_000, |_| {});
+    assert_eq!(
+        read(&f, &policy.binding, 1),
+        Err(ReleaseManifestCustodyErrorV1::StaleHeight),
+        "old finality cannot authorize a current raw custody read"
+    );
+    assert_eq!(
+        read(&f, &policy.binding, 2),
+        Err(ReleaseManifestCustodyErrorV1::FinalityUnavailable),
+        "current custody cannot borrow an earlier block's CommitQC"
     );
 }

@@ -51,10 +51,6 @@ pub(super) struct AppleGovernedPolicyCellsV1<F: KagemushaPoseidonFieldV1> {
 }
 
 /// Select the predecessor cells already assigned by Eq/Ep state and Guard relations.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 pub(super) fn apple_policy_cells_from_state_guard_v1<F: KagemushaPoseidonFieldV1>(
     state: &state_relation::KagemushaAssignedStateRelationV1<F>,
     guard: &guard_bundle::KagemushaAssignedGuardBundleV1<F>,
@@ -72,10 +68,9 @@ pub(super) fn apple_policy_cells_from_state_guard_v1<F: KagemushaPoseidonFieldV1
     }
 }
 
-/// RP/App ID and app release bytes that must be passed unchanged to assertion SHA.
+/// Authenticated RP/App ID bytes passed unchanged to assertion SHA.
 pub(super) struct AppleGovernedAppBytesV1<F: KagemushaPoseidonFieldV1> {
     pub(super) rp_id_hash: [AssignedValue<F>; 32],
-    pub(super) app_release_digest: [AssignedValue<F>; 32],
 }
 
 fn uint_le<F: KagemushaPoseidonFieldV1>(
@@ -137,10 +132,6 @@ fn nonzero_bytes<F: KagemushaPoseidonFieldV1>(
 /// its result equals the authenticated Guard credential field. The same RP
 /// cells equal the signed 37-byte authenticator header and are returned for
 /// `queue_apple_assertion_digest`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 #[allow(clippy::too_many_lines)]
 pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
@@ -306,12 +297,6 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
             .collect::<Vec<_>>()
             .try_into()
             .expect("RP width"),
-        app_release_digest: app_release
-            .iter()
-            .map(|byte| byte.assigned().expect("governed app release assigned"))
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("app release width"),
     })
 }
 
@@ -323,10 +308,6 @@ pub(super) fn constrain_apple_governed_policy_opening_v1<F: KagemushaPoseidonFie
 /// whose digest must equal the value in signed `S`. This is a staged relation:
 /// the assertion signature, issuer credential and remaining signed Core fields
 /// must also share these exact cells before monetary admission.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn constrain_apple_governed_signed_identity_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,

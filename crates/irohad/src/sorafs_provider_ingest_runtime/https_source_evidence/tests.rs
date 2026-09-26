@@ -275,7 +275,11 @@ fn signed_admission_labels_cannot_be_rewritten_into_https_authorities() {
     let explicit_default_port = fixture_with_torii_authority("source.sorafs.example:443");
     assert!(explicit_default_port.check().is_err());
     let alternate_port = fixture_with_torii_authority("source.sorafs.example:8443");
-    alternate_port.check().unwrap();
+    assert_eq!(
+        alternate_port.check(),
+        Err(ProviderIngestSourceFetchErrorV1::Rejected),
+        "signed evidence cannot approve an origin that the gateway transport rejects"
+    );
 }
 #[test]
 fn wrong_network_source_assignment_grant_and_root_fail_against_valid_evidence() {

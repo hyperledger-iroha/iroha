@@ -204,6 +204,7 @@ class ExplicitChainContextTest {
 
         assertEquals(NetworkId::class.java, managed.parameterTypes[1])
         assertEquals(ByteArray::class.java, native.parameterTypes[1])
+        assertEquals(12, native.parameterCount, "retired shield verifier JNI parameters must be absent")
         assertEquals(32, NetworkId.BYTE_LENGTH)
     }
 
@@ -226,7 +227,7 @@ class ExplicitChainContextTest {
 
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 23 is required",
+            "connect_norito_bridge ABI 24 is required",
         )
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
             SigningAlgorithm.ED25519,

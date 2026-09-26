@@ -874,7 +874,7 @@ impl SettlementDetails {
     /// Iterate every committed movement, including all N atomic movements.
     ///
     /// Reference-retention consumers must use both exact source and destination
-    /// AssetIds; the fixed bilateral pair is not a bound on atomic receipts.
+    /// `AssetId` values; the fixed bilateral pair is not a bound on atomic receipts.
     pub fn movements(&self) -> impl Iterator<Item = &ResolvedSettlementMovement> {
         let (first, second, batch) = match self {
             Self::Dvp(DvpSettlementDetails {
@@ -901,7 +901,7 @@ impl SettlementDetails {
 
 /// Immutable receipt persisted only after complete successful settlement.
 ///
-/// The world-state map key is the unique SettlementId. Failed attempts create no
+/// The world-state map key is the unique `SettlementId`. Failed attempts create no
 /// receipt. Resolved asset scopes come from the prepared transfer owner, never
 /// from ambient routing or a subsequent state view.
 #[derive(

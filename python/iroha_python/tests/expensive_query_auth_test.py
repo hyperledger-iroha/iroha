@@ -34,6 +34,7 @@ def _response(status: int = 200) -> requests.Response:
     response.status_code = status
     response.headers["Content-Type"] = "application/json"
     response._content = json.dumps({"items": [], "total": 0}).encode()
+    response._content_consumed = True
     response.encoding = "utf-8"
     return response
 

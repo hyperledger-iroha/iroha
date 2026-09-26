@@ -3208,17 +3208,70 @@ fn fair_v2_ingress_merge_attempt_cursors(
     Some(merged.into_values().collect())
 }
 fn fair_v2_ingress_attempt_cursor_hash(attempts: &[FairV2IngressReplyAttempt]) -> CryptoHash {
-    let mut projection = Vec::with_capacity(24usize.saturating_mul(attempts.len()));
-    projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-cursors:v2");
     let count = u64::try_from(attempts.len())
         .expect("bounded fair-ingress route count is representable as u64");
-    projection.extend_from_slice(&count.to_le_bytes());
-    for attempt in attempts {
-        projection.extend_from_slice(attempt.route.process_local_identity_hash().as_ref());
-        projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
-        projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+    CryptoHash::new_from_writer(|writer| {
+        writer.write_all(b"iroha:sumeragi:v2:fair-ingress-cursors:v2")?;
+        writer.write_all(&count.to_le_bytes())?;
+        for attempt in attempts {
+            writer.write_all(attempt.route.process_local_identity_hash().as_ref())?;
+            writer.write_all(&attempt.message_cursor.to_le_bytes())?;
+            writer.write_all(&attempt.chunk_cursor.to_le_bytes())?;
+        }
+        Ok(())
+    })
+    .expect("writing to the fair-ingress hash state cannot fail")
+}
+
+#[cfg(test)]
+mod fair_v2_ingress_attempt_cursor_hash_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+    use iroha_p2p::network::NetworkReplyRouteTestFixture;
+
+    fn old_projection_hash(attempts: &[FairV2IngressReplyAttempt]) -> CryptoHash {
+        let mut projection = Vec::with_capacity(24usize.saturating_mul(attempts.len()));
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-cursors:v2");
+        let count = u64::try_from(attempts.len()).expect("test route count fits u64");
+        projection.extend_from_slice(&count.to_le_bytes());
+        for attempt in attempts {
+            projection.extend_from_slice(attempt.route.process_local_identity_hash().as_ref());
+            projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
+            projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+        }
+        CryptoHash::new(projection)
     }
-    CryptoHash::new(projection)
+
+    #[test]
+    fn streamed_hash_matches_old_byte_projection_for_empty_and_bounded_routes() {
+        let first = PeerId::new(KeyPair::random().public_key().clone());
+        let second = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(first.clone(), 2);
+        let attempts = [
+            FairV2IngressReplyAttempt {
+                route: routes.mint(first),
+                message_cursor: 0,
+                chunk_cursor: u64::MAX,
+            },
+            FairV2IngressReplyAttempt {
+                route: routes.mint(second),
+                message_cursor: u64::MAX,
+                chunk_cursor: 7,
+            },
+        ];
+        for count in 0..=attempts.len() {
+            let prefix = &attempts[..count];
+            assert_eq!(
+                fair_v2_ingress_attempt_cursor_hash(prefix),
+                old_projection_hash(prefix)
+            );
+        }
+        let reversed = [attempts[1].clone(), attempts[0].clone()];
+        assert_eq!(
+            fair_v2_ingress_attempt_cursor_hash(&reversed),
+            old_projection_hash(&reversed)
+        );
+    }
 }
 fn fair_v2_ingress_carrier_attempts_match_routes(
     attempts: &[FairV2IngressReplyAttempt],
@@ -3473,10 +3526,11 @@ fn fair_v2_ingress_required_manifest_bytes(
 }
 /// Exact bare-Norito bytes of a structurally maximal execution commitment.
 ///
-/// The maximum carries the bounded top-up, Native AMX, lane-finality, and
-/// merge-carrier projections. The canonical structural proposal fixture below
-/// binds this allocation-free constant to the live wire codec.
-const FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES: usize = 306;
+/// The maximum carries the bounded top-up, Native AMX, lane-finality,
+/// merge-carrier, and selective transaction projections. The canonical
+/// structural proposal fixture below binds this allocation-free constant to
+/// the live wire codec.
+const FAIR_V2_INGRESS_MAX_EXECUTION_COMMITMENT_BYTES: usize = 396;
 fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Option<usize> {
     let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
     let signer_vector_bytes = roster_len.checked_mul(5)?.checked_add(8)?;
@@ -9045,7 +9099,7 @@ mod authoritative_runtime_gate_tests {
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 1_106_267,
+            required_proposal, 1_109_147,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -9054,13 +9108,30 @@ mod authoritative_runtime_gate_tests {
                 payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
                 ..
             }) => match &proposal.justification {
-                wire::ProposalJustification::Timeout(timeout) => timeout
-                    .highest_prepare_qc
-                    .as_ref()
-                    .expect("maximum proposal has a highest PrepareQC")
-                    .execution_commitment
-                    .encode()
-                    .len(),
+                wire::ProposalJustification::Timeout(timeout) => {
+                    let commitment = &timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .expect("maximum proposal has a highest PrepareQC")
+                        .execution_commitment;
+                    let maximum_leaf_count = NonZeroU64::new(wire::MAX_EXECUTED_BLOCK_WIRE_BYTES)
+                        .expect("maximum executed wire bound is non-zero");
+                    assert_eq!(
+                        commitment
+                            .transaction_input_commitment
+                            .map(|tree| tree.leaf_count()),
+                        Some(maximum_leaf_count),
+                        "maximal PrepareQC must carry the selective Network input tree",
+                    );
+                    assert_eq!(
+                        commitment
+                            .transaction_output_commitment
+                            .map(|tree| tree.leaf_count()),
+                        Some(maximum_leaf_count),
+                        "maximal PrepareQC must carry the selective output tree",
+                    );
+                    commitment.encode().len()
+                }
                 wire::ProposalJustification::ParentCommit(_) => {
                     unreachable!("maximum proposal uses Timeout justification")
                 }
@@ -9159,7 +9230,7 @@ mod authoritative_runtime_gate_tests {
         let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 67_236);
+        assert_eq!(minimal_proposal_bytes, 67_416);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,

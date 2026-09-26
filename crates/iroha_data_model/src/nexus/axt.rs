@@ -2241,28 +2241,25 @@ impl AxtAnchoredSpendDraftV1 {
         if envelope.da_commitment != Some(anchor.da_manifest_digest.into()) {
             return Err(AxtAnchoredSpendValidationErrorV1::DaManifest);
         }
-        match self.intent.op.amount.as_ref() {
-            Some(clear_amount) => {
-                if self.amount_commitment.is_some() || envelope.amount_commitment.is_some() {
-                    return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
-                }
-                if self.amount.as_ref() != Some(clear_amount) {
-                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
-                }
-                if envelope.committed_amount.is_none_or(|amount| amount == 0)
-                    || clear_amount.scale() != 0
-                    || clear_amount.as_numeric().try_mantissa_u128() != envelope.committed_amount
-                {
-                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
-                }
+        if let Some(clear_amount) = self.intent.op.amount.as_ref() {
+            if self.amount_commitment.is_some() || envelope.amount_commitment.is_some() {
+                return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
             }
-            None => {
-                if self.amount.is_some() || envelope.committed_amount.is_some() {
-                    return Err(AxtAnchoredSpendValidationErrorV1::Amount);
-                }
-                if self.amount_commitment.is_none_or(|bytes| bytes == [0; 32]) {
-                    return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
-                }
+            if self.amount.as_ref() != Some(clear_amount) {
+                return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+            }
+            if envelope.committed_amount.is_none_or(|amount| amount == 0)
+                || clear_amount.scale() != 0
+                || clear_amount.as_numeric().try_mantissa_u128() != envelope.committed_amount
+            {
+                return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+            }
+        } else {
+            if self.amount.is_some() || envelope.committed_amount.is_some() {
+                return Err(AxtAnchoredSpendValidationErrorV1::Amount);
+            }
+            if self.amount_commitment.is_none_or(|bytes| bytes == [0; 32]) {
+                return Err(AxtAnchoredSpendValidationErrorV1::AmountCommitment);
             }
         }
         if self.amount_commitment != envelope.amount_commitment {

@@ -233,7 +233,7 @@ def miss_probability(good: int, domain: int, queries: int) -> Fraction:
 def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
     """Unqualified `<2N` DEEP/masking byte and degree screen, not a proof."""
     n, h, lde_rows, queries, retained = 65_536, 32_768, 8_388_608, 64, 301
-    if deep_frame_bytes != 506_351:
+    if deep_frame_bytes != 500_783:
         raise ValueError("DEEP DTO frame changed; review the hiding candidate")
     trace_bound = n + h
     numerator_bound = max(2 * trace_bound - 1 + (n - n // 512), trace_bound + n - 1)
@@ -253,7 +253,7 @@ def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
         or row_mask_bytes != 32
         or queries * row_mask_bytes != 2_048
         or (frame_bytes, segment_margin, axt_two_child_margin)
-        != (508_399, 15_889, 31_778)
+        != (502_831, 21_457, 42_914)
     ):
         raise ValueError("unqualified hiding degree or byte margins changed")
     return {

@@ -46,7 +46,7 @@ pub const INTERNAL_REJECTION_DIAGNOSTIC_OMITTED: &str = "callback failed; diagno
 /// Position of a deterministic pipeline event in its applying carrier.
 ///
 /// Network positions are source indices, not a compressed list of matched
-/// events. BlockApproved follows every network event. Advertised results are
+/// events. `BlockApproved` follows every network event. Advertised results are
 /// never event inputs; Core must construct events from actual prefix execution.
 #[derive(
     Debug,
@@ -561,7 +561,7 @@ impl ExecutionOutputV1 {
 
     /// Resolve the actual call owner from source index or pre-body invocation.
     ///
-    /// Network SealedReveal uses the inner signed call identity; it retains its
+    /// Network `SealedReveal` uses the inner signed call identity; it retains its
     /// distinct outer source identity through `input_index`. No output enters the hash.
     ///
     /// # Errors
@@ -617,13 +617,13 @@ impl ExecutionOutputV1 {
                 failure_root,
                 ..
             }) => {
-                if let PipelineEventPositionV1::Network(input_index) = invocation.event {
-                    if !matches!(
+                if let PipelineEventPositionV1::Network(input_index) = invocation.event
+                    && !matches!(
                         network_input(network_inputs, input_index)?,
                         TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedReveal(_)
-                    ) {
-                        return Err("pipeline event source has no signed transaction event".into());
-                    }
+                    )
+                {
+                    return Err("pipeline event source has no signed transaction event".into());
                 }
                 Some((&invocation.trigger, failure_root))
             }

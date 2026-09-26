@@ -755,7 +755,124 @@ pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> 
     record: SourceOpeningRecordV1,
     proof_session: commitment_session_v1::RetainedSourceSessionV1<R>,
 }
+
+/// Future live correspondence owner. Both the repeatable source snapshot and
+/// the complete original opening inventory stay alive while qPCS uses its
+/// original resource budget. No production constructor exists until their
+/// common encryption lifecycle is authenticated.
+#[must_use = "dropping this owner closes its source, openings and resource ledger"]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source) struct RnsNativeSourceWithOriginalOpeningsV1<
+    R,
+    S,
+> {
+    snapshot: S,
+    openings: GlobalLookupSourceOpeningMaterialV1<R>,
+    poisoned: core::cell::Cell<bool>,
+}
+
+impl<R, S> crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1
+    for RnsNativeSourceWithOriginalOpeningsV1<R, S>
+where
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+    S: crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    type Chunk = S::Chunk;
+
+    fn layout(
+        &self,
+    ) -> crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.snapshot.layout()
+    }
+
+    fn snapshot_digest(
+        &self,
+        arena: crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceArenaV1,
+    ) -> [u8; 32] {
+        self.snapshot.snapshot_digest(arena)
+    }
+
+    fn read_slot(
+        &mut self,
+        arena: crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+    ) -> Result<
+        Self::Chunk,
+        crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceErrorV1,
+    > {
+        if self.poisoned.get() {
+            return Err(
+                crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceErrorV1::Poisoned,
+            );
+        }
+        let result = self.snapshot.read_slot(arena, slot);
+        if result.is_err() {
+            self.poisoned.set(true);
+        }
+        result
+    }
+
+    fn structural_receipt(
+        &self,
+    ) -> Result<
+        crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceReceiptV1,
+        crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceErrorV1,
+    > {
+        if self.poisoned.get() {
+            return Err(
+                crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeSourceErrorV1::Poisoned,
+            );
+        }
+        let result = self.snapshot.structural_receipt();
+        if result.is_err() {
+            self.poisoned.set(true);
+        }
+        result
+    }
+}
+
+impl<R, S>
+    crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
+    for RnsNativeSourceWithOriginalOpeningsV1<R, S>
+where
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+    S: crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+}
+
+impl<R, S>
+    crate::vega::zk_ams::mkhe::collective::incremental_source::RnsNativeOriginalBudgetedSourceV1
+    for RnsNativeSourceWithOriginalOpeningsV1<R, S>
+where
+    R: crate::vega::MaskedRelaxedRandomSourceV1,
+    S: crate::vega::zk_ams::mkhe::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    fn original_budget_mut_v1(
+        &mut self,
+    ) -> Result<
+        &mut crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
+        ZkAmsMkheErrorV1,
+    > {
+        if self.poisoned.get() {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        self.openings.original_budget_mut_v1()
+    }
+}
+
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMaterialV1<R> {
+    /// Borrow the original ledger only after the source-opening record and
+    /// final Q-mask phase validate. The material remains owned for later
+    /// same-opening and composite verification.
+    fn original_budget_mut_v1(
+        &mut self,
+    ) -> Result<
+        &mut crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
+        ZkAmsMkheErrorV1,
+    > {
+        self.validate_v1()?;
+        self.proof_session.original_budget_mut_v1()
+    }
+
     pub(super) fn prepare_source_packing_openings_v1(&mut self) -> Result<(), ZkAmsMkheErrorV1> {
         self.validate_v1()?;
         self.proof_session.prepare_source_packing_openings_v1()?;

@@ -1007,6 +1007,20 @@ fn verified_finality_derives_epoch_aware_sora_anchor_and_rejects_boundaries() {
         Err(SccpSoraFinalityAnchorBuildError::EpochZero)
     );
 
+    let same_epoch_fixture = genesis_fixture.with_exact_finalized_successor();
+    let same_epoch_finality =
+        iroha_sccp::decode_taira_bridge_finality_proof(&same_epoch_fixture.bundle.finality_proof)
+            .expect("exact same-epoch height-two finality proof");
+    let same_epoch_verified = VerifiedV2FinalityArtifact::verify_for_header(
+        same_epoch_finality.block_header,
+        same_epoch_finality.finality_artifact,
+    )
+    .expect("exact same-epoch height-two finality verifies");
+    assert_eq!(
+        same_epoch_verified.sccp_sora_finality_anchor_v1(),
+        Err(SccpSoraFinalityAnchorBuildError::EpochZero)
+    );
+
     let fixture = genesis_fixture.with_exact_epoch_one_finalized_successor();
     let finality = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
         .expect("exact height-two finality proof");

@@ -27,6 +27,8 @@ class SumeragiV2WireFixtureTest {
         )
         val laneFinality = SumeragiV2Wire.LaneFinalityManifestCommitment(hash(0x2b), 1)
         val carrier = SumeragiV2Wire.MergeCarrierCommitment(1, hash(0x29))
+        val inputs = SumeragiV2Wire.TransactionTreeCommitment(hash(0x2d), 1)
+        val outputs = SumeragiV2Wire.TransactionTreeCommitment(hash(0x2f), 2)
         val carried = SumeragiV2Wire.ExecutionCommitment(
             base.parentStateRoot,
             base.postStateRoot,
@@ -40,6 +42,8 @@ class SumeragiV2WireFixtureTest {
             carrier,
             base.executedBlockWireLen,
             base.executedBlockWireHash,
+            inputs,
+            outputs,
         )
 
         val decodedBase = SumeragiV2Wire.ExecutionCommitment.decode(base.encode())
@@ -54,6 +58,29 @@ class SumeragiV2WireFixtureTest {
             laneFinality,
             SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).laneFinalityManifest,
         )
+        assertEquals(inputs, SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).transactionInputCommitment)
+        assertEquals(outputs, SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).transactionOutputCommitment)
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.TransactionTreeCommitment(hash(0x2d), 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                base.kagemushaTopUpRoot,
+                base.kagemushaTopUpCount,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
+                null,
+                null,
+                base.executedBlockWireLen,
+                base.executedBlockWireHash,
+                inputs,
+                null,
+            )
+        }
         listOf(0L, SumeragiV2Wire.MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK + 1).forEach { count ->
             assertFailsWith<IllegalArgumentException> {
                 SumeragiV2Wire.LaneFinalityManifestCommitment(hash(0x2b), count)
@@ -163,6 +190,23 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(row.hex.hexBytes())
             }
         }
+    }
+
+    @Test
+    fun `Rust transaction tree fixture pins populated v4 commitments`() {
+        val row = fixtureRows().single {
+            it.kind == "message" && it.name == "quorum_certificate_transaction_commitments"
+        }
+        val encoded = row.hex.hexBytes()
+        val message = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(encoded)
+        val certificate = (
+            message.payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val inputs = requireNotNull(certificate.executionCommitment.transactionInputCommitment)
+        val outputs = requireNotNull(certificate.executionCommitment.transactionOutputCommitment)
+        assertEquals(2, inputs.leafCount)
+        assertEquals(3, outputs.leafCount)
+        assertContentEquals(encoded, message.encode())
     }
 
     @Test
@@ -571,6 +615,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -587,6 +633,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -603,6 +651,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -619,6 +669,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
 
@@ -642,6 +694,8 @@ class SumeragiV2WireFixtureTest {
             null,
             base.executedBlockWireLen,
             base.executedBlockWireHash,
+            base.transactionInputCommitment,
+            base.transactionOutputCommitment,
         )
         assertEquals(largeCount, valid.kagemushaTopUpCount)
         assertEquals(kagemushaTopUpRoot, valid.kagemushaTopUpRoot)
@@ -682,6 +736,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -698,6 +754,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -714,6 +772,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -730,6 +790,8 @@ class SumeragiV2WireFixtureTest {
                 null,
                 base.executedBlockWireLen,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -746,6 +808,8 @@ class SumeragiV2WireFixtureTest {
                 base.mergeCarrier,
                 0,
                 base.executedBlockWireHash,
+                base.transactionInputCommitment,
+                base.transactionOutputCommitment,
             )
         }
     }
@@ -769,7 +833,7 @@ class SumeragiV2WireFixtureTest {
         requireNotNull(decoded.highestPrepareQc)
         requireNotNull(decoded.lastTimeoutCertificate)
         assertEquals(null, decoded.lastCommittedSubject)
-        assertEquals(2L, decoded.heightContext.epoch)
+        assertEquals(0L, decoded.heightContext.epoch)
         assertEquals(100L, decoded.heightContext.epochEndHeight)
         assertEquals(SumeragiV2Wire.ConsensusMode.NPOS, decoded.heightContext.mode)
         assertEquals(4L, decoded.heightContext.validatorCount)
@@ -878,6 +942,7 @@ class SumeragiV2WireFixtureTest {
             "vote",
             "quorum_certificate",
             "quorum_certificate_merge_carrier",
+            "quorum_certificate_transaction_commitments",
             "commit_vote_reproposal",
             "commit_quorum_certificate_reproposal",
             "timeout_vote",

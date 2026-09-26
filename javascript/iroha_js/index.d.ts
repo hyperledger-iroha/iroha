@@ -193,7 +193,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 24;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -6512,6 +6512,8 @@ export interface ToriiSumeragiV2LaneFinalityManifestCommitment { root: string; l
 
 export interface ToriiSumeragiV2MergeCarrierCommitment { version: 1; entry_hash: string; }
 
+export interface ToriiSumeragiV2TransactionTreeCommitment { root: string; leaf_count: ToriiU64; }
+
 export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
   post_state_root: string;
@@ -6525,6 +6527,8 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
   executed_block_wire_len: ToriiU64;
   executed_block_wire_hash: string;
+  transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
+  transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
 }
 
 export interface ToriiSumeragiV2QuorumCertificateRef {
@@ -8310,13 +8314,20 @@ export interface CastPlainBallotInstructionInput {
   owner: string;
   amount: QuantityInput;
   durationBlocks: NumericLike;
-  direction?: number | string;
+  direction: number | string;
+}
+
+/** Choice-free extension of an existing public ballot's bond or lock. */
+export interface UpdatePlainConvictionInstructionInput {
+  referendumId: string;
+  owner: string;
+  amount: QuantityInput;
+  durationBlocks: NumericLike;
 }
 
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
-  shieldVerifyingKey?: VerifyingKeyIdLike | null;
 }
 
 export interface ScheduleConfidentialPolicyTransitionInstructionInput {
@@ -10462,6 +10473,18 @@ export interface CastPlainBallotTransactionInput {
   networkId: NetworkId;
   authority: string;
   ballot: CastPlainBallotInstructionInput;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: CryptoAlgorithm;
+}
+
+export interface UpdatePlainConvictionTransactionInput {
+  networkId: NetworkId;
+  authority: string;
+  update: UpdatePlainConvictionInstructionInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -13193,7 +13216,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 24;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -13218,7 +13241,7 @@ export const VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE: "EVALUATED_PROJECTION_NOT_IN
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES: 4096;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES: 65536;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS: 100000;
-export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 24;
 export function encodeValidationFeeHijiriQuoteRequestV1(
   accountId: string,
   qualifyingTransferCount: number,
@@ -13447,6 +13470,9 @@ export function buildCastZkBallotTransaction(
 ): SignedTransactionResult;
 export function buildCastPlainBallotTransaction(
   input: CastPlainBallotTransactionInput & FeePaymentRequired,
+): SignedTransactionResult;
+export function buildUpdatePlainConvictionTransaction(
+  input: UpdatePlainConvictionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
   input: RegisterZkAssetTransactionInput & FeePaymentRequired,
@@ -14156,6 +14182,9 @@ export function buildCastZkBallotInstruction(
 
 export function buildCastPlainBallotInstruction(
   input: CastPlainBallotInstructionInput,
+): object;
+export function buildUpdatePlainConvictionInstruction(
+  input: UpdatePlainConvictionInstructionInput,
 ): object;
 
 export function buildSubmitAgendaProposalInstruction(input: {

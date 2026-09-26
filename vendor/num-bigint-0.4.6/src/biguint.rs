@@ -519,20 +519,26 @@ impl BigUint {
     /// A constant `BigUint` with value 0, useful for static initialization.
     pub const ZERO: Self = BigUint { data: Vec::new() };
 
-    /// Adopt canonical native digits without repacking or allocating.
+    /// Adopt least-significant-first native digits without digit conversion.
     ///
-    /// Digits are least significant first. The input vector's allocation and
-    /// capacity become the resulting integer's physical owner; callers that
-    /// account for an exact allocation must supply an exact-capacity vector.
+    /// Canonical, full-capacity input (no high zero digit and `len == capacity`)
+    /// keeps its allocation and capacity. Other input is normalized; dropping
+    /// high zero digits or excess capacity may call `Vec::shrink_to_fit` and
+    /// reallocate. Exact-allocation callers must supply canonical, full-capacity
+    /// digits.
     #[cfg(target_pointer_width = "64")]
     #[inline]
     pub fn from_native_digits(digits: Vec<u64>) -> BigUint {
         biguint_from_vec(digits)
     }
 
-    /// Adopt canonical `u32` native digits without repacking or allocating.
+    /// Adopt least-significant-first `u32` native digits without digit conversion.
     ///
-    /// This is the non-64-bit counterpart of the native-digit handoff.
+    /// Canonical, full-capacity input (no high zero digit and `len == capacity`)
+    /// keeps its allocation and capacity. Other input is normalized; dropping
+    /// high zero digits or excess capacity may call `Vec::shrink_to_fit` and
+    /// reallocate. Exact-allocation callers must supply canonical, full-capacity
+    /// digits.
     #[cfg(not(target_pointer_width = "64"))]
     #[inline]
     pub fn from_native_digits(digits: Vec<u32>) -> BigUint {
@@ -1175,18 +1181,33 @@ cfg_digit!(
 );
 
 #[test]
-fn native_digits_adopt_the_original_allocation() {
-    let digits: Vec<BigDigit> = vec![1, 2];
-    let original = digits.as_ptr();
+fn native_digits_adopt_canonical_full_capacity_allocation() {
+    let mut digits: Vec<BigDigit> = Vec::with_capacity(2);
     let capacity = digits.capacity();
+    digits.resize(capacity, 1);
+    digits[0] = 2;
+    assert_eq!(digits.len(), capacity);
+    assert_ne!(digits.last(), Some(&0));
+    let original = digits.as_ptr();
     let adopted = BigUint::from_native_digits(digits);
     assert_eq!(adopted.data.as_ptr(), original);
     assert_eq!(adopted.data.capacity(), capacity);
-    assert_eq!(adopted.data, vec![1, 2]);
+    assert_eq!(adopted.data.len(), capacity);
+    assert_eq!(adopted.data[0], 2);
+    assert!(adopted.data[1..].iter().all(|&digit| digit == 1));
 
     let empty = BigUint::from_native_digits(Vec::new());
     assert!(empty.data.is_empty());
     assert_eq!(empty.data.capacity(), 0);
+}
+
+#[test]
+fn native_digits_normalize_noncanonical_overcapacity_input() {
+    let mut digits: Vec<BigDigit> = Vec::with_capacity(16);
+    digits.extend([1, 0, 0, 0]);
+    assert!(digits.len() < digits.capacity());
+    let normalized = BigUint::from_native_digits(digits);
+    assert_eq!(normalized.data, vec![1]);
 }
 
 #[test]

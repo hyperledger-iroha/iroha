@@ -492,10 +492,14 @@ impl KagemushaMintFinalityEpochAuthorizationV1 {
         authority: &KagemushaMintFinalityAuthorityGenerationV1,
     ) -> Result<(), KagemushaIsiValidationErrorV1> {
         self.validate()?;
-        if self.network_id != authority.network_id
-            || self.authority_generation != authority.generation
-            || self.authority_id != authority.authority_id()?
-        {
+        if self.network_id != authority.network_id {
+            return Err(invalid("mint_finality.epoch_authorization.authority"));
+        }
+        // The authorization's authority_generation names this record's generation.
+        if self.authority_generation != authority.generation {
+            return Err(invalid("mint_finality.epoch_authorization.authority"));
+        }
+        if self.authority_id != authority.authority_id()? {
             return Err(invalid("mint_finality.epoch_authorization.authority"));
         }
         Ok(())

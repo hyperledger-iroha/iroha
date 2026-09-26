@@ -116,10 +116,20 @@ impl BigInt {
     /// Rejects an unrepresentable layout or physical allocator refusal.
     #[allow(unsafe_code)]
     pub fn try_clone_for_admission(&self) -> Result<Self, BigIntAdmissionCloneError> {
-        self.try_clone_for_admission_with(|layout| unsafe { std::alloc::alloc(layout) })
+        // SAFETY: `std::alloc::alloc` returns a global-allocator-owned pointer
+        // for the requested nonzero layout, or null on refusal.
+        let allocate = |layout| unsafe { std::alloc::alloc(layout) };
+        unsafe { self.try_clone_for_admission_with(allocate) }
     }
+    /// Clone using a caller-supplied exact-layout allocator.
+    ///
+    /// # Safety
+    /// If `allocate` returns non-null, it must return an owned pointer allocated
+    /// with the requested `Layout`, aligned for `NativeBigDigit`, that can be
+    /// transferred to `Vec` and deallocated by the global allocator. A null
+    /// pointer is allowed. The callback is not called for a zero-byte layout.
     #[allow(unsafe_code)]
-    fn try_clone_for_admission_with(
+    unsafe fn try_clone_for_admission_with(
         &self,
         allocate: impl FnOnce(Layout) -> *mut u8,
     ) -> Result<Self, BigIntAdmissionCloneError> {
@@ -134,11 +144,14 @@ impl BigInt {
             });
         }
         let capacity = layout.size() / core::mem::size_of::<NativeBigDigit>();
+        let digit_pointer = core::ptr::NonNull::new(pointer)
+            .expect("the allocation pointer was checked non-null")
+            .cast::<NativeBigDigit>()
+            .as_ptr();
         // SAFETY: `pointer` owns exactly `Layout::array::<NativeBigDigit>(capacity)`.
         // Length starts at zero and each guarded push remains below capacity;
         // the Vec frees the exact allocation on any later error.
-        let mut digits =
-            unsafe { Vec::from_raw_parts(pointer.cast::<NativeBigDigit>(), 0, capacity) };
+        let mut digits = unsafe { Vec::from_raw_parts(digit_pointer, 0, capacity) };
         #[cfg(target_pointer_width = "64")]
         let source_digits = self.inner.iter_u64_digits();
         #[cfg(not(target_pointer_width = "64"))]
@@ -482,11 +495,13 @@ impl<'a> DecodeFromSlice<'a> for BigInt {
 mod tests {
     use super::*;
     #[test]
+    #[allow(unsafe_code)]
     fn admitted_clone_uses_exact_native_digit_layout_and_refuses_allocator() {
         let zero = BigInt::zero();
         assert_eq!(zero.admission_clone_layout().unwrap().size(), 0);
         assert_eq!(
-            zero.try_clone_for_admission_with(|_| panic!("zero must not allocate"))
+            // SAFETY: zero returns before invoking the callback.
+            unsafe { zero.try_clone_for_admission_with(|_| panic!("zero must not allocate")) }
                 .unwrap(),
             zero
         );
@@ -504,7 +519,8 @@ mod tests {
             );
             assert_eq!(value.try_clone_for_admission().unwrap(), value);
             assert_eq!(
-                value.try_clone_for_admission_with(|_| core::ptr::null_mut()),
+                // SAFETY: null is an explicitly permitted allocation refusal.
+                unsafe { value.try_clone_for_admission_with(|_| core::ptr::null_mut()) },
                 Err(BigIntAdmissionCloneError::Allocator {
                     requested_bytes: layout.size(),
                 })

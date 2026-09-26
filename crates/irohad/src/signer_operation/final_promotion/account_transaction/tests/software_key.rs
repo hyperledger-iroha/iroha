@@ -92,6 +92,23 @@ fn role15_software_key_rejects_wrong_role_handle_revision_and_foreign_private_ke
         SoftwareFinalPromotionAccountKeyV1::load_from_supervisor_credential(&path, binding),
         Err(Error::Binding)
     ));
+    for malformed in [
+        "software://sorafs/final-promotion-account-transaction/",
+        "software://sorafs/final-promotion-account-transaction/primary/nested",
+    ] {
+        let mut binding = f.account_policy.binding.clone();
+        binding.runtime_handle = malformed.into();
+        assert!(matches!(
+            SoftwareFinalPromotionAccountKeyV1::load_from_supervisor_credential(&path, binding),
+            Err(Error::Binding)
+        ));
+        let mut binding = f.account_policy.binding.clone();
+        binding.key_handle = malformed.into();
+        assert!(matches!(
+            SoftwareFinalPromotionAccountKeyV1::load_from_supervisor_credential(&path, binding),
+            Err(Error::Binding)
+        ));
+    }
     let mut binding = f.account_policy.binding.clone();
     binding.key_revision = 0;
     assert!(matches!(

@@ -957,19 +957,90 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
     let mint_stage_statement = machine
         .preview_stage_mint_credit(&verified_mint, 200)
         .expect("preview old-epoch mint stage");
+    let mint_stage_certificate = MintStageCertificateV1 {
+        statement: mint_stage_statement,
+        guard_bundle: vec![0x92],
+    };
     machine
         .stage_mint_credit(
             &mint_authorization,
             &mint_credit,
             Some(&verified_mint),
-            Some(&MintStageCertificateV1 {
-                statement: mint_stage_statement,
-                guard_bundle: vec![0x92],
-            }),
+            Some(&mint_stage_certificate),
         )
         .expect("stage finalized old-epoch mint");
     let mint_credit_id = CreditIdV1(mint_credit.statement.lifecycle.credit_id);
     assert_eq!(machine.inbox_revision(), 2);
+    let staged_inbox = machine.mint_inbox().clone();
+    let staged_revision = machine.inbox_revision();
+    assert_eq!(
+        super::mint_inbox_operations::require_original_mint_stage_certificate_v1(
+            machine.mint_inbox(),
+            mint_credit_id,
+            &mint_stage_certificate,
+        ),
+        Ok(true),
+    );
+    assert_eq!(
+        machine.stage_mint_credit(&mint_authorization, &mint_credit, None, None),
+        Ok(MintCreditStageOutcomeV1::DuplicatePending(
+            mint_stage_certificate.clone(),
+        )),
+        "an exact retry returns the retained hardware certificate",
+    );
+    assert_eq!(machine.inbox_revision(), staged_revision);
+    assert_eq!(machine.mint_inbox(), &staged_inbox);
+
+    let mut changed_certificate = mint_stage_certificate.clone();
+    changed_certificate.guard_bundle[0] ^= 1;
+    assert_eq!(
+        super::mint_inbox_operations::require_original_mint_stage_certificate_v1(
+            machine.mint_inbox(),
+            mint_credit_id,
+            &changed_certificate,
+        ),
+        Err(KagemushaStateErrorV1::HardwareCertificateMismatch),
+    );
+    changed_certificate = mint_stage_certificate.clone();
+    changed_certificate.statement.inbox_revision_after += 1;
+    assert_eq!(
+        super::mint_inbox_operations::require_original_mint_stage_certificate_v1(
+            machine.mint_inbox(),
+            mint_credit_id,
+            &changed_certificate,
+        ),
+        Err(KagemushaStateErrorV1::HardwareCertificateMismatch),
+    );
+    assert_eq!(
+        super::mint_inbox_operations::require_original_mint_stage_certificate_v1(
+            machine.mint_inbox(),
+            CreditIdV1(snapshot_digest(b"unreserved-mint-credit", 13)),
+            &mint_stage_certificate,
+        ),
+        Ok(false),
+    );
+
+    let mut changed_authorization = mint_authorization.clone();
+    changed_authorization.proof.eq_proof[0] ^= 1;
+    assert_eq!(
+        machine.stage_mint_credit(&changed_authorization, &mint_credit, None, None),
+        Err(KagemushaStateErrorV1::InvalidMintCredit),
+        "the credit binds the complete original authorization digest",
+    );
+    let mut changed_credit = mint_credit.clone();
+    changed_credit.proof.eq_proof[0] ^= 1;
+    assert!(
+        changed_credit
+            .validate_shape_against_authorization(&mint_authorization)
+            .is_ok(),
+        "a shape-valid proof substitution must reach the exact inbox identity check",
+    );
+    assert_eq!(
+        machine.stage_mint_credit(&mint_authorization, &changed_credit, None, None),
+        Err(KagemushaStateErrorV1::CreditConflict(mint_credit_id)),
+    );
+    assert_eq!(machine.inbox_revision(), staged_revision);
+    assert_eq!(machine.mint_inbox(), &staged_inbox);
 
     let current_credential = snapshot_hardware_credential(
         lane.network_id,

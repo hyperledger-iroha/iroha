@@ -157,6 +157,10 @@ pub struct ReleaseManifestExpireV1 {
 }
 
 /// Claimed immutable operation outcome; the native reader must authenticate the retained row.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-13 completed outcome stays inline and Copy in canonical V1 Norito; boxing changes its wire and allocation"
+)]
 #[derive(
     Clone,
     Copy,
@@ -405,6 +409,10 @@ pub struct ReleaseManifestCheckV1 {
 }
 
 /// Closed native action surface; its registered instruction has no production execution path.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-13 Check and Complete stay inline in the registered canonical V1 action; boxing changes Norito and schema"
+)]
 #[derive(
     Clone,
     Debug,

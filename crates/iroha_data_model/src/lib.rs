@@ -70,6 +70,8 @@ pub mod confidential;
 pub mod consensus;
 /// Static content hosting records.
 pub mod content;
+/// Accumulated exact-value contract-state commitments and inclusion proofs.
+pub mod contract_state_proof;
 /// Data availability ingest, manifest, and governance types.
 pub mod da;
 /// Domain metadata and registration structures.

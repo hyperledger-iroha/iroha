@@ -610,10 +610,12 @@ fn preparation_id_v1(
     name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalJournalCommitmentPreimageV1"
 )]
 struct TerminalJournalCommitmentPreimageV1 {
-    preparation_id: DigestV1,
-    candidate_envelope_digest: DigestV1,
-    state_transition_digest: DigestV1,
-    outbox_reservation_commitment: DigestV1,
+    // Spell the byte-array type explicitly: Norito's derive treats an opaque type alias as a
+    // generic array and otherwise emits two bytes per digest byte in this fixed-frame preimage.
+    preparation_id: [u8; 32],
+    candidate_envelope_digest: [u8; 32],
+    state_transition_digest: [u8; 32],
+    outbox_reservation_commitment: [u8; 32],
     journal_revision_after: u128,
 }
 
@@ -709,8 +711,9 @@ pub(crate) fn terminal_journal_canonical_layout_v1()
     name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalRecoveryCommitmentPreimageV1"
 )]
 struct TerminalRecoveryCommitmentPreimageV1 {
-    preparation_id: DigestV1,
-    prepared_one_use_authorization_digest: DigestV1,
+    // Keep the native recovery digest's fixed bytes identical to its recursive opening.
+    preparation_id: [u8; 32],
+    prepared_one_use_authorization_digest: [u8; 32],
     sealed_transition_inputs: Vec<u8>,
     sealed_recovery_seeds: Vec<u8>,
 }
@@ -1660,17 +1663,20 @@ impl CommittedOutgoingCandidateV1 {
         })
     }
 
-    /// Return the six exact SHA messages needed to open a retained sender preparation.
+    /// Return the six exact SHA messages needed to open a retained outgoing preparation.
     ///
     /// This is producer material only. The terminal circuit must assign these bytes, SHA-open
     /// them against the recursively verified State carriers, and prove the complete 32-job Eq/Ep
-    /// claim before they can authorize an outgoing payment. In particular, this method does not
-    /// verify the persisted candidate proof or grant a hardware commitment.
+    /// claim before they can authorize an outgoing payment or redemption. In particular, this
+    /// method does not verify the persisted candidate proof or grant a hardware commitment.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the complete terminal SHA claim is not installed")
+        expect(
+            dead_code,
+            reason = "native committed-candidate export is not yet wired into the coordinator"
+        )
     )]
-    pub(crate) fn canonical_send_opening_sha_messages_v1(
+    pub(crate) fn canonical_outgoing_opening_sha_messages_v1(
         &self,
     ) -> Result<[Vec<u8>; 6], KagemushaStateErrorV1> {
         use sha2::{Digest as _, Sha256};
@@ -1683,8 +1689,18 @@ impl CommittedOutgoingCandidateV1 {
         {
             return Err(KagemushaStateErrorV1::SnapshotIntegrity);
         }
-        let PreparedPublicProjectionV1::Send(projection) = &prepared.projection else {
-            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        let (operation_tag, request_digest, artifact_manifest_digest) = match &prepared.projection {
+            PreparedPublicProjectionV1::Send(projection) => (
+                2,
+                projection
+                    .request
+                    .canonical_digest()
+                    .map_err(|_| KagemushaStateErrorV1::InvalidPaymentRequest)?,
+                [0; 32],
+            ),
+            PreparedPublicProjectionV1::Redemption(projection) => {
+                (4, [0; 32], projection.artifact_manifest_digest)
+            }
         };
         let body = self.candidate.hardware_terminal_body()?;
         let digest = |message: &[u8]| -> DigestV1 { Sha256::digest(message).into() };
@@ -1709,17 +1725,14 @@ impl CommittedOutgoingCandidateV1 {
         )?;
         let transition_digest = digest(&transition);
         let seeds_digest = digest(&seeds);
-        let request_digest = projection
-            .request
-            .canonical_digest()
-            .map_err(|_| KagemushaStateErrorV1::InvalidPaymentRequest)?;
-        let lifecycle_digest = projection
-            .lifecycle
+        let lifecycle_digest = prepared
+            .projection
+            .lifecycle()
             .canonical_digest()
             .map_err(|_| KagemushaStateErrorV1::InvalidCandidateStage)?;
         let reservation_digest = validate_outbox_reservation(prepared.outbox_reservation)?;
         let fields = PreparationIdCommitmentsV1 {
-            operation_tag: 2,
+            operation_tag,
             predecessor_state_commitment: prepared.predecessor_state.state_commitment,
             successor_state_commitment: prepared.successor_state.state_commitment,
             state_transition_digest: prepared.state_transition_digest,
@@ -1729,7 +1742,7 @@ impl CommittedOutgoingCandidateV1 {
             projection_semantic_digest: prepared.projection.semantic_digest()?,
             lifecycle_binding_digest: lifecycle_digest,
             request_digest,
-            artifact_manifest_digest: [0; 32],
+            artifact_manifest_digest,
             normalized_guard_statement_digest: prepared.normalized_guard_statement_digest,
             outbox_reservation_commitment: reservation_digest,
             prepared_one_use_authorization_digest: prepared.prepared_one_use_authorization_digest,
@@ -2809,7 +2822,7 @@ impl KagemushaSenderOutboxCapacityV1 {
         Ok(())
     }
 
-    fn reconcile_capacity_meters(
+    pub(super) fn reconcile_capacity_meters(
         &mut self,
         journal: &KagemushaOutgoingCandidateJournalV1,
     ) -> Result<(), KagemushaStateErrorV1> {
@@ -3151,7 +3164,7 @@ fn validate_recovery_material(
     Ok(())
 }
 
-fn validate_installed_successor_not_ahead(
+pub(super) fn validate_installed_successor_not_ahead(
     current: &KagemushaStateV1,
     installed: &KagemushaStateV1,
 ) -> Result<(), KagemushaStateErrorV1> {
@@ -3326,6 +3339,23 @@ mod preparation_id_tests {
                 "mutation {mutation} preserved the preparation ID"
             );
         }
+    }
+
+    #[test]
+    fn redemption_preparation_uses_zero_request_and_pinned_manifest() {
+        let mut fields = vector_fields();
+        fields.operation_tag = 4;
+        fields.request_digest = [0; 32];
+        fields.artifact_manifest_digest = [11; 32];
+        assert_eq!(
+            hash_preparation_id_commitments_v1(fields),
+            [
+                0x74, 0x9a, 0x17, 0x02, 0xc4, 0x9b, 0x34, 0x3c, 0xbd, 0x76, 0x5c, 0x2a, 0x02, 0x09,
+                0x68, 0xd4, 0xf8, 0x0a, 0x39, 0x67, 0x9a, 0x2f, 0xc3, 0x63, 0x9b, 0x1e, 0x2c, 0xdd,
+                0x74, 0xde, 0xbb, 0xfd,
+            ],
+            "native redemption transcript must match the isolated terminal SHA vector",
+        );
     }
 }
 

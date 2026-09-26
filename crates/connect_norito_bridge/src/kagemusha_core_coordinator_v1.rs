@@ -121,6 +121,12 @@ pub const KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1: [u32; 12] = [
     KagemushaCoreCoordinatorMethodV1::ALL.len() as u32,
 ];
 
+// The read-only Core archive export and the pinned testnet observer accept the same public input.
+const _: () = assert!(
+    iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1
+        == crate::kagemusha_testnet_observation_v1::KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1
+);
+
 /// Closed coordinator method inventory.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,11 +160,13 @@ pub enum KagemushaCoreCoordinatorMethodV1 {
     InitialEnrollment = 12,
     /// Acknowledge an App Attest assertion only after the original terminal is durably committed.
     AcknowledgeCommittedAppAttest = 13,
+    /// Read the original paired outgoing State proof retained by the authenticated Core owner.
+    ExportOutgoingStateProof = 14,
 }
 
 impl KagemushaCoreCoordinatorMethodV1 {
     /// All coordinator methods in canonical code order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::ReserveOperationId,
         Self::AcceptQualification,
         Self::AcceptAuthenticatedReply,
@@ -172,6 +180,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
         Self::BeginObservation,
         Self::InitialEnrollment,
         Self::AcknowledgeCommittedAppAttest,
+        Self::ExportOutgoingStateProof,
     ];
 
     /// Parse one closed coordinator method code.
@@ -191,6 +200,7 @@ impl KagemushaCoreCoordinatorMethodV1 {
             11 => Some(Self::BeginObservation),
             12 => Some(Self::InitialEnrollment),
             13 => Some(Self::AcknowledgeCommittedAppAttest),
+            14 => Some(Self::ExportOutgoingStateProof),
             _ => None,
         }
     }
@@ -270,6 +280,20 @@ pub trait KagemushaCoreCoordinatorBackendV1: Send + Sync + 'static {
         _handle: u64,
         _request_frame: &[u8],
     ) -> Result<Vec<u8>, KagemushaCoreCoordinatorBackendErrorV1> {
+        Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
+    }
+
+    /// Export the original bounded paired State proof from this owner's authenticated Core
+    /// operation index. Implementations must call Core's retained archive exporter rather than
+    /// reconstructing a statement from app bytes. This read confers no monetary authority.
+    fn export_outgoing_state_proof(
+        &self,
+        _handle: u64,
+        _operation_id: [u8; 32],
+    ) -> Result<
+        iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingStateProofArchivePairV1,
+        KagemushaCoreCoordinatorBackendErrorV1,
+    > {
         Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)
     }
 
@@ -430,6 +454,10 @@ pub fn kagemusha_core_coordinator_validate_method_request_v1(
                 return Err(KagemushaCoreCoordinatorFrameErrorV1::Field);
             }
             require_nonempty_field(fields.get(1))
+        }
+        KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => {
+            require_field_count(&fields, 1)?;
+            require_nonzero_digest_field(fields.first())
         }
         KagemushaCoreCoordinatorMethodV1::AcceptQualification => {
             require_field_count(&fields, 6)?;
@@ -790,6 +818,18 @@ pub fn kagemusha_core_coordinator_validate_method_response_v1(
         KagemushaCoreCoordinatorMethodV1::BeginObservation => {
             require_field_count(&response, 1)?;
             require_nonzero_digest_field(response.first())
+        }
+        KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => {
+            require_field_count(&response, 3)?;
+            require_equal_fields(response.first(), request.first())?;
+            require_bounded_nonempty_field(
+                response.get(1),
+                iroha_core::zk::kagemusha_v1_state::KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
+            )?;
+            require_bounded_nonempty_field(
+                response.get(2),
+                iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+            )
         }
         KagemushaCoreCoordinatorMethodV1::AcceptQualification
         | KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => {
@@ -1163,6 +1203,11 @@ mod tests {
                 "app-attest-ack",
                 app_attest_ack_request_fields(),
             ),
+            (
+                KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
+                "outgoing-state-proof-export",
+                vec![digest(0x66)],
+            ),
         ]
     }
 
@@ -1199,6 +1244,11 @@ mod tests {
         match method {
             KagemushaCoreCoordinatorMethodV1::ReserveOperationId => vec![request[1].clone()],
             KagemushaCoreCoordinatorMethodV1::BeginObservation => vec![digest(0x65)],
+            KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => vec![
+                request[0].clone(),
+                b"public-state-inputs".to_vec(),
+                b"original-paired-proof".to_vec(),
+            ],
             KagemushaCoreCoordinatorMethodV1::AcceptQualification
             | KagemushaCoreCoordinatorMethodV1::AcceptAuthenticatedReply => Vec::new(),
             KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
@@ -1276,7 +1326,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert_eq!(fixtures.len(), 20);
+        assert_eq!(fixtures.len(), 21);
         for (method, name, request_fields) in mobile_request_cases() {
             let (actual_method, request, response) =
                 fixtures.get(name).expect("shared method case");
@@ -1425,11 +1475,11 @@ mod tests {
     fn coordinator_contract_and_methods_are_exact() {
         assert_eq!(
             KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1,
-            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13]
+            [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14]
         );
         assert_eq!(
             KagemushaCoreCoordinatorMethodV1::ALL.map(KagemushaCoreCoordinatorMethodV1::code),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         );
         for method in KagemushaCoreCoordinatorMethodV1::ALL {
             assert_eq!(
@@ -1633,6 +1683,45 @@ mod tests {
                 KAGEMUSHA_CORE_COORDINATOR_MAX_FIELD_BYTES_V1
                     + 1
             ]]),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+        );
+    }
+
+    #[test]
+    fn outgoing_state_proof_export_binds_operation_and_rejects_untyped_archives() {
+        let method = KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof;
+        let operation_id = digest(0x66);
+        let request = kagemusha_core_coordinator_encode_request_v1(&[operation_id.clone()])
+            .expect("bounded operation selector");
+        kagemusha_core_coordinator_validate_method_request_v1(method, &request)
+            .expect("exact selector");
+        for rejected in [vec![0; 32], vec![0x66; 31]] {
+            let invalid = kagemusha_core_coordinator_encode_request_v1(&[rejected]).unwrap();
+            assert_eq!(
+                kagemusha_core_coordinator_validate_method_request_v1(method, &invalid),
+                Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+            );
+        }
+        let response = kagemusha_core_coordinator_encode_response_v1(&[
+            operation_id.clone(),
+            b"not-canonical-public-inputs".to_vec(),
+            b"not-canonical-proof".to_vec(),
+        ])
+        .unwrap();
+        kagemusha_core_coordinator_validate_method_response_v1(method, &request, &response)
+            .expect("transport shape only");
+        assert_eq!(
+            archive_boundary::validate_response(method, &request, &response),
+            Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
+        );
+        let substituted = kagemusha_core_coordinator_encode_response_v1(&[
+            digest(0x67),
+            b"not-canonical-public-inputs".to_vec(),
+            b"not-canonical-proof".to_vec(),
+        ])
+        .unwrap();
+        assert_eq!(
+            kagemusha_core_coordinator_validate_method_response_v1(method, &request, &substituted),
             Err(KagemushaCoreCoordinatorFrameErrorV1::Field)
         );
     }
@@ -2252,6 +2341,30 @@ mod tests {
         );
         assert!(observation_output.is_null());
         assert_eq!(observation_output_len, 0);
+        let proof_export_request = kagemusha_core_coordinator_encode_request_v1(&[digest(0x66)])
+            .expect("original operation selector");
+        assert_eq!(
+            archive_boundary::validate_request(
+                KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof,
+                &proof_export_request,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            unsafe {
+                crate::connect_norito_kagemusha_core_coordinator_invoke_v1(
+                    7,
+                    KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof.code(),
+                    proof_export_request.as_ptr(),
+                    proof_export_request.len(),
+                    &mut observation_output,
+                    &mut observation_output_len,
+                )
+            },
+            crate::ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        );
+        assert!(observation_output.is_null());
+        assert_eq!(observation_output_len, 0);
         let mut forged_proof_slot = observation_request_fields(21);
         forged_proof_slot[1] = b"paired-state-proof".to_vec();
         let forged_proof_request = kagemusha_core_coordinator_encode_request_v1(&forged_proof_slot)
@@ -2558,6 +2671,14 @@ mod tests {
         assert!(swift.contains(&format!(
             "public static let schemaVersion: UInt16 = {version}"
         )));
+        assert!(header.contains(
+            "CONNECT_NORITO_KAGEMUSHA_CORE_COORDINATOR_EXPORT_OUTGOING_STATE_PROOF_V1 = 14"
+        ));
+        assert!(swift.contains("case exportOutgoingStateProof"));
+        let kotlin = include_str!(
+            "../../../kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCoreCoordinatorFrameV1.kt"
+        );
+        assert!(kotlin.contains("EXPORT_OUTGOING_STATE_PROOF(14)"));
         for symbol in [
             "connect_norito_kagemusha_core_coordinator_contract_v1(",
             "connect_norito_kagemusha_core_coordinator_open_v1(",
@@ -2567,6 +2688,9 @@ mod tests {
             assert!(header.contains(symbol));
         }
         let source = crate::bridge_source();
+        assert!(
+            source.contains("method == KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof")
+        );
         for symbol in [
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
             "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",

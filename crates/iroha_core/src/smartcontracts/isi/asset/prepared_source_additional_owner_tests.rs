@@ -6,7 +6,7 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, StateTransaction, World},
 };
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{IntoKeyValue, block::BlockHeader};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
 
@@ -68,7 +68,10 @@ fn asset_balance_or_zero(tx: &StateTransaction<'_, '_>, id: &AssetId) -> Quantit
         .unwrap_or_else(Quantity::zero)
 }
 
-fn seed_prepared_test_orchard_reserve(tx: &mut StateTransaction<'_, '_>, id: &AssetId) {
+fn seed_prepared_test_orchard_reserve(
+    tx: &mut StateTransaction<'_, '_>,
+    id: &AssetId,
+) -> PrivacyPublicReserveOwnerV1 {
     use iroha_data_model::privacy::{
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
         PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
@@ -91,6 +94,149 @@ fn seed_prepared_test_orchard_reserve(tx: &mut StateTransaction<'_, '_>, id: &As
         .expect("reserve custody key"),
         crate::privacy_state::PrivacyStateItemRecordV1::public_reserve_custody(id.clone(), owner)
             .expect("reserve custody row"),
+    );
+    owner
+}
+
+#[test]
+fn privacy_public_reserve_apply_rejects_nonconserving_delta_before_balances_change() {
+    let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);
+    let destination_asset_id = AssetId::new(definition_id, BOB_ID.clone());
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    let owner = seed_prepared_test_orchard_reserve(&mut transaction, &reserve_asset_id);
+    let exact = transaction
+        .world
+        .precheck_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &Quantity::one(),
+        )
+        .expect("reserve withdrawal has a valid transparent delta");
+    let mut forged = exact.clone();
+    forged.to_balance_after = Quantity::from(2_u32);
+    let error = transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &exact.amount,
+            &forged,
+            NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+        )
+        .expect_err("one-unit reserve debit cannot create two recipient units");
+    assert!(error.to_string().contains("reserve delta must conserve"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &reserve_asset_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_asset_id),
+        Quantity::zero()
+    );
+    let mut forged_debit = exact.clone();
+    forged_debit.from_balance_after = Quantity::from(8_u32);
+    let error = transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &exact.amount,
+            &forged_debit,
+            NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+        )
+        .expect_err("one-unit reserve debit cannot remove two source units");
+    assert!(error.to_string().contains("reserve delta must conserve"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &reserve_asset_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_asset_id),
+        Quantity::zero()
+    );
+    let mut forged_amount = exact.clone();
+    forged_amount.amount = Quantity::from(2_u32);
+    let error = transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &exact.amount,
+            &forged_amount,
+            NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+        )
+        .expect_err("delta cannot replace the authorized amount");
+    assert!(error.to_string().contains("authorized amount"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &reserve_asset_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_asset_id),
+        Quantity::zero()
+    );
+    transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &exact.amount,
+            &exact,
+            NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+        )
+        .expect("exact one-unit delta remains admissible to the apply owner");
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &reserve_asset_id),
+        Quantity::from(9_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_asset_id),
+        Quantity::one()
+    );
+}
+
+#[test]
+fn privacy_public_reserve_apply_rejects_stale_destination_balance() {
+    let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);
+    let destination_asset_id = AssetId::new(definition_id, BOB_ID.clone());
+    let mut block = state.block(occurrence_header());
+    let mut transaction = block.transaction();
+    let owner = seed_prepared_test_orchard_reserve(&mut transaction, &reserve_asset_id);
+    let exact = transaction
+        .world
+        .precheck_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &Quantity::one(),
+        )
+        .expect("reserve withdrawal has a valid transparent delta");
+    let (_, destination_value) =
+        Asset::new(destination_asset_id.clone(), 1_u32).into_key_value();
+    transaction.world.track_asset_holder(&destination_asset_id);
+    transaction
+        .world
+        .assets
+        .insert(destination_asset_id.clone(), destination_value);
+
+    let error = transaction
+        .world
+        .apply_prechecked_numeric_asset_transfer_delta_exact(
+            &reserve_asset_id,
+            &destination_asset_id,
+            &exact.amount,
+            &exact,
+            NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner),
+        )
+        .expect_err("the destination changed after reserve preparation");
+    assert!(error.to_string().contains("reserve delta must conserve"));
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &reserve_asset_id),
+        Quantity::from(10_u32)
+    );
+    assert_eq!(
+        asset_balance_or_zero(&transaction, &destination_asset_id),
+        Quantity::one()
     );
 }
 

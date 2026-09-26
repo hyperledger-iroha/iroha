@@ -65,13 +65,8 @@ pub fn prepare_stream_token_signing_payload_v1(
     )
     .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidReceipt)?;
     let expected = SignerStreamTokenExpectedV1::new(&body, pinned_binding)?;
-    if body
-        .signing_payload_bytes()
-        .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidReceipt)?
-        != payload
-    {
-        return Err(SignerStreamTokenReceiptErrorV1::InvalidReceipt);
-    }
+    norito::verify_exact_canonical_frame(&body, bytes)
+        .map_err(|_| SignerStreamTokenReceiptErrorV1::InvalidReceipt)?;
     Ok((body, expected))
 }
 

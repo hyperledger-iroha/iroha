@@ -338,7 +338,7 @@ impl ConfidentialSpoolLayoutV1 {
     /// outside this named-payload accounting. A complete admission owner must
     /// qualify those separately; this method is not an allocation permit.
     pub fn named_operation_workspace_bytes_v1(&self) -> usize {
-        self.plaintext_len as usize
+        usize::try_from(self.plaintext_len).expect("validated spool plaintext length fits usize")
             + size_of::<ConfidentialSpoolChunkV1>()
             + self.aad_len
             + size_of::<Zeroizing<Vec<u8>>>()

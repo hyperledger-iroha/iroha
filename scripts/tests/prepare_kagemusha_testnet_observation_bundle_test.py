@@ -291,7 +291,7 @@ class TestnetBundleTests(unittest.TestCase):
             "native_artifact_sha256": digest(b"native_artifact"),
             "native_artifact_size": len(b"native_artifact"),
             "native_sdk": "c-jni",
-            "native_bridge_abi_version": 23,
+            "native_bridge_abi_version": 24,
             "release_id": args.release_id,
             "attestation_digest": args.attestation_digest,
             "authority_policy_digest": "d" * 64,

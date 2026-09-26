@@ -42,7 +42,7 @@ hashtrie_skinny = []
 
 arcache-is-hashmap = ["arcache"]
 arcache-is-hashtrie = ["arcache"]
-simd_support = []
+simd = []
 
 [dependencies]
 ahash = { version = "0.8.12", optional = true }

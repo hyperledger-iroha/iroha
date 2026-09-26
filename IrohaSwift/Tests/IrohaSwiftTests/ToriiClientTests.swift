@@ -15394,6 +15394,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "kagemusha_top_up_root": NSNull(),
             "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
@@ -15404,6 +15405,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
         ]
         let prepareQC: [String: Any] = [
             "round": [
@@ -15562,6 +15565,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "kagemusha_top_up_root": NSNull(),
             "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
@@ -15571,6 +15575,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
         ]
         func decode(_ value: [String: Any]) throws {
             _ = try JSONDecoder().decode(
@@ -15619,6 +15625,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
         ]
         func decode(_ value: [String: Any]) throws -> ToriiSumeragiV2ExecutionCommitment {
             try JSONDecoder().decode(
@@ -15649,6 +15657,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "kagemusha_top_up_root": NSNull(),
             "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root": emptyRoot,
@@ -15657,6 +15666,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 123,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
         ]
         func decode(_ value: [String: Any]) throws -> ToriiSumeragiV2ExecutionCommitment {
             try JSONDecoder().decode(
@@ -15708,11 +15719,81 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         var missingWireLen = base
         missingWireLen.removeValue(forKey: "executed_block_wire_len")
         XCTAssertThrowsError(try decode(missingWireLen))
-        for invalidWireLen: Any in [0, -1, true, "123", 1.5, NSNull()] {
+        for invalidWireLen: Any in [
+            0, -1, true, "123", 1.5, NSNull(),
+            ToriiSumeragiV2ExecutionCommitment.maximumExecutedBlockWireBytes + 1,
+        ] {
             var malformedWireLen = base
             malformedWireLen["executed_block_wire_len"] = invalidWireLen
             XCTAssertThrowsError(try decode(malformedWireLen))
         }
+    }
+
+    func testSumeragiExecutionCommitmentRequiresExactTransactionTrees() throws {
+        let base: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "kagemusha_top_up_root": NSNull(),
+            "kagemusha_top_up_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root":
+                ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,
+            "native_amx_application_manifest_count": 0,
+            "lane_finality_manifest": NSNull(),
+            "merge_carrier": NSNull(),
+            "executed_block_wire_len": 123,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
+        ]
+        func decode(_ value: [String: Any]) throws -> ToriiSumeragiV2ExecutionCommitment {
+            try JSONDecoder().decode(
+                ToriiSumeragiV2ExecutionCommitment.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+
+        XCTAssertNil(try decode(base).transactionInputCommitment)
+        XCTAssertNil(try decode(base).transactionOutputCommitment)
+        var missingTopUpRoot = base
+        missingTopUpRoot.removeValue(forKey: "kagemusha_top_up_root")
+        XCTAssertThrowsError(try decode(missingTopUpRoot))
+        for key in ["transaction_input_commitment", "transaction_output_commitment"] {
+            var missing = base
+            missing.removeValue(forKey: key)
+            XCTAssertThrowsError(try decode(missing), key)
+        }
+
+        var committed = base
+        committed["transaction_input_commitment"] = [
+            "root": nativeAmxTestHash(0xD1), "leaf_count": 2,
+        ]
+        committed["transaction_output_commitment"] = [
+            "root": nativeAmxTestHash(0xD3), "leaf_count": 3,
+        ]
+        let decoded = try decode(committed)
+        XCTAssertEqual(decoded.transactionInputCommitment?.leafCount, 2)
+        XCTAssertEqual(decoded.transactionOutputCommitment?.leafCount, 3)
+
+        var missingOutput = committed
+        missingOutput["transaction_output_commitment"] = NSNull()
+        XCTAssertThrowsError(try decode(missingOutput))
+        var shortOutput = committed
+        shortOutput["transaction_output_commitment"] = [
+            "root": nativeAmxTestHash(0xD3), "leaf_count": 1,
+        ]
+        XCTAssertThrowsError(try decode(shortOutput))
+        var zeroLeaves = committed
+        zeroLeaves["transaction_input_commitment"] = [
+            "root": nativeAmxTestHash(0xD1), "leaf_count": 0,
+        ]
+        XCTAssertThrowsError(try decode(zeroLeaves))
+        var unknownField = committed
+        unknownField["transaction_output_commitment"] = [
+            "root": nativeAmxTestHash(0xD3), "leaf_count": 3, "future": true,
+        ]
+        XCTAssertThrowsError(try decode(unknownField))
     }
 
     func testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts() throws {

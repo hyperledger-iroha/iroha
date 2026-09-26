@@ -127,9 +127,65 @@ class LocalAppleIntegrationTests(unittest.TestCase):
                 self.assertEqual(arguments.count('--local-integration'), int(local))
                 self.assertEqual(arguments[0], '/fixture/scripts/' + ('validate_norito_bridge_xcframework.py' if command == fragment else 'check_mobile_sdk_artifacts.sh'))
 
+    def test_apple_cargo_command_pins_proc_macro_compiler_wrapper(self):
+        self.git.stop()
+        source = (ROOT / 'scripts/build_norito_xcframework.sh').read_text()
+        function = re.search(r'^run_hermetic_apple_cargo\(\) \{.*?^\}', source, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(function)
+        setup = '\n'.join([
+            'run_isolated_python() { printf "%s\\n" "$@"; }',
+            'assert_selected_cargo_lock() { :; }',
+            'ROOT_DIR=/fixture', 'HERMETIC_RUNNER=/fixture/runner',
+            f'STAGE_DIR={shlex.quote(str(self.lane / "build"))}',
+            'CARGO_LOCKFILE=/fixture/Cargo.lock', 'CARGO_BINARY=/fixture/cargo',
+            'RUSTC_BINARY=/fixture/rustc', 'RUSTDOC_BINARY=/fixture/rustdoc',
+            'MOBILE_CARGO_HOME=/fixture/cargo-home', 'CARGO_TARGET_DIR=/fixture/target',
+            'EMBEDDED_SOURCE_COMMIT=' + '1' * 40, 'USER_HOME_DIR=/fixture/home',
+            'MOBILE_RUSTUP_HOME=/fixture/rustup', 'MOBILE_TMPDIR=/fixture/tmp',
+            'XCODE_DEVELOPER_DIR=/fixture/Xcode', 'MACOSX_DEPLOYMENT_TARGET=15.0',
+            'CARGO_BUILD_JOBS=1',
+        ])
+        command = setup + '\n' + function.group(0) + '\n' + (
+            'run_hermetic_apple_cargo apple-macos /fixture/sdk build '
+            '--target aarch64-apple-darwin -p connect_norito_bridge\n'
+        )
+        subprocess.run(['/bin/bash', '-eu', '-c', command], check=True, capture_output=True, text=True)
+        args = (self.lane / 'build/cargo-messages/aarch64-apple-darwin.jsonl').read_text().splitlines()
+        cargo = args.index('--') + 1
+        self.assertEqual(args[cargo:cargo + 10], [
+            '/fixture/cargo', '-Z', 'host-config', '-Z', 'target-applies-to-host',
+            '--config', 'build.rustc-wrapper="/fixture/scripts/apple_proc_macro_rustc_wrapper.sh"',
+            '--config', 'build.rustc-workspace-wrapper=""',
+            'build',
+        ])
+
+    def test_apple_proc_macro_wrapper_disables_strip_only_for_proc_macros(self):
+        self.git.stop()
+        compiler = self.lane / 'rustc-stub'
+        compiler.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$ARG_DUMP"\n')
+        compiler.chmod(0o700)
+        wrapper = ROOT / 'scripts/apple_proc_macro_rustc_wrapper.sh'
+        dump = self.lane / 'arguments'
+        environment = dict(os.environ, RUSTC=str(compiler), ARG_DUMP=str(dump))
+        for arguments, expected in [
+            (['--crate-type', 'proc-macro', '--crate-name', 'example'],
+             ['--crate-type', 'proc-macro', '--crate-name', 'example', '-C', 'strip=none']),
+            (['--crate-type', 'proc-macro', '-C', 'strip=debuginfo'],
+             ['--crate-type', 'proc-macro', '-C', 'strip=debuginfo', '-C', 'strip=none']),
+            (['--crate-type=proc-macro', '--crate-name', 'example'],
+             ['--crate-type=proc-macro', '--crate-name', 'example', '-C', 'strip=none']),
+            (['--crate-type', 'staticlib', '--crate-name', 'example'],
+             ['--crate-type', 'staticlib', '--crate-name', 'example']),
+        ]:
+            subprocess.run([str(wrapper), str(compiler), *arguments], check=True, env=environment)
+            self.assertEqual(dump.read_text().splitlines(), expected)
+        rejected = subprocess.run([str(wrapper), '/usr/bin/true', '--crate-type', 'proc-macro'],
+                                  env=environment, capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+
     def payload(self, dirty=False):
         return {
-            'version': '0.1.0', 'native_bridge_abi_version': 23,
+            'version': '0.1.0', 'native_bridge_abi_version': 24,
             'privacy_production_enabled': True, 'cargo_features': ['privacy-production-enabled'],
             'build_environment': {}, 'source_commit': '1' * 40, 'embedded_source_commit': '1' * 40,
             'source_tree_dirty': dirty, 'source_fingerprint_sha256': '2' * 64,
@@ -227,13 +283,13 @@ class LocalAppleIntegrationTests(unittest.TestCase):
         lockfile.write_bytes(b'version = 4\n')
         header = self.root / 'crates/connect_norito_bridge/include/connect_norito_bridge.h'
         header.parent.mkdir(parents=True)
-        header.write_text('#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23\n')
+        header.write_text('#define CONNECT_NORITO_BRIDGE_ABI_VERSION 24\n')
         bridge = self.root / 'crates/connect_norito_bridge/src/lib.rs'
         bridge.parent.mkdir(parents=True)
         bridge.write_text('const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;\n')
         protocol = self.root / 'crates/iroha_data_model/src/privacy/protocol.rs'
         protocol.parent.mkdir(parents=True)
-        protocol.write_text('pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 23;\n')
+        protocol.write_text('pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 24;\n')
         payload = self.payload()
         payload['cargo_lock_sha256'] = hashlib.sha256(lockfile.read_bytes()).hexdigest()
         payload['bridge_header_sha256'] = hashlib.sha256(header.read_bytes()).hexdigest()

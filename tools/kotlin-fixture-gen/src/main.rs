@@ -247,6 +247,7 @@ fn emit_claim_identifier() {
     let receipt = IdentifierResolutionReceipt {
         payload: receipt_payload,
         attestation: RamLfeReceiptAttestation::Signed(signature),
+        phone_retail_canonicality: None,
     };
     let claim = ClaimIdentifier {
         account: account_id.clone(),

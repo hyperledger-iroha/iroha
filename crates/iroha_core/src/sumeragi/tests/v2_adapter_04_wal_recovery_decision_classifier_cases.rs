@@ -343,6 +343,13 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
 }
 #[test]
 fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store() {
+    run_lifecycle_fixture_on_large_stack(
+        "bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store",
+        bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store_body,
+    );
+}
+
+fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store_body() {
     let proposal_safety = TempDir::new().expect("temporary ProposalIntent classifier WAL");
     let timeout_safety = TempDir::new().expect("temporary TimeoutIntent classifier WAL");
     persist_proposal_intent_for_control_recovery(&proposal_safety, 0xC3);

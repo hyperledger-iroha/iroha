@@ -16,11 +16,37 @@ The Initial executor, native dispatcher, time-sensitive execution classification
 and validation-fee effects inventory include the new instruction. There is no
 alternate decoder or cast-as-update path.
 
-Local source checks: scoped Rust formatting and `git diff --check` passed.
-Focused Cargo tests are pending a settled shared build slot. The updated tests
-cover duplicate casts, missing-position updates, owner mismatch, monotonic
-bond/expiry checks, exact escrow deltas, retained choice, slash restitution,
-typed wire decoding, and signed-instruction substitution.
+Local source checks: scoped Rust formatting and `git diff --check` passed. A
+same-source Core library binary passes the signed-update substitution test
+(1/1), public ballot selector (4/4), governance registration and direct-entry
+selectors (1/1 each), zero-minimum escrow helper (1/1), and slash/restitution
+selector (4/4). The fresh DataModel codec selector passes 1/1, including
+cast-payload substitution with a direction field. Fresh grouped Core integration
+passes 9/9 under `iroha-core-tests`. The updated tests cover duplicate casts,
+missing-position updates, owner mismatch, monotonic bond/expiry checks, exact
+escrow deltas, retained choice, slash restitution, typed wire decoding, and
+signed-instruction substitution.
+
+The JavaScript SDK now exposes a choice-free update builder, one-instruction
+signed transaction helper, typed inputs, and the canonical native wire ID.
+Its strict Norito boundary rejects an injected direction and duplicate JSON
+keys before native dispatch. The public cast also has an exact five-field
+boundary that rejects update-like extras and directions outside 0–2. The
+isolated strict-boundary and TypeScript checks pass; syntax, scoped ESLint,
+distribution build, and built-export checks pass. Native-backed JavaScript
+parity tests require a rebuilt same-source
+binding: the current binary's source-provenance guard correctly rejects it.
+Kotlin and Java-source consumers now compile the exact four-field native
+instruction and reject choice fields, noncanonical values, and malformed
+frames. Their four focused runtime tests stop at missing same-source ABI-23
+account admission before reaching the assertions. Rust fixture parity, the
+other SDK/client interfaces, and final fixture regeneration remain open.
+
+The [F12 optional-orderbook lazy cut](javascript-f12-orderbook-lazy-bundle-boundary.md)
+restored the JavaScript bundle gate without changing the release limits. The
+Torii eager closure is now 811,612 bytes against its unchanged 797 KiB ceiling;
+the complete `npm run bundle:check` passes. Native-backed orderbook and ballot
+parity still require the rebuilt same-source binding.
 
 This public-account slice does not implement anonymous credential ballots,
 confidential bond positions, a sound closed-corpus tally proof, or the mandatory

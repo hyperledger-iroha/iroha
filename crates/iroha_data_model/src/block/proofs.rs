@@ -159,7 +159,7 @@ pub struct BlockProofs {
     pub entry_proof: BlockReceiptProof,
     /// Claimed Merkle root and exact leaf count used to verify the execution proof.
     pub output_commitment: MerkleTreeCommitment<ExecutionOutputV1>,
-    /// Full typed output proof; its Network.input_index explicitly joins the input proof.
+    /// Full typed output proof; its `Network.input_index` explicitly joins the input proof.
     pub output_proof: ExecutionReceiptProof,
     /// Claimed FASTPQ transfer transcripts grouped by exact execution-call hash.
     pub fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
@@ -254,7 +254,7 @@ impl TrustedBlockProofAnchor {
     /// the exact executed block wire hash and length. It validates the output cache in place,
     /// locates `entry_hash` in authenticated network-input order, and
     /// retains the exact FASTPQ transcript map bound by that wire. Input and output positions join
-    /// only through the authenticated Network.input_index; internal outputs have no input leaf. The
+    /// only through the authenticated `Network.input_index`; internal outputs have no input leaf. The
     /// external-only header root is checked with a logarithmic-memory accumulator.
     ///
     /// # Errors
@@ -358,7 +358,7 @@ pub struct TrustedExecutionOutputAnchor {
 }
 
 impl TrustedExecutionOutputAnchor {
-    /// Authenticate the output at `output_index` with a fully verified CommitQC under an
+    /// Authenticate the output at `output_index` with a fully verified `CommitQC` under an
     /// independently trusted target height context.
     ///
     /// Pin `expected_context_id` independently, or obtain the exact target context after verifying

@@ -17,6 +17,7 @@ final class ExactCertificateCardinalityTests: XCTestCase {
             "parent_state_root": hashLiteral,
             "post_state_root": hashLiteral,
             "ordinary_writes_root": hashLiteral,
+            "kagemusha_top_up_root": NSNull(),
             "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root":
@@ -25,6 +26,8 @@ final class ExactCertificateCardinalityTests: XCTestCase {
             "merge_carrier": NSNull(),
             "executed_block_wire_len": 1,
             "executed_block_wire_hash": hashLiteral,
+            "transaction_input_commitment": NSNull(),
+            "transaction_output_commitment": NSNull(),
         ]
         if let laneManifest { commitment["lane_finality_manifest"] = laneManifest }
         return try JSONSerialization.data(withJSONObject: [

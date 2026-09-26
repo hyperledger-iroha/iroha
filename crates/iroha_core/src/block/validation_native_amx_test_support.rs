@@ -256,29 +256,31 @@ fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
     for keypair in &keypairs {
         let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
             .expect("generate BLS proof-of-possession");
-        let id = crate::state::derive_validator_key_id(keypair.public_key());
-        let record = iroha_data_model::consensus::ConsensusKeyRecord {
-            id: id.clone(),
-            public_key: keypair.public_key().clone(),
-            pop: Some(pop),
-            activation_height: 0,
-            expiry_height: None,
-            replaces: None,
-            status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
-        };
-        world_block
-            .consensus_keys
-            .insert(id.clone(), record.clone());
-        let pk = record.public_key.to_string();
-        let mut by_pk = world_block
-            .consensus_keys_by_pk
-            .get(&pk)
-            .cloned()
-            .unwrap_or_default();
-        if !by_pk.contains(&id) {
-            by_pk.push(id);
+        for id in [
+            crate::state::derive_validator_key_id(keypair.public_key()),
+            crate::state::derive_committee_key_id(keypair.public_key()),
+        ] {
+            let record = iroha_data_model::consensus::ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(pop.clone()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
+            };
+            world_block.consensus_keys.insert(id.clone(), record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world_block
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&id) {
+                by_pk.push(id);
+            }
+            world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
-        world_block.consensus_keys_by_pk.insert(pk, by_pk);
     }
     world_block.commit();
     (world, keypairs)

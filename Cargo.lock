@@ -5220,6 +5220,7 @@ dependencies = [
  "iroha_smart_contract_codec",
  "iroha_smart_contract_utils",
  "norito",
+ "sorafs_manifest",
 ]
 
 [[package]]

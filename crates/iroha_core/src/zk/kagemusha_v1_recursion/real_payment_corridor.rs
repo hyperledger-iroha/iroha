@@ -3020,7 +3020,7 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
         hardware_authorization,
     )
     .expect("Ep mint-authorization SHA queue");
-    let expected_lengths = vec![422, 663, 76, 426, 198, 363, 365, 200, 74, 367];
+    let expected_lengths = vec![457, 697, 76, 459, 198, 363, 365, 200, 74, 367];
 
     assert_eq!(
         eq.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -3066,8 +3066,8 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
             .map(|message| (message.len() + 9).div_ceil(64))
             .sum::<usize>()
     };
-    assert_eq!((eq.len(), blocks(&eq)), (10, 55));
-    assert_eq!((ep.len(), blocks(&ep)), (10, 55));
+    assert_eq!((eq.len(), blocks(&eq)), (10, 58));
+    assert_eq!((ep.len(), blocks(&ep)), (10, 58));
 }
 
 #[test]

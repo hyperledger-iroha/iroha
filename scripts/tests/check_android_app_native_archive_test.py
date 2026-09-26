@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for exact ABI-23 byte authentication in Android app archives."""
+"""Tests for exact ABI-24 byte authentication in Android app archives."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
 
         provenance = {
             "schema": "iroha.android-native-build-provenance.v1",
-            "native_bridge_abi_version": 23,
+            "native_bridge_abi_version": 24,
             "build_profile": "release",
             "cargo_locked": True,
             "privacy_production_enabled": True,

@@ -70,7 +70,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
         self.assertIn("try bridge.acknowledgeCommittedAppAttest(", adapter)
 
     def test_coordinator_methods_match_exact_c_rust_swift_kotlin_and_fixture_inventory(self) -> None:
-        # The probe's ten output words are independent of the thirteen method codes.
+        # The probe's ten output words are independent of the fourteen method codes.
         # Preserve each language's exact public spelling, including Swift's ID.
         names = (
             ("RESERVE_OPERATION_ID", "ReserveOperationId", "reserveOperationID"),
@@ -86,6 +86,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             ("BEGIN_OBSERVATION", "BeginObservation", "beginObservation"),
             ("INITIAL_ENROLLMENT", "InitialEnrollment", "initialEnrollment"),
             ("ACKNOWLEDGE_COMMITTED_APP_ATTEST", "AcknowledgeCommittedAppAttest", "acknowledgeCommittedAppAttest"),
+            ("EXPORT_OUTGOING_STATE_PROOF", "ExportOutgoingStateProof", "exportOutgoingStateProof"),
         )
         contracts = {
             "c": "crates/connect_norito_bridge/include/connect_norito_bridge.h",
@@ -108,7 +109,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             int(line.split("\t")[1]) for line in fixture.read_text().splitlines()
             if line and not line.startswith("#")
         }
-        self.assertEqual(methods, set(range(1, 14)))
+        self.assertEqual(methods, set(range(1, 15)))
 
     def test_coordinator_frame_schema_matches_c_rust_swift_and_shared_fixtures(self) -> None:
         contracts = (
@@ -128,7 +129,7 @@ class KagemushaPackageSurfaceTests(unittest.TestCase):
             if not line or line.startswith("#"):
                 continue
             name, method, request, response = line.split("\t")
-            self.assertIn(int(method), range(1, 14))
+            self.assertIn(int(method), range(1, 15))
             for direction, encoded in (("request", request), ("response", response)):
                 with self.subTest(name=name, direction=direction):
                     frame = bytes.fromhex(encoded)

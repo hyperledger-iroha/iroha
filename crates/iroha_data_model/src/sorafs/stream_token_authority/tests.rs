@@ -70,6 +70,43 @@ fn completion() -> StreamTokenCompleteV1 {
 }
 
 #[test]
+fn stream_token_outcome_keeps_inline_copy_and_completed_schema_payload() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<StreamTokenOutcomeV1>();
+    assert_copy::<StreamTokenOperationV1>();
+    const _: () = assert!(core::mem::size_of::<StreamTokenOutcomeV1>() <= 512);
+
+    let schema = StreamTokenOutcomeV1::schema();
+    let iroha_schema::Metadata::Enum(outcomes) = schema
+        .get::<StreamTokenOutcomeV1>()
+        .expect("stream-token outcome schema")
+    else {
+        panic!("stream-token outcome must have an enum schema");
+    };
+    assert_eq!(outcomes.variants.len(), 3);
+    assert_eq!(outcomes.variants[0].discriminant, 0);
+    assert_eq!(outcomes.variants[0].ty, None);
+    assert_eq!(outcomes.variants[1].discriminant, 1);
+    assert_eq!(
+        outcomes.variants[1].ty,
+        Some(core::any::TypeId::of::<StreamTokenCompleteV1>())
+    );
+    assert_eq!(outcomes.variants[2].discriminant, 2);
+    assert_eq!(outcomes.variants[2].ty, None);
+
+    let claim = StreamTokenOperationV1 {
+        outcome: StreamTokenOutcomeV1::Completed(completion()),
+        ..original()
+    };
+    let frame = norito::encode_canonical(&claim).expect("completed claim frame");
+    assert_eq!(
+        norito::canonical_frame_len(&claim).expect("completed claim length"),
+        frame.len()
+    );
+    assert!(frame.len() <= STREAM_TOKEN_OPERATION_CLAIM_MAX_BYTES_V1);
+}
+
+#[test]
 fn stream_token_operation_claim_has_one_bounded_canonical_norito_and_json_shape() {
     let reserved = original();
     let completed = StreamTokenOperationV1 {

@@ -16,6 +16,18 @@ maps those obligations to the present closed instruction and state shapes.
 The [primary-source functional-opening review](../docs/history/2026-09-24/standalone-election-primary-source-functional-opening-review.md)
 compares additional authority-free aggregation papers with this fault and
 disclosure boundary without selecting a production construction.
+The [programmed-opening screen](../docs/history/2026-09-25/standalone-election-programmed-opening-screen.md)
+checks later functional-encryption candidates against exact closed-corpus and
+late-dropout requirements. It identifies no qualifying construction; this is a
+bounded review of the cited candidates, not an impossibility proof.
+
+The retained Core election state has one bounded, ordered sequence of fixed
+`(nullifier, commitment)` ballot pairs. This preserves the association and
+admission order of public operation bytes through snapshot and restart; it does
+not authenticate a credential or confidential bond, constrain a hidden choice
+through updates, or prove a tally over the closed latest-state corpus. The
+existing standalone ballot and tally admission guards stay closed. The
+committee-free late-dropout construction and its review remain unresolved.
 
 ## Fault and disclosure boundary
 

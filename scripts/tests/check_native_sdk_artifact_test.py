@@ -10,8 +10,8 @@ from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = REPO_ROOT / "scripts/check_native_sdk_abi23_artifact.py"
-SPEC = importlib.util.spec_from_file_location("check_native_sdk_abi23_artifact", MODULE_PATH)
+MODULE_PATH = REPO_ROOT / "scripts/check_native_sdk_artifact.py"
+SPEC = importlib.util.spec_from_file_location("check_native_sdk_artifact", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -294,10 +294,52 @@ def test_python_probe_disables_bytecode_in_its_actual_isolated_child(tmp_path: P
         "assert sys.flags.isolated == 1\n"
         "assert sys.dont_write_bytecode\n"
         "def connect_norito_bridge_abi_version():\n"
-        "    return 23\n",
+        "    return 24\n",
         encoding="utf-8",
     )
     assert MODULE.probe_python_abi(
         artifact, ("connect_norito_bridge_abi_version",)
-    ) == 23
+    ) == 24
     assert not (tmp_path / "__pycache__").exists()
+
+
+def test_retired_abi23_privacy_export_marker_is_rejected() -> None:
+    marker = "iroha_privacy_abi23_compiled_profile_catalog_v1"
+    assert MODULE.STALE_PRIVACY_ABI_MARKER_RE.search(marker)
+    try:
+        MODULE.validate_privacy_c_exports(
+            [marker, *MODULE.APPROVED_PRIVACY_C_EXPORTS], require_exact=False
+        )
+    except MODULE.ArtifactContractError as error:
+        assert "stale privacy/bridge ABI marker" in str(error)
+    else:
+        raise AssertionError("retired ABI-23 privacy export marker was accepted")
+
+
+def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
+    manifest = {
+        "artifact_sha256": "a" * 64,
+        "artifact_size": 1,
+        "bridge_abi_version": MODULE.REQUIRED_BRIDGE_ABI_VERSION,
+        "privacy_c_exports": [],
+        "privacy_c_exports_inspected": False,
+        "required_symbols": list(MODULE.REQUIRED_SYMBOLS["python"]),
+        "schema": MODULE.SCHEMA,
+        "sdk": "python",
+        "source_commit": "b" * 40,
+        "source_tree_clean": True,
+        "target": "aarch64-apple-darwin",
+        "workspace_source_manifest_sha256": "c" * 64,
+    }
+    MODULE.validate_manifest(manifest)
+    for field, retired, expected in (
+        ("bridge_abi_version", 23, "must be exactly 24"),
+        ("schema", "iroha.native-sdk-abi23-artifact.v1", "schema is unsupported"),
+    ):
+        stale = {**manifest, field: retired}
+        try:
+            MODULE.validate_manifest(stale)
+        except MODULE.ArtifactContractError as error:
+            assert expected in str(error)
+        else:
+            raise AssertionError(f"retired {field} was accepted")

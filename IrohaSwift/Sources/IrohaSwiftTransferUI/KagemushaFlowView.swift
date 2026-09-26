@@ -82,7 +82,7 @@ public struct IrohaKagemushaTransportPicker: View {
 
     private func subtitle(for kind: IrohaKagemushaTransportKind) -> String {
         switch kind {
-        case .qr: return "Show or scan a canonical ABI-23 KAGEMUSHA payment stream."
+        case .qr: return "Show or scan a canonical ABI-24 KAGEMUSHA payment stream."
         case .nfc: return "Tap phones for an authenticated local handoff."
         case .nearby: return "Pair nearby phones with the matching picture."
         }

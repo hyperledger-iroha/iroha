@@ -186,7 +186,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         hashes: dict[str, str] = {}
         self.framework.mkdir()
         for identifier, (platform, architectures, variant) in SLICE_METADATA.items():
-            binary = f"native:{identifier}:abi23".encode()
+            binary = f"native:{identifier}:abi24".encode()
             slice_root = self.framework / identifier
             headers = slice_root / "Headers"
             headers.mkdir(parents=True)
@@ -249,7 +249,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         }
         manifest = {
             "version": "0.1.0",
-            "native_bridge_abi_version": 23,
+            "native_bridge_abi_version": 24,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": build_environment,
@@ -962,7 +962,7 @@ else:
         self.assertGreaterEqual(builder.count("--archive-output requires a value"), 2)
         self.assertIn('output.suffix != ".zip"', builder)
         self.assertIn(
-            'header_abis != ["23"]',
+            'header_abis != ["24"]',
             builder,
         )
         self.assertIn(

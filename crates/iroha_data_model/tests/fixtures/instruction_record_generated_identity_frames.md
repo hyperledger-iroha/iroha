@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for all 290 current `isi!` declarations: 281 nongeneric records and 39 concrete
-instantiations of the nine generic declarations. Its 320 type rows preserve 355
-populated values and 1,420 complete root, vector, option and map frames.
+for the current instruction records and concrete generic instantiations. Its 321
+type rows preserve 357 populated values and 1,428 complete root, vector, option
+and map frames.
 
 The fixture SHA-256 is
-`9da764b5c7ea5ef44f9e93049430b019133796135bbda358ef0a3c0c579618a5`.
+`59a6162b6c1b3ab384b3e06dd61cf8326eade4333beae4a07b782813ae88f97a`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -42,7 +42,28 @@ including exact root, vector, option and map decode/re-encode checks.
 typed fixture and its real codec roundtrip helper. Its Proposed lifecycle contains
 only `proposed_at_height`; the retired automatic activation-height field is absent.
 All four frame forms were decoded, compared and exactly re-encoded by the generator.
-Only that one case's four frames changed; the other 354 cases, all nominal and
-directional identities, and the strict retired-field rejection tests are unchanged.
+Only that case's four frames changed in that recapture; nominal and directional
+identities and the strict retired-field rejection tests remained unchanged.
 The opt-in `capture_current_privacy_activation_instruction_identity_frames` test
 prints the actual capture to stdout and never writes the fixture itself.
+
+`RegisterZkAsset` was recaptured on 2026-09-25 after removal of its retired
+`vk_shield` field. A temporary Rust test constructed both the no-unshield and
+unshield cases and printed the actual root, vector, option and map frames. The
+fixture proposal changed only those two cases; the temporary test was removed.
+The type's directional identity hashes and the other 320 rows are unchanged.
+
+`RedeemKagemushaV1` and `TopUpKagemushaV1` were recaptured on 2026-09-25
+after the terminal-body commitment and hardware credential binding changed.
+The temporary typed maintenance test identified exactly these two changed
+populated rows among the 51 missing-record producers. It supplied all four
+current frame forms for each row; the row identities, other 319 rows, and
+inventory counts are unchanged. The temporary test was removed after capture.
+
+`RegisterIdentifierPolicy`, both `ClaimIdentifier` cases, and
+`FinalizeElection` were recaptured on 2026-09-25 after first-release policy,
+receipt and exact `u128` tally changes. The two Claim cases were matched by
+their unchanged encoded account field, preserving original case order. Only
+these three rows' four frame forms changed; all declared type identities and
+the 321-row, 357-case inventory remain unchanged. The temporary typed capture
+tests were removed afterwards.

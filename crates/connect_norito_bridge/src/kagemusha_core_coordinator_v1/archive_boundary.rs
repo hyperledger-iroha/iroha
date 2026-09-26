@@ -9,13 +9,16 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPublicInputPreimageV1, SenderPublicInputsV1, SenderRecoverySelectorV1, SenderReplyBodyV1,
     SenderReplyV1, SenderTerminalReceiptV1, terminal_envelope_digest_v1,
 };
-use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
+use iroha_core::zk::{
+    kagemusha_v1_recursion::{KagemushaOperationV1, KagemushaStateRelationPublicInputsV1},
+    kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1,
+};
 use iroha_data_model::{
     account::AccountId,
     kagemusha::{
         KagemushaAcknowledgementV1, KagemushaAppEnrollmentCertificateV1,
         KagemushaDeviceQualificationReplyV1, KagemushaDeviceReadCredentialCommandV1,
-        KagemushaPaymentRequestV1, KagemushaRetailEnrollmentCertificateV1,
+        KagemushaPairedProofV1, KagemushaPaymentRequestV1, KagemushaRetailEnrollmentCertificateV1,
         KagemushaRetailEnrollmentChallengeV1, KagemushaRetailEnrollmentPossessionProofV1,
     },
 };
@@ -154,6 +157,11 @@ pub(crate) fn validate_request(
     kagemusha_core_coordinator_validate_method_request_v1(method, frame)?;
     let fields = kagemusha_core_coordinator_decode_request_v1(frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => {
+            // The original operation ID is the sole selector. No app-supplied proof bytes can
+            // enter this read-only Core projection.
+            require_nonzero_digest_field(fields.first())?;
+        }
         KagemushaCoreCoordinatorMethodV1::BeginObservation => {
             let operation =
                 u8::try_from(require_u32_field(fields.first())?).map_err(field_error)?;
@@ -263,6 +271,30 @@ pub(crate) fn validate_response(
     let request = kagemusha_core_coordinator_decode_request_v1(request_frame)?;
     let response = kagemusha_core_coordinator_decode_response_v1(response_frame)?;
     match method {
+        KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof => {
+            let public: KagemushaStateRelationPublicInputsV1 =
+                norito::decode_canonical_with_limits(
+                    &response[1],
+                    norito::canonical_decode_limits(response[1].len()),
+                )
+                .map_err(field_error)?;
+            let proof: KagemushaPairedProofV1 = norito::decode_canonical_with_limits(
+                &response[2],
+                norito::canonical_decode_limits(response[2].len()),
+            )
+            .map_err(field_error)?;
+            require_binding(matches!(
+                public.operation,
+                KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+            ))?;
+            proof
+                .validate_shape_for_semantic_digest(public.transport_semantic_digest)
+                .map_err(field_error)?;
+            require_binding(
+                norito::encode_canonical(&public).map_err(field_error)? == response[1]
+                    && norito::encode_canonical(&proof).map_err(field_error)? == response[2],
+            )?;
+        }
         KagemushaCoreCoordinatorMethodV1::BeginSenderTransition => {
             let preparation =
                 KagemushaCoreSenderPreparationArchiveV1::decode_canonical_exact(&response[1])

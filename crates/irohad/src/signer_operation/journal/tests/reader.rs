@@ -13,12 +13,12 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
     const CHILD_PATH: &str = "IROHA_SIGNER_RECEIPT_READER_LEASE_TEST_CHILD_PATH";
     const CHILD_TEST: &str = "signer_operation::journal::tests::reader::reader_and_pinned_receipt_keep_the_same_exclusive_lease";
     if let Some(path) = std::env::var_os(CHILD_PATH) {
-        assert!(SignerReceiptJournalV1::open(Path::new(&path), PURPOSE).is_err());
+        assert!(SignerReceiptJournalV1::open_test(Path::new(&path), PURPOSE).is_err());
         return;
     }
     let directory = private_directory();
     let path = directory.path().canonicalize().unwrap();
-    let writer = SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+    let writer = SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
     let reader = writer.reader();
     assert_eq!(reader.purpose(), PURPOSE);
     assert!(reader.recover(OPERATION).is_err());
@@ -26,7 +26,7 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
     let bytes = b"exact private receipt bytes";
     drop(writer.stage(OPERATION, bytes).unwrap());
     drop(writer);
-    assert!(SignerReceiptJournalV1::open(&path, PURPOSE).is_err());
+    assert!(SignerReceiptJournalV1::open_test(&path, PURPOSE).is_err());
     let pinned = reader.recover(OPERATION).unwrap();
     assert_eq!(pinned.bytes(), bytes);
     drop(reader);
@@ -35,7 +35,7 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
         SignerReceiptPurposeV1::ReleaseManifest,
         SignerReceiptPurposeV1::StreamToken,
     ] {
-        assert!(SignerReceiptJournalV1::open(&path, purpose).is_err());
+        assert!(SignerReceiptJournalV1::open_test(&path, purpose).is_err());
     }
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
@@ -75,7 +75,7 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
     pinned.recheck().unwrap();
     assert_eq!(pinned.bytes(), bytes);
     drop(pinned);
-    let reopened = SignerReceiptJournalV1::open(&path, PURPOSE)
+    let reopened = SignerReceiptJournalV1::open_test(&path, PURPOSE)
         .expect("the last pinned owner releases the lease");
     assert_eq!(reopened.recover(OPERATION).unwrap().bytes(), bytes);
 }
@@ -84,14 +84,14 @@ fn reader_and_pinned_receipt_keep_the_same_exclusive_lease() {
 fn staged_receipt_also_retains_the_lease_after_the_writer_drops() {
     let directory = private_directory();
     let path = directory.path().canonicalize().unwrap();
-    let writer = SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+    let writer = SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
     let staged = writer.stage(OPERATION, b"staged exact bytes").unwrap();
     drop(writer);
-    assert!(SignerReceiptJournalV1::open(&path, PURPOSE).is_err());
+    assert!(SignerReceiptJournalV1::open_test(&path, PURPOSE).is_err());
     staged.recheck().unwrap();
     assert_eq!(staged.bytes(), b"staged exact bytes");
     drop(staged);
-    SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+    SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn read_only_recovery_has_the_same_closed_purpose_bounds() {
     ] {
         let directory = private_directory();
         let path = directory.path().canonicalize().unwrap();
-        let writer = SignerReceiptJournalV1::open(&path, purpose).unwrap();
+        let writer = SignerReceiptJournalV1::open_test(&path, purpose).unwrap();
         let reader = writer.reader();
         assert_eq!(reader.purpose(), purpose);
         assert!(reader.recover([0; 32]).is_err());
@@ -132,7 +132,7 @@ fn read_only_recovery_has_the_same_closed_purpose_bounds() {
 fn reader_recheck_rejects_in_place_byte_changes_and_retains_its_original_buffer() {
     let directory = private_directory();
     let path = directory.path().canonicalize().unwrap();
-    let writer = SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+    let writer = SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
     drop(writer.stage(OPERATION, b"original bytes").unwrap());
     let reader = writer.reader();
     let pinned = reader.recover(OPERATION).unwrap();
@@ -148,7 +148,7 @@ fn reader_recheck_rejects_in_place_byte_changes_and_retains_its_original_buffer(
 fn reader_recheck_rejects_path_replacement_even_when_the_bytes_match() {
     let directory = private_directory();
     let path = directory.path().canonicalize().unwrap();
-    let writer = SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+    let writer = SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
     let bytes = b"identical bytes do not preserve the pinned inode";
     drop(writer.stage(OPERATION, bytes).unwrap());
     let reader = writer.reader();
@@ -169,7 +169,7 @@ fn read_only_recovery_rejects_unsafe_files_and_changed_ancestor_identity() {
         let path = parent.join("receipts");
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, Permissions::from_mode(0o700)).unwrap();
-        let writer = SignerReceiptJournalV1::open(&path, PURPOSE).unwrap();
+        let writer = SignerReceiptJournalV1::open_test(&path, PURPOSE).unwrap();
         drop(writer.stage(OPERATION, b"private receipt").unwrap());
         let reader = writer.reader();
         let pinned = reader.recover(OPERATION).unwrap();

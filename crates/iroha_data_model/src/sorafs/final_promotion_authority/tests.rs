@@ -7,6 +7,29 @@ use sorafs_manifest::signer::protocol::{SignerOperationActionV1, SignerOperation
 
 mod check;
 
+#[test]
+fn final_promotion_action_keeps_inline_check_and_complete_schema_payloads() {
+    const _: () = assert!(core::mem::size_of::<FinalPromotionAuthorityActionV1>() <= 1024);
+    let schema = FinalPromotionAuthorityActionV1::schema();
+    let Metadata::Enum(actions) = schema
+        .get::<FinalPromotionAuthorityActionV1>()
+        .expect("final-promotion action schema")
+    else {
+        panic!("final-promotion action must have an enum schema");
+    };
+    assert_eq!(actions.variants.len(), 7);
+    assert_eq!(actions.variants[4].discriminant, 4);
+    assert_eq!(
+        actions.variants[4].ty,
+        Some(core::any::TypeId::of::<FinalPromotionCompleteV1>())
+    );
+    assert_eq!(actions.variants[6].discriminant, 6);
+    assert_eq!(
+        actions.variants[6].ty,
+        Some(core::any::TypeId::of::<FinalPromotionCheckV1>())
+    );
+}
+
 fn intent() -> SignerOperationIntentV1 {
     SignerOperationIntentV1 {
         action: SignerOperationActionV1::Sign,

@@ -159,7 +159,7 @@ impl Fixture {
             Arc::from(statements::statement_message(&receipt_policy.binding));
         let directory = tempfile::tempdir().unwrap();
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let journal = SignerReceiptJournalV1::open(
+        let journal = SignerReceiptJournalV1::open_test(
             &directory.path().canonicalize().unwrap(),
             SignerReceiptPurposeV1::FinalPromotionProvenance,
         )

@@ -53,7 +53,10 @@ use super::{
     observer_transaction::{
         FinalPromotionObserverTransactionErrorV1, FinalPromotionObserverTransactionsV1,
     },
-    pending_reserve_journal::{FinalPromotionPendingReserveJournalV1, RecoveredPendingReserveV1},
+    pending_reserve_journal::{
+        FinalPromotionPendingReserveJournalErrorV1, FinalPromotionPendingReserveJournalV1,
+        RecoveredPendingReserveV1,
+    },
 };
 
 /// Pre-submission Reserve owner with the exact signed role-15 envelope and independent floor.
@@ -98,8 +101,22 @@ impl FinalPromotionReservedCheckRuntimeV1 {
             return Err(Error::Binding);
         }
         let pre_reserve_floor = floor.read().map_err(|_| Error::Floor)?;
+        let current_check_floor = signed_reserve.original_current_check().applied_floor();
+        // A retained floor older than the signed Current Check's authenticated applied cut is
+        // a rollback. Equal heights must retain the same hash and committee context.
+        if pre_reserve_floor.height < current_check_floor.height
+            || (pre_reserve_floor.height == current_check_floor.height
+                && pre_reserve_floor != current_check_floor)
+        {
+            return Err(Error::Floor);
+        }
         let view = state.view();
         authenticate_pre_reserve_floor_at_v1(&view, pre_reserve_floor)?;
+        if pre_reserve_floor != current_check_floor {
+            authenticate_pre_reserve_floor_at_v1(&view, current_check_floor)?;
+        }
+        // TODO: Reprove successor continuity and historical floor issuance after restart before
+        // using the journaled floor for any later operation phase.
         let height = u64::try_from(view.height()).map_err(|_| Error::Check)?;
         let snapshot = read_final_promotion_authority_at_v1(
             &view,
@@ -172,7 +189,10 @@ impl FinalPromotionReservedCheckRuntimeV1 {
                 signed_reserve.original_current_check(),
                 signed_reserve.reconciliation_transaction(),
             )
-            .map_err(|_| Error::Journal)?;
+            .map_err(|error| match error {
+                FinalPromotionPendingReserveJournalErrorV1::LocalCapacity => Error::LocalCapacity,
+                FinalPromotionPendingReserveJournalErrorV1::Unavailable => Error::Journal,
+            })?;
         Ok(Self {
             state,
             observer,

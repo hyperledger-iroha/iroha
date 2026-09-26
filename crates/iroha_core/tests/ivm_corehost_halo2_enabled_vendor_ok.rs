@@ -197,7 +197,7 @@ fn verify_then_vendor_submit_ballot_applies() {
         verify_res, 0,
         "verify must succeed under enabled config (err code {verify_err})"
     );
-    // Seed an election so SubmitBallot can record ciphertexts
+    // Seed an election so SubmitBallot can record an ordered ballot pair.
     let mut commit_bytes = [0u8; 32];
     let mut root_bytes = [0u8; 32];
     commit_bytes.copy_from_slice(&fixture.public_inputs[..32]);

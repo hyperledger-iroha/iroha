@@ -15,7 +15,7 @@ use norito::json::Value as JsonValue;
 /// lane/catalog binding, governance rules, validator identities and commitments.
 /// Optional fields preserve absent declarations for that semantic validation;
 /// successfully decoding a descriptor does not establish that it is admissible.
-#[derive(Debug, Clone, PartialEq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
 pub struct NativeLaneManifestV1 {
     /// Lane alias the manifest targets.
@@ -40,7 +40,7 @@ pub struct NativeLaneManifestV1 {
     pub privacy_commitments: Option<Vec<NativeLanePrivacyCommitmentV1>>,
 }
 /// Manifest-level validator binding descriptor.
-#[derive(Debug, Clone, PartialEq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
 pub struct NativeLaneValidatorBindingV1 {
     /// Validator authority account literal.
@@ -52,7 +52,7 @@ pub struct NativeLaneValidatorBindingV1 {
     pub torii_url: Option<String>,
 }
 /// Manifest-level privacy commitment descriptor.
-#[derive(Debug, Clone, PartialEq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
 pub struct NativeLanePrivacyCommitmentV1 {
     /// Registry identifier assigned to the commitment entry.
@@ -64,7 +64,7 @@ pub struct NativeLanePrivacyCommitmentV1 {
     pub merkle: Option<NativeLaneMerkleCommitmentV1>,
 }
 /// Merkle commitment parameters advertised in manifests.
-#[derive(Debug, Clone, PartialEq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, DeriveJsonSerialize, DeriveJsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
 pub struct NativeLaneMerkleCommitmentV1 {
     /// Canonical 32-byte root digest encoded as hex.

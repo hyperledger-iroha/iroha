@@ -72,6 +72,8 @@ def test_android_codegen_gate_uses_two_sealed_isolated_replays() -> None:
     assert 'SECOND_TARGET="${RUN_ROOT}/target-second"' in gate
     assert 'diff -ru "${FIRST_STAGE}/generated" "${SECOND_STAGE}/generated"' in gate
     assert 'cmp -s "${FIRST_STAGE}/codegen_parity_summary.json"' in gate
+    assert '--codegen-root "${codegen_root}"' in gate
+    assert '--source-root "${source_root}"' in gate
     assert "two clean Android binding generations produced different bytes" in gate
     assert "two clean Android parity summaries disagreed" in gate
 

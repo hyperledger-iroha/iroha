@@ -6,8 +6,10 @@
 //! independent, fresh challenged BeforeRelease evidence verification may release a token.
 //! Authenticated software providers use this same path. No embedded service key, observer-picked
 //! trust, or alternate signing/recovery path exists here.
-//! TODO: supply and qualify software signing, authoritative journal/finality and observer adapters;
-//! injected source/provider tests exercise races and persistence, not a deployed service.
+//! The owner-only software-credential constructor assembles this producer over one injected
+//! source; it does not qualify that source or activate generic signer dispatch.
+//! TODO: supply and qualify the authoritative journal/finality, observer and configured runtime
+//! adapters; injected source/provider tests exercise races and persistence, not a deployed service.
 //! TODO: the genuine state/provider adapters must reconstruct the same window and request digest
 //! from exact canonical body bytes plus independently pinned custody before admission. The generic
 //! reservation interface currently exposes the bound intent digest, not a separately authenticated
@@ -18,6 +20,7 @@ use super::journal::{
     SignerReceiptPurposeV1,
 };
 use super::*;
+use iroha_data_model::sorafs::stream_token_authority::StreamTokenReviewedV1;
 use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenV1,
     signer::{
@@ -35,6 +38,7 @@ use sorafs_manifest::{
         },
     },
 };
+use std::path::Path;
 use zeroize::Zeroize as _;
 
 /// Fixed public failure classes; no request, filesystem path or backend detail is retained.
@@ -46,12 +50,15 @@ pub enum SignerStreamTokenErrorV1 {
     Operation(SignerOperationErrorV1),
     /// Private bounded receipt persistence or retained identity failed.
     Journal,
+    /// Finite local inventory resources are busy; reconcile the original operation.
+    LocalCapacity,
 }
 impl fmt::Display for SignerStreamTokenErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Receipt(_) => "stream-token signing request or receipt rejected",
             Self::Operation(_) => "stream-token authoritative operation failed",
+            Self::LocalCapacity => "local signer-journal inventory capacity unavailable",
             Self::Journal => "stream-token private receipt journal unavailable",
         })
     }
@@ -68,8 +75,12 @@ impl From<SignerStreamTokenReceiptErrorV1> for SignerStreamTokenErrorV1 {
     }
 }
 impl From<SignerReceiptJournalErrorV1> for SignerStreamTokenErrorV1 {
-    fn from(_: SignerReceiptJournalErrorV1) -> Self {
-        Self::Journal
+    fn from(error: SignerReceiptJournalErrorV1) -> Self {
+        if error.is_local_capacity() {
+            Self::LocalCapacity
+        } else {
+            Self::Journal
+        }
     }
 }
 
@@ -186,6 +197,39 @@ impl fmt::Debug for SignerStreamTokenServiceV1 {
     }
 }
 impl SignerStreamTokenServiceV1 {
+    /// Assemble the provider-scoped service from an owner-only software credential.
+    ///
+    /// The caller supplies one independently authenticated finalized operation source for both
+    /// the key provider and coordinator. This constructor does not create native Reserve, Check,
+    /// completion or observer authority. It rejects an absent source or wrong role/journal before
+    /// opening the credential; a current custody read is still required before construction.
+    ///
+    /// # Errors
+    /// Rejects absent or unavailable authoritative state, wrong purpose, journal, or credential,
+    /// and any current custody mismatch without producing a signing capability.
+    pub fn from_software_supervisor_credential(
+        path: &Path,
+        binding: SignerCustodyBindingV1,
+        record: Vec<u8>,
+        trust: SignerCustodyTrustV1,
+        source: Option<Arc<dyn SignerOperationStateSourceV1>>,
+        journal: SignerReceiptJournalV1,
+    ) -> Result<Self, SignerStreamTokenErrorV1> {
+        let source = source.ok_or(SignerOperationErrorV1::StateUnavailable)?;
+        if journal.purpose() != SignerReceiptPurposeV1::StreamToken {
+            return Err(SignerStreamTokenErrorV1::Journal);
+        }
+        stream_token_binding_digest_v1(&binding)?;
+        let coordinator = SignerOperationCoordinatorV1::from_software_supervisor_credential(
+            path,
+            binding,
+            record,
+            trust,
+            Some(source),
+        )?;
+        Self::new(coordinator, journal)
+    }
+
     /// Split off a provider-free completed-receipt checker over this exact journal lease.
     ///
     /// The returned capability can outlive the signer and has no Reserve, Complete or key method.
@@ -238,6 +282,9 @@ impl SignerStreamTokenServiceV1 {
     ) -> Result<SignerStreamTokenReceiptBytesV1, SignerStreamTokenErrorV1> {
         let (body, expected) =
             prepare_stream_token_signing_payload_v1(payload, &self.coordinator.binding)?;
+        // A genuine native source must permanently tombstone admitted IDs. Also fence a staged
+        // private receipt before another source read, Reserve or key use if that source rolled back.
+        self.journal.ensure_unstaged(expected.operation_id())?;
         let snapshot = self
             .coordinator
             .source
@@ -252,7 +299,10 @@ impl SignerStreamTokenServiceV1 {
             previous_audit: snapshot.audit_head,
         };
         // begin observes custody again; reservation CAS must compare this exact prepared head.
-        let mut operation = self.coordinator.begin(intent)?;
+        let reviewed = StreamTokenReviewedV1 { request, intent };
+        let mut operation = self
+            .coordinator
+            .begin_stream_token(intent, &body, payload, &expected, &reviewed)?;
         if SignerOperationCustodyV1::from_verified(&operation.custody) != request.original_custody
             || !operation.custody.continues_active_state(&custody)
         {

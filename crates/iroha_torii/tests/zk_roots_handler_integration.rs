@@ -149,8 +149,7 @@ fn seeded_zk_roots_state(
             Register::asset_definition(definition).into(),
             Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
                 .into(),
-            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None)
-                .into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         ];
         for instr in init_instrs {
             stx.world

@@ -25,6 +25,8 @@ def _execution_commitment() -> dict[str, object]:
         "merge_carrier": None,
         "executed_block_wire_len": 512,
         "executed_block_wire_hash": canonical_hash(0x64),
+        "transaction_input_commitment": None,
+        "transaction_output_commitment": None,
     }
 
 

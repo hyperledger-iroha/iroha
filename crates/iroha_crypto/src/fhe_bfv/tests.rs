@@ -7423,7 +7423,7 @@ fn full_bootstrap_proof_schema_artifact_digest_is_stable() {
     let schema = proof_public_input_schema_v1();
     let_row! { schema_artifact = encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(&params, 1, &schema) .expect("encode canonical proof public-input schema artifact") };
     let schema_digest = Hash::new(&schema_artifact);
-    assert_eq_row! { schema_digest.to_string(), "f68487d6cd9de0eacf854ba3ae262991365ec199d46082ed0bc6809f0de7b161", "canonical proof public-input schema artifact digest drifted" };
+    assert_eq_row! { schema_digest.to_string(), "1a0f72d4fcff19a0b418a4535d9d6dc709f6b2390eb999e4a5f870f99f668137", "canonical proof public-input schema artifact digest drifted" };
     let_row! { schema_payload_bytes = norito::to_bytes(&schema).expect("encode canonical proof public-input schema payload") };
     let_row! { schema_payload_digest = bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v1(&schema) .expect("hash canonical proof public-input schema payload material") };
     assert_eq_row! { canonical_bfv_full_bootstrap_proof_public_input_schema_payload_digest_v1() .expect("canonical proof public-input schema payload digest"), schema_payload_digest, "canonical proof public-input schema payload digest must hash the exact typed Norito schema bytes" };

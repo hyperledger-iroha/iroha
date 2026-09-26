@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1586 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1750 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1597 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1761 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -74,6 +74,12 @@ SPEC = importlib.util.spec_from_file_location("taira_release_check", SCRIPT)
 assert SPEC and SPEC.loader
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
+
+
+def production_library_events():
+    return [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["lib"]},
+             "profile": {"test": False}, "features": ["default"]}
+            for name in ("iroha_core", "iroha_torii")]
 
 
 def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
@@ -2023,7 +2029,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                             source_commit="a" * 40, lock_fds=(77, 88),
                             completed_independent_checks=completed, update_independent_checks=checkpoint)
                     self.assertIs(caught.exception, failure)
-                    self.test_metadata.assert_not_called()
+                    self.test_metadata.assert_called_once()
+                    self.assertEqual(self.test_metadata.call_args.kwargs,
+                                     {"harnesses": ("config", "network"), "lock_fds": (77, 88)})
                     compile.assert_called_once()
                     expected = gate.native_harness_plan(gate.qualification_stages(scope), shipping)[1]
                     self.assertEqual(compile.call_args.kwargs,
@@ -2051,7 +2059,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
                                     source_commit="a" * 40, lock_fds=(77, 88))
             self.assertEqual(order, ["codegen"])
-            self.test_metadata.assert_not_called()
+            self.test_metadata.assert_called_once()
+            self.assertEqual(self.test_metadata.call_args.kwargs,
+                             {"harnesses": ("config", "network"), "lock_fds": (77, 88)})
             self.assertEqual({key: compile.call_args.args[1][key] for key in env}, env)
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (77, 88))
             graphs.append(compile.call_args.kwargs["harnesses"])
@@ -2085,13 +2095,16 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  patch.object(gate, "check_shipping_binaries", side_effect=lambda *args:
                               order.append(("shipping-metadata", ()))) as metadata, \
                  patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
-                              executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests)), \
+                              (order.append(("shipping-codegen-network", ())),
+                               executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests))), \
                  contextlib.redirect_stdout(output):
                 gate.run_checks(Path("/frozen"), qualification_scope=scope,
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                 source_commit="a" * 40, update_independent_checks=checkpoint)
             builds.append(compile.call_args.kwargs["harnesses"])
-            self.test_metadata.assert_not_called()
+            self.test_metadata.assert_called_once()
+            self.assertEqual(self.test_metadata.call_args.kwargs,
+                             {"harnesses": ("config", "network"), "lock_fds": ()})
             selected = gate.qualification_stages(scope)
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
@@ -2129,8 +2142,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     for test in tests:
                         if (name, test) in expected:
                             self.assertLess(executed.index((name, test)), cli_start)
-            metadata.assert_called_once()
-            shipping_index = order.index(("shipping-metadata", ()))
+            metadata.assert_not_called()
+            shipping_index = order.index(("shipping-codegen-network", ()))
             self.assertLess(order.index(("cli", priority_cli)), shipping_index)
             self.assertLess(order.index(("torii-unit", priority_torii)), shipping_index)
             self.assertLess(shipping_index, order.index(("cli", deferred_cli)))
@@ -2352,11 +2365,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             compile.assert_called_once()
             run.assert_called_once()
             self.assertEqual(run.call_args.args[3], gate.CONFIG_STAGES)
-            metadata.assert_called_once()
+            metadata.assert_not_called()
             network.assert_called_once()
             checkpoint.assert_not_called()
 
-    def test_shipping_metadata_failure_stops_long_tests_network_and_new_checkpoint(self):
+    def test_shipping_codegen_failure_stops_long_tests_and_new_checkpoint(self):
         shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (False, True):
@@ -2365,7 +2378,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 early, _, _ = gate.native_harness_plan(selected, shipping)
                 evidence = gate.independent_check_evidence(
                     copies, (("cli", selected["cli"]),) + early, qualification_scope=scope)
-                failure = gate.CheckError("shipping metadata check failed (exit 101)")
+                failure = gate.CheckError("shipping codegen feature evidence failed")
                 with self.subTest(scope=scope, reuse=reuse), \
                      patch.object(gate, "shipping_harnesses", return_value=shipping), \
                      patch.object(gate, "run_pure_fsm_checks"), \
@@ -2373,9 +2386,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                      patch.object(gate, "compile_test_harnesses", return_value=copies), \
                      patch.object(gate, "run_stages", side_effect=lambda name, root, env, stages, locks, **kwargs:
                                   executed.append((name, stages))), \
-                     patch.object(gate, "check_shipping_binaries", side_effect=failure) as metadata, \
-                     patch.object(gate, "run_network_checks") as network, \
-                     patch.object(gate, "compile_network_binaries") as codegen, \
+                     patch.object(gate, "check_shipping_binaries") as metadata, \
+                     patch.object(gate, "run_network_checks", side_effect=failure) as network, \
                      contextlib.redirect_stdout(output):
                     with self.assertRaises(gate.CheckError) as error:
                         gate.run_checks(Path("/frozen"), qualification_scope=scope,
@@ -2384,10 +2396,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                         completed_independent_checks=evidence if reuse else None,
                                         update_independent_checks=checkpoint)
                 self.assertIs(error.exception, failure)
-                metadata.assert_called_once()
-                self.assertEqual(metadata.call_args.args[0], Path("/frozen"))
-                self.assertEqual(metadata.call_args.args[1]["CARGO_TARGET_DIR"], "/warm")
-                self.assertEqual(metadata.call_args.args[2], (77, 88))
+                metadata.assert_not_called()
+                network.assert_called_once()
+                self.assertEqual(network.call_args.args[0], Path("/frozen"))
+                self.assertEqual(network.call_args.args[2]["CARGO_TARGET_DIR"], "/warm")
+                self.assertEqual(network.call_args.args[3], (77, 88))
                 priority_cli, _ = gate.partition_priority_stages(
                     selected["cli"], test_names=gate.PRIORITY_CLI_TESTS)
                 priority_torii, _ = gate.partition_priority_stages(
@@ -2403,8 +2416,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     checkpoint.assert_not_called()
                 else:
                     checkpoint.assert_called_once_with(None)
-                network.assert_not_called()
-                codegen.assert_not_called()
                 self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_standalone_cli_selects_basic_by_default_and_forwards_explicit_full(self):
@@ -2796,7 +2807,10 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 gate.run_checks(Path("/mutable"), qualification_scope=scope,
                                 environment=self.env, source_commit="a" * 40, lock_fds=(91,))
                 complete_graph = compile.call_args.kwargs["harnesses"]
-                self.metadata.assert_not_called()
+                self.metadata.assert_called_once()
+                self.assertEqual(self.metadata.call_args.kwargs,
+                                 {"harnesses": ("config", "network"), "lock_fds": (91,)})
+                self.metadata.reset_mock()
                 compile.reset_mock(); run.reset_mock(); network.reset_mock()
                 output.seek(0); output.truncate(0)
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
@@ -3622,7 +3636,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         for selected, accepted in ((events, True), (events[:1], False),
                                    ([event | {"profile": {"test": True}} for event in events], False)):
             child = MagicMock()
-            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in selected))
+            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in
+                                                     [*production_library_events(), *selected]))
             child.wait.return_value = 0
             process = MagicMock()
             process.__enter__.return_value = child
@@ -3648,7 +3663,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                        "profile": {"test": False}, "executable": "/warm/" + name}
                       for name in sorted(expected_names)]
             child = MagicMock()
-            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in events))
+            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in
+                                                     [*production_library_events(), *events]))
             child.wait.return_value = 0
             process = MagicMock()
             process.__enter__.return_value = child
@@ -4267,7 +4283,8 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
             (lambda env: gate.compile_test_harnesses(Path("/frozen"), env, harnesses=("config",)),
              [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
             (lambda env: gate.compile_network_binaries(Path("/frozen"), env, ()),
-             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
+             [*production_library_events(), *(CargoBuildProgressTests.event(name, "bin", test=False)
+                                               for name in ("iroha3d", "iroha", "iroha3d_taira"))]),
         )
         for operation, events in phases:
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
@@ -4310,7 +4327,8 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
             ("test codegen", lambda: gate.compile_test_harnesses(Path("/frozen"), {"CARGO": "/unused"}, harnesses=("config",)),
              [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
             ("shipping codegen", lambda: gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/unused"}, ()),
-             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
+             [*production_library_events(), *(CargoBuildProgressTests.event(name, "bin", test=False)
+                                               for name in ("iroha3d", "iroha", "iroha3d_taira"))]),
         )
         for phase, operation, events in phases:
             for code in (0, 101):
@@ -5450,7 +5468,8 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 self.assertTrue(Path(path).parent.name.startswith("taira-native-artifacts-"))
                 self.assertEqual(Path(path).read_bytes(), executable.read_bytes())
         rows = [self.artifact(selection, shipping=True) for selection in ("iroha3d", "iroha", "taira-launcher")]
-        with patch.object(gate.subprocess, "Popen", return_value=self.process([row[2] for row in rows])):
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(
+                [*production_library_events(), *(row[2] for row in rows)])):
             copied = gate.compile_network_binaries(self.source, self.env, (77,))
         self.assertEqual(set(copied), {"iroha3d", "iroha", "taira-launcher"})
         for selection, path in copied.items():
@@ -5870,6 +5889,7 @@ class PureFsmGateTests(unittest.TestCase):
         with patch.object(gate, "run_pure_fsm_checks"), \
              patch.object(gate, "validate_mv_test_registration"), \
              patch.object(gate, "validate_torii_lifecycle_test_registration"), \
+             patch.object(gate, "validate_selected_source_test_inventory"), \
              patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", diagnostic)) as run, \
              patch.object(gate, "_run_standalone_checks") as rust, \
              patch.object(gate, "run_config_checks") as config, \
@@ -5900,7 +5920,8 @@ class PureFsmGateTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         fsm.assert_called_once()
         source.assert_called_once_with(Path("/frozen"),
-            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
+            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,),
+            gate.qualification_stages("full"))
         libraries.assert_not_called()
         compile.assert_not_called()
         network.assert_not_called()

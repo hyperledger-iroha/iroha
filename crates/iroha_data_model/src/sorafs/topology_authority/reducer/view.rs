@@ -11,10 +11,22 @@ pub trait TopologyIndexedReadV1 {
     /// Typed storage failure retained separately from deterministic transition rejection.
     type Error;
     /// Exact immutable latest record for the permanent original operation ID, or proven absence.
+    ///
+    /// # Errors
+    /// Returns the implementation's typed error if the indexed record cannot be read;
+    /// a missing operation is `Ok(None)`.
     fn operation(&self, id: &[u8; 32]) -> Result<Option<&TopologyOperationRecordV1>, Self::Error>;
     /// Whether the exact signer-key tombstone exists in this same retained cut.
+    ///
+    /// # Errors
+    /// Returns the implementation's typed error if the signer-key index cannot be read;
+    /// an absent tombstone is `Ok(false)`.
     fn signer_key_seen(&self, key: &[u8; 32]) -> Result<bool, Self::Error>;
     /// Whether the exact independent-attester-key tombstone exists in the same retained cut.
+    ///
+    /// # Errors
+    /// Returns the implementation's typed error if the attester-key index cannot be read;
+    /// an absent tombstone is `Ok(false)`.
     fn attester_key_seen(&self, key: &[u8; 32]) -> Result<bool, Self::Error>;
 }
 /// Deterministic rule failure and host storage/refund refusal occupy distinct variants.
@@ -104,14 +116,13 @@ impl<L: TopologyIndexedReadV1 + ?Sized> TopologyStateViewV1<'_, L> {
             .index
             .operation(id)
             .map_err(TopologyPreparationErrorV1::Lookup)?;
-        if let Some(row) = row {
-            if row.reviewed.request.operation_id != *id
+        if let Some(row) = row
+            && (row.reviewed.request.operation_id != *id
                 || row.deployment_id != self.deployment
                 || row.revision == 0
-                || row.revision > self.root.operation_head.revision
-            {
-                return Err(Error::History.into());
-            }
+                || row.revision > self.root.operation_head.revision)
+        {
+            return Err(Error::History.into());
         }
         Ok(row)
     }

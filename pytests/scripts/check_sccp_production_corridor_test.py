@@ -583,7 +583,7 @@ def test_java_source_kotlin_executes_both_platforms_and_authenticates_the_bridge
     for required in (
         ":core-jvm:test", ":client-android:testDebugHostNative",
         "--rerun-tasks", "--no-build-cache", "IROHA_NATIVE_LIBRARY_PATH=",
-        "check_native_sdk_abi23_artifact.py record", "check_native_sdk_abi23_artifact.py verify",
+        "check_native_sdk_artifact.py record", "check_native_sdk_artifact.py verify",
         "check_sccp_java_consumer_contract.py", "--jdk-home",
         "build/test-results/testDebugHostNative",
     ):

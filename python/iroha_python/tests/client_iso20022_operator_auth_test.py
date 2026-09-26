@@ -198,7 +198,7 @@ def test_iso_status_exposes_pinned_participant_provenance() -> None:
         operator_signing_context=context(),
     )
 
-    record = client.get_iso_message_status("provenance-1")
+    record = client.get_iso_message_status_typed("provenance-1")
 
     assert record is not None
     assert record.originator_participant_id == "originator-bank"
@@ -265,7 +265,7 @@ def test_iso_status_preserves_schema_v3_replay_settlement_and_plan_fields() -> N
         operator_signing_context=context(),
     )
 
-    record = client.get_iso_message_status("schema-v3")
+    record = client.get_iso_message_status_typed("schema-v3")
 
     assert record is not None
     assert record.status == "Committed"

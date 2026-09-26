@@ -194,13 +194,13 @@ function withNativeBinding(native, body) {
 test("validation-fee consensus factories isolate immutable native runtimes", async () => {
   const checkpoint = { height: 100, contextId: "03".repeat(32) };
   const bindingA = {
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xa1]),
     validationFeeVerifyCurrentPolicyProofV1() {},
   };
   const apiA = createValidationFeeConsensusApi(createNativeRuntime(bindingA));
   const apiB = createValidationFeeConsensusApi(createNativeRuntime({
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeCurrentPolicyProofRequestV1: () => Buffer.from([0xb2]),
     validationFeeVerifyCurrentPolicyProofV1() {},
   }));
@@ -221,7 +221,7 @@ function verifyProjectionFixture(projection) {
   return withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 23;
+        return 24;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1() {
@@ -272,7 +272,7 @@ test("request encoder delegates only after strict checkpoint validation", () => 
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 23;
+        return 24;
       },
       validationFeeCurrentPolicyProofRequestV1(height, context) {
         assert.equal(height, 100n);
@@ -327,7 +327,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 23;
+        return 24;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(
@@ -576,7 +576,7 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
     ({ encodeValidationFeeCurrentPolicyProofRequestV1: encode }) => {
       assert.throws(
         () => encode(binding.checkpoint),
-        /ABI 23/u,
+        /ABI 24/u,
       );
     },
   );
@@ -584,7 +584,7 @@ test("validation-fee proof path rejects a stale native bridge ABI", () => {
 
 test("Torii validation-fee proofs use the client native runtime", async () => {
   const native = {
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeCurrentPolicyProofRequestV1(height, contextId) {
       assert.equal(height, 100n);
       assert.deepEqual(contextId, Buffer.from(binding.checkpoint.contextId, "hex"));

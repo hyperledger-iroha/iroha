@@ -121,7 +121,7 @@ final class ValidationFeeHijiriQuoteTests: XCTestCase {
         XCTAssertThrowsError(try parseProjection(wrongAssurance))
     }
 
-    func testAbi23NativeBridgeEncodesAndRejectsMalformedResponse() throws {
+    func testAbi24NativeBridgeEncodesAndRejectsMalformedResponse() throws {
         let request = try ValidationFeeHijiriQuoteRequestV1(
             accountId: canonicalAccountId(),
             qualifyingTransferCount: 2

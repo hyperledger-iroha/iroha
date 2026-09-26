@@ -30,7 +30,6 @@ enum NativeBridgeError: Error, Equatable {
     case accountOnboardingBody
     case aliasInstruction
     case verifyingKeyId
-    case zkAssetPolicy
     case secpParse
     case secpSign
     case secpVerify
@@ -81,7 +80,6 @@ enum NativeBridgeError: Error, Equatable {
         case -408: return .accountOnboardingBody
         case -409: return .aliasInstruction
         case -403: return .verifyingKeyId
-        case -404: return .zkAssetPolicy
         case -501: return .detachedTransactionScaffold
         case -502: return .detachedTransactionSignature
         case -503: return .canonicalJSON

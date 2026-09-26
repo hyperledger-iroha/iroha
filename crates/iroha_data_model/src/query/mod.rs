@@ -2300,7 +2300,7 @@ mod model {
 }
 impl CommittedTransaction {
     /// Selective exact Network input/output inclusion. The caller MUST first
-    /// authenticate this header, complete ExecutionCommitment, native NetworkId
+    /// authenticate this header, complete `ExecutionCommitment`, native `NetworkId`
     /// and four-validator context from its independently pinned finality root.
     /// This method does not authorize disclosing the selected record.
     #[must_use]

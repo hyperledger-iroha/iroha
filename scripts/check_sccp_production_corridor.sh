@@ -1609,9 +1609,9 @@ ensure_sccp_jvm_native_artifact() {
     esac
   fi
   SCCP_JVM_NATIVE_ARTIFACT="$target_dir/debug/$native_file"
-  SCCP_JVM_NATIVE_MANIFEST="$target_dir/sccp-jvm-native-abi23.json"
+  SCCP_JVM_NATIVE_MANIFEST="$target_dir/sccp-jvm-native-abi24.json"
   run_cmd cargo build --locked -p connect_norito_bridge --lib --target-dir "$target_dir"
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_abi23_artifact.py record \
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_artifact.py record \
     --artifact "$SCCP_JVM_NATIVE_ARTIFACT" --manifest "$SCCP_JVM_NATIVE_MANIFEST" \
     --source-root "$ROOT" --sdk c-jni --target "$host_triple"
   verify_sccp_jvm_native_artifact
@@ -1619,7 +1619,7 @@ ensure_sccp_jvm_native_artifact() {
 }
 
 verify_sccp_jvm_native_artifact() {
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_abi23_artifact.py verify \
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -I -S scripts/check_native_sdk_artifact.py verify \
     --artifact "$SCCP_JVM_NATIVE_ARTIFACT" --manifest "$SCCP_JVM_NATIVE_MANIFEST" \
     --source-root "$ROOT"
 }

@@ -1398,7 +1398,7 @@ fn access_set_from_hint_keys(
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("zk:election:") {
-            if rest.is_empty() || rest.contains('*') {
+            if !iroha_data_model::governance::is_valid_governance_selector_v1(rest) {
                 return None;
             }
             state_keys.insert(raw.to_owned());
@@ -1886,15 +1886,13 @@ where
         return set;
     }
     if let Some(instr) = any.downcast_ref::<zk::SubmitBallot>() {
-        // Write ciphertext history and nullifiers for this election
-        let id = instr.election_id();
-        set.add_write(format!("zk:election:{id}:ciphertexts"));
-        set.add_write(format!("zk:election:{id}:nullifiers"));
+        // The executor replaces the whole election record, including its ordered corpus.
+        set.add_write(format!("zk:election:{}", instr.election_id()));
         return set;
     }
     if let Some(instr) = any.downcast_ref::<zk::FinalizeElection>() {
-        // Write finalized tally for this election
-        set.add_write(format!("zk:election:{}:tally", instr.election_id()));
+        // Finalization also replaces that same election record.
+        set.add_write(format!("zk:election:{}", instr.election_id()));
         return set;
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
@@ -4904,18 +4902,65 @@ seiyaku DynamicAccessCounter {
         let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
             .expect("asset definition");
         let reads = vec![format!("zk_asset:{asset_def}")];
-        let writes = vec![
-            "zk:election:election-1:ciphertexts".to_owned(),
-            "zk:election:election-1:nullifiers".to_owned(),
-        ];
+        let writes = vec!["zk:election:election-1".to_owned()];
         let set = access_set_from_hint_keys(&reads, &writes, &[], &[])
             .expect("expected zk access set hints to normalize");
         assert!(set.read_keys.contains(&format!("zk_asset:{asset_def}")));
-        assert!(
-            set.write_keys
-                .contains("zk:election:election-1:ciphertexts")
+        assert!(set.write_keys.contains("zk:election:election-1"));
+        for retired in [
+            "zk:election:election-1:accepted_ballots",
+            "zk:election:election-1:tally",
+        ] {
+            assert!(access_set_from_hint_keys(&[], &[retired.to_owned()], &[], &[]).is_none());
+        }
+    }
+    #[test]
+    fn election_instructions_conflict_on_one_whole_record_key() {
+        let backend = "halo2/ipa";
+        let proof = iroha_data_model::proof::ProofAttachment::new_ref(
+            backend.into(),
+            iroha_data_model::proof::ProofBox::new(backend.into(), vec![1]),
+            iroha_data_model::proof::VerifyingKeyId::new(backend, "ballot-v1"),
         );
-        assert!(set.write_keys.contains("zk:election:election-1:nullifiers"));
+        let instructions: [InstructionBox; 3] = [
+            zk::CreateElection {
+                election_id: "election-1".to_owned(),
+                options: 2,
+                eligible_root: [0; 32],
+                start_ts: 1,
+                end_ts: 2,
+                vk_ballot: iroha_data_model::proof::VerifyingKeyId::new(backend, "ballot-v1"),
+                vk_tally: iroha_data_model::proof::VerifyingKeyId::new(backend, "tally-v1"),
+                domain_tag: "election-1".to_owned(),
+            }
+            .into(),
+            zk::SubmitBallot {
+                election_id: "election-1".to_owned(),
+                ciphertext: vec![2],
+                ballot_proof: proof.clone(),
+                nullifier: [3; 32],
+            }
+            .into(),
+            zk::FinalizeElection {
+                election_id: "election-1".to_owned(),
+                tally: vec![0, 0],
+                tally_proof: proof,
+            }
+            .into(),
+        ];
+        for instruction in &instructions {
+            let set = derive_from_instruction::<crate::state::StateView<'_>>(
+                instruction,
+                None,
+                &mut BTreeSet::new(),
+                0,
+                1,
+            );
+            assert_eq!(
+                set.write_keys,
+                BTreeSet::from(["zk:election:election-1".to_owned()]),
+            );
+        }
     }
     #[test]
     fn access_set_hints_accept_and_expand_authority_placeholders() {

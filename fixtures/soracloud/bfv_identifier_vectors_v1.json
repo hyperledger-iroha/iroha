@@ -1888,13 +1888,13 @@
       "blind_rotation_key_digest_hex": "9326b2c930fae171e1d9bed8c0e58113b9badb7e03feca1beab23df428625a3d",
       "sample_extraction_key_digest_hex": "2a5b602b85eb2130a9c960c3735a5d105cc75a575d0a6165a7f527edaea1a63d",
       "accumulator_digest_hex": "f6707a01a4593047d89c5e7c2aa47b241d422f63537af7e8595cdf819bac6e81",
-      "proof_public_input_schema_digest_hex": "f68487d6cd9de0eacf854ba3ae262991365ec199d46082ed0bc6809f0de7b161",
-      "prover_key_digest_hex": "878563dfd68e444af2cba561c8c8ee3bf2550b249f0cca179c8435ac0d59f6ed",
-      "prover_key_material_commitment_hex": "64607c85e35603fbf30bbae860d6041c97c50d168842f5fd14e00845e750c1c1",
+      "proof_public_input_schema_digest_hex": "1a0f72d4fcff19a0b418a4535d9d6dc709f6b2390eb999e4a5f870f99f668137",
+      "prover_key_digest_hex": "08b9aba43340a2293343a513feacba1ad0530658a66f3fe64a4a22c625d4950b",
+      "prover_key_material_commitment_hex": "25f167665256cbabf570360a4accbef3efec6ab479c1a0e86ee8fdc5d2d1c7fb",
       "verifier_key_digest_hex": "63c5755db74a73b47b9c4a38420a86f807c181bee9357eace19c235644a854ad",
       "verifier_key_material_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
       "vk_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
-      "expected_material_digest_hex": "f6a8ddd2b7068f5421b82f25dcc9bd95b013450fa858d47ca56191078766dcd9"
+      "expected_material_digest_hex": "b0eff8d92390aadfc6bf5d32f6a22a0034ca87d6d33150193b0c13c00d5948f9"
     },
     "bootstrap_refresh_vectors": [
       {

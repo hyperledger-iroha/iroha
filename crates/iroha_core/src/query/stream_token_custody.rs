@@ -2,8 +2,12 @@
 //!
 //! A height index selects the terminal control transition without decoding the full history.
 //! The selected revision, its adjacent revisions, the active record and their indexes must agree.
-//! These reads establish native control association; callers still own durable Kura/QC finality.
-use crate::state::{StateReadOnly, WorldReadOnly};
+//! These reads establish native control association. The current-block read additionally pairs
+//! that control with durable Kura/QC finality; signing still requires an executed native Check.
+use crate::{
+    query::signer_finality::{VerifiedSignerFinalityV1, verify_signer_finality_v1},
+    state::{StateReadOnly, StateView, WorldReadOnly},
+};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -32,13 +36,17 @@ pub enum StreamTokenCustodyControlErrorV1 {
     CorruptHistory,
     /// The requested block is absent from this exact committed State view.
     HeightUnavailable,
+    /// The requested height is not the current committed State height.
+    StaleHeight,
+    /// The current State block lacks matching durable Kura/QC finality.
+    FinalityUnavailable,
     /// Exact revision/digest CAS failed.
     Conflict,
     /// The finite normal or emergency revision capacity is exhausted.
     Capacity,
     /// A key/policy generation or enrollment sequence would roll back or revive a revoked key.
     Generation,
-    /// The existing independent hardware enrollment verifier rejected the signed record.
+    /// The independent enrollment verifier rejected the signed custody record.
     Enrollment,
 }
 impl std::fmt::Display for StreamTokenCustodyControlErrorV1 {
@@ -56,6 +64,28 @@ pub struct StreamTokenCustodyControlSnapshotV1 {
     pub state: SignerCustodyControlStateV1,
     /// Requested block coordinates paired with the selected native control digest.
     pub anchor: SignerCustodyAnchorV1,
+}
+
+/// Raw role-11 custody paired with finality of its current State block.
+///
+/// This has no wire form and grants no operation, Check, or stream-token signing authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamTokenCustodyBlockFinalityV1 {
+    custody: StreamTokenCustodyControlSnapshotV1,
+    block_finality: VerifiedSignerFinalityV1,
+}
+impl StreamTokenCustodyBlockFinalityV1 {
+    /// Borrow the raw custody row without granting token-signing authority.
+    #[must_use]
+    pub const fn custody(&self) -> &StreamTokenCustodyControlSnapshotV1 {
+        &self.custody
+    }
+
+    /// Exact same-State durable block and revision-4 Kura/QC finality.
+    #[must_use]
+    pub const fn block_finality(&self) -> VerifiedSignerFinalityV1 {
+        self.block_finality
+    }
 }
 
 #[derive(
@@ -467,5 +497,35 @@ pub fn read_stream_token_custody_control_at_v1(
             block_hash: *block_hash.as_ref(),
             state_digest: selected.index.digest,
         },
+    }))
+}
+
+/// Pair the current role-11 custody row with finality of the same committed State block.
+///
+/// This validates the provider binding and retained custody chain, then authenticates the exact
+/// current block against durable Kura/QC evidence. A missing row remains `None` only after block
+/// finality succeeds. This does not prove successful custody-transition execution, an operation
+/// completion, or a challenged Check, and cannot be used alone for token issuance.
+///
+/// # Errors
+/// Rejects stale heights, foreign bindings, corrupt history and absent or forked block finality.
+pub fn read_current_stream_token_custody_block_finality_v1(
+    state: &StateView<'_>,
+    binding: &SignerCustodyBindingV1,
+    height: u64,
+) -> Result<Option<StreamTokenCustodyBlockFinalityV1>, StreamTokenCustodyControlErrorV1> {
+    if height == 0 || usize::try_from(height).ok() != Some(state.block_hashes().len()) {
+        return Err(Error::StaleHeight);
+    }
+    let custody = read_stream_token_custody_control_at_v1(state, binding, height)?;
+    let block_hash = state
+        .block_hashes()
+        .get(state.block_hashes().len() - 1)
+        .ok_or(Error::HeightUnavailable)?;
+    let block_finality = verify_signer_finality_v1(state, height, *block_hash.as_ref())
+        .map_err(|_| Error::FinalityUnavailable)?;
+    Ok(custody.map(|custody| StreamTokenCustodyBlockFinalityV1 {
+        custody,
+        block_finality,
     }))
 }

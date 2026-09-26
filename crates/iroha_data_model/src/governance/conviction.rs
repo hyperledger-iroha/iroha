@@ -218,11 +218,34 @@ impl PlainConvictionPolicyV1 {
     pub fn weight(&self, amount: &Quantity, duration: u64) -> Result<u128, ConvictionErrorV1> {
         self.validate()?;
         let units = self.units(amount)?;
-        let base = integer_sqrt(units);
-        let factor = (u128::from(duration / self.conviction_step_blocks) + 1)
-            .min(u128::from(self.max_conviction));
-        base.checked_mul(factor).ok_or(ConvictionErrorV1::Overflow)
+        conviction_weight_from_units_v1(
+            units,
+            duration,
+            self.conviction_step_blocks,
+            self.max_conviction,
+        )
     }
+}
+
+/// Compute exact conviction weight from an asset's smallest units.
+///
+/// The caller must authenticate the election, asset scale, bond, ballot and proof separately.
+///
+/// # Errors
+/// Returns an invalid-policy error for a zero step or maximum, or an overflow error if the
+/// checked weight exceeds `u128`.
+pub fn conviction_weight_from_units_v1(
+    units: u128,
+    duration_blocks: u64,
+    step_blocks: u64,
+    max_conviction: u64,
+) -> Result<u128, ConvictionErrorV1> {
+    if step_blocks == 0 || max_conviction == 0 {
+        return Err(ConvictionErrorV1::InvalidPolicy);
+    }
+    let base = integer_sqrt(units);
+    let factor = (u128::from(duration_blocks / step_blocks) + 1).min(u128::from(max_conviction));
+    base.checked_mul(factor).ok_or(ConvictionErrorV1::Overflow)
 }
 
 /// Check the strict increase and nondecrease rules for an existing conviction position.

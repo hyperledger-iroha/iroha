@@ -53,7 +53,7 @@ fn revoked_generations_cannot_revive_through_policy_rotation_and_enrollment_sequ
         );
         next.binding.key_revision += 1;
         next.binding.public_key = key(14).public_key().clone();
-        next.binding.key_handle = "pkcs11:stream/key-2".into();
+        next.binding.key_handle = "software://sorafs/stream-token/key-2".into();
         next.attester_authority.key_revision += 1;
         next.attester_public_key = key(15).public_key().clone();
         instruction(
@@ -80,7 +80,7 @@ fn historical_key_reuse_and_key_or_policy_rollback_are_rejected_atomically() {
         let mut next = f.policy.clone();
         next.binding.key_revision = 2;
         next.binding.public_key = key(16).public_key().clone();
-        next.binding.key_handle = "pkcs11:stream/key-2".into();
+        next.binding.key_handle = "software://sorafs/stream-token/key-2".into();
         next.attester_authority.key_revision = 2;
         next.attester_public_key = key(17).public_key().clone();
         instruction(

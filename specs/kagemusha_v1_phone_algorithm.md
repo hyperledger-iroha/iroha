@@ -147,21 +147,43 @@ monetary authority. The pinned generic
 Halo2 ECC helper assumes a curve coefficient of zero and is unsuitable for
 P-256. A dedicated `a = -3` point and bounded ECDSA relation is present, but
 its full-width proof and recursive assertion binding remain unqualified.
-The current paired terminal relation also checks its supplied
-`hardware_terminal_commitment` for nonzero but does not yet derive it from the
-authenticated canonical terminal-body bytes. The staged terminal-body and
-durable-recovery helpers are not connected to the production recursive fold.
+The staged Apple original-assertion relation now composes exact two-key CBOR,
+canonical DER, the signed `S` and authenticator bytes, the SHA-derived P-256
+equation, and copy constraints from both signed secure indices and the Apple
+counter to passed state cells. The five-case original-assertion selection
+passes in both Pasta fields, including signed-index and DER mutations; the
+dedicated P-256 carry geometry now uses three 87-bit limbs. This helper is not
+yet called by the live
+monetary fold; complete Core subject, credential, issuer-policy, release and
+terminal links remain required before ordinary-app admission can open.
+A separate staged composition now feeds the same assigned signing subject and
+authenticator bytes through the available State, Guard, governed Apple policy,
+original assertion and P-256 relations. It is compile-checked as a helper,
+not yet proof-tested as one combined circuit; a coherent non-Bootstrap Apple
+State/Guard fixture and the missing issuer/terminal bindings are still needed.
+The source-staged paired outgoing terminal relation now derives journal and
+recovery digests through six appended SHA jobs, then derives the terminal-body
+hash from those results and assigned State, Guard and certificate cells. It
+requires exact outgoing bytes and the release-pinned manifest source. These
+jobs join the same typed recursive claim after State and Guard verification;
+the 32-job proof and fixed geometry still require compilation and real-proof
+qualification in both Pasta parities before production use.
 The recursive State proof now carries six public limbs for the outgoing
 preparation ID and two sealed-stream digests, and the native preparation ID
 uses a fixed, domain-separated pre-proof transcript. These are candidate
-commitments. An isolated terminal helper now opens the exact 475-byte
-preparation transcript and both bounded sealed streams against recursively
-verified State carriers, with both-parity mutation tests. The live terminal
-fold has a release-authenticated redemption-manifest source in its 83-cell
-terminal public column, but no room for these SHA jobs in its fixed claim
-geometry; it leaves `verified_preparation_id`
-absent. The ID cannot authorize a terminal outcome until the complete opening
-is installed and qualified in the live proof.
+commitments. An isolated terminal helper opens the exact 475-byte preparation
+transcript and both bounded sealed streams for SendSplit and RedeemSplit against
+recursively verified State carriers, with both-parity mutation tests. Core can
+export the six exact SHA preimages from a retained committed send or redemption
+candidate. A native committed-redemption test checks those six exporter messages
+against Core's retained digests. A source-staged genuine redemption diagnostic
+now carries a funded Core candidate through State, Guard, the 32-job claim and
+Terminal; its expensive paired proof has not yet compiled or run. The live
+terminal fold has a release-authenticated
+redemption-manifest source in its 83-cell terminal public column and includes
+the six appended jobs. Its compiled 32-job geometry, paired proof, release keys
+and physical backing remain unqualified. The ID cannot authorize a production
+terminal outcome until those checks pass.
 This is an unsatisfied proof obligation even for an OEM checkpoint profile;
 testnet execution must not be cited as proof of production hardware backing.
 
@@ -429,8 +451,11 @@ After the connected Pixel 6 moved to an Android 17 user build, it still
 advertised neither hardware single-use nor limited-use Keystore support, and
 did not advertise the hardware Identity Credential feature.
 Its embedded `eSE1` reader was present, but no access rule for the current
-applet AID was observed. This recheck does not establish that an applet is
-installed or that this app can select it. The concrete internal eSE service
+applet AID was observed. A fresh test-only Android 17 instrumentation probe
+reached the reader but `OPEN_LOGICAL_CHANNEL` returned
+`ACCESS_CONTROL_ENFORCER_DENIED`; it observed a StrongBox key but no hardware
+no-fork selection. This recheck does not establish that an applet is installed
+or that this app can select it. The concrete internal eSE service
 and physical acceptance contract is in
 [`kagemusha_pixel6_ese_service_contract_v1.md`](kagemusha_pixel6_ese_service_contract_v1.md).
 
@@ -457,9 +482,10 @@ scope and user experience must be qualified separately.
 
 ## Experimental testnet execution
 
-Keep testnet monetary top-up, offline peer-flow and redemption experiments
-available while hardware qualification proceeds. A testnet-only release may
-use an explicitly labeled experimental device adapter or structural certificate
+The testnet corridor must admit monetary top-up, offline peer-flow and
+redemption experiments while hardware qualification proceeds. A testnet-only
+release may use an explicitly labeled experimental device adapter or
+structural certificate
 to exercise end-to-end wallet, proof, transport and ledger behavior. Such
 evidence proves only the relations it actually checks; it must not set a
 hardware-qualified claim or be accepted by the production verifier. Bind the
@@ -482,11 +508,21 @@ unqualified observation. A Rust-only owner retains that concrete
 verifier and one process-local lane lineage. No app-facing native installation
 or durable monetary capability exists yet; the terminal hardware fold and
 monetary admission remain separate.
+Core now has a read-only projection of the original paired outgoing State
+proof and canonical public inputs from a retained, authenticated candidate.
+It re-verifies the pair and rejects released or stale operations. Method 14 of
+the native coordinator ABI now exports this projection by Core operation ID to
+Swift and Kotlin adapters, but stock builds have no installed qualified backend.
+The projection therefore does not make the phone observer or a testnet payment
+path operational by itself.
 On Pixel 6, a source-staged experimental collector binds a StrongBox signature,
 attestation challenge and app-private intent journal to the canonical selection
-frame and exact network, release, lane and counter inputs. Its latest source
-hardening still awaits the focused JVM and physical-device test rerun. It can
-exercise peer exchange and later online conflict detection, but the software
+frame and exact network, release, lane and counter inputs. Its focused Android
+collector suite passes 15 JVM tests; the connected Android 17 Pixel 6 confirms
+StrongBox signing while placing the one-use limit only in software-enforced
+attestation. A source-matched JNI/app package and device run remain pending. This
+collector cannot yet authorize peer value exchange or redemption; a separate
+exact-network experimental coordinator and release are required. The software
 use limit leaves no-fork unproven. Its raw observation carries an experimental
 profile and cannot be relabeled as hardware one-use evidence.
 The testnet phone probe can obtain a 460-byte frame directly from the Rust

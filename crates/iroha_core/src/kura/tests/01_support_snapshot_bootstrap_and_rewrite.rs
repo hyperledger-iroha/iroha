@@ -2016,6 +2016,227 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
     );
 }
 #[test]
+fn v2_finality_metadata_for_state_matches_full_read_without_body_io() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let stored_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let (full_header, full_artifact) = kura
+        .v2_finality_artifact_with_header(1)
+        .expect("read full finality")
+        .expect("finality exists");
+    kura.reset_canonical_query_reads_for_test();
+    let (header, metadata_artifact, receipt) = kura
+        .v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read State-bound metadata")
+        .expect("finality exists");
+    assert_eq!(header, full_header);
+    assert_eq!(metadata_artifact, full_artifact);
+    assert_eq!(receipt.height(), stored_receipt.height());
+    assert_eq!(receipt.block_hash(), stored_receipt.block_hash());
+    assert_eq!(receipt.context_id(), stored_receipt.context_id());
+    assert_eq!(receipt.subject(), stored_receipt.subject());
+    assert_eq!(receipt.certificate(), stored_receipt.certificate());
+    assert_eq!(receipt.artifact_hash(), stored_receipt.artifact_hash());
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_rejects_wrong_fork_network_and_receipt() {
+    let kura = Kura::blank_kura_for_testing();
+    let mut generator = DummyBlocks::new();
+    let blocks = vec![generator.next(), generator.next()];
+    for block in &blocks {
+        kura.store_block(Arc::clone(block)).expect("store block");
+    }
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    for artifact in &artifacts {
+        let receipt = kura
+            .store_v2_finality_artifact(artifact)
+            .expect("store finality");
+        assert_eq!(receipt.height(), artifact.height);
+    }
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            blocks[1].hash(),
+            blocks[0].header().prev_block_hash(),
+            artifacts[0].height_context.network_id,
+        ),
+        Err(Error::BlockHeightConflict { .. })
+    ));
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            2,
+            blocks[1].hash(),
+            None,
+            artifacts[1].height_context.network_id,
+        )
+        .is_err()
+    );
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            blocks[0].hash(),
+            blocks[0].header().prev_block_hash(),
+            test_network_id(b"wrong finality network"),
+        )
+        .is_err()
+    );
+    let (_, first, first_receipt) = kura
+        .v2_finality_metadata_for_state(
+            1,
+            blocks[0].hash(),
+            blocks[0].header().prev_block_hash(),
+            artifacts[0].height_context.network_id,
+        )
+        .unwrap()
+        .unwrap();
+    let (_, second, second_receipt) = kura
+        .v2_finality_metadata_for_state(
+            2,
+            blocks[1].hash(),
+            blocks[1].header().prev_block_hash(),
+            artifacts[1].height_context.network_id,
+        )
+        .unwrap()
+        .unwrap();
+    let verify_successor = |receipt: &KuraV2CommitReceipt| {
+        crate::sumeragi::v2::VerifiedHeightContext::successor(
+            second.height_context.clone(),
+            second.validator_set_pops.clone(),
+            &first,
+            receipt,
+            &first.validator_set_pops,
+        )
+    };
+    assert!(verify_successor(&first_receipt).is_ok());
+    assert!(verify_successor(&second_receipt).is_err());
+}
+#[test]
+fn v2_finality_metadata_for_state_accepts_evicted_body_without_reading_it() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    kura.evict_first_admission_body_for_testing(nonzero!(1_usize), block.hash())
+        .expect("evict body without removing signed metadata");
+    assert!(
+        kura.block_store
+            .lock()
+            .read_block_index(0)
+            .unwrap()
+            .is_evicted()
+    );
+    kura.reset_canonical_query_reads_for_test();
+    let result = kura
+        .v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read evicted-body metadata")
+        .expect("finality exists");
+    assert_eq!(result.1, artifact);
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_does_not_materialize_corrupt_inline_body() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let index = kura.block_store.lock().read_block_index(0).unwrap();
+    let mut data = fs::OpenOptions::new()
+        .write(true)
+        .open(blocks_dir.join(DATA_FILE_NAME))
+        .expect("open inline body data");
+    data.seek(SeekFrom::Start(index.start))
+        .expect("seek to body");
+    data.write_all(&[0xff]).expect("corrupt inline body");
+    data.sync_all().expect("persist corrupted test body");
+    drop(data);
+    kura.block_data.lock()[0].1 = None;
+    kura.reset_canonical_query_reads_for_test();
+    // Metadata continuity may be authenticated despite a corrupt local body.
+    // A target execution proof must still read and authenticate that body.
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read signed metadata only")
+        .is_some()
+    );
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_rejects_index_and_retained_wire_substitution() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    let index = kura.block_store.lock().read_block_index(0).unwrap();
+    kura.block_store
+        .lock()
+        .write_block_index(0, index.start, index.length + 1)
+        .expect("substitute index length");
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        ),
+        Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height: 1 })
+    ));
+    kura.block_store
+        .lock()
+        .write_block_index(0, index.start, index.length)
+        .expect("restore index length");
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained record");
+    let mut retained =
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("decode retained record");
+    retained.proposal_wire_hash = Hash::new(b"wrong proposal wire");
+    fs::write(&retained_path, retained.encode()).expect("substitute retained wire hash");
+    kura.reset_canonical_query_reads_for_test();
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        ),
+        Err(Error::V2FinalityPayloadHashMismatch { height: 1 })
+    ));
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
 fn block_store_read_only_finality_verifies_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();

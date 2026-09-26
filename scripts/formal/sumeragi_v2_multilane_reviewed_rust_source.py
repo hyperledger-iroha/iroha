@@ -324,6 +324,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         (
             "# kind\tname\thex\texpectation",
             "message\tquorum_certificate_merge_carrier\t",
+            "message\tquorum_certificate_transaction_commitments\t",
             "negative_message\texecution_commitment_merge_carrier_wrong_version\t",
             "negative_message\texecution_commitment_missing_merge_carrier_field\t",
         ),
@@ -333,6 +334,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         (
             'const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";',
             'name: "quorum_certificate_merge_carrier",',
+            'name: "quorum_certificate_transaction_commitments",',
             '"execution_commitment_merge_carrier_wrong_version",',
             '"execution_commitment_missing_merge_carrier_field",',
             "&options.output_dir.join(WIRE_FIXTURE_BASENAME),",
@@ -345,6 +347,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings()",
             "fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation()",
             '"quorum_certificate_merge_carrier",',
+            '"quorum_certificate_transaction_commitments",',
             '"execution_commitment_merge_carrier_wrong_version",',
             '"execution_commitment_missing_merge_carrier_field",',
         ),

@@ -3063,6 +3063,21 @@ const SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1;
 const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
   "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F";
 
+function parseSumeragiTransactionTreeCommitment(value, context) {
+  if (value === null) {
+    return null;
+  }
+  const record = assertExactSumeragiRecord(value, ["root", "leaf_count"], context);
+  return Object.freeze({
+    root: parseSumeragiHash(record.root, `${context}.root`),
+    leaf_count: parseSumeragiUnsigned(
+      record.leaf_count,
+      `${context}.leaf_count`,
+      { positive: true },
+    ),
+  });
+}
+
 function parseSumeragiExecutionCommitment(value, context) {
   const record = ensureRecord(value, context);
   const allowedFields = new Set([
@@ -3078,6 +3093,8 @@ function parseSumeragiExecutionCommitment(value, context) {
     "merge_carrier",
     "executed_block_wire_len",
     "executed_block_wire_hash",
+    "transaction_input_commitment",
+    "transaction_output_commitment",
   ]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
@@ -3087,6 +3104,8 @@ function parseSumeragiExecutionCommitment(value, context) {
     "kagemusha_top_up_root",
     "lane_finality_manifest",
     "merge_carrier",
+    "transaction_input_commitment",
+    "transaction_output_commitment",
   ]) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
       rejectType(`${context}.${field} is required`);
@@ -3189,6 +3208,22 @@ function parseSumeragiExecutionCommitment(value, context) {
       ),
     });
   }
+  const transactionInputCommitment = parseSumeragiTransactionTreeCommitment(
+    record.transaction_input_commitment,
+    `${context}.transaction_input_commitment`,
+  );
+  const transactionOutputCommitment = parseSumeragiTransactionTreeCommitment(
+    record.transaction_output_commitment,
+    `${context}.transaction_output_commitment`,
+  );
+  if (
+    transactionInputCommitment !== null &&
+    (transactionOutputCommitment === null ||
+      BigInt(transactionOutputCommitment.leaf_count) <
+        BigInt(transactionInputCommitment.leaf_count))
+  ) {
+    rejectRange(`${context}.transaction_output_commitment must cover every network input`);
+  }
   return Object.freeze({
     parent_state_root: parseSumeragiHash(
       record.parent_state_root,
@@ -3218,6 +3253,8 @@ function parseSumeragiExecutionCommitment(value, context) {
       record.executed_block_wire_hash,
       `${context}.executed_block_wire_hash`,
     ),
+    transaction_input_commitment: transactionInputCommitment,
+    transaction_output_commitment: transactionOutputCommitment,
   });
 }
 

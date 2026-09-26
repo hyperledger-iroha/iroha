@@ -1210,6 +1210,11 @@ function normalizeGovernanceU64(value, name) {
   return integer;
 }
 
+function asGovernanceU64JsonValue(value, name) {
+  const integer = normalizeGovernanceU64(value, name);
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
 function normalizeVerifyingKeyId(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -4766,19 +4771,53 @@ export function buildCastZkBallotInstruction(options) {
  */
 export function buildCastPlainBallotInstruction(options) {
   const source = assertPlainObject(options, "castPlainBallot");
+  const fields = ["referendumId", "owner", "amount", "durationBlocks", "direction"];
+  if (
+    Object.keys(source).length !== fields.length ||
+    fields.some((field) => !Object.prototype.hasOwnProperty.call(source, field))
+  ) {
+    fail(
+      V_CODE_INVALID_OBJECT,
+      `castPlainBallot must contain exactly ${fields.join(", ")}`,
+      "castPlainBallot",
+    );
+  }
   return {
     CastPlainBallot: {
-      referendum_id: normalizeGovernanceSelectorV1(
-        source.referendumId ?? source.referendum_id,
-        "referendumId",
-      ),
+      referendum_id: normalizeGovernanceSelectorV1(source.referendumId, "referendumId"),
       owner: normalizeAccountId(source.owner, "owner"),
       amount: asQuantity(source.amount, "amount"),
-      duration_blocks: asNonNegativeInteger(
-        source.durationBlocks ?? source.duration_blocks,
-        "durationBlocks",
-      ),
+      duration_blocks: asGovernanceU64JsonValue(source.durationBlocks, "durationBlocks"),
       direction: normalizeDirection(source.direction, "direction"),
+    },
+  };
+}
+
+/**
+ * Build the choice-free update for an existing public standalone ballot.
+ * A second cast is never an update, and the choice is read from the retained lock.
+ * @param {object} options
+ * @returns {{UpdatePlainConviction: object}}
+ */
+export function buildUpdatePlainConvictionInstruction(options) {
+  const source = assertPlainObject(options, "updatePlainConviction");
+  const fields = ["referendumId", "owner", "amount", "durationBlocks"];
+  if (
+    Object.keys(source).length !== fields.length ||
+    fields.some((field) => !Object.prototype.hasOwnProperty.call(source, field))
+  ) {
+    fail(
+      V_CODE_INVALID_OBJECT,
+      `updatePlainConviction must contain exactly ${fields.join(", ")}`,
+      "updatePlainConviction",
+    );
+  }
+  return {
+    UpdatePlainConviction: {
+      referendum_id: normalizeGovernanceSelectorV1(source.referendumId, "referendumId"),
+      owner: normalizeAccountId(source.owner, "owner"),
+      amount: asQuantity(source.amount, "amount"),
+      duration_blocks: asGovernanceU64JsonValue(source.durationBlocks, "durationBlocks"),
     },
   };
 }
@@ -5186,9 +5225,6 @@ export function buildRegisterZkAssetInstruction(options) {
       "unshieldVerifyingKey",
       "vkUnshield",
       "vk_unshield",
-      "shieldVerifyingKey",
-      "vkShield",
-      "vk_shield",
     ]),
     "registerZkAsset",
   );
@@ -5201,19 +5237,9 @@ export function buildRegisterZkAssetInstruction(options) {
     source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
     "registerZkAsset.vkUnshield",
   );
-  const vkShield = normalizeVerifyingKeyId(
-    source.shieldVerifyingKey ?? source.vkShield ?? source.vk_shield,
-    "registerZkAsset.vkShield",
-  );
-  if (vkShield !== null && vkUnshield === null) {
-    throw new TypeError(
-      "registerZkAsset.vkShield requires vkUnshield so shielded funds remain redeemable",
-    );
-  }
   const payload = {
     asset: assertString(asset, "registerZkAsset.asset"),
     vk_unshield: vkUnshield,
-    vk_shield: vkShield,
   };
   return {
     zk: {

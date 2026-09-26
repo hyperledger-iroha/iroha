@@ -720,6 +720,26 @@ required. Earlier evidence remains in the
    `2f + 1` validator quorums, signed RS16 availability, authenticated round and
    context identity, durable-before-signing, deterministic validation and
    canonical exactly-once application. Observers cannot supply votes.
+8. **The asynchronous queue is a source, not a vote.** A leader may choose a
+   bounded subset of locally available transactions and complete admission
+   inputs. Its signed proposal fixes their order and exact bytes. Replicas
+   validate that proposal against authenticated protocol and committed State,
+   without requiring the same local queue contents or arrival order. A missing
+   local certificate or held Queue owner must not indefinitely block unrelated
+   eligible work. Proposal sizing must leave every accepted item a reachable
+   carrier opportunity. The current global FIFO predecessor cuts still need
+   review against this rule; removing them requires tests for route closure,
+   same-account economics, reservation release and restart.
+
+The bounded leader sampler now advances across local queue windows when an
+unadmitted QueuePlan prefix exceeds `max_queue_scan`. It resets on a new
+committed parent or physical queue reorder, and stops at canonical QueuePlan,
+selected, transitioning or durably reserved FIFO owners. A scan with unvisited entries wakes the
+leader for another bounded turn. The Core regression selects ready work behind
+three unadmitted claims with a one-item scan limit, then checks that a new
+committed parent reconsiders the earlier claim. This is scoped queue-selection
+evidence; the full network fault campaign and a committed-close transition for
+the skipped claim remain required.
 
 Protocol and storage changes may break pre-release compatibility. Keep one
 explicit canonical Norito layout and reject obsolete inputs. Intentional

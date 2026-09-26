@@ -152,6 +152,18 @@ fn catalog_fixture(invalid: InvalidMember) -> (State, Vec<iroha_crypto::KeyPair>
             .insert(key.public_key().to_string(), vec![id]);
     }
     world.commit();
+    if matches!(invalid, InvalidMember::None) {
+        for key in &keys {
+            let peer = PeerId::new(key.public_key().clone());
+            assert!(state.world.view().peers().iter().any(|p| p == &peer));
+            assert!(peer_has_live_consensus_key_for_lane(
+                &state.world.view(),
+                &peer,
+                3,
+                LaneId::new(5),
+            ));
+        }
+    }
     (state, keys)
 }
 

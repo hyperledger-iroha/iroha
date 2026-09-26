@@ -699,6 +699,200 @@ mod tests {
         );
     }
     #[test]
+    fn direct_update_plain_conviction_golden_is_canonical() {
+        use base64::Engine as _;
+        use std::io::Write as _;
+
+        let value = UpdatePlainConviction {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: 2_000_u64.into(),
+            duration_blocks: 200,
+        };
+        let (bare_payload, header_flags) = norito::codec::encode_with_header_flags(&value);
+        let concrete_frame = norito::core::frame_bare_with_header_flags::<UpdatePlainConviction>(
+            &bare_payload,
+            header_flags,
+        )
+        .expect("frame direct conviction update");
+        let concrete_decoded: UpdatePlainConviction =
+            norito::decode_from_bytes(&concrete_frame).expect("decode direct conviction frame");
+        assert_eq!(concrete_decoded, value);
+        assert_eq!(
+            norito::core::to_bytes(&concrete_decoded).expect("re-encode direct conviction frame"),
+            concrete_frame
+        );
+
+        let boxed: InstructionBox = value.clone().into();
+        let (wire_id, registered_frame) =
+            crate::isi::framed_instruction_payload(&boxed).expect("registered direct instruction");
+        assert_eq!(
+            wire_id,
+            "iroha.instruction.v1::governance::UpdatePlainConviction"
+        );
+        assert_eq!(registered_frame, concrete_frame);
+        let registered_decoded = crate::isi::decode_instruction_from_pair(wire_id, &concrete_frame)
+            .expect("decode registered direct instruction");
+        assert_eq!(
+            registered_decoded
+                .as_any()
+                .downcast_ref::<UpdatePlainConviction>()
+                .expect("direct instruction type"),
+            &value
+        );
+
+        let (instruction_box_pair, pair_flags) = norito::codec::encode_with_header_flags(&boxed);
+        assert_eq!(pair_flags, header_flags);
+        let pair_decoded = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+            let (decoded, used) = InstructionBox::decode_from_slice(&instruction_box_pair)
+                .expect("decode bare InstructionBox pair");
+            assert_eq!(used, instruction_box_pair.len());
+            decoded
+        };
+        assert_eq!(
+            pair_decoded
+                .as_any()
+                .downcast_ref::<UpdatePlainConviction>()
+                .expect("bare pair direct instruction"),
+            &value
+        );
+        let (reencoded_pair, reencoded_pair_flags) =
+            norito::codec::encode_with_header_flags(&pair_decoded);
+        assert_eq!(reencoded_pair_flags, pair_flags);
+        assert_eq!(reencoded_pair, instruction_box_pair);
+
+        let standalone_instruction_box_frame = norito::core::frame_bare_with_header_flags::<
+            InstructionBox,
+        >(&instruction_box_pair, pair_flags)
+        .expect("frame standalone InstructionBox");
+        let standalone_decoded: InstructionBox =
+            norito::decode_from_bytes(&standalone_instruction_box_frame)
+                .expect("decode standalone InstructionBox");
+        assert_eq!(
+            standalone_decoded
+                .as_any()
+                .downcast_ref::<UpdatePlainConviction>()
+                .expect("standalone direct instruction"),
+            &value
+        );
+        assert_eq!(
+            norito::core::to_bytes(&standalone_decoded).expect("re-encode standalone box"),
+            standalone_instruction_box_frame
+        );
+
+        assert!(
+            crate::isi::decode_instruction_from_pair(
+                std::any::type_name::<UpdatePlainConviction>(),
+                &concrete_frame
+            )
+            .is_err(),
+            "Rust type name is not a decode alias"
+        );
+        let mut trailing_frame = concrete_frame.clone();
+        trailing_frame.push(0);
+        assert!(
+            crate::isi::decode_instruction_from_pair(wire_id, &trailing_frame).is_err(),
+            "trailing concrete frame byte must be rejected"
+        );
+        let mut trailing_pair = instruction_box_pair.clone();
+        trailing_pair.push(0);
+        let _guard = norito::core::DecodeFlagsGuard::enter(pair_flags);
+        assert!(
+            InstructionBox::decode_from_slice(&trailing_pair).is_err(),
+            "trailing InstructionBox pair byte must be rejected"
+        );
+        drop(_guard);
+        assert_legacy_instruction_payload_rejected(
+            std::any::type_name::<UpdatePlainConviction>(),
+            &CastPlainBallot {
+                referendum_id: value.referendum_id.clone(),
+                owner: value.owner.clone(),
+                amount: value.amount.clone(),
+                duration_blocks: value.duration_blocks,
+                direction: 1,
+            },
+        );
+
+        let schema_name = <UpdatePlainConviction as norito::NoritoSchema>::frame_name();
+        assert_eq!(
+            schema_name,
+            "iroha_data_model::isi::governance::UpdatePlainConviction"
+        );
+        let expected = norito::json!({
+            "version": 1,
+            "inputs": {
+                "referendum_id": (value.referendum_id.clone()),
+                "owner": (value.owner.to_string()),
+                "amount": (value.amount.to_string()),
+                "duration_blocks": (value.duration_blocks),
+            },
+            "wire_id": wire_id,
+            "concrete_schema_name": schema_name,
+            "concrete_schema_hash": (hex::encode(
+                norito::schema::identity::frame_hash::<UpdatePlainConviction>()
+            )),
+            "header_flags": header_flags,
+            "framed_instruction_base64": (base64::engine::general_purpose::STANDARD
+                .encode(&concrete_frame)),
+            "framed_instruction_len": (u64::try_from(concrete_frame.len())
+                .expect("direct conviction frame length fits u64")),
+            "bare_payload_hex": (hex::encode(&bare_payload)),
+            "concrete_frame_hex": (hex::encode(&concrete_frame)),
+            "instruction_box_pair_hex": (hex::encode(&instruction_box_pair)),
+            "standalone_instruction_box_frame_hex": (hex::encode(
+                &standalone_instruction_box_frame
+            )),
+        });
+        let canonical = format!(
+            "{}\n",
+            norito::json::to_string_pretty(&expected).expect("render direct conviction golden")
+        );
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("canonical repository root");
+        if std::env::var("IROHA_WRITE_DIRECT_CONVICTION_GOLDEN_V1")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            let target = repo_root.join("target");
+            assert!(
+                target
+                    .symlink_metadata()
+                    .expect("repository target directory")
+                    .file_type()
+                    .is_dir(),
+                "golden export target must be a real repository directory"
+            );
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(target.join("update_plain_conviction_instruction_v1.json"))
+                .expect("fresh target-only direct conviction golden output");
+            output
+                .write_all(canonical.as_bytes())
+                .expect("write direct conviction golden output");
+            output
+                .sync_all()
+                .expect("flush direct conviction golden output");
+            return;
+        }
+        let fixture_path = repo_root
+            .join("fixtures/governance/plain_v1/update_plain_conviction_instruction_v1.json");
+        let fixture = std::fs::read_to_string(fixture_path)
+            .expect("read checked-in direct conviction golden");
+        let decoded: norito::json::Value =
+            norito::json::from_str(&fixture).expect("decode direct conviction golden JSON");
+        assert_eq!(decoded, expected);
+        assert_eq!(
+            fixture, canonical,
+            "direct conviction golden bytes are canonical"
+        );
+    }
+
+    #[test]
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {
             contract_address: contract_address(),

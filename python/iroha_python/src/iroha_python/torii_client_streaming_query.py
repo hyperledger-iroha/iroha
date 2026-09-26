@@ -283,6 +283,16 @@ def create_torii_client_streaming_query_mixin(
                             _set_header(final_headers, name, value)
                     if not allow_resume:
                         _remove_header(final_headers, "Last-Event-ID")
+                        session_headers = getattr(self._session, "headers", {})
+                        if not isinstance(session_headers, Mapping):
+                            raise TypeError("SSE Session.headers must be a mapping")
+                        if any(
+                            str(name).lower() == "last-event-id"
+                            for name in session_headers
+                        ):
+                            raise ValueError(
+                                f"{path} rejects ambient Session.headers Last-Event-ID"
+                            )
                     _set_header(final_headers, "Accept", "text/event-stream")
                     if should_resume and active_last_id:
                         _set_header(final_headers, "Last-Event-ID", active_last_id)
@@ -310,6 +320,7 @@ def create_torii_client_streaming_query_mixin(
                             timeout=timeout,
                             allow_retry=False,
                             allow_redirects=False,
+                            _headers_are_final=True,
                         )
                     except requests.RequestException as exc:
                         prepare_retry(exc)

@@ -147,6 +147,10 @@ pub struct FinalPromotionExpireV1 {
 }
 
 /// Sole native mutation surface; custody management and operation rights are separate.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-15 Check and Complete stay inline in the signed canonical V1 action; boxing changes Norito and schema"
+)]
 #[derive(
     Clone,
     Debug,

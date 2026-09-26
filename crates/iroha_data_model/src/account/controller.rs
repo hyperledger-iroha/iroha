@@ -331,8 +331,11 @@ impl MultisigPolicy {
         }
         // SAFETY: pointer owns exactly Layout::array::<MultisigMember>(count),
         // and each push initializes one slot without exceeding that capacity.
-        let mut members =
-            unsafe { Vec::from_raw_parts(pointer.cast::<MultisigMember>(), 0, self.members.len()) };
+        let member_pointer = core::ptr::NonNull::new(pointer)
+            .expect("the allocation pointer was checked non-null")
+            .cast::<MultisigMember>()
+            .as_ptr();
+        let mut members = unsafe { Vec::from_raw_parts(member_pointer, 0, self.members.len()) };
         for member in &self.members {
             members.push(MultisigMember {
                 public_key: member.public_key.try_clone_for_admission()?,

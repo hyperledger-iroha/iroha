@@ -313,7 +313,7 @@ impl NexusCatalogTransitionV1 {
 impl NexusRuntimeCatalogV1 {
     /// Supported layout version.
     pub const VERSION: u8 = 1;
-    /// Protected state key; a direct user SetParameter for this key must be rejected by Core.
+    /// Protected state key; a direct user `SetParameter` for this key must be rejected by Core.
     pub const PARAMETER_ID_STR: &'static str = "nexus_runtime_catalog_v1";
 
     /// Validate the canonical cumulative overlay; this does not authenticate state origin.

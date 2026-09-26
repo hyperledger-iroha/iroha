@@ -98,13 +98,15 @@ state_test! { sync native_transport_rejects_changed_source_and_fails_stop_on_act
     let lane = &observed.contexts()[0];let local = lane.frozen().committee[0].clone();
     let guard = ConsensusOutputGuard::isolated();
     let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state),Arc::clone(&guard),local.clone(),nonzero!(1_usize));
-    for change in 0..4 {
+    for change in 0..6 {
         let mut packet = native_transport_packet_for_test(&fixture,lane);
         match change {
             0 => packet.canonical_bytes[0] ^= 1,
             1 => packet.destinations.swap(0,1),
             2 => {if let iroha_data_model::block::lane_consensus::LaneMessageV1::TimeoutVote(vote) = &mut packet.envelope.message {vote.share.signature[0] ^= 1;}packet.canonical_bytes = norito::encode_canonical(&packet.envelope).unwrap();},
             3 => {packet.envelope.version += 1;packet.canonical_bytes = norito::encode_canonical(&packet.envelope).unwrap();},
+            4 => {packet.canonical_bytes.pop().unwrap();},
+            5 => {packet.canonical_bytes.push(0);},
             _ => unreachable!(),
         }
         let bytes = packet.canonical_bytes.clone();

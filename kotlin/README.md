@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-23 `connect_norito_bridge`
+Account and public-key admission requires the ABI-24 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -20,6 +20,17 @@ I105 strings without surrounding whitespace. For host tests, set
 `IROHA_NATIVE_LIBRARY_PATH` to the absolute directory containing the freshly
 built bridge. Android packages the bridge through the generated native artifact
 pipeline described in `CLAUDE.md`.
+
+`UpdatePlainConvictionInstruction` exposes the public standalone ballot's
+choice-free conviction update to Kotlin and Java callers. It emits the registered
+`iroha.instruction.v1::governance::UpdatePlainConviction` Norito frame with exactly
+`referendum_id`, `owner`, `amount`, and `duration_blocks`. Construction and
+transaction encoding reject direction fields, noncanonical selectors, account
+addresses, quantities, durations, and malformed frames. The focused
+`UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
+execution still requires a same-source ABI-24 native bridge for account
+admission. This SDK slice does not establish Rust fixture parity or complete
+private standalone elections.
 
 ## Artifacts
 
@@ -375,7 +386,7 @@ uncertain obligations. Acknowledged history is not charged against a lifetime op
 
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
-It checks the complete ABI-23 inventory and rejects substituted response bindings;
+It checks the complete ABI-24 inventory and rejects substituted response bindings;
 missing JNI or an absent qualified native coordinator fails closed.
 `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
 wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
@@ -452,7 +463,7 @@ val request = ValidationFeeHijiriQuoteRequestV1(accountId, qualifyingTransferCou
 val quote = transport.postValidationFeeHijiriQuote(request, canonicalAuth).join()
 ```
 
-This operation requires `libconnect_norito_bridge` ABI 23 and an HTTPS Torii
+This operation requires `libconnect_norito_bridge` ABI 24 and an HTTPS Torii
 base URL. It signs the exact bounded Norito request with `Cache-Control: no-store`,
 requires a private, non-stored, uncompressed `application/x-norito` response,
 and exposes the typed projection only after native canonical decode,
@@ -1066,7 +1077,7 @@ also requires every runtime group in the corresponding Gradle JUnit reports;
 skipped or missing groups cannot qualify the phase.
 
 The release corridor accepts `java-source-kotlin` as its sole Java-consumer
-phase. It builds and authenticates the host ABI-23 library, runs both consumers,
+phase. It builds and authenticates the host ABI-24 library, runs both consumers,
 and rechecks native identity afterward. This is host execution of the Android
 consumer classpath; Android device/native packaging qualification remains a
 separate release requirement. No separate Java SDK implementation is produced.

@@ -9787,6 +9787,25 @@ pub struct SorafsNativeTransactionSignerBindings {
     /// Orderbook transaction signer binding.
     pub orderbook: Option<SorafsNativeTransactionSignerBinding>,
 }
+/// Finite process-shared admission for private signer-journal inventory scans.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsSignerJournalInventory {
+    /// Concurrent requested resident allocation bytes, including scan and retained paths.
+    pub resident_bytes: Bytes,
+    /// Concurrent logical directory and metadata probes; not physical disk bytes.
+    pub metadata_probes: u64,
+    /// Concurrent retained path, scan and receipt file descriptors.
+    pub open_handles: u32,
+}
+impl Default for SorafsSignerJournalInventory {
+    fn default() -> Self {
+        Self {
+            resident_bytes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES,
+            metadata_probes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_METADATA_PROBES,
+            open_handles: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES,
+        }
+    }
+}
 /// Embedded SoraFS storage configuration (Torii-owned).
 #[derive(Debug, Clone)]
 pub struct SorafsStorage {
@@ -9802,6 +9821,8 @@ pub struct SorafsStorage {
     pub max_parallel_fetches: usize,
     /// Maximum number of pinned manifests accepted before back-pressure.
     pub max_pins: usize,
+    /// One configured inventory resource pool shared by all SoraFS signer purposes.
+    pub signer_journal_inventory: SorafsSignerJournalInventory,
     /// Periodic Proof-of-Retrievability sampling cadence (seconds).
     pub por_sample_interval_secs: u64,
     /// Maximum PDP segments that one governed challenge may sample.
@@ -10678,6 +10699,7 @@ impl_default!(SorafsStorage => {
             max_capacity_bytes: defaults::sorafs::storage::MAX_CAPACITY_BYTES,
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
+            signer_journal_inventory: SorafsSignerJournalInventory::default(),
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,

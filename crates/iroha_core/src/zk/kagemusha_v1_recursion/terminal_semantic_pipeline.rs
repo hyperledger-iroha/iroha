@@ -1,4 +1,4 @@
-//! Shared Terminal semantic assignment and its complete ordinary SHA queue.
+//! Shared Terminal semantic assignment and its complete outgoing SHA queue.
 //!
 //! Production recursion and non-authorizing planning use the same assigned cells and ordered
 //! transcript construction. The caller must still verify candidate and Guard proofs, fold all
@@ -56,7 +56,7 @@ pub(super) struct TerminalSemanticAssignmentV1<F: KagemushaPoseidonFieldV1> {
     pub(super) public_cells: Vec<AssignedValue<F>>,
     pub(super) history_cells: Vec<AssignedValue<F>>,
     pub(super) assigned_terminal_guard: KagemushaAssignedGuardBundleV1<F>,
-    /// SHA-derived and Guard-linked sources retained for the future durable prepared opening.
+    /// SHA-derived and Guard-linked sources retained for the outgoing durable opening.
     pub(super) prepared_source_cells: KagemushaTerminalPreparedSourceCellsV1<F>,
     pub(super) candidate_instances: Vec<Vec<AssignedValue<F>>>,
     pub(super) sha_jobs: PastaSha256JobsV1<F>,
@@ -473,17 +473,17 @@ fn terminal_prepared_candidate_bindings_v1<F: KagemushaPoseidonFieldV1>(
     if candidate.len()
         != state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count()
     {
-        return Err("prepared send candidate has wrong fixed public shape".to_owned());
+        return Err("prepared outgoing candidate has wrong fixed public shape".to_owned());
     }
     let digest = |offset: usize| -> Result<DigestV1, String> {
         let mut bytes = [0_u8; 32];
         let limbs = candidate
             .get(offset..offset + 2)
-            .ok_or_else(|| "prepared send candidate digest offset is absent".to_owned())?;
+            .ok_or_else(|| "prepared outgoing candidate digest offset is absent".to_owned())?;
         for (index, limb) in limbs.iter().enumerate() {
             let encoded = fe_to_biguint(limb).to_bytes_le();
             if encoded.len() > 16 {
-                return Err("prepared send candidate digest limb exceeds u128".to_owned());
+                return Err("prepared outgoing candidate digest limb exceeds u128".to_owned());
             }
             bytes[index * 16..index * 16 + encoded.len()].copy_from_slice(&encoded);
         }
@@ -508,17 +508,13 @@ fn require_paired_prepared_candidate_bindings_v1(
     Ok(eq)
 }
 
-/// Non-authorizing paired plan for the original Terminal queue plus all six send openings.
+/// Non-authorizing paired plan for the original Terminal queue plus all six outgoing openings.
 ///
 /// `active_job_block_counts` is the shard/claim work for the active logical messages;
 /// `capacity_job_block_counts` records the fixed bounded geometry the terminal consumer must
 /// constrain. The two may differ for short sealed streams. This plan grants no authority until
 /// the same assigned queue is bound to a recursively verified claim in both parities.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "full send claim is not installed")
-)]
-pub(crate) struct TerminalPreparedSendShaPlanV1 {
+pub(crate) struct TerminalPreparedOutgoingShaPlanV1 {
     pub(crate) eq_messages: Vec<Vec<u8>>,
     pub(crate) ep_messages: Vec<Vec<u8>>,
     pub(crate) active_job_block_counts: Vec<u32>,
@@ -531,9 +527,43 @@ pub(crate) struct TerminalPreparedSendShaPlanV1 {
 /// This produces the typed claim's preimages and prepared-intent carriers from both candidate
 /// columns. The Terminal consumer must authenticate the generated proof, both complete histories
 /// and the reciprocal carrier tail against its own queue.
+#[cfg(test)]
 pub(crate) fn plan_terminal_semantic_sha_v1(
     inputs: TerminalSemanticPlanInputsV1<'_>,
 ) -> Result<TerminalSemanticShaPlanV1, String> {
+    capture_terminal_sha_v1(inputs, false).map(|(semantic, _)| semantic)
+}
+
+/// Capture the exact assigned 32-job outgoing queue without granting proof authority.
+/// The live Terminal circuit must independently assign and authenticate the same jobs.
+pub(crate) fn plan_terminal_outgoing_sha_v1(
+    inputs: TerminalSemanticPlanInputsV1<'_>,
+) -> Result<TerminalPreparedOutgoingShaPlanV1, String> {
+    let plan = capture_terminal_sha_v1(inputs, true)?
+        .1
+        .ok_or_else(|| "terminal outgoing SHA queue was not assigned".to_owned())?;
+    if plan.active_job_block_counts.len() != 32
+        || plan.capacity_job_block_counts.len() != 32
+        || plan
+            .active_job_block_counts
+            .iter()
+            .any(|blocks| *blocks == 0)
+    {
+        return Err("terminal outgoing SHA plan has incomplete bounded geometry".to_owned());
+    }
+    Ok(plan)
+}
+
+fn capture_terminal_sha_v1(
+    inputs: TerminalSemanticPlanInputsV1<'_>,
+    outgoing: bool,
+) -> Result<
+    (
+        TerminalSemanticShaPlanV1,
+        Option<TerminalPreparedOutgoingShaPlanV1>,
+    ),
+    String,
+> {
     inputs.public.validate()?;
     validate_enabled_hardware_profiles_v1(inputs.enabled_hardware_profiles)?;
     validate_terminal_nested_public_shape_v1(
@@ -579,7 +609,16 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         parity_inputs: &TerminalSemanticPlanParityV1<'_, C>,
         parity: KagemushaPastaParityV1,
         guard_protocols: [DigestV1; 2],
-    ) -> Result<(Vec<Vec<u8>>, Vec<u32>, TerminalPreparedCandidateBindingsV1), String>
+        outgoing: bool,
+    ) -> Result<
+        (
+            Vec<Vec<u8>>,
+            Vec<u32>,
+            TerminalPreparedCandidateBindingsV1,
+            Option<Vec<PastaSha256PlanMessageV1>>,
+        ),
+        String,
+    >
     where
         C: CurveAffineExt,
         C::Base: BigPrimeField,
@@ -627,7 +666,7 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
         // helper nor through the converted candidate helpers. Drop its graph before this one.
         #[cfg(test)]
         let legacy = tests::legacy_semantic_snapshot::<C>(semantic_inputs)?;
-        let assignment =
+        let mut assignment =
             assign_terminal_semantic_pipeline_v1(&mut builder, &range, semantic_inputs)?;
         #[cfg(test)]
         if legacy
@@ -673,19 +712,52 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
                 "terminal SHA compression inventory differs from its assigned queue".to_owned(),
             );
         }
-        Ok((messages, blocks, prepared_candidate_bindings))
+        drop(claims);
+        let outgoing_jobs = if outgoing {
+            // The planner has no nested proof authority. It assigns the same candidate cells
+            // only to extract exact private preimages; the live circuit separately verifies
+            // State and Guard before it can consume the six appended jobs.
+            let mut sources = assignment.prepared_source_cells;
+            install_verified_candidate_semantic_carriers_v1(
+                &mut sources,
+                assignment.candidate_instances.first().ok_or_else(|| {
+                    "terminal outgoing plan lacks its State candidate column".to_owned()
+                })?,
+            )?;
+            let opening =
+                KagemushaAuthenticatedTerminalRecoveryOpeningV1::from_verified_assigned_sources_v1(
+                    sources,
+                    &assignment.assigned_terminal_guard,
+                    inputs.private_transition.outgoing_sealed_streams.as_ref(),
+                )?;
+            constrain_outgoing_terminal_recovery_opening_v1(
+                builder.main(0),
+                &range,
+                &mut assignment.sha_jobs,
+                Some(&opening),
+            )?;
+            if assignment.sha_jobs.typed_claim_jobs()?.len() != 32 {
+                return Err("terminal outgoing plan lacks its complete 32-job queue".to_owned());
+            }
+            Some(assignment.sha_jobs.canonical_plan_messages()?)
+        } else {
+            None
+        };
+        Ok((messages, blocks, prepared_candidate_bindings, outgoing_jobs))
     }
-    let (eq_messages, eq_blocks, eq_prepared) = half(
+    let (eq_messages, eq_blocks, eq_prepared, eq_outgoing) = half(
         &inputs,
         &inputs.eq,
         KagemushaPastaParityV1::Eq,
         guard_protocols,
+        outgoing,
     )?;
-    let (ep_messages, ep_blocks, ep_prepared) = half(
+    let (ep_messages, ep_blocks, ep_prepared, ep_outgoing) = half(
         &inputs,
         &inputs.ep,
         KagemushaPastaParityV1::Ep,
         guard_protocols,
+        outgoing,
     )?;
     let prepared_candidate_bindings =
         require_paired_prepared_candidate_bindings_v1(eq_prepared, ep_prepared)?;
@@ -700,39 +772,51 @@ pub(crate) fn plan_terminal_semantic_sha_v1(
             "terminal paired semantic SHA queues have different job/block shapes".to_owned(),
         );
     }
-    Ok(TerminalSemanticShaPlanV1 {
+    let semantic = TerminalSemanticShaPlanV1 {
         eq_messages,
         ep_messages,
         job_block_counts: eq_blocks,
         prepared_candidate_bindings,
-    })
+    };
+    let outgoing_plan = match (eq_outgoing, ep_outgoing) {
+        (Some(eq), Some(ep)) => Some(plan_terminal_prepared_outgoing_sha_v1(
+            &semantic,
+            &eq,
+            &ep,
+            inputs.public.operation,
+        )?),
+        (None, None) => None,
+        _ => return Err("terminal outgoing Eq/Ep assignment differs".to_owned()),
+    };
+    Ok((semantic, outgoing_plan))
 }
 
-/// Validate the six send-opening jobs appended to the exact original Terminal SHA queues.
+/// Validate the six outgoing-opening jobs appended to the exact original Terminal SHA queues.
 ///
 /// `eq_jobs` and `ep_jobs` must be exported from the respective assigned queues with
 /// `PastaSha256JobsV1::canonical_plan_messages`. This host plan checks ordering, active lengths,
 /// fixed capacities, selected final blocks, parity, and the three prepared-intent digests carried
-/// by the paired State candidates. It exports only active logical messages for the existing typed
-/// shard generator. It does not authenticate an assigned queue or enable
-/// the live 26-job consumer; that requires the same bounded cells to be constrained against the
-/// recursive claim after candidate and Guard verification. TODO: qualify that complete k=16
-/// relation and its release keys before any production use.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "full send claim is not installed")
-)]
+/// by the paired State candidates. It exports only active logical messages for the typed shard
+/// generator. It does not authenticate an assigned queue: the live circuit must constrain the
+/// same bounded cells against the recursive claim after candidate and Guard verification.
+/// TODO: qualify the complete k=16 relation and its release keys before production use.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn plan_terminal_prepared_send_sha_v1(
+pub(crate) fn plan_terminal_prepared_outgoing_sha_v1(
     semantic: &TerminalSemanticShaPlanV1,
     eq_jobs: &[PastaSha256PlanMessageV1],
     ep_jobs: &[PastaSha256PlanMessageV1],
-) -> Result<TerminalPreparedSendShaPlanV1, String> {
+    operation: KagemushaOperationV1,
+) -> Result<TerminalPreparedOutgoingShaPlanV1, String> {
     use super::super::{terminal_body_commitment, terminal_durable_commitments as durable};
     use sha2::{Digest as _, Sha256};
 
     const ORIGINAL_JOBS: usize = 26;
     const OPENING_JOBS: usize = 6;
+    let operation_tag = match operation {
+        KagemushaOperationV1::SendSplit => 2,
+        KagemushaOperationV1::RedeemSplit => 4,
+        _ => return Err("prepared outgoing SHA plan requires an outgoing operation".to_owned()),
+    };
     if semantic.eq_messages.len() != ORIGINAL_JOBS
         || semantic.ep_messages.len() != ORIGINAL_JOBS
         || semantic.job_block_counts.len() != ORIGINAL_JOBS
@@ -740,24 +824,24 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
         || ep_jobs.len() != eq_jobs.len()
     {
         return Err(
-            "prepared send SHA plan needs the original 26 jobs and six openings".to_owned(),
+            "prepared outgoing SHA plan needs the original 26 jobs and six openings".to_owned(),
         );
     }
 
     let blocks = |length: usize| -> Result<usize, String> {
         let suffix = canonical_padding_suffix(length)
-            .ok_or_else(|| "prepared send SHA message length is not encodable".to_owned())?;
+            .ok_or_else(|| "prepared outgoing SHA message length is not encodable".to_owned())?;
         length
             .checked_add(suffix.len())
             .map(|padded| padded / BLOCK_BYTE_SIZE)
-            .ok_or_else(|| "prepared send SHA padded length overflow".to_owned())
+            .ok_or_else(|| "prepared outgoing SHA padded length overflow".to_owned())
     };
     let journal_frame = crate::zk::kagemusha_v1_state::terminal_journal_canonical_layout_v1()
-        .map_err(|_| "prepared send journal layout changed".to_owned())?
+        .map_err(|_| "prepared outgoing journal layout changed".to_owned())?
         .0;
     let recovery_frame_prefix =
         crate::zk::kagemusha_v1_state::terminal_recovery_canonical_frame_prefix_v1()
-            .map_err(|_| "prepared send recovery frame prefix changed".to_owned())?;
+            .map_err(|_| "prepared outgoing recovery frame prefix changed".to_owned())?;
     let transition_capacity = durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1.len()
         + 1
         + 8
@@ -819,7 +903,9 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         || *max_blocks != blocks(*capacity)?
                         || selected_block.checked_add(1) != Some(blocks(logical_message.len())?)
                     {
-                        return Err("prepared send bounded SHA block selection changed".to_owned());
+                        return Err(
+                            "prepared outgoing bounded SHA block selection changed".to_owned()
+                        );
                     }
                     Ok((logical_message, *selected_block + 1, *max_blocks))
                 }
@@ -828,7 +914,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
         let (eq_message, eq_active, eq_capacity) = eq_result?;
         let (ep_message, ep_active, ep_capacity) = ep_result?;
         if eq_active != ep_active || eq_capacity != ep_capacity {
-            return Err("prepared send Eq/Ep SHA block geometry differs".to_owned());
+            return Err("prepared outgoing Eq/Ep SHA block geometry differs".to_owned());
         }
         if index < ORIGINAL_JOBS {
             if !matches!(eq, PastaSha256PlanMessageV1::Ordinary(_))
@@ -839,7 +925,8 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                 || eq_active != semantic.job_block_counts[index] as usize
             {
                 return Err(
-                    "prepared send SHA prefix differs from the original terminal queue".to_owned(),
+                    "prepared outgoing SHA prefix differs from the original terminal queue"
+                        .to_owned(),
                 );
             }
         } else {
@@ -856,7 +943,9 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                 || (!expect_bounded && eq_message.len() != tail_capacities[role])
                 || eq_message != ep_message
             {
-                return Err("prepared send opening SHA role, capacity or parity changed".to_owned());
+                return Err(
+                    "prepared outgoing opening SHA role, capacity or parity changed".to_owned(),
+                );
             }
             let domain = match role {
                 0 => durable::SEALED_TRANSITION_DIGEST_DOMAIN_V1,
@@ -865,7 +954,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                 3 => durable::TERMINAL_JOURNAL_DOMAIN_V1,
                 4 => durable::TERMINAL_RECOVERY_DOMAIN_V1,
                 5 => terminal_body_commitment::TERMINAL_BODY_DOMAIN_V1,
-                _ => unreachable!("six prepared send opening jobs"),
+                _ => unreachable!("six prepared outgoing opening jobs"),
             };
             let prefix = if role == 3 || role == 4 {
                 [(domain.len() as u64).to_be_bytes().as_slice(), domain].concat()
@@ -873,7 +962,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                 [domain, &[0]].concat()
             };
             if !eq_message.starts_with(&prefix) {
-                return Err("prepared send opening SHA domain changed".to_owned());
+                return Err("prepared outgoing opening SHA domain changed".to_owned());
             }
             match role {
                 0 | 1 => {
@@ -884,19 +973,20 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         .and_then(|bytes| bytes.try_into().ok())
                         .map(u64::from_le_bytes)
                         .ok_or_else(|| {
-                            "prepared send sealed stream length is missing".to_owned()
+                            "prepared outgoing sealed stream length is missing".to_owned()
                         })?;
                     if count == 0
                         || usize::try_from(count).ok() != Some(eq_message.len() - count_end)
                     {
                         return Err(
-                            "prepared send sealed stream length disagrees with bytes".to_owned()
+                            "prepared outgoing sealed stream length disagrees with bytes"
+                                .to_owned(),
                         );
                     }
                     let digest: [u8; 32] = Sha256::digest(eq_message).into();
                     if digest != semantic.prepared_candidate_bindings.sealed_stream_digests[role] {
                         return Err(
-                            "prepared send sealed stream differs from State candidate carrier"
+                            "prepared outgoing sealed stream differs from State candidate carrier"
                                 .to_owned(),
                         );
                     }
@@ -906,10 +996,10 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                     if eq_message.len() != transcript_capacity
                         || eq_message[prefix.len()..prefix.len() + 2]
                             != KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes()
-                        || eq_message[prefix.len() + 2] != 2
+                        || eq_message[prefix.len() + 2] != operation_tag
                     {
                         return Err(
-                            "prepared send preparation transcript header changed".to_owned()
+                            "prepared outgoing preparation transcript header changed".to_owned()
                         );
                     }
                     // The native preparation ID commits to the active lengths and digests of the
@@ -922,7 +1012,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                     {
                         let (expected_length, expected_digest) = sealed_stream_claims[stream]
                             .ok_or_else(|| {
-                                "prepared send sealed stream claim is absent".to_owned()
+                                "prepared outgoing sealed stream claim is absent".to_owned()
                             })?;
                         let length = u64::from_le_bytes(
                             eq_message[offset..offset + 8]
@@ -934,7 +1024,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                                 != expected_digest.as_slice()
                         {
                             return Err(
-                                "prepared send preparation transcript sealed claim differs from stream"
+                                "prepared outgoing preparation transcript sealed claim differs from stream"
                                     .to_owned(),
                             );
                         }
@@ -942,7 +1032,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                     let preparation_id: DigestV1 = Sha256::digest(eq_message).into();
                     if preparation_id != semantic.prepared_candidate_bindings.preparation_id {
                         return Err(
-                            "prepared send transcript differs from State candidate preparation ID"
+                            "prepared outgoing transcript differs from State candidate preparation ID"
                                 .to_owned(),
                         );
                     }
@@ -955,13 +1045,14 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         .and_then(|bytes| bytes.try_into().ok())
                         .map(u64::from_be_bytes)
                         .ok_or_else(|| {
-                            "prepared send durable frame length is missing".to_owned()
+                            "prepared outgoing durable frame length is missing".to_owned()
                         })?;
                     if usize::try_from(frame_len).ok() != Some(eq_message.len() - length_end)
                         || (role == 4 && frame_len < recovery_frame_prefix.len() as u64)
                     {
                         return Err(
-                            "prepared send durable frame length disagrees with bytes".to_owned()
+                            "prepared outgoing durable frame length disagrees with bytes"
+                                .to_owned(),
                         );
                     }
                     // The native Norito encoder owns these fixed header and field-width bytes.
@@ -978,7 +1069,7 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         })
                     {
                         return Err(
-                            "prepared send durable frame differs from canonical Norito layout"
+                            "prepared outgoing durable frame differs from canonical Norito layout"
                                 .to_owned(),
                         );
                     }
@@ -990,24 +1081,24 @@ pub(crate) fn plan_terminal_prepared_send_sha_v1(
                         || eq_message[prefix.len() + 8..prefix.len() + 10]
                             != KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes()
                     {
-                        return Err("prepared send terminal body length changed".to_owned());
+                        return Err("prepared outgoing terminal body length changed".to_owned());
                     }
                 }
-                _ => unreachable!("six prepared send opening jobs"),
+                _ => unreachable!("six prepared outgoing opening jobs"),
             }
         }
         eq_messages.push(eq_message.to_vec());
         ep_messages.push(ep_message.to_vec());
         active_job_block_counts.push(
             u32::try_from(eq_active)
-                .map_err(|_| "prepared send active SHA block count exceeds u32".to_owned())?,
+                .map_err(|_| "prepared outgoing active SHA block count exceeds u32".to_owned())?,
         );
-        capacity_job_block_counts.push(
-            u32::try_from(eq_capacity)
-                .map_err(|_| "prepared send capacity SHA block count exceeds u32".to_owned())?,
-        );
+        capacity_job_block_counts
+            .push(u32::try_from(eq_capacity).map_err(|_| {
+                "prepared outgoing capacity SHA block count exceeds u32".to_owned()
+            })?);
     }
-    Ok(TerminalPreparedSendShaPlanV1 {
+    Ok(TerminalPreparedOutgoingShaPlanV1 {
         eq_messages,
         ep_messages,
         active_job_block_counts,

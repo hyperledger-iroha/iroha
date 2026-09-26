@@ -49,42 +49,22 @@ isi! {
     /// Register a ZK-capable asset definition with policy and verifying keys.
     #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::RegisterZkAsset")]
+    #[norito(deny_unknown_fields)]
     pub struct RegisterZkAsset {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
         /// Verifying key for confidential redemption proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        /// Canonical confidential shielding verifying key.
-        pub vk_shield: Option<crate::proof::VerifyingKeyId>,
     }
 }
 impl crate::seal::Instruction for RegisterZkAsset {}
 impl RegisterZkAsset {
-    /// Validate the first-release verifier-role relationship.
-    ///
-    /// A shield verifier admits new confidential commitments. It is therefore
-    /// invalid without an unshield verifier that can redeem those commitments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `vk_shield` is set while `vk_unshield` is absent.
-    pub fn validate_verifier_roles(&self) -> Result<(), &'static str> {
-        if self.vk_shield.is_some() && self.vk_unshield.is_none() {
-            return Err("vk_shield requires vk_unshield so shielded funds remain redeemable");
-        }
-        Ok(())
-    }
     /// Construct a new `RegisterZkAsset` instruction.
     pub fn new(
         asset: AssetDefinitionId,
         vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        vk_shield: Option<crate::proof::VerifyingKeyId>,
     ) -> Self {
-        Self {
-            asset,
-            vk_unshield,
-            vk_shield,
-        }
+        Self { asset, vk_unshield }
     }
 }
 isi! {
@@ -330,7 +310,6 @@ impl_zk_decode_from_slice!(PruneProofs {
 impl_zk_decode_from_slice!(RegisterZkAsset {
     asset: AssetDefinitionId,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
-    vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
 impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
     asset: AssetDefinitionId,
@@ -468,7 +447,6 @@ mod tests {
         assert_slice_roundtrip(RegisterZkAsset::new(
             asset.clone(),
             Some(verifying_key("unshield")),
-            Some(verifying_key("shield")),
         ));
         assert_slice_roundtrip(ScheduleConfidentialPolicyTransition::new(
             asset.clone(),
@@ -520,7 +498,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             "iroha.instruction.v1::zk::RegisterZkAsset",
-            RegisterZkAsset::new(asset.clone(), None, None),
+            RegisterZkAsset::new(asset.clone(), None),
         );
         assert_registry_decodes(
             &registry,
@@ -543,24 +521,25 @@ mod tests {
         );
     }
     #[test]
-    fn shield_verifier_requires_an_unshield_verifier() {
-        let asset = asset_definition_id();
-        let shield = Some(verifying_key("shield"));
-        let unshield = Some(verifying_key("unshield"));
+    fn register_zk_asset_rejects_retired_third_wire_field() {
+        use norito::{codec::Encode as _, core::DecodeFromSlice as _};
+        let registration =
+            RegisterZkAsset::new(asset_definition_id(), Some(verifying_key("unshield")));
+        let mut retired_payload = registration.encode();
+        retired_payload.push(0);
         assert!(
-            RegisterZkAsset::new(asset.clone(), None, shield.clone())
-                .validate_verifier_roles()
-                .is_err()
+            RegisterZkAsset::decode_from_slice(&retired_payload).is_err(),
+            "the retired optional shield field must not be accepted as trailing bytes"
         );
+        let mut retired_json =
+            norito::json::to_value(&registration).expect("encode registration JSON");
+        retired_json
+            .as_object_mut()
+            .expect("registration JSON object")
+            .insert("vk_shield".to_owned(), norito::json::Value::Null);
         assert!(
-            RegisterZkAsset::new(asset.clone(), unshield.clone(), shield)
-                .validate_verifier_roles()
-                .is_ok()
-        );
-        assert!(
-            RegisterZkAsset::new(asset, unshield, None)
-                .validate_verifier_roles()
-                .is_ok()
+            norito::json::from_value::<RegisterZkAsset>(retired_json).is_err(),
+            "the retired shield role must not be accepted as a JSON field"
         );
     }
 }

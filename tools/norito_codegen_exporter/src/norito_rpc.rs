@@ -47,9 +47,10 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
-use tempfile::{TempDir, tempdir};
+use tempfile::{TempDir, tempdir, tempdir_in};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const CANONICAL_FIXTURE_DIRECTORY: &str = "fixtures/norito_rpc";
+const LOCAL_INTEGRATION_PARENT: &str = "target/norito-rpc-local";
 const CANONICAL_PAYLOADS: &str = "fixtures/norito_rpc/transaction_payloads.json";
 const ALIAS_SETUP_FIXTURE_V1: &str = "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json";
 const PAYLOADS_BASENAME: &str = "transaction_payloads.json";
@@ -149,11 +150,24 @@ impl AliasSetupFixtureBytes {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FixtureOptions {
     output_root: Option<PathBuf>,
+    local_integration: bool,
 }
 impl FixtureOptions {
     /// Create fixture-generation options rooted at an optional staging tree.
     pub fn new(output_root: Option<PathBuf>) -> Self {
-        Self { output_root }
+        Self {
+            output_root,
+            local_integration: false,
+        }
+    }
+    /// Select an ignored, checkout-local create-only test publication.
+    ///
+    /// This does not satisfy the external-root release publication contract.
+    pub fn local_integration(output_root: PathBuf) -> Self {
+        Self {
+            output_root: Some(output_root),
+            local_integration: true,
+        }
     }
     fn resolve_paths(self) -> Result<ResolvedFixtureOptions> {
         let source_root = workspace_root()
@@ -169,8 +183,8 @@ impl FixtureOptions {
                 fixtures.display()
             ));
         }
-        let (output_root, create_only) = match self.output_root {
-            None => (source_root, false),
+        let (output_root, create_only, local_parent_identity) = match self.output_root {
+            None => (source_root.clone(), false, None),
             Some(requested_root) => {
                 reject_ambiguous_root(&requested_root)?;
                 if !requested_root.is_absolute() {
@@ -219,19 +233,35 @@ impl FixtureOptions {
                     .file_name()
                     .ok_or_else(|| eyre!("fixture output root must have a final path component"))?;
                 let output_root = canonical_parent.join(name);
-                if output_root.starts_with(&source_root) {
+                let local_parent_identity = if self.local_integration {
+                    let expected_parent = source_root.join(LOCAL_INTEGRATION_PARENT);
+                    if canonical_parent != expected_parent {
+                        bail!(
+                            "local fixture output root must be a direct child of {}",
+                            expected_parent.display()
+                        );
+                    }
+                    require_private_local_parent(&parent_metadata, &source_root)?;
+                    Some(directory_identity(&parent_metadata, parent)?)
+                } else if output_root.starts_with(&source_root) {
                     bail!(
                         "fixture output root must be outside the source workspace: {}",
                         output_root.display()
                     );
-                }
-                (output_root, true)
+                } else {
+                    None
+                };
+                (output_root, true, local_parent_identity)
             }
         };
         Ok(ResolvedFixtureOptions {
             output_root,
             fixtures_json: fixtures,
             create_only,
+            local_render_parent: self
+                .local_integration
+                .then(|| source_root.join(LOCAL_INTEGRATION_PARENT)),
+            local_parent_identity,
         })
     }
 }
@@ -239,6 +269,26 @@ struct ResolvedFixtureOptions {
     output_root: PathBuf,
     fixtures_json: PathBuf,
     create_only: bool,
+    local_render_parent: Option<PathBuf>,
+    local_parent_identity: Option<DirectoryIdentity>,
+}
+#[cfg(unix)]
+fn require_private_local_parent(parent: &fs::Metadata, source_root: &Path) -> Result<()> {
+    let workspace = fs::symlink_metadata(source_root)?;
+    if canonical_mode(parent) != 0o700 || parent.uid() != workspace.uid() {
+        bail!("local fixture output parent must be owner-owned mode 0700");
+    }
+    Ok(())
+}
+#[cfg(not(unix))]
+fn require_private_local_parent(_parent: &fs::Metadata, _source_root: &Path) -> Result<()> {
+    bail!("local fixture output requires an owner-private Unix mode-0700 parent")
+}
+fn require_local_render_parent(parent: &Path, identity: DirectoryIdentity) -> Result<()> {
+    reject_symlink_components(parent)?;
+    require_directory_identity(parent, identity)?;
+    let metadata = fs::symlink_metadata(parent)?;
+    require_private_local_parent(&metadata, &workspace_root().canonicalize()?)
 }
 fn reject_ambiguous_root(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
@@ -569,7 +619,7 @@ fn build_verification_report(
     let resolved = FixtureOptions::new(None).resolve_paths()?;
     let root = resolved.output_root.clone();
     let source = capture_required_guarded_file(&resolved.fixtures_json)?;
-    let rendered = render_verified_publication_pair(&source.bytes, alias_setup_fixture)?;
+    let rendered = render_verified_publication_pair(&source.bytes, alias_setup_fixture, None)?;
     verify_preimage(&resolved.fixtures_json, Some(&source))
         .context("canonical fixture source changed during verification")?;
     let expected = &rendered.manifest;
@@ -667,8 +717,24 @@ pub fn generate_fixtures(
     if !resolved.create_only {
         bail!("fixture generation requires an explicit create-only --output-root");
     }
+    if let (Some(parent), Some(identity)) = (
+        &resolved.local_render_parent,
+        resolved.local_parent_identity,
+    ) {
+        require_local_render_parent(parent, identity)?;
+    }
     let source = capture_required_guarded_file(&resolved.fixtures_json)?;
-    let rendered = render_verified_publication_pair(&source.bytes, alias_setup_fixture)?;
+    let rendered = render_verified_publication_pair(
+        &source.bytes,
+        alias_setup_fixture,
+        resolved.local_render_parent.as_deref(),
+    )?;
+    if let (Some(parent), Some(identity)) = (
+        &resolved.local_render_parent,
+        resolved.local_parent_identity,
+    ) {
+        require_local_render_parent(parent, identity)?;
+    }
     verify_preimage(&resolved.fixtures_json, Some(&source))
         .context("canonical fixture source changed during deterministic rendering")?;
     let generated = &rendered.manifest;
@@ -678,6 +744,12 @@ pub fn generate_fixtures(
         &resolved.output_root,
         &owned_paths,
         || {
+            if let (Some(parent), Some(identity)) = (
+                &resolved.local_render_parent,
+                resolved.local_parent_identity,
+            ) {
+                require_local_render_parent(parent, identity)?;
+            }
             verify_preimage(&resolved.fixtures_json, Some(&source))
                 .context("canonical fixture source drifted before publication")?;
             verify_all_blob_policies_without_seal(&resolved.output_root, &generated.fixtures, true)
@@ -698,9 +770,12 @@ struct VerifiedPublication {
 fn render_verified_publication_pair(
     fixtures_json: &[u8],
     alias_setup_fixture: &AliasSetupFixtureBytes,
+    local_render_parent: Option<&Path>,
 ) -> Result<VerifiedPublication> {
-    let first = tempdir().context("failed to create first private fixture publication tree")?;
-    let second = tempdir().context("failed to create second private fixture publication tree")?;
+    let first = create_render_tree(local_render_parent)
+        .context("failed to create first private fixture publication tree")?;
+    let second = create_render_tree(local_render_parent)
+        .context("failed to create second private fixture publication tree")?;
     let first_manifest =
         render_fixture_publication(fixtures_json, alias_setup_fixture, first.path())?;
     let second_manifest =
@@ -716,6 +791,12 @@ fn render_verified_publication_pair(
         root: first,
         manifest: first_manifest,
         snapshot: first_snapshot,
+    })
+}
+fn create_render_tree(local_render_parent: Option<&Path>) -> Result<TempDir> {
+    Ok(match local_render_parent {
+        Some(parent) => tempdir_in(parent)?,
+        None => tempdir()?,
     })
 }
 fn render_fixture_publication(
@@ -3906,6 +3987,92 @@ mod tests {
                 .contains("outside the source workspace"),
             "unexpected in-workspace error: {inside_error}"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn local_fixture_mode_is_confined_to_private_target_lane() {
+        use std::{io::ErrorKind, os::unix::fs::DirBuilderExt as _};
+
+        let source_root = workspace_root().canonicalize().expect("workspace root");
+        let target = source_root.join("target");
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) => assert!(metadata.is_dir() && !metadata.file_type().is_symlink()),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                fs::create_dir(&target).expect("create ignored target directory");
+            }
+            Err(error) => panic!("inspect target directory: {error}"),
+        }
+        reject_symlink_components(&target).expect("target ancestors are not symbolic");
+        let parent = source_root.join(LOCAL_INTEGRATION_PARENT);
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        match builder.create(&parent) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => panic!("create local fixture parent: {error}"),
+        }
+        let output = parent.join("absent-fixture-publication-test");
+        assert!(
+            !output.exists(),
+            "local publication test root must be absent"
+        );
+        let resolved = FixtureOptions::local_integration(output.clone())
+            .resolve_paths()
+            .expect("private fixed target lane is allowed locally");
+        assert_eq!(resolved.output_root, output);
+        assert_eq!(
+            resolved.local_render_parent.as_deref(),
+            Some(parent.as_path())
+        );
+        let identity = resolved
+            .local_parent_identity
+            .expect("local parent identity");
+        require_local_render_parent(&parent, identity).expect("unchanged parent remains private");
+        let rendered = create_render_tree(Some(&parent)).expect("repo-local render tree");
+        assert!(rendered.path().starts_with(&parent));
+        let existing_error = match FixtureOptions::local_integration(rendered.path().to_path_buf())
+            .resolve_paths()
+        {
+            Ok(_) => panic!("local mode must refuse an existing destination"),
+            Err(error) => error,
+        };
+        assert!(existing_error.to_string().contains("already exists"));
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock follows Unix epoch")
+            .as_nanos();
+        let alias = target.join(format!("norito-rpc-local-alias-{unique}"));
+        std::os::unix::fs::symlink(&parent, &alias).expect("create in-target test symlink");
+        let alias_error =
+            match FixtureOptions::local_integration(alias.join("absent")).resolve_paths() {
+                Ok(_) => panic!("local mode must refuse a symbolic parent"),
+                Err(error) => error,
+            };
+        assert!(
+            alias_error
+                .to_string()
+                .contains("must not traverse a symlink")
+        );
+        fs::remove_file(&alias).expect("remove in-target test symlink");
+
+        let external_error = match FixtureOptions::new(Some(output)).resolve_paths() {
+            Ok(_) => panic!("external release mode must still refuse this workspace"),
+            Err(error) => error,
+        };
+        assert!(
+            external_error
+                .to_string()
+                .contains("outside the source workspace")
+        );
+        let wrong_lane = target.join("absent-norito-rpc-publication-test");
+        let wrong_error = match FixtureOptions::local_integration(wrong_lane).resolve_paths() {
+            Ok(_) => panic!("local mode must not accept an arbitrary target child"),
+            Err(error) => error,
+        };
+        assert!(wrong_error.to_string().contains("direct child"));
+        let wrong_identity = capture_directory_identity(&target).expect("target identity");
+        assert!(require_local_render_parent(&parent, wrong_identity).is_err());
     }
     #[test]
     fn publication_path_policy_rejects_case_and_unicode_alias_classes() {

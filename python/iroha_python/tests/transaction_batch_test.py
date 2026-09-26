@@ -466,7 +466,15 @@ def test_to_builder_is_a_pure_repeatable_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     builders: list[RecordingBuilder] = []
-    manifest = object()
+
+    class BoundManifest:
+        def __init__(self) -> None:
+            self.checked_networks: list[NetworkId] = []
+
+        def require_transaction_network(self, network_id: NetworkId) -> None:
+            self.checked_networks.append(network_id)
+
+    manifest = BoundManifest()
     monkeypatch.setattr(
         tx_module,
         "_is_native_crypto_instance",
@@ -480,6 +488,7 @@ def test_to_builder_is_a_pure_repeatable_snapshot(
     draft = TransactionDraft(config()).bind_privacy_exact12_capability_manifest_v1(
         manifest  # type: ignore[arg-type]
     )
+    assert manifest.checked_networks == [NETWORK_ID]
 
     first = draft.to_builder()
     second = draft.to_builder()

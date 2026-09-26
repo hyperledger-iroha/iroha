@@ -8,7 +8,9 @@ use crate::{
         compact_public_columns::COMMITTED_COLUMN_COUNT,
         deep_composition::OodPair,
         deep_geometry::LDE_ROWS,
-        deep_proof::{FriGroup, FriRound, OodAnswers, QuotientOpening, RowOpening, RowValues},
+        deep_proof::{
+            FriGroup, FriRound, FriValues, OodAnswers, QuotientOpening, RowOpening, RowValues,
+        },
     },
     gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
 };
@@ -77,7 +79,7 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
                     .iter()
                     .map(|&index| FriGroup {
                         index: index as u32,
-                        values: vec![F::ZERO; FRI_ARITIES[round]],
+                        values: FriValues::new(vec![F::ZERO; FRI_ARITIES[round]]).unwrap(),
                     })
                     .collect(),
                 siblings: vec![digest; plans.rounds[round].work().siblings],

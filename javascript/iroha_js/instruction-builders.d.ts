@@ -15,6 +15,7 @@ export {
   buildCancelSmartContractCodeUploadInstruction,
   buildCancelTwitterEscrowInstruction,
   buildCastPlainBallotInstruction,
+  buildUpdatePlainConvictionInstruction,
   buildCastZkBallotInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildCommitContractDeploymentInstruction,

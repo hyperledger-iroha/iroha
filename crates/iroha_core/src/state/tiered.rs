@@ -2511,7 +2511,8 @@ mod measured_bytes_impls {
             ElectionState, FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-            GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
+            GovernanceSlashEntry, GovernanceSlashLedger, StandaloneBallotCorpusEntryV1,
+            ZkAssetState, ZkAssetVerifierBinding,
         },
         tle_release::{TleKeySessionLifecycleV1, TleKeySessionPublicStateV1},
     };
@@ -3569,9 +3570,13 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.root_history.measured_bytes_extra());
             total = total.saturating_add(self.nullifiers.measured_bytes_extra());
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
-            total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total
+        }
+    }
+    impl MeasuredBytes for StandaloneBallotCorpusEntryV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>()
         }
     }
     impl MeasuredBytes for ElectionState {
@@ -3583,8 +3588,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.end_ts.measured_bytes_extra());
             total = total.saturating_add(self.finalized.measured_bytes_extra());
             total = total.saturating_add(self.tally.measured_bytes_extra());
-            total = total.saturating_add(self.ballot_nullifiers.measured_bytes_extra());
-            total = total.saturating_add(self.ciphertexts.measured_bytes_extra());
+            total = total.saturating_add(self.accepted_ballots.measured_bytes_extra());
             total = total.saturating_add(self.vk_ballot.measured_bytes_extra());
             total = total.saturating_add(self.vk_ballot_commitment.measured_bytes_extra());
             total = total.saturating_add(self.vk_tally.measured_bytes_extra());

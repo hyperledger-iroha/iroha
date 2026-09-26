@@ -2474,20 +2474,23 @@ pub mod isi {
             }
             for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
                 let pool = operation.pool();
-                if pool.asset == asset_definition_id
-                    && state_transaction
+                if pool.asset == asset_definition_id {
+                    let stored_pool = state_transaction
                         .world
                         .kagemusha_reserve_pools
-                        .get(&pool.liability_pool_id)
-                        .is_none()
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister asset definition {asset_definition_id}: an Kagemusha V1 operation references a missing reserve pool"
-                        )
-                        .into(),
+                        .get(&pool.liability_pool_id);
+                    crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_retirement_operation_pool_v1(
+                        pool,
+                        stored_pool,
                     )
-                    .into());
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 operation has an invalid reserve pool: {error}"
+                            )
+                            .into(),
+                        )
+                    })?;
                 }
             }
             if let Some(reference) = crate::smartcontracts::isi::sorafs_moderation::retained_moderation_asset_definition_reference(

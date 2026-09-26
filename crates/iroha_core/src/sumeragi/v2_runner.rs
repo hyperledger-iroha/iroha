@@ -765,6 +765,17 @@ impl LocalProposalState {
         ));
         true
     }
+    fn defer_pre_signing_candidate_history_admission(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &super::v2_candidate::CandidateError,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let super::v2_candidate::CandidateError::LocalStateAdmission(error) = error else {
+            return false;
+        };
+        self.defer_history_admission(owner, error, wake)
+    }
     fn defer_evidence_preparation(
         &mut self,
         owner: LocalProposalOwner,
@@ -1732,7 +1743,19 @@ fn schedule_local_proposal(
         };
         let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;
         native.retain_candidate_source(source);
-        let assembly = outcome?;
+        let assembly = match outcome {
+            Ok(assembly) => assembly,
+            Err(error)
+                if proposal_state.defer_pre_signing_candidate_history_admission(
+                    owner,
+                    &error,
+                    &queue.sumeragi_waker(),
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {

@@ -11,7 +11,8 @@ use crate::signer_operation::final_promotion::observer_transaction::FinalPromoti
 use crate::signer_operation::final_promotion::pending_reserve_journal::FinalPromotionPendingReserveJournalV1;
 use crate::signer_operation::final_promotion::reserved_observation::FinalPromotionReservedCheckRuntimeV1;
 use iroha_core::{
-    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1, state::State,
+    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1,
+    state::{State, StateReadOnly},
 };
 use iroha_data_model::{
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
@@ -36,7 +37,7 @@ fn pending_reserve_journal() -> (tempfile::TempDir, FinalPromotionPendingReserve
         .join("pending-reserve-v1")
         .canonicalize()
         .unwrap();
-    let journal = FinalPromotionPendingReserveJournalV1::open(&path).unwrap();
+    let journal = FinalPromotionPendingReserveJournalV1::open_test(&path).unwrap();
     (directory, journal)
 }
 
@@ -428,6 +429,93 @@ fn reserved_runtime(
 }
 
 #[test]
+fn pending_reserve_rejects_a_finalized_but_rolled_back_floor_before_staging() {
+    let mut f = Fixture::new();
+    let prepared_check = f.prepare_receipt_check(None, Duration::from_secs(60));
+    let payload = f.observer_payload(prepared_check.instruction().clone().into());
+    let pending_check = f
+        .observer_transactions()
+        .sign_receipt_with(prepared_check, payload, |request| {
+            Signature::try_new(key(3).private_key(), request.signing_message())
+                .map_err(|_| ObserverError::Provider)
+        })
+        .unwrap();
+    assert_eq!(
+        f.native
+            .commit(NOW, vec![pending_check.signed_transaction().clone()]),
+        [true]
+    );
+    assert!(f.native.commit(NOW, Vec::new()).is_empty());
+    let checked = pending_check
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(times().0))
+        .unwrap();
+    let check_height = checked.check_height();
+    assert_eq!(checked.applied_floor().height, check_height + 1);
+    let FinalPromotionAuthorityActionV1::Check(current) = &checked.instruction().action else {
+        panic!("original Current Check");
+    };
+    let request = current.request;
+    let prepared = f.prepare(checked);
+    let account_check = f.execute_account_check(f.begin_account_check(&prepared));
+    let authorized = prepared
+        .authorize(account_check, times().0, times().1)
+        .unwrap();
+    let (pending, after_account) = authorized
+        .sign_with(
+            Arc::clone(f.native.state()),
+            Duration::from_secs(60),
+            || Ok(times()),
+            |key_request| {
+                Signature::try_new(key(2).private_key(), key_request.signing_message())
+                    .map_err(|_| Error::Provider)
+            },
+        )
+        .unwrap();
+    let after_account = f.execute_account_check(after_account);
+    let (pending, after_receipt) = pending
+        .check_account(after_account, times().0, times().1)
+        .unwrap();
+    let after_receipt = f.execute_receipt_check(after_receipt);
+    let signed = pending
+        .release(after_receipt, times().0, times().1)
+        .unwrap();
+
+    let mut floor = RetainedFloor::new(&f);
+    let view = f.native.state().view();
+    let artifact = view
+        .kura()
+        .v2_finality_artifact(check_height)
+        .unwrap()
+        .unwrap();
+    floor.current = FinalPromotionCheckFloorV1 {
+        height: check_height,
+        block_hash: *artifact.block_hash.as_ref(),
+        context_id: artifact.context_id(),
+    };
+    drop(view);
+    let (directory, journal) = pending_reserve_journal();
+    assert!(matches!(
+        FinalPromotionReservedCheckRuntimeV1::new(
+            Arc::clone(f.native.state()),
+            f.observer_transactions(),
+            request,
+            signed,
+            Duration::from_secs(60),
+            &mut floor,
+            journal,
+        ),
+        Err(CurrentError::Floor)
+    ));
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("pending-reserve-v1"))
+            .unwrap()
+            .count(),
+        0,
+        "rollback must be rejected before staging a durable operation ID"
+    );
+}
+
+#[test]
 fn pending_reserve_restart_recovers_only_the_original_signed_attempt() {
     let mut f = Fixture::new();
     let (request, signed) = signed_reserve(&mut f);
@@ -444,9 +532,9 @@ fn pending_reserve_restart_recovers_only_the_original_signed_attempt() {
         hex::encode(request.operation_id)
     ));
     assert_eq!(std::fs::metadata(&file).unwrap().mode() & 0o7777, 0o400);
-    assert!(FinalPromotionPendingReserveJournalV1::open(&pending).is_err());
+    assert!(FinalPromotionPendingReserveJournalV1::open_test(&pending).is_err());
     drop(runtime);
-    let reopened = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+    let reopened = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
     let recovered = reopened.recover(request.operation_id).unwrap();
     assert_eq!(recovered.operation_id(), request.operation_id);
     assert_eq!(recovered.source_floor(), source_floor);

@@ -22,7 +22,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeBridgeABIVersion(),
             23,
-            "required transaction fixture decode must execute through ABI-23"
+            "required transaction fixture decode must execute through ABI-24"
         )
         for name in loader.names {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
@@ -595,7 +595,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeSignedTransactionDecodeStatus(signedBytes),
             -2,
-            "ABI-23 must reject the unversioned bare signed transaction fixture: \(name)"
+            "ABI-24 must reject the unversioned bare signed transaction fixture: \(name)"
         )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)
@@ -611,7 +611,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         }
         let json = try XCTUnwrap(
             decodedJson,
-            "ABI-23 native bridge must decode every required signed transaction fixture: \(name)"
+            "ABI-24 native bridge must decode every required signed transaction fixture: \(name)"
         )
         guard let payload = decodeSignedPayload(from: json) else {
             return XCTFail("failed to decode signed transaction JSON for \(name)")

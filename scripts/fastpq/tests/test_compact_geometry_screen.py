@@ -105,13 +105,13 @@ def test_base_field_hiding_degree_and_exact_inline_row_mask_screen() -> None:
         "high_quotient_degree_bound": 130_943,
         "terminal_degree_bound": 2,
         "row_mask_added_bytes": 2_048,
-        "frame_bytes": 508_399,
-        "segment_margin_bytes": 15_889,
-        "axt_two_child_margin_before_carrier_bytes": 31_778,
+        "frame_bytes": 502_831,
+        "segment_margin_bytes": 21_457,
+        "axt_two_child_margin_before_carrier_bytes": 42_914,
         "raw_base_lde_bytes": 20_199_768_064,
     }
     assert SCREEN["base_field_hiding"] == expected
-    assert screen(506_351) == expected
+    assert screen(500_783) == expected
     assert SCREEN["CAP"] == 524_288
     assert SCREEN["AXT_INNER_CAP"] == 1_048_576
 
@@ -122,12 +122,12 @@ def test_base_field_hiding_screen_refuses_drifted_frame_or_caps(
     """Source size and production-limit changes need an explicit review."""
     screen = SCREEN["base_field_hiding_degree_screen"]
     with pytest.raises(ValueError, match="DEEP DTO frame changed"):
-        screen(506_352)
+        screen(500_784)
     with monkeypatch.context() as patch:
         patch.setitem(screen.__globals__, "CAP", 524_289)
         with pytest.raises(ValueError, match="margins changed"):
-            screen(506_351)
+            screen(500_783)
     with monkeypatch.context() as patch:
         patch.setitem(screen.__globals__, "AXT_INNER_CAP", 1_048_577)
         with pytest.raises(ValueError, match="margins changed"):
-            screen(506_351)
+            screen(500_783)

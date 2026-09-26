@@ -74,6 +74,14 @@ public sealed class TransactionBuilder
         return this;
     }
 
+    /// <summary>Adds the registered choice-free public conviction update.</summary>
+    public TransactionBuilder UpdatePlainConviction(
+        string referendumId,
+        string amount,
+        ulong durationBlocks) =>
+        AddInstruction(TransactionInstruction.UpdatePlainConviction(
+            referendumId, AuthorityAccountId, amount, durationBlocks));
+
     public TransactionBuilder AddContractCall(TransactionContractInvocation invocation)
     {
         ArgumentNullException.ThrowIfNull(invocation);

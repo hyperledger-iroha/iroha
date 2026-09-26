@@ -111,6 +111,9 @@ macro_rules! schema_types {
             iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
             // Registered for canonical V1 decoding; Core admission remains closed.
             iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsTopologyCustody,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsTopologyApproval,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsTopologyApproval,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCustodyRecordV1,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
             iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionCustody,

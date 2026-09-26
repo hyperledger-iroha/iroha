@@ -95,6 +95,9 @@ from iroha_torii_client.client import (
     inspect_i105_network_prefix,
 )
 from iroha_torii_client.client import (
+    ToriiOperatorSigningContext as _BaseToriiOperatorSigningContext,
+)
+from iroha_torii_client.client import (
     SumeragiAutonomousLaneExecution as _CanonicalSumeragiAutonomousLaneExecution,
 )
 from iroha_torii_client.client import (
@@ -11670,6 +11673,22 @@ class SumeragiStatusSnapshot:
             ),
             executed_block_wire_len=execution_commitment.executed_block_wire_len,
             executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
+            transaction_input_commitment=(
+                None
+                if execution_commitment.transaction_input_commitment is None
+                else SumeragiV2TransactionTreeCommitment(
+                    root=execution_commitment.transaction_input_commitment.root,
+                    leaf_count=execution_commitment.transaction_input_commitment.leaf_count,
+                )
+            ),
+            transaction_output_commitment=(
+                None
+                if execution_commitment.transaction_output_commitment is None
+                else SumeragiV2TransactionTreeCommitment(
+                    root=execution_commitment.transaction_output_commitment.root,
+                    leaf_count=execution_commitment.transaction_output_commitment.leaf_count,
+                )
+            ),
         )
 
     @classmethod
@@ -13774,6 +13793,7 @@ __all__ = [
     "SumeragiV2ConsensusRound",
     "SumeragiV2BlockSubject",
     "SumeragiV2MergeCarrierCommitment",
+    "SumeragiV2TransactionTreeCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
@@ -18458,7 +18478,10 @@ class ToriiClient(
         allow_retry: bool = True,
         allow_redirects: bool = False,
         stream: bool = False,
+        _headers_are_final: bool = False,
     ) -> requests.Response:
+        if _headers_are_final and (not stream or headers is None):
+            raise ValueError("final SSE headers require a streaming request with headers")
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
         if params is not None and not isinstance(params, Mapping):
@@ -18470,7 +18493,9 @@ class ToriiClient(
 
         normalized_path = _normalize_request_path(path)
 
-        final_headers: Dict[str, str] = dict(self._default_headers)
+        final_headers: Dict[str, str] = (
+            {} if _headers_are_final else dict(self._default_headers)
+        )
         if headers is not None:
             for name, value in _copy_http_headers(headers, "headers").items():
                 _set_exact_header(final_headers, name, value)
@@ -20020,7 +20045,6 @@ class ToriiClient(
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
         vk_unshield: Optional[Union[str, Mapping[str, Any]]] = None,
-        vk_shield: Optional[Union[str, Mapping[str, Any]]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -20036,7 +20060,6 @@ class ToriiClient(
         draft.register_zk_asset(
             asset_definition_id,
             vk_unshield=vk_unshield,
-            vk_shield=vk_shield,
         )
         return self._submit_transaction_draft_result(
             draft,
@@ -21846,9 +21869,10 @@ class ToriiClient(
         )
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
+        definition = _require_exact_token_string(asset_definition_id, "asset_definition_id")
         return self.request_json(
             "GET",
-            f"/v1/assets/{asset_definition_id}/holders",
+            f"/v1/assets/{quote(definition, safe='')}/holders",
             params=params or None,
             expected_status=(200,),
         )
@@ -23334,7 +23358,11 @@ class ToriiClient(
             "/v1/sumeragi/status/sse",
             headers=_OperatorRequestHeaderPlan(
                 {"Accept": "text/event-stream"},
-                operator_context,
+                _BaseToriiOperatorSigningContext(
+                    network_id=operator_context.network_id.literal,
+                    public_key=operator_context.key_pair.public_key_multihash,
+                    signer=operator_context.key_pair.sign,
+                ),
             ),
             timeout=timeout,
             max_retries=0,

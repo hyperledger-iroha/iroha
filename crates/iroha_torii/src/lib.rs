@@ -11234,8 +11234,31 @@ fn derive_identifier_request_draft(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::IdentifierResolveRequestDto,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    if policy.id.is_phone_retail() {
+        let canonicality = request.phone_retail_canonicality.clone().ok_or_else(|| {
+            identifier_conversion_error(
+                "phone#retail requires a trusted canonical E.164 nullifier attestation",
+            )
+        })?;
+        return resolver
+            .derive_phone_retail_encrypted(
+                policy,
+                program_policy,
+                &ciphertext,
+                request.output_opening.clone(),
+                canonicality,
+                network_id,
+            )
+            .map_err(|err| identifier_conversion_error(err.to_string()));
+    }
+    if request.phone_retail_canonicality.is_some() {
+        return Err(identifier_conversion_error(
+            "phone canonicality attestation is only valid for phone#retail",
+        ));
+    }
     match program_policy.commitment.backend {
         iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
         | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
@@ -11453,6 +11476,7 @@ fn identifier_receipt_response(
     Ok(routing::IdentifierResolveResponseDto {
         payload: identifier_resolution_receipt_payload_dto(&receipt.payload),
         attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
+        phone_retail_canonicality: receipt.phone_retail_canonicality.clone(),
     })
 }
 #[cfg(feature = "app_api")]
@@ -39951,7 +39975,13 @@ async fn handler_identifier_resolve(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let draft = derive_identifier_request_draft(
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
+    )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
@@ -40026,7 +40056,13 @@ async fn handler_identifier_claim_receipt(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let draft = derive_identifier_request_draft(
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
+    )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
         .map_err(|err| {

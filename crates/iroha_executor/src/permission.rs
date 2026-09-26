@@ -208,6 +208,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanCheckSorafsFinalPromotion},
     iroha_executor_data_model::permission::sorafs::{CanManageSorafsFinalPromotionAccountCustody},
     iroha_executor_data_model::permission::sorafs::{CanCheckSorafsFinalPromotionAccountCustody},
+    iroha_executor_data_model::permission::sorafs::{CanManageSorafsTopologyCustody},
+    iroha_executor_data_model::permission::sorafs::{CanOperateSorafsTopologyApproval},
+    iroha_executor_data_model::permission::sorafs::{CanCheckSorafsTopologyApproval},
     iroha_executor_data_model::permission::soranet::{CanManageSoranetVpnQuoteIssuers},
     iroha_executor_data_model::permission::soranet::{CanIssueSoranetVpnQuote},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
@@ -889,12 +892,14 @@ mod sorafs {
     use super::*;
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCheckSorafsFinalPromotion,
-        CanCheckSorafsFinalPromotionAccountCustody, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanManageSorafsFinalPromotionAccountCustody, CanManageSorafsFinalPromotionCustody,
-        CanManageSorafsModeration, CanManageSorafsPopRegistry, CanManageSorafsStreamTokenCustody,
-        CanOperateSorafsFinalPromotion, CanOperateSorafsPopIssuer, CanSetSorafsPricing,
-        CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry, CanUpsertSorafsProviderCredit,
+        CanCheckSorafsFinalPromotionAccountCustody, CanCheckSorafsTopologyApproval,
+        CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
+        CanIssueSorafsReplicationOrder, CanManageSorafsFinalPromotionAccountCustody,
+        CanManageSorafsFinalPromotionCustody, CanManageSorafsModeration,
+        CanManageSorafsPopRegistry, CanManageSorafsStreamTokenCustody,
+        CanManageSorafsTopologyCustody, CanOperateSorafsFinalPromotion, CanOperateSorafsPopIssuer,
+        CanOperateSorafsTopologyApproval, CanSetSorafsPricing, CanSetSorafsReservePolicy,
+        CanSubmitSorafsTelemetry, CanUpsertSorafsProviderCredit,
     };
     impl_owned_permission!(
         CanBindSorafsAlias,
@@ -915,6 +920,9 @@ mod sorafs {
         CanCheckSorafsFinalPromotion,
         CanManageSorafsFinalPromotionAccountCustody,
         CanCheckSorafsFinalPromotionAccountCustody,
+        CanManageSorafsTopologyCustody,
+        CanOperateSorafsTopologyApproval,
+        CanCheckSorafsTopologyApproval,
     );
 }
 mod soranet {

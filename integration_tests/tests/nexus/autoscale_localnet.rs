@@ -31,6 +31,7 @@ use iroha::{
     },
 };
 use iroha_core::{
+    kura::LaneStorageIdentity,
     merge::{MergeLedgerCandidate, merge_qc_message_digest},
     sumeragi::network_topology::commit_quorum_from_len,
 };
@@ -185,26 +186,117 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "per_lane_target_tps"], 32_i64);
         })
 }
-fn active_lane_segments(peer: &NetworkPeer) -> Result<Vec<String>> {
-    let blocks_root = peer.kura_store_dir().join("blocks");
-    if !blocks_root.exists() {
+#[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneIncarnationMarker")]
+struct LaneIncarnationMarkerSnapshot {
+    version: u8,
+    network_id: NetworkId,
+    dataspace_id: DataSpaceId,
+    lane_id: LaneId,
+    incarnation: Hash,
+    activation_height: u64,
+    move_target_blocks: Option<String>,
+    move_target_merge: Option<String>,
+    block_store_digest: Hash,
+    merge_log_digest: Hash,
+}
+fn active_lane_storage_instances(peer: &NetworkPeer) -> Result<Vec<(u32, String, PathBuf)>> {
+    let active_bindings = if peer.is_running() {
+        let lifecycle = peer_client_with_timeout(peer)
+            .client()
+            .get_lane_lifecycle_status()?;
+        lifecycle.validate()?;
+        let active_incarnations = lifecycle
+            .incarnations
+            .iter()
+            .map(|entry| (entry.lane_id, entry.incarnation))
+            .collect::<BTreeMap<_, _>>();
+        Some(
+            lifecycle
+                .lanes
+                .iter()
+                .filter_map(|lane| {
+                    active_incarnations
+                        .get(&lane.id)
+                        .copied()
+                        .map(|incarnation| (lane.id, (lane.dataspace_id, incarnation)))
+                })
+                .collect::<BTreeMap<_, _>>(),
+        )
+    } else {
+        // The restart test stops a peer before certification. Its physical
+        // snapshot remains frozen until that peer is started again.
+        None
+    };
+    let instances_root = peer.kura_store_dir().join("blocks").join("instances");
+    if !instances_root.exists() {
         return Ok(Vec::new());
     }
-    let mut lanes = Vec::new();
-    for entry in fs::read_dir(&blocks_root)? {
+    let mut instances = Vec::new();
+    for entry in fs::read_dir(&instances_root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
+        let marker_path = entry.path().join(".lane-incarnation.norito");
+        let marker_metadata = match fs::symlink_metadata(&marker_path) {
+            Ok(metadata) => metadata,
+            // A physical directory can precede its durable publication marker.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
         };
-        if name.starts_with("lane_") {
-            lanes.push(name);
+        ensure!(
+            marker_metadata.file_type().is_file(),
+            "lane incarnation marker is not a regular file"
+        );
+        ensure!(
+            marker_metadata.len() <= 4 * 1024,
+            "lane incarnation marker exceeds its storage limit"
+        );
+        let marker_bytes = fs::read(&marker_path)?;
+        ensure!(
+            marker_bytes.len() <= 4 * 1024,
+            "lane incarnation marker exceeds its storage limit"
+        );
+        let marker: LaneIncarnationMarkerSnapshot = norito::codec::decode_adaptive(&marker_bytes)?;
+        ensure!(
+            marker.version == 4,
+            "unexpected lane incarnation marker version"
+        );
+        let identity = LaneStorageIdentity::new(
+            marker.network_id,
+            marker.lane_id,
+            marker.dataspace_id,
+            marker.incarnation,
+            marker.activation_height,
+        );
+        ensure!(
+            entry.path() == identity.blocks_dir(peer.kura_store_dir()),
+            "lane incarnation marker is not at its exact storage identity path"
+        );
+        // Kura retains retired instance directories as authenticated recovery
+        // evidence. Only the committed catalog can identify active storage.
+        if active_bindings.as_ref().is_some_and(|bindings| {
+            bindings.get(&marker.lane_id) != Some(&(marker.dataspace_id, marker.incarnation))
+        }) {
+            continue;
         }
+        let lane_id = marker.lane_id.as_u32();
+        let instance = entry.file_name().to_string_lossy().into_owned();
+        instances.push((
+            lane_id,
+            format!("lane_{lane_id:03}_instance_{instance}"),
+            entry.path(),
+        ));
     }
-    lanes.sort();
-    Ok(lanes)
+    instances.sort_by(|left, right| left.1.cmp(&right.1));
+    Ok(instances)
+}
+fn active_lane_segments(peer: &NetworkPeer) -> Result<Vec<String>> {
+    Ok(active_lane_storage_instances(peer)?
+        .into_iter()
+        .map(|(_, segment, _)| segment)
+        .collect())
 }
 fn lane_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<(usize, Vec<String>)>> {
     network
@@ -1045,20 +1137,9 @@ fn peer_elastic_lane_storage_stats(
     peer: &NetworkPeer,
     lane_id: u32,
 ) -> Result<Option<ElasticLaneStorageStats>> {
-    let blocks_root = peer.kura_store_dir().join("blocks");
-    if !blocks_root.exists() {
-        return Ok(None);
-    }
-    for entry in fs::read_dir(&blocks_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        if is_autoscale_elastic_storage_segment(&name, lane_id) {
-            return collect_directory_tree_stats(&entry.path()).map(Some);
+    for (instance_lane_id, _, path) in active_lane_storage_instances(peer)? {
+        if instance_lane_id == lane_id {
+            return collect_directory_tree_stats(&path).map(Some);
         }
     }
     Ok(None)
@@ -2156,12 +2237,13 @@ fn storage_lane_id(segment: &str) -> Option<u32> {
     }
     digits.parse().ok()
 }
-fn autoscale_elastic_storage_segment(lane_id: u32) -> String {
-    format!("lane_{lane_id:03}_elastic_lane_{lane_id}")
-}
 fn is_autoscale_elastic_storage_segment(segment: &str, lane_id: u32) -> bool {
-    segment == autoscale_elastic_storage_segment(lane_id)
-        && storage_lane_id(segment) == Some(lane_id)
+    storage_lane_id(segment) == Some(lane_id)
+        && segment
+            .strip_prefix(&format!("lane_{lane_id:03}_instance_"))
+            .is_some_and(|instance| {
+                !instance.is_empty() && instance.chars().all(|ch| ch.is_ascii_hexdigit())
+            })
 }
 fn all_peers_have_storage_lane_profile(
     snapshot: &[(usize, Vec<String>)],
@@ -3206,16 +3288,22 @@ fn wait_for_storage_lane_count(
 ) -> Result<()> {
     let started = Instant::now();
     let mut last_storage_snapshot = Vec::new();
+    let mut last_probe_error = None;
     while started.elapsed() <= timeout {
-        let storage_snapshot = lane_snapshot(network)?;
-        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
-            return Ok(());
+        match lane_snapshot(network) {
+            Ok(storage_snapshot) => {
+                if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
+                    return Ok(());
+                }
+                last_storage_snapshot = storage_snapshot;
+                last_probe_error = None;
+            }
+            Err(error) => last_probe_error = Some(error.to_string()),
         }
-        last_storage_snapshot = storage_snapshot;
         thread::sleep(LANE_POLL_INTERVAL);
     }
     Err(eyre!(
-        "{context}: timed out waiting for {expected_count} provisioned lane directories on all peers; last storage snapshot: {last_storage_snapshot:?}"
+        "{context}: timed out waiting for {expected_count} active lane storage instances on all peers; last storage snapshot: {last_storage_snapshot:?}; last probe error: {last_probe_error:?}"
     ))
 }
 fn usize_to_u64(value: usize) -> u64 {
@@ -6999,10 +7087,10 @@ mod tests {
     }
     #[test]
     fn storage_lane_id_rejects_prefix_spoofed_segments() {
-        assert_eq!(storage_lane_id("lane_003_elastic_lane_3"), Some(3));
+        assert_eq!(storage_lane_id("lane_003_instance_0"), Some(3));
         assert_eq!(storage_lane_id("lane_003_elastic3"), Some(3));
         assert!(is_autoscale_elastic_storage_segment(
-            "lane_003_elastic_lane_3",
+            "lane_003_instance_0",
             3
         ));
         assert!(!is_autoscale_elastic_storage_segment(
@@ -7022,7 +7110,7 @@ mod tests {
         assert_eq!(storage_lane_id("lane_003_elastic_"), None);
         assert_eq!(storage_lane_id("lane_03_elastic_lane_3"), None);
         assert_eq!(storage_lane_id("lane_0003_elastic_lane_3"), None);
-        assert_eq!(storage_lane_id("prefix_lane_003_elastic_lane_3"), None);
+        assert_eq!(storage_lane_id("prefix_lane_003_instance_0"), None);
     }
     #[test]
     fn autoscale_transition_stats_parse_log_markers() {
@@ -9670,13 +9758,13 @@ mod tests {
         let mut partial_four_lane_storage = three_lane_storage.clone();
         partial_four_lane_storage[0]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         partial_four_lane_storage[1]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         partial_four_lane_storage[2]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         assert!(!expansion_observed_on_storage_for_count(
             &partial_four_lane_storage,
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
@@ -9688,7 +9776,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                 ],
             );
             4
@@ -9718,7 +9806,7 @@ mod tests {
                 vec![
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003_duplicate".to_owned(),
                 ],
             );
@@ -9740,7 +9828,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003shadow".to_owned(),
                 ],
             );
@@ -9758,7 +9846,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003_duplicate".to_owned(),
                 ],
             );
@@ -9779,7 +9867,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_004_elastic_lane_4".to_owned(),
+                    "lane_004_instance_0".to_owned(),
                 ],
             );
             4
@@ -10279,28 +10367,28 @@ mod tests {
                 0,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 1,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 2,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 3,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
         ];
@@ -10310,14 +10398,14 @@ mod tests {
                 0,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 1,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (2, vec!["lane_000_default".to_owned()]),
@@ -10325,7 +10413,7 @@ mod tests {
                 3,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
         ];

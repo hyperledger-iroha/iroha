@@ -933,4 +933,5 @@ mod sorafs_permission_tests {
     include!("stream_token_custody_permission_tests.rs");
     include!("final_promotion_permission_tests.rs");
     include!("final_promotion_account_permission_tests.rs");
+    include!("topology_permission_tests.rs");
 }

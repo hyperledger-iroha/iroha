@@ -16182,6 +16182,111 @@ impl Kura {
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
     }
+    /// Read one State-selected finality record without materializing its executed body.
+    ///
+    /// The caller supplies the block hash, parent hash, and network from one
+    /// immutable State view. Kura joins them to its exact durable hash/index and
+    /// retained header, validates the canonical finality and retention records,
+    /// binds the signed proposal and complete-wire identities, and verifies the
+    /// CommitQC and roster proofs of possession. The receipt is reconstructed
+    /// only from that same verified artifact. This does not authorize a source
+    /// transaction: callers still need an exact executed-body proof at each
+    /// source height and independently pinned successor continuity.
+    ///
+    /// TODO: Before wiring this into a multi-height production caller, reserve
+    /// the full history's bounded sidecar I/O, cumulative Norito decoder graph,
+    /// re-encoding scratch, BLS work, and separately read target bodies. One
+    /// height can read up to `MAX_KURA_V2_FINALITY_RECORD_BYTES +
+    /// MAX_RETAINED_BLOCK_RECORD_BYTES` bytes even when the body is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-durable height, mismatched State hash,
+    /// parent, or network, corrupt index or sidecar, or invalid finality proof.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "TODO: wire bounded signer replay after resource admission"
+        )
+    )]
+    pub(crate) fn v2_finality_metadata_for_state(
+        &self,
+        height: u64,
+        expected_state_hash: HashOf<BlockHeader>,
+        expected_state_parent_hash: Option<HashOf<BlockHeader>>,
+        expected_network_id: NetworkId,
+    ) -> Result<Option<(BlockHeader, V2FinalityArtifact, KuraV2CommitReceipt)>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        if NonZeroUsize::new(usize::try_from(height)?).is_none() {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
+        let (durable_hash, indexed_wire_len) = {
+            let mut store = self.block_store.lock();
+            let durable_count = store.read_exact_durable_index_count()?;
+            if height > durable_count {
+                return Err(Error::BlockHeightGap {
+                    expected_next_height: durable_count.saturating_add(1),
+                    actual_height: height,
+                });
+            }
+            let hash = store
+                .read_block_hashes(height - 1, 1)?
+                .into_iter()
+                .next()
+                .ok_or(Error::HashesFileHeightMismatch)?;
+            let index = store.read_block_index(height - 1)?;
+            (hash, index.length)
+        };
+        if durable_hash != expected_state_hash {
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected: durable_hash,
+                actual: expected_state_hash,
+            });
+        }
+        if indexed_wire_len == 0 || indexed_wire_len > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(Error::CorruptedBlockLength {
+                length: indexed_wire_len,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
+        }
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
+        let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
+        let Some((record, read_identity)) = self.decode_v2_finality_record_at(&path, &directory)?
+        else {
+            return Ok(None);
+        };
+        Self::validate_v2_finality_record_at(&path, height, durable_hash, &record)?;
+        if record.block_header.prev_block_hash() != expected_state_parent_hash
+            || record.artifact.height_context.network_id != expected_network_id
+        {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
+        let (retained_header, proposal_hash, wire_len, wire_hash, _, _) = self
+            .retained_block_record_at_without_live_body(&blocks_dir, height, durable_hash)?
+            .ok_or(Error::MissingRetainedBlockRecord { height })?;
+        if retained_header != record.block_header {
+            return Err(Error::ConflictingRetainedBlockRecord { height });
+        }
+        if wire_len != indexed_wire_len {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_hash,
+            wire_len,
+            wire_hash,
+        )?;
+        self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
+        let receipt = v2_commit_receipt(&record.artifact);
+        Ok(Some((record.block_header, record.artifact, receipt)))
+    }
     fn validate_staged_kagemusha_finality(
         staged: &StagedKagemushaFinalitySidecarV1,
         artifact: &V2FinalityArtifact,

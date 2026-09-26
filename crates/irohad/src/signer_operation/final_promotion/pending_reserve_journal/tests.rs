@@ -57,23 +57,25 @@ fn exact_intent_frame_and_record_byte_ceilings_are_inclusive() {
 #[test]
 fn pending_journal_requires_dedicated_sibling_and_independent_lease() {
     let (_parent, receipts, pending) = private_sibling_directories();
-    let receipt =
-        SignerReceiptJournalV1::open(&receipts, SignerReceiptPurposeV1::FinalPromotionProvenance)
-            .unwrap();
-    assert!(FinalPromotionPendingReserveJournalV1::open(&receipts).is_err());
-    let pending_writer = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
-    assert!(FinalPromotionPendingReserveJournalV1::open(&pending).is_err());
-    assert!(SignerReceiptJournalV1::open(&pending, receipt.purpose()).is_err());
+    let receipt = SignerReceiptJournalV1::open_test(
+        &receipts,
+        SignerReceiptPurposeV1::FinalPromotionProvenance,
+    )
+    .unwrap();
+    assert!(FinalPromotionPendingReserveJournalV1::open_test(&receipts).is_err());
+    let pending_writer = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
+    assert!(FinalPromotionPendingReserveJournalV1::open_test(&pending).is_err());
+    assert!(SignerReceiptJournalV1::open_test(&pending, receipt.purpose()).is_err());
     drop(receipt);
-    assert!(FinalPromotionPendingReserveJournalV1::open(&pending).is_err());
+    assert!(FinalPromotionPendingReserveJournalV1::open_test(&pending).is_err());
     drop(pending_writer);
-    FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+    FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
 }
 
 #[test]
 fn partial_record_is_durable_but_never_recovered_as_authority() {
     let (_parent, _receipts, pending) = private_sibling_directories();
-    let journal = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+    let journal = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
     let staged = journal.files.stage(OPERATION, b"partial").unwrap();
     let file = pending_file(&pending);
     let metadata = fs::metadata(&file).unwrap();
@@ -84,7 +86,7 @@ fn partial_record_is_durable_but_never_recovered_as_authority() {
     assert!(journal.files.stage(OPERATION, b"replacement").is_err());
     drop(staged);
     drop(journal);
-    let reopened = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+    let reopened = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
     assert!(reopened.recover(OPERATION).is_err());
 }
 
@@ -92,7 +94,7 @@ fn partial_record_is_durable_but_never_recovered_as_authority() {
 fn pinned_pending_record_rejects_changed_bytes_and_replaced_path() {
     for attack in ["bytes", "path", "hardlink"] {
         let (parent, _receipts, pending) = private_sibling_directories();
-        let journal = FinalPromotionPendingReserveJournalV1::open(&pending).unwrap();
+        let journal = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
         let pinned = journal
             .files
             .stage(OPERATION, b"private pending record")

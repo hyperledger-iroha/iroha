@@ -18,6 +18,7 @@
 //! module's injected test providers exercise races and failures without establishing deployment readiness.
 
 use iroha_crypto::Signature;
+use iroha_data_model::sorafs::stream_token_authority::StreamTokenReviewedV1;
 use sorafs_manifest::signer::{
     custody::{
         SignerCustodyBindingV1, SignerCustodyErrorV1, SignerCustodyTrustV1,
@@ -26,9 +27,11 @@ use sorafs_manifest::signer::{
     protocol::{
         SignerKeyOperationPurposeV1, SignerOperationActionV1, SignerOperationAuditHeadV1,
         SignerOperationCommitmentV1, SignerOperationCustodyV1, SignerOperationIntentV1,
-        SignerOperationReservationV1,
+        SignerOperationReservationV1, SignerRoleV1,
     },
+    stream_token::{SignerStreamTokenExpectedV1, SignerStreamTokenRequestV1},
 };
+use sorafs_manifest::{StreamTokenBodyV1, token::STREAM_TOKEN_SIGNATURE_DOMAIN_V1};
 use std::{fmt, sync::Arc};
 use zeroize::Zeroizing;
 
@@ -82,6 +85,33 @@ impl SignerOperationReservationRequestV1<'_> {
     #[must_use]
     pub const fn custody(&self) -> &VerifiedSignerCustodyV1 {
         self.custody
+    }
+}
+
+/// Sealed, purpose-bound role-11 review presented only with the exact Reserve CAS.
+///
+/// Its constructor is private to the canonical stream-token service/coordinator. A native source
+/// must still independently authenticate finalized custody, the audit predecessor and CAS state.
+pub struct SignerStreamTokenReservationReviewV1<'a> {
+    body: &'a StreamTokenBodyV1,
+    signing_payload: &'a [u8],
+    reviewed: &'a StreamTokenReviewedV1,
+}
+impl SignerStreamTokenReservationReviewV1<'_> {
+    /// Exact canonical body from which the request and time window were derived.
+    #[must_use]
+    pub const fn body(&self) -> &StreamTokenBodyV1 {
+        self.body
+    }
+    /// Exact domain-prefixed canonical bytes that the role key will sign.
+    #[must_use]
+    pub const fn signing_payload(&self) -> &[u8] {
+        self.signing_payload
+    }
+    /// Exact body, original custody and audit-predecessor claim to submit as native Reserve.
+    #[must_use]
+    pub const fn reviewed(&self) -> &StreamTokenReviewedV1 {
+        self.reviewed
     }
 }
 
@@ -210,6 +240,20 @@ pub trait SignerOperationStateSourceV1: Send + Sync {
     fn reserve(
         &self,
         request: &SignerOperationReservationRequestV1<'_>,
+    ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1>;
+
+    /// Reserve a role-11 operation using the sealed canonical body and reviewed request.
+    ///
+    /// Implementations must rederive the body window and request digest from these exact inputs,
+    /// then durably submit and authenticate the native Reserve under the original custody and
+    /// audit predecessor. The generic `reserve` method does not receive a role-11 Sign operation.
+    ///
+    /// # Errors
+    /// Fails on substituted body/request, custody or audit drift, replay, or unavailable finality.
+    fn reserve_stream_token(
+        &self,
+        request: &SignerOperationReservationRequestV1<'_>,
+        review: &SignerStreamTokenReservationReviewV1<'_>,
     ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1>;
 
     /// Authenticate exact still-exclusive, unexpired ownership and return fresh custody state.
@@ -406,11 +450,74 @@ impl SignerOperationCoordinatorV1 {
         &self,
         intent: SignerOperationIntentV1,
     ) -> Result<SignerOperationV1<'_>, SignerOperationErrorV1> {
+        if self.binding.role == SignerRoleV1::StreamToken
+            && intent.action == SignerOperationActionV1::Sign
+        {
+            return Err(SignerOperationErrorV1::InvalidOperation);
+        }
+        self.begin_with_reservation(intent, |request| self.source.reserve(request))
+    }
+
+    /// Keep the exact reviewed body/window in scope until the native role-11 Reserve CAS.
+    fn begin_stream_token(
+        &self,
+        intent: SignerOperationIntentV1,
+        body: &StreamTokenBodyV1,
+        signing_payload: &[u8],
+        expected: &SignerStreamTokenExpectedV1,
+        reviewed: &StreamTokenReviewedV1,
+    ) -> Result<SignerOperationV1<'_>, SignerOperationErrorV1> {
+        if self.binding.role != SignerRoleV1::StreamToken
+            || intent.action != SignerOperationActionV1::Sign
+            || reviewed.intent != intent
+        {
+            return Err(SignerOperationErrorV1::InvalidOperation);
+        }
+        let body_bytes = signing_payload
+            .strip_prefix(STREAM_TOKEN_SIGNATURE_DOMAIN_V1)
+            .ok_or(SignerOperationErrorV1::InvalidOperation)?;
+        norito::verify_exact_canonical_frame(body, body_bytes)
+            .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+        self.begin_with_reservation(intent, |request| {
+            expected
+                .validate_time_at(request.custody().verified_at_unix_ms())
+                .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+            // The request constructor rederives `expected` from this exact body and fresh
+            // custody. Do not allocate another intermediate expected/payload before Reserve.
+            let exact = SignerStreamTokenRequestV1::new(request.custody(), expected, body)
+                .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+            if reviewed.request != exact
+                || reviewed.intent.request_digest
+                    != exact
+                        .digest()
+                        .map_err(|_| SignerOperationErrorV1::InvalidOperation)?
+                || reviewed.intent != *request.intent()
+            {
+                return Err(SignerOperationErrorV1::InvalidOperation);
+            }
+            self.source.reserve_stream_token(
+                request,
+                &SignerStreamTokenReservationReviewV1 {
+                    body,
+                    signing_payload,
+                    reviewed,
+                },
+            )
+        })
+    }
+
+    fn begin_with_reservation(
+        &self,
+        intent: SignerOperationIntentV1,
+        reserve: impl FnOnce(
+            &SignerOperationReservationRequestV1<'_>,
+        ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1>,
+    ) -> Result<SignerOperationV1<'_>, SignerOperationErrorV1> {
         let intent_digest = intent
             .digest()
             .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
         let custody = self.verify(&self.source.observe(&self.binding)?)?;
-        let reservation = self.source.reserve(&SignerOperationReservationRequestV1 {
+        let reservation = reserve(&SignerOperationReservationRequestV1 {
             intent: &intent,
             intent_digest,
             custody: &custody,

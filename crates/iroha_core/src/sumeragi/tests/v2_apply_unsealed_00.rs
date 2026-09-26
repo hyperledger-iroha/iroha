@@ -350,22 +350,31 @@ fn install_fixture_validator_authority(
     }
     for (validator, pop) in context.roster.iter().zip(validator_set_pops) {
         let public_key = validator.validator.public_key().clone();
-        let id = crate::state::derive_validator_key_id(&public_key);
-        let record = ConsensusKeyRecord {
-            id: id.clone(),
-            public_key,
-            pop: Some(pop.clone()),
-            activation_height: 0,
-            expiry_height: None,
-            replaces: None,
-            status: ConsensusKeyStatus::Active,
-        };
-        world_block
-            .consensus_keys
-            .insert(id.clone(), record.clone());
-        world_block
-            .consensus_keys_by_pk
-            .insert(record.public_key.to_string(), vec![id]);
+        for id in [
+            crate::state::derive_validator_key_id(&public_key),
+            crate::state::derive_committee_key_id(&public_key),
+        ] {
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: public_key.clone(),
+                pop: Some(pop.clone()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block.consensus_keys.insert(id, record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world_block
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&record.id) {
+                by_pk.push(record.id);
+                world_block.consensus_keys_by_pk.insert(pk, by_pk);
+            }
+        }
     }
     world_block.commit();
     let validators = context

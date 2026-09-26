@@ -132,7 +132,7 @@ impl TopologyRetainedStateV1 {
 )]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyExecutionClaimV1")]
 pub struct TopologyExecutionClaimV1 {
-    /// Claimed executing block height; Core must derive it from the actual StateTransaction.
+    /// Claimed executing block height; Core must derive it from the actual `StateTransaction`.
     pub height: u64,
     /// Zero-based topology mutation ordinal in that block, excluding no-write Checks.
     pub ordinal: u32,

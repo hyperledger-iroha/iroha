@@ -11274,7 +11274,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut root_history = None;
         let mut nullifiers = None;
         let mut vk_unshield = None;
-        let mut vk_shield = None;
         let mut frontier_checkpoints = None;
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
@@ -11295,7 +11294,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 "root_history" => root_history = Some(visitor.parse_value()?),
                 "nullifiers" => nullifiers = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
-                "vk_shield" => vk_shield = Some(visitor.parse_value()?),
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => return Err(json::Error::unknown_field(other)),
             }
@@ -11315,19 +11313,47 @@ impl json::JsonDeserialize for ZkAssetState {
                 .ok_or_else(|| json::MapVisitor::missing_field("root_history"))?,
             nullifiers: nullifiers.ok_or_else(|| json::MapVisitor::missing_field("nullifiers"))?,
             vk_unshield: vk_unshield.unwrap_or(None),
-            vk_shield: vk_shield.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
         };
         state.validate_tree_integrity().map_err(json::Error::from)?;
         Ok(state)
     }
 }
+/// Maximum accepted ballots in one first-release standalone election.
+pub(crate) const MAX_STANDALONE_ELECTION_BALLOTS_V1: usize = 1_000;
+
+/// One accepted standalone ballot operation in canonical execution order.
+///
+/// This pairs retained public bytes only. The production proof gate remains closed until
+/// a credential and confidential-bond relation authenticates their semantics.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::StandaloneBallotCorpusEntryV1")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct StandaloneBallotCorpusEntryV1 {
+    /// Nullifier presented by the accepted operation; credential linkage is not inferred here.
+    pub nullifier: [u8; 32],
+    /// Exact commitment presented by that same accepted operation.
+    pub commitment: [u8; 32],
+}
+
 /// Election state for anonymous voting.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ElectionState")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ElectionState {
     /// Number of options (K).
     pub options: u32,
@@ -11341,10 +11367,9 @@ pub struct ElectionState {
     pub finalized: bool,
     /// Exact public conviction weight per option in the frozen asset's smallest units.
     pub tally: Vec<u128>,
-    /// Set of consumed ballot nullifiers to prevent double voting.
-    pub ballot_nullifiers: std::collections::BTreeSet<[u8; 32]>,
-    /// Recent ciphertexts (bounded by config) for observability.
-    pub ciphertexts: Vec<Vec<u8>>,
+    /// Complete accepted nullifier/commitment pairs in canonical admission order.
+    #[norito(json = "election_accepted_ballots_json_v1")]
+    pub accepted_ballots: Vec<StandaloneBallotCorpusEntryV1>,
     /// Verifying key identifiers (optional) for ballot and tally proofs.
     pub vk_ballot: Option<iroha_data_model::proof::VerifyingKeyId>,
     /// Commitment of the ballot verifying key bytes at election creation.
@@ -11355,6 +11380,118 @@ pub struct ElectionState {
     pub vk_tally_commitment: Option<[u8; 32]>,
     /// Domain‑separation tag for ballot nullifier derivation.
     pub domain_tag: String,
+}
+mod election_accepted_ballots_json_v1 {
+    use super::{MAX_STANDALONE_ELECTION_BALLOTS_V1, StandaloneBallotCorpusEntryV1};
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser, SeqVisitor};
+    use std::{string::String, vec::Vec};
+
+    #[allow(
+        clippy::ptr_arg,
+        reason = "Norito's field helper receives the declared Vec type"
+    )]
+    pub fn serialize(value: &Vec<StandaloneBallotCorpusEntryV1>, out: &mut String) {
+        value.json_serialize(out);
+    }
+
+    #[allow(
+        clippy::ptr_arg,
+        reason = "Norito's field helper receives the declared Vec type"
+    )]
+    pub fn serialize_bounded(
+        value: &Vec<StandaloneBallotCorpusEntryV1>,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        value.json_serialize_to(out)
+    }
+
+    pub fn deserialize(
+        parser: &mut Parser<'_>,
+    ) -> Result<Vec<StandaloneBallotCorpusEntryV1>, json::Error> {
+        // Count the borrowed array before Norito reserves its entries. Decode
+        // each fixed-size pair during preflight, without retaining the corpus.
+        let raw = parser.raw_value_slice()?;
+        let mut scan = Parser::new(raw);
+        if scan.preflight_array_entries()? > MAX_STANDALONE_ELECTION_BALLOTS_V1 {
+            return Err(json::Error::Message(
+                "ballot corpus exceeds the V1 maximum".into(),
+            ));
+        }
+        let mut entries = SeqVisitor::new(&mut scan)?;
+        while entries
+            .next_element::<StandaloneBallotCorpusEntryV1>()?
+            .is_some()
+        {}
+        entries.finish()?;
+        json::from_str(raw)
+    }
+}
+#[cfg(test)]
+mod election_ballot_json_v1_tests {
+    use super::{ElectionState, MAX_STANDALONE_ELECTION_BALLOTS_V1, StandaloneBallotCorpusEntryV1};
+    use norito::json;
+
+    #[test]
+    fn election_ballot_json_rejects_oversized_corpus_before_typed_decode() {
+        let entries = (0..MAX_STANDALONE_ELECTION_BALLOTS_V1)
+            .map(|index| {
+                let mut nullifier = [0_u8; 32];
+                nullifier[..8].copy_from_slice(
+                    &u64::try_from(index)
+                        .expect("test index fits u64")
+                        .to_le_bytes(),
+                );
+                StandaloneBallotCorpusEntryV1 {
+                    nullifier,
+                    commitment: [7_u8; 32],
+                }
+            })
+            .collect::<Vec<_>>();
+        let exact = ElectionState {
+            accepted_ballots: entries,
+            ..ElectionState::default()
+        };
+        let encoded = json::to_json(&exact).expect("encode canonical election corpus");
+        let decoded: ElectionState = json::from_str(&encoded).expect("decode exact ballot cap");
+        assert_eq!(decoded.accepted_ballots, exact.accepted_ballots);
+        assert_eq!(json::to_json(&decoded).expect("re-encode"), encoded);
+        for retired_field in ["ballot_nullifiers", "ciphertexts"] {
+            let retired = encoded.replacen(
+                "\"accepted_ballots\":",
+                &format!("\"{retired_field}\":[],\"accepted_ballots\":"),
+                1,
+            );
+            assert_ne!(retired, encoded);
+            assert!(
+                json::from_str::<ElectionState>(&retired).is_err(),
+                "retired `{retired_field}` layout must not decode"
+            );
+        }
+
+        let mut too_many_entries = exact.clone();
+        too_many_entries
+            .accepted_ballots
+            .push(StandaloneBallotCorpusEntryV1 {
+                nullifier: [255_u8; 32],
+                commitment: [7_u8; 32],
+            });
+        let encoded = json::to_json(&too_many_entries).expect("encode oversized corpus");
+        let error = json::from_str::<ElectionState>(&encoded)
+            .expect_err("oversized corpus must be refused before Vec reservation");
+        assert!(
+            error
+                .to_string()
+                .contains("ballot corpus exceeds the V1 maximum")
+        );
+
+        let encoded = json::to_json(&exact).expect("encode exact corpus");
+        let wrong_commitment_size = encoded.replacen(&"07".repeat(32), &"07".repeat(33), 1);
+        assert_ne!(wrong_commitment_size, encoded);
+        let error = json::from_str::<ElectionState>(&encoded)
+            .expect("original fixed-size commitment is canonical");
+        assert_eq!(error.accepted_ballots, exact.accepted_ballots);
+        assert!(json::from_str::<ElectionState>(&wrong_commitment_size).is_err());
+    }
 }
 const ELECTION_RESTORE_ERROR_PREFIX_V1: &str = "elections: ";
 
@@ -11373,6 +11510,19 @@ fn validate_election_state_for_restore_v1(
         .map_err(|error| invalid(error.to_string()))?;
     if election.end_ts < election.start_ts {
         return Err(invalid("end_ts precedes start_ts".into()));
+    }
+    if election.accepted_ballots.len() > MAX_STANDALONE_ELECTION_BALLOTS_V1 {
+        return Err(invalid("ballot corpus exceeds the V1 maximum".into()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if election
+        .accepted_ballots
+        .iter()
+        .any(|entry| !seen.insert(entry.nullifier))
+    {
+        return Err(invalid(
+            "duplicate ballot nullifier in accepted corpus".into(),
+        ));
     }
     election
         .tally
@@ -21960,6 +22110,48 @@ impl World {
                     "Identifier claim {opaque_id} carries an all-zero receipt hash"
                 ));
             }
+            if claim.policy_id.is_phone_retail() {
+                let nullifier = claim.phone_retail_nullifier.ok_or_else(|| {
+                    format!("Phone retail claim {opaque_id} lacks a canonical nullifier")
+                })?;
+                if nullifier == Hash::prehashed([0; Hash::LENGTH]) {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has a zero nullifier"
+                    ));
+                }
+                let policy = self
+                    .identifier_policies
+                    .view()
+                    .get(&claim.policy_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned policy")
+                    })?;
+                if policy.program_id.to_string() != "phone_retail"
+                    || policy.normalization
+                        != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+                    || policy.phone_retail_attestor_public_key.is_none()
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted policy metadata"
+                    ));
+                }
+                let program_id_bytes = norito::encode_canonical(&policy.program_id)
+                    .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
+                let (expected_id, expected_receipt_hash) =
+                    iroha_crypto::identifier_hashes_from_output_hash(&program_id_bytes, &nullifier);
+                if *opaque_id != OpaqueAccountId::from(expected_id)
+                    || claim.receipt_hash != expected_receipt_hash
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} diverges from its canonical nullifier index"
+                    ));
+                }
+            } else if claim.phone_retail_nullifier.is_some() {
+                return Err(format!(
+                    "Non-phone claim {opaque_id} carries a phone nullifier"
+                ));
+            }
             let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
                 return Err(format!(
                     "Identifier claim {opaque_id} is missing from the opaque UAID index"
@@ -31693,6 +31885,7 @@ impl State {
         .expect("infallible replacement-block pristine stage")
     }
     /// Create a replacement block with one pre-lifecycle deterministic stage.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub(crate) fn block_and_revert_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,

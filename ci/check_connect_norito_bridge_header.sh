@@ -10,6 +10,7 @@ UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 PRIVACY_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
 RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_reserve_finality_v1.rs"
+TESTNET_OBSERVATION_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_testnet_observation_v1.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
@@ -23,6 +24,8 @@ SELF_TESTS=(
   --self-test-bad-reserve-finality-height-signature
   --self-test-missing-reserve-finality-request-binding
   --self-test-missing-kagemusha-header-symbol
+  --self-test-missing-kagemusha-close-header-symbol
+  --self-test-missing-kagemusha-testnet-observation-header-symbol
   --self-test-missing-kagemusha-rust-symbol
   --self-test-bad-kagemusha-signature
   --self-test-missing-kagemusha-command-binding
@@ -43,6 +46,7 @@ SELF_TESTS=(
   --self-test-bad-sorafs-reference-bundle-layout
   --self-test-bad-sorafs-reference-bundle-limit
   --self-test-missing-generated-transaction-signer
+  --self-test-missing-conviction-update-signer-header-symbol
   --self-test-bad-generated-transaction-signer-signature
   --self-test-forbidden-retired-transaction-signer
   --self-test-bad-deallocator-signature
@@ -62,6 +66,7 @@ run_contract_check() {
   local hijiri_api="$6"
   local private_settlement_rust="$7"
   local reserve_finality_rust="$8"
+  local testnet_observation_rust="$9"
 
   python3 - \
     "${rust_lib}" \
@@ -71,7 +76,8 @@ run_contract_check() {
     "${parliament_rust}" \
     "${hijiri_api}" \
     "${private_settlement_rust}" \
-    "${reserve_finality_rust}" <<'PY'
+    "${reserve_finality_rust}" \
+    "${testnet_observation_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -84,6 +90,7 @@ rust += "\n" + Path(sys.argv[5]).read_text(encoding="utf-8")
 hijiri_api = Path(sys.argv[6]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[9]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -112,6 +119,8 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_core_coordinator_contract_v1",
     "connect_norito_kagemusha_core_coordinator_open_v1",
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
+    "connect_norito_kagemusha_core_coordinator_close_v1",
+    "connect_norito_kagemusha_testnet_state_proof_observe_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -169,6 +178,7 @@ PRIVATE_SETTLEMENT_EXPORTS = {
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
+    "connect_norito_encode_account_read_permission_multisig_signed_transaction",
     "connect_norito_encode_burn_signed_transaction",
     "connect_norito_encode_claim_identifier_signed_transaction",
     "connect_norito_encode_governance_cast_plain_ballot_signed_transaction",
@@ -181,9 +191,12 @@ TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_set_key_value_signed_transaction",
     "connect_norito_encode_transfer_signed_transaction",
 }
+TRANSACTION_SIGNER_ALGORITHM_ONLY_EXPORTS = {
+    "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
+}
 TRANSACTION_SIGNER_EXPORTS = TRANSACTION_SIGNER_BASE_EXPORTS | {
     f"{name}_alg" for name in TRANSACTION_SIGNER_BASE_EXPORTS
-}
+} | TRANSACTION_SIGNER_ALGORITHM_ONLY_EXPORTS
 
 
 def split_parameters(value: str) -> list[str]:
@@ -466,8 +479,8 @@ require_signature_parity(
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
 
-require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+23\b", header, "C bridge ABI version")
-require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*23\s*;", privacy, "Rust bridge ABI version")
+require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+24\b", header, "C bridge ABI version")
+require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*24\s*;", privacy, "Rust bridge ABI version")
 require(
     r"const\s+CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*PRIVACY_BRIDGE_ABI_VERSION_V1\s*;",
     rust,
@@ -544,7 +557,7 @@ if umbrella.strip() != """// Umbrella header for NoritoBridge
     raise SystemExit("[connect-norito-header] umbrella header drift")
 
 print(
-    "[connect-norito-header] ABI 23 synchronized: "
+    "[connect-norito-header] ABI 24 synchronized: "
     f"{len(KAGEMUSHA_EXPORTS)} KAGEMUSHA, {len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(HIJIRI_EXPORTS)} Hijiri, "
@@ -620,6 +633,7 @@ make_negative_workspace() {
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${RESERVE_FINALITY_RUST}" "${tmp}/kagemusha_reserve_finality_v1.rs"
+  cp "${TESTNET_OBSERVATION_RUST}" "${tmp}/kagemusha_testnet_observation_v1.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -629,6 +643,7 @@ make_negative_workspace() {
 
 expect_contract_rejection() {
   local tmp="$1"
+  local expected_diagnostic="${2:-}"
   local output
   if output="$(run_contract_check \
       "${tmp}/lib.rs" \
@@ -638,8 +653,14 @@ expect_contract_rejection() {
       "${tmp}/parliament_timed_ovn_ffi.rs" \
       "${tmp}/validation_fee_api.rs" \
       "${tmp}/private_settlement_ffi.rs" \
-      "${tmp}/kagemusha_reserve_finality_v1.rs" 2>&1)"; then
+      "${tmp}/kagemusha_reserve_finality_v1.rs" \
+      "${tmp}/kagemusha_testnet_observation_v1.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
+    exit 1
+  fi
+  if [[ -n "${expected_diagnostic}" && "${output}" != *"${expected_diagnostic}"* ]]; then
+    echo "[connect-norito-header] negative control rejected for the wrong reason: ${MODE}" >&2
+    echo "${output}" >&2
     exit 1
   fi
   echo "[connect-norito-header] negative control rejected expected drift: ${MODE}"
@@ -664,12 +685,14 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${PARLIAMENT_RUST}" \
     "${HIJIRI_API}" \
     "${PRIVATE_SETTLEMENT_RUST}" \
-    "${RESERVE_FINALITY_RUST}" >/dev/null
+    "${RESERVE_FINALITY_RUST}" \
+    "${TESTNET_OBSERVATION_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
   tmp_header="${tmp}/connect_norito_bridge.h"
   tmp_umbrella="${tmp}/NoritoBridge.h"
+  expected_diagnostic=""
 
   case "${MODE}" in
     --self-test-missing-reserve-finality-header-symbol)
@@ -706,13 +729,25 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23" \
+        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 24" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
     --self-test-missing-kagemusha-header-symbol)
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_v1_payment_validate" \
         "removed_kagemusha_v1_payment_validate"
+      ;;
+    --self-test-missing-kagemusha-close-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_core_coordinator_close_v1" \
+        "removed_kagemusha_core_coordinator_close_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_core_coordinator_close_v1']"
+      ;;
+    --self-test-missing-kagemusha-testnet-observation-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_testnet_state_proof_observe_v1" \
+        "removed_kagemusha_testnet_state_proof_observe_v1"
+      expected_diagnostic="C KAGEMUSHA inventory mismatch: missing=['connect_norito_kagemusha_testnet_state_proof_observe_v1']"
       ;;
     --self-test-missing-kagemusha-rust-symbol)
       replace_once "${tmp_rust}" \
@@ -814,6 +849,12 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "    connect_norito_encode_burn_signed_transaction =>" \
         "    removed_connect_norito_encode_burn_signed_transaction =>"
       ;;
+    --self-test-missing-conviction-update-signer-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg" \
+        "removed_governance_update_plain_conviction_signed_transaction_alg"
+      expected_diagnostic="C transaction signer inventory mismatch: missing=['connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg']"
+      ;;
     --self-test-bad-generated-transaction-signer-signature)
       replace_once "${tmp_rust}" \
         '$algorithm_code: u8,' \
@@ -840,7 +881,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
   esac
 
-  expect_contract_rejection "${tmp}"
+  expect_contract_rejection "${tmp}" "${expected_diagnostic}"
   exit 0
 fi
 
@@ -857,5 +898,6 @@ run_contract_check \
   "${PARLIAMENT_RUST}" \
   "${HIJIRI_API}" \
   "${PRIVATE_SETTLEMENT_RUST}" \
-  "${RESERVE_FINALITY_RUST}"
+  "${RESERVE_FINALITY_RUST}" \
+  "${TESTNET_OBSERVATION_RUST}"
 compile_header

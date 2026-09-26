@@ -61,6 +61,8 @@ pub enum FinalPromotionCheckObservationErrorV1 {
     Submission,
     /// The private pending-Reserve journal is unavailable, changed or noncanonical.
     Journal,
+    /// Local inventory resources are busy; reconcile the original signed operation.
+    LocalCapacity,
 }
 impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -74,6 +76,7 @@ impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
             Self::Provider => "final-promotion Check observer unavailable",
             Self::Submission => "final-promotion Check submission unavailable",
             Self::Journal => "final-promotion pending Reserve journal unavailable",
+            Self::LocalCapacity => "final-promotion pending Reserve journal capacity unavailable",
         })
     }
 }

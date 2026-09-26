@@ -203,7 +203,10 @@ impl NativeLaneDriver {
                 .iter()
                 .any(|peer| peer.public_key() == self.key.public_key());
         let authenticate = || -> Result<()> {
-            let bytes = match input {
+            // Count the canonical frame before signature work or a second full
+            // allocation. The original fair-ingress carrier remains owned by
+            // the caller on an oversized rejection.
+            let frame_bytes = match input {
                 NativeLaneInputRef::Control(envelope) => {
                     if !local {
                         return Err(
@@ -213,6 +216,17 @@ impl NativeLaneDriver {
                     if envelope.version != LANE_MESSAGE_VERSION_V1 {
                         return Err("unsupported native lane envelope revision".into());
                     }
+                    norito::canonical_frame_len(envelope).map_err(|error| error.to_string())?
+                }
+                NativeLaneInputRef::Decision(decision) => {
+                    norito::canonical_frame_len(decision).map_err(|error| error.to_string())?
+                }
+            };
+            if frame_bytes > self.limits.maximum_message_bytes.get() {
+                return Err("native message exceeds its admitted frame bound".into());
+            }
+            match input {
+                NativeLaneInputRef::Control(envelope) => {
                     envelope
                         .message
                         .validate_shape(lane.frozen().committee.len())
@@ -222,17 +236,12 @@ impl NativeLaneDriver {
                     LaneAuthenticator::new(lane)
                         .event(&envelope.message, tag)
                         .map_err(|error| error.to_string())?;
-                    norito::encode_canonical(envelope).map_err(|error| error.to_string())?
                 }
                 NativeLaneInputRef::Decision(decision) => {
                     LaneAuthenticator::new(lane)
                         .decision_certificate(decision)
                         .map_err(|error| error.to_string())?;
-                    norito::encode_canonical(decision).map_err(|error| error.to_string())?
                 }
-            };
-            if bytes.len() > self.limits.maximum_message_bytes.get() {
-                return Err("native message exceeds its admitted frame bound".into());
             }
             Ok(())
         };

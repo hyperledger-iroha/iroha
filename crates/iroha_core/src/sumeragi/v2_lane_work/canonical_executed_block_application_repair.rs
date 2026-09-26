@@ -21,28 +21,39 @@ impl CanonicalRecoveryReadError {
 const CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES: usize = MAX_CERTIFIED_MERGE_CHUNK_BYTES;
 const CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS: usize =
     (STRICT_INIT_MAX_BLOCK_BYTES as usize).div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
+/// Bare `BlockMessage` encoding is a u32 variant followed by a length-framed
+/// `Box<T>`. The box itself length-frames the borrowed inner payload.
+fn canonical_historical_recovery_message_len(inner_len: usize) -> Option<usize> {
+    u64::try_from(inner_len).ok()?;
+    let flags = norito::core::default_encode_flags();
+    let boxed_len =
+        norito::core::len_prefix_len_with_flags(inner_len, flags).checked_add(inner_len)?;
+    u64::try_from(boxed_len).ok()?;
+    4usize
+        .checked_add(norito::core::len_prefix_len_with_flags(boxed_len, flags))?
+        .checked_add(boxed_len)
+}
 /// Check the canonical-only request against the configured authenticated frame.
 pub(crate) fn canonical_executed_block_request_fits_frame(
     limits: V2LaneWorkLimits,
     request: &LaneHistoricalRecoveryRequestV1,
 ) -> bool {
-    BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone()))
-        .encode()
-        .len()
-        <= limits
-            .merge_share_frame_capacity
-            .get()
-            .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
+    canonical_historical_recovery_message_len(request.encoded_len()).is_some_and(|bytes| {
+        bytes
+            <= limits
+                .merge_share_frame_capacity
+                .get()
+                .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
+    })
 }
 fn canonical_executed_block_response_fits_frame(
     limits: V2LaneWorkLimits,
     response: &LaneHistoricalRecoveryResponseV1,
 ) -> bool {
-    let bytes = BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response.clone()))
-        .encode()
-        .len();
-    super::fair_v2_ingress_required_lane_p2p_frame_bytes(bytes)
-        <= limits.historical_recovery_response_frame_capacity.get()
+    canonical_historical_recovery_message_len(response.encoded_len()).is_some_and(|bytes| {
+        super::fair_v2_ingress_required_lane_p2p_frame_bytes(bytes)
+            <= limits.historical_recovery_response_frame_capacity.get()
+    })
 }
 /// Build one exact chunk-recovery dependency from locally verified durable
 /// State, Kura finality, and the consensus-signed canonical wire length.
@@ -200,15 +211,13 @@ fn validate_canonical_executed_block_request(
     }
     Ok((**need, finality, *chunk_index))
 }
-fn canonical_executed_block_matches_need(
+fn canonical_executed_block_wire_matching_need(
     block: &SignedBlock,
     finality: &wire::finality::V2FinalityArtifact,
     need: CanonicalExecutedBlockNeedV1,
-) -> bool {
-    let Ok(wire) = block.encode_wire() else {
-        return false;
-    };
-    finality.verify().is_ok()
+) -> Option<Vec<u8>> {
+    let wire = block.encode_wire().ok()?;
+    (finality.verify().is_ok()
         && finality.validate_for_header(&block.header()).is_ok()
         && finality.height == need.height
         && finality.block_hash == need.block_hash
@@ -216,7 +225,8 @@ fn canonical_executed_block_matches_need(
         && block.header().height().get() == need.height
         && block.hash() == need.block_hash
         && u64::try_from(wire.len()).ok() == Some(need.executed_block_wire_len)
-        && Hash::new(&wire) == need.executed_block_wire_hash
+        && Hash::new(&wire) == need.executed_block_wire_hash)
+        .then_some(wire)
 }
 /// Build one exact Kura-backed response after validating committed State and finality.
 pub(crate) fn build_canonical_executed_block_response(
@@ -237,21 +247,8 @@ pub(crate) fn build_canonical_executed_block_response(
         .read_block_body(height)
         .map_err(CanonicalRecoveryReadError::storage)?
         .ok_or_else(|| "canonical executed block is unavailable at responder".to_owned())?;
-    if !canonical_executed_block_matches_need(&block, &finality, need) {
-        return Err("canonical executed-block response differs from finality"
-            .to_owned()
-            .into());
-    }
-    let wire = block.encode_wire().map_err(|error| error.to_string())?;
-    if u64::try_from(wire.len()).ok() != Some(need.executed_block_wire_len)
-        || Hash::new(&wire) != need.executed_block_wire_hash
-    {
-        return Err(
-            "canonical executed-block wire exceeds the durable block bound"
-                .to_owned()
-                .into(),
-        );
-    }
+    let wire = canonical_executed_block_wire_matching_need(&block, &finality, need)
+        .ok_or_else(|| "canonical executed-block response differs from finality".to_owned())?;
     let chunk_count = wire.len().div_ceil(CANONICAL_EXECUTED_BLOCK_CHUNK_BYTES);
     let chunk_index_usize = usize::try_from(chunk_index).map_err(|error| error.to_string())?;
     if chunk_count == 0
@@ -608,7 +605,7 @@ impl CanonicalExecutedBlockRecovery {
                 need,
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-            if !canonical_executed_block_matches_need(&block, &finality, need) {
+            if canonical_executed_block_wire_matching_need(&block, &finality, need).is_none() {
                 return Err(V2LaneWorkError::Persistence(
                     "locally cached canonical executed block conflicts with its exact need"
                         .to_owned(),
@@ -954,10 +951,8 @@ impl CanonicalExecutedBlockRecovery {
             self.abandon_front_responder_after_append(retained_prefix_len)?;
             return Ok(V2LaneIngressOutcome::Rejected);
         };
-        if block
-            .encode_wire()
-            .map_or(true, |canonical_wire| canonical_wire != self.assembly)
-            || !canonical_executed_block_matches_need(&block, &local_finality, need)
+        if canonical_executed_block_wire_matching_need(&block, &local_finality, need)
+            .is_none_or(|canonical_wire| canonical_wire != self.assembly)
         {
             self.abandon_front_responder_after_append(retained_prefix_len)?;
             return Ok(V2LaneIngressOutcome::Rejected);

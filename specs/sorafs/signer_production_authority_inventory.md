@@ -1,7 +1,7 @@
 # SoraFS production signer authority inventory
 
 This is the implementation inventory for G02.1, initially inspected on 2026-09-13
-and rechecked on 2026-09-23 in the `optimizations` checkout. It records existing
+and rechecked on 2026-09-24 in the `optimizations` checkout. It records existing
 source boundaries and missing production code. Configuration declarations and
 test signatures do not prove an operating signer, authoritative state source or
 deployment. The outer receipt contract is
@@ -41,13 +41,24 @@ operation before key I/O. Completion consumes that owner. The existing sign path
 still stages the complete immutable receipt before the authoritative completion
 CAS and verifies fresh completion before release; recovery does not sign again.
 
+The purpose-specific service now has an explicit owner-only software-credential
+constructor. It requires the caller's independent operation-state source,
+preflights the role, reviewed manifest coordinates and private-journal purpose
+before credential access, and passes one source to both the software key provider
+and coordinator. This is local assembly of the already bounded four-signature
+ceremony, not a configured daemon entrypoint or finalized state implementation.
+The [role-13 finalized-source audit](../../docs/history/2026-09-24/sorafs-release-manifest-role13-finalized-source-audit.md)
+traces the closed Core action handler, raw custody-only reader, test-only state
+sources and rejected generic software dispatch. No production state source can
+be assembled from those current APIs.
+
 This is a producer prerequisite. Role13 remains rejected by the external software
 adapter/protocol. A configured production path still needs native ReleaseManifest
 custody/permission/Current Check and operation authority, a state/finality provider
 using actual State/Kura/Queue, qualified observer/time/floor and fee/submission
-assembly, and an authenticated software key adapter carrying all four ordered
-operations plus ambiguous recovery. Injected provider tests and a local receipt
-journal establish none of that authority. The integrated daemon harness passes
+assembly, configured software purpose dispatch, and ambiguous recovery. Injected
+provider tests and a local receipt journal establish none of that authority.
+The integrated daemon harness passes
 all seven new ceremony-owner controls and all 111 signer-operation tests;
 `target/first-release-release-ceremony-native/identity.json` records the copied
 binary and unchanged observed inputs. Its observation was captured while the

@@ -45,6 +45,20 @@ use std::{
 /// This is a structural capacity bound, not signing, spending, custody or currentness authority.
 pub const FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1: usize = 64 * 1024;
 const MAX_ROUND: Duration = Duration::from_secs(60);
+/// Maximum canonical lineage a one-use native Check may replay from its trusted floor.
+/// Shared preflight runs before any Kura finality or block-body read.
+const MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1: u64 = 4_096;
+
+fn check_history_span_v1(floor_height: u64, applied_height: u64) -> Result<(), Error> {
+    if applied_height
+        .checked_sub(floor_height)
+        .and_then(|distance| distance.checked_add(1))
+        .is_none_or(|span| span > MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1)
+    {
+        return Err(Error::Finality);
+    }
+    Ok(())
+}
 
 /// Shared proof failures, mapped into each purpose's payload-free public errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +159,21 @@ pub(crate) enum NativeCustodyCheckPurposeV1 {
 pub(crate) enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stream-token native Check has no production caller yet"
+        )
+    )]
     StreamToken(&'a MutateSorafsStreamTokenAuthority),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "topology native Check has no production caller yet"
+        )
+    )]
     Topology(&'a MutateSorafsTopologyAuthority),
 }
 impl NativeCustodyCheckRefV1<'_> {
@@ -429,6 +457,7 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
     if check_height <= bound.floor.height || check_height > applied_height {
         return Err(Error::NotApplied);
     }
+    check_history_span_v1(bound.floor.height, applied_height)?;
     let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
     let mut check_artifact = None;
     let mut applied_floor = bound.floor;

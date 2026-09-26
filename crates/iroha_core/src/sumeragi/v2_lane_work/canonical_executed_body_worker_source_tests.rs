@@ -74,6 +74,11 @@ fn recv_canonical_worker_completion(
 }
 
 #[test]
+fn canonical_historical_recovery_message_len_refuses_overflow() {
+    assert_eq!(canonical_historical_recovery_message_len(usize::MAX), None);
+}
+
+#[test]
 fn canonical_executed_body_worker_prepares_source_without_local_repair_need() {
     use crate::sumeragi::v2_block_sync::{
         CanonicalExecutedBodyServeAdmission, CanonicalExecutedBodyServeCompletion,
@@ -83,6 +88,22 @@ fn canonical_executed_body_worker_prepares_source_without_local_repair_need() {
     let (adapter, keys, block, finality) = canonical_executed_block_recovery_fixture();
     let need = canonical_executed_block_need(&block, &finality);
     let request = canonical_executed_body_worker_request(&adapter, need);
+    let request_wire_len = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone()))
+        .encode()
+        .len();
+    assert_eq!(
+        canonical_historical_recovery_message_len(request.encoded_len()),
+        Some(request_wire_len)
+    );
+    assert_eq!(
+        canonical_executed_block_request_fits_frame(adapter.limits, &request),
+        request_wire_len
+            <= adapter
+                .limits
+                .merge_share_frame_capacity
+                .get()
+                .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
+    );
     let responder_key = keys[0].clone();
     let responder = PeerId::new(responder_key.public_key().clone());
     let mut server = V2BlockSyncServer::new_with_historical_body_service(
@@ -122,6 +143,30 @@ fn canonical_executed_body_worker_prepares_source_without_local_repair_need() {
     let BlockMessage::LaneHistoricalRecoveryResponse(response) = envelope.as_message() else {
         panic!("worker prepares only canonical response traffic")
     };
+    let response_wire_len = envelope.as_message().encode().len();
+    assert_eq!(
+        canonical_historical_recovery_message_len(response.as_ref().encoded_len()),
+        Some(response_wire_len)
+    );
+    assert_eq!(
+        canonical_executed_block_response_fits_frame(adapter.limits, response.as_ref()),
+        super::super::fair_v2_ingress_required_lane_p2p_frame_bytes(response_wire_len)
+            <= adapter
+                .limits
+                .historical_recovery_response_frame_capacity
+                .get()
+    );
+    let verified_wire = canonical_executed_block_wire_matching_need(&block, &finality, need)
+        .expect("committed canonical block has one verified wire");
+    assert_eq!(
+        verified_wire,
+        block.encode_wire().expect("canonical signed block wire")
+    );
+    let wrong_need = CanonicalExecutedBlockNeedV1 {
+        executed_block_wire_len: need.executed_block_wire_len + 1,
+        ..need
+    };
+    assert!(canonical_executed_block_wire_matching_need(&block, &finality, wrong_need).is_none());
     assert_eq!(response.request_hash, HashOf::new(&request));
     let LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk {
         finality_artifact,
@@ -136,6 +181,7 @@ fn canonical_executed_body_worker_prepares_source_without_local_repair_need() {
     assert_eq!(finality_artifact, &finality);
     assert_eq!(*wire_len, need.executed_block_wire_len);
     assert_eq!(*chunk_index, 0);
+    assert_eq!(bytes.as_slice(), &verified_wire[..bytes.len()]);
     assert!(!bytes.is_empty());
     assert!(!server.has_pending_historical_body_serve());
 

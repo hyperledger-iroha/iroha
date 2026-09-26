@@ -53,6 +53,7 @@ const BFV_PROGRAM_OPAQUE_HASH_DOMAIN: &[u8] = b"iroha.ram_lfe.bfv_program.opaque
 const BFV_PROGRAM_RECEIPT_HASH_DOMAIN: &[u8] = b"iroha.ram_lfe.bfv_program.receipt_hash.v1";
 const BFV_PROGRAM_DIGEST_DOMAIN: &[u8] = b"iroha.ram_lfe.bfv_program.digest.v1";
 const RAM_FHE_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha.ram_lfe.output_hash.v1";
+const PHONE_RETAIL_NULLIFIER_DOMAIN: &[u8] = b"iroha.identifier.phone_retail.nullifier.v1";
 const IDENTIFIER_OUTPUT_OPAQUE_HASH_DOMAIN: &[u8] = b"iroha.ram_lfe.identifier.opaque_hash.v1";
 const IDENTIFIER_OUTPUT_RECEIPT_HASH_DOMAIN: &[u8] = b"iroha.ram_lfe.identifier.receipt_hash.v1";
 const BFV_AFFINE_OUTPUT_BYTES: usize = Hash::LENGTH;
@@ -467,6 +468,45 @@ pub enum RamLfeError {
     /// The selected backend is not supported by the evaluator.
     #[error("unsupported RAM-LFE backend `{0}`")]
     UnsupportedBackend(String),
+    /// A phone nullifier may only be derived from an exact canonical E.164 value.
+    #[error("phone nullifier requires canonical E.164 input")]
+    NonCanonicalPhone,
+    /// The private phone-nullifier key must carry at least 256 bits of entropy.
+    #[error("phone nullifier secret must be at least 32 bytes")]
+    WeakPhoneNullifierSecret,
+}
+/// Derive a stable, non-enumerable retail-phone nullifier after canonicalization.
+///
+/// The attestor must retain the same secret for the lifetime of the pinned policy.
+/// The signed canonicality statement is the consensus-visible proof that this
+/// private derivation was performed for the encrypted input.
+///
+/// # Errors
+/// Returns an error for a noncanonical phone, a secret shorter than 32 bytes,
+/// or an HKDF expansion failure.
+pub fn derive_phone_retail_nullifier_v1(
+    secret: &[u8],
+    network_id: &[u8; Hash::LENGTH],
+    canonical_phone: &str,
+) -> Result<Hash, RamLfeError> {
+    let bytes = canonical_phone.as_bytes();
+    if bytes.len() < 3
+        || bytes.len() > 16
+        || bytes[0] != b'+'
+        || !matches!(bytes[1], b'1'..=b'9')
+        || !bytes[2..].iter().all(u8::is_ascii_digit)
+    {
+        return Err(RamLfeError::NonCanonicalPhone);
+    }
+    if secret.len() < Hash::LENGTH {
+        return Err(RamLfeError::WeakPhoneNullifierSecret);
+    }
+    let hkdf = Hkdf::<Sha3_512>::new(Some(network_id), secret);
+    let mut material = Zeroizing::new([0_u8; Hash::LENGTH]);
+    let info = [PHONE_RETAIL_NULLIFIER_DOMAIN, canonical_phone.as_bytes()].concat();
+    hkdf.expand(&info, material.as_mut())
+        .map_err(|_| RamLfeError::DerivationFailed)?;
+    Ok(Hash::prehashed(*material))
 }
 /// Runtime evaluator interface for hidden-function services.
 pub trait Evaluator: Send + Sync {

@@ -127,11 +127,11 @@ mod deep_geometry;
 #[path = "backend/deep_polynomial.rs"]
 mod deep_polynomial;
 #[cfg(test)]
-#[path = "backend/deep_prover_plan.rs"]
-mod deep_prover_plan;
-#[cfg(test)]
 #[path = "backend/deep_proof.rs"]
 mod deep_proof;
+#[cfg(test)]
+#[path = "backend/deep_prover_plan.rs"]
+mod deep_prover_plan;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;

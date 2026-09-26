@@ -930,29 +930,46 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
 ) -> SccpFinalizedBlockTestFixtureV1 {
-    sccp_finalize_taira_block_test_fixture_with_boundary_v1(block, parent, false)
+    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+        block,
+        parent,
+        SccpFinalityFixtureEpochSchedule::Ordinary,
+    )
 }
 
 fn sccp_finalize_taira_epoch_boundary_test_fixture_v1(
     block: &SignedBlock,
 ) -> SccpFinalizedBlockTestFixtureV1 {
-    sccp_finalize_taira_block_test_fixture_with_boundary_v1(block, None, true)
+    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+        block,
+        None,
+        SccpFinalityFixtureEpochSchedule::GenesisBoundary,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SccpFinalityFixtureEpochSchedule {
+    Ordinary,
+    GenesisBoundary,
 }
 
 #[expect(
     clippy::too_many_lines,
     reason = "the test-only signer keeps the ordered block, roster, context, QC, and aggregate-binding checks cohesive"
 )]
-fn sccp_finalize_taira_block_test_fixture_with_boundary_v1(
+fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
-    genesis_epoch_boundary: bool,
+    epoch_schedule: SccpFinalityFixtureEpochSchedule,
 ) -> SccpFinalizedBlockTestFixtureV1 {
     let block_header = block.header();
     let height = block_header.height().get();
     assert!(
-        (1..=9).contains(&height),
-        "the exact SCCP finality signer supports only its bounded first-epoch fixture window"
+        match epoch_schedule {
+            SccpFinalityFixtureEpochSchedule::Ordinary => (1..=9).contains(&height),
+            SccpFinalityFixtureEpochSchedule::GenesisBoundary => height == 1,
+        },
+        "the exact SCCP finality signer received a height outside its selected epoch schedule"
     );
     assert_exact_fixture_block_body(block);
     let mut keypairs = [
@@ -995,39 +1012,50 @@ fn sccp_finalize_taira_block_test_fixture_with_boundary_v1(
                 KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
             };
 
-            let first_epoch_end = if genesis_epoch_boundary { 1 } else { 10 };
+            let first_epoch_end = match epoch_schedule {
+                SccpFinalityFixtureEpochSchedule::Ordinary => 10,
+                SccpFinalityFixtureEpochSchedule::GenesisBoundary => 1,
+            };
             let (authorization, authority) =
                 sccp_mint_finality_genesis_test_fixture_v1(network_id, &roster, first_epoch_end);
-            let next_epoch_snapshot = genesis_epoch_boundary.then(|| {
-                let successor = KagemushaMintFinalityEpochAuthorizationV1 {
-                    epoch: 1,
-                    first_height: 2,
-                    last_height: 10,
-                    beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                        session_id: [0xC4; 32],
-                        transcript_hash: [0xC5; 32],
-                    }),
-                    previous_authorization_id: authorization
-                        .authorization_id()
-                        .expect("exact SCCP predecessor authorization identity"),
-                    decision: KagemushaMintFinalityEpochDecisionV1::Retain,
-                    ..authorization
-                };
-                successor
-                    .validate_successor(&authorization)
-                    .expect("exact SCCP epoch-one authorization is contiguous");
-                iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
-                    epoch: successor.epoch,
-                    kagemusha_mint_finality_authorization: successor,
-                    kagemusha_mint_finality_authority: authority.clone(),
-                    epoch_end_height: successor.last_height,
-                    mode: ConsensusMode::Npos,
-                    roster: roster.clone(),
-                    validator_set_pops: validator_set_pops.clone(),
-                    quorum,
-                    leader_seed: [0x5a; 32],
-                }
-            });
+            let next_epoch_snapshot =
+                (epoch_schedule == SccpFinalityFixtureEpochSchedule::GenesisBoundary).then(|| {
+                    let successor = KagemushaMintFinalityEpochAuthorizationV1 {
+                        version: authorization.version,
+                        network_id,
+                        epoch: 1,
+                        first_height: 2,
+                        last_height: 10,
+                        authority_generation: authority.generation,
+                        authority_id: authorization.authority_id,
+                        beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                            session_id: [0xC4; 32],
+                            transcript_hash: [0xC5; 32],
+                        }),
+                        previous_authorization_id: authorization
+                            .authorization_id()
+                            .expect("exact SCCP predecessor authorization identity"),
+                        transition_id: [0; 32],
+                        decision: KagemushaMintFinalityEpochDecisionV1::Retain,
+                    };
+                    successor
+                        .validate_against_authority(&authority)
+                        .expect("exact SCCP epoch-one authorization binds its authority");
+                    successor
+                        .validate_successor(&authorization)
+                        .expect("exact SCCP epoch-one authorization is contiguous");
+                    iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
+                        epoch: successor.epoch,
+                        kagemusha_mint_finality_authorization: successor,
+                        kagemusha_mint_finality_authority: authority.clone(),
+                        epoch_end_height: successor.last_height,
+                        mode: ConsensusMode::Npos,
+                        roster: roster.clone(),
+                        validator_set_pops: validator_set_pops.clone(),
+                        quorum,
+                        leader_seed: [0x5a; 32],
+                    }
+                });
             HeightContext {
                 network_id,
                 protocol_version: PROTOCOL_VERSION,

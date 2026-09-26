@@ -98,7 +98,7 @@ SIMD
 There is support for SIMD in ARC if you are using a nightly compiler. To use this, you need to compile
 with:
 
-    RUSTFLAGS="-C target-feature=+avx2,+avx" cargo ... --features=concread/simd_support
+    RUSTFLAGS="-C target-feature=+avx2,+avx" cargo ... --features=concread/simd
 
 Contributing
 ------------

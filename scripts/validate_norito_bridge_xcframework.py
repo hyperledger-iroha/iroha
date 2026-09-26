@@ -126,6 +126,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_chain_discriminant_scope_enter",
     "connect_norito_chain_discriminant_scope_exit",
     "connect_norito_encode_transfer_signed_transaction",
+    "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
     "connect_norito_encode_transfer_instruction_box",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
@@ -372,8 +373,8 @@ def _validate_root_identity(
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["23"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 23")
+    if header_abis != ["24"]:
+        raise ValidationError("authoritative NoritoBridge header ABI is not exact 24")
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -394,8 +395,8 @@ def _validate_root_identity(
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["23"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 23")
+    if protocol_abis != ["24"]:
+        raise ValidationError("authoritative privacy bridge ABI is not exact 24")
 
 
 def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_integration: bool = False) -> dict[str, object]:
@@ -422,8 +423,8 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_int
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 23:
-        raise ValidationError("artifact does not bind exact native bridge ABI 23")
+    if payload["native_bridge_abi_version"] != 24:
+        raise ValidationError("artifact does not bind exact native bridge ABI 24")
     production = payload["privacy_production_enabled"]
     if type(production) is not bool:
         raise ValidationError("privacy_production_enabled must be boolean")

@@ -233,6 +233,10 @@ pub struct StreamTokenCheckV1 {
 }
 
 /// Sole proposed role-11 native operation surface; not registered as an instruction.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-11 Check and Complete stay inline in canonical V1 Norito; boxing adds a wire length and decoder allocation"
+)]
 #[derive(
     Clone,
     Debug,

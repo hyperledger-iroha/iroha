@@ -6,13 +6,14 @@ import pytest
 
 from iroha_python import NetworkId, ToriiClient
 from iroha_python.address import AccountAddress
+from iroha_python.crypto import Ed25519KeyPair
 
 NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 
 
 def _faucet_account_id(chain_discriminant: int = 753) -> str:
     return AccountAddress.from_account(
-        public_key=bytes(range(32)),
+        public_key=Ed25519KeyPair.from_private_key(bytes(range(32))).public_key,
     ).to_i105(chain_discriminant)
 
 

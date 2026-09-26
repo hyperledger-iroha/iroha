@@ -18,7 +18,7 @@ public static class Kagemusha
     public const int MaximumAssetScale = 28;
     public const ulong RequestMaximumTtlMilliseconds = 5 * 60 * 1_000;
     public const int MaximumAggregateBytes = 768;
-    public const int MaximumRequestBytes = 928;
+    public const int MaximumRequestBytes = 1_024;
     public const int MaximumPaymentBytes = 7_552;
     public const int MaximumAcknowledgementBytes = 256;
     public const int MaximumMintAuthorizationBytes = 7_936;
@@ -736,8 +736,10 @@ public static class Kagemusha
             throw new ArgumentException("KAGEMUSHA V1 hardware credential is invalid.");
         foreach (var field in new[] { value.CredentialId, value.HardwareProfileId, value.SuiteId,
                      value.FirmwarePolicyDigest, value.LaneCommitment, value.HardwareEpochId,
-                     value.DeviceKeyReference })
+                     value.DeviceKeyReference, value.AppPolicyBindingDigest })
             _ = Fixed(field);
+        if (IsZero32(value.AppPolicyBindingDigest))
+            throw new ArgumentException("KAGEMUSHA V1 app-policy binding digest is reserved zero.");
     }
 
     private static void ValidateRequest(KagemushaPaymentRequestV1 value)
@@ -1265,7 +1267,7 @@ public static class Kagemusha
         Fixed(value.SuiteId), Fixed(value.FirmwarePolicyDigest), U64(value.PolicyEpoch), Fixed(value.LaneCommitment),
         Fixed(value.HardwareEpochId), U64(value.HardwareEpochGeneration), value.DevicePublicKey.Sec1Bytes(),
         Fixed(value.DeviceKeyReference), U64(value.IssuedAtMilliseconds), U64(value.ExpiresAtMilliseconds),
-        value.GovernanceSignature.RawBytes());
+        Fixed(value.AppPolicyBindingDigest), value.GovernanceSignature.RawBytes());
 
     private static byte[] EncodeRequestPayload(KagemushaPaymentRequestV1 value) => Fields(
         U16(value.Version), Fixed(value.ReleaseId), value.NetworkId.ToBytes(), value.Asset.CanonicalPayload(),
@@ -1467,7 +1469,8 @@ public static class Kagemusha
             ReadFixed32(ref reader, "laneCommitment"), ReadFixed32(ref reader, "hardwareEpochId"),
             ReadU64(ref reader, "hardwareEpochGeneration"), ReadPublicKey(ref reader, "devicePublicKey"),
             ReadFixed32(ref reader, "deviceKeyReference"), ReadU64(ref reader, "issuedAt"),
-            ReadU64(ref reader, "expiresAt"), ReadSignature(ref reader, "governanceSignature"));
+            ReadU64(ref reader, "expiresAt"), ReadFixed32(ref reader, "appPolicyBindingDigest"),
+            ReadSignature(ref reader, "governanceSignature"));
         reader.RequireEnd();
         return value;
     }
@@ -2147,7 +2150,7 @@ public static class Kagemusha
 
     private static (int Raw, int Text) Limits(PayloadKind kind) => kind switch
     {
-        PayloadKind.PaymentRequest => (MaximumRequestBytes, 1_243),
+        PayloadKind.PaymentRequest => (MaximumRequestBytes, 1_371),
         PayloadKind.Payment => (MaximumPaymentBytes, 10_075),
         PayloadKind.Acknowledgement => (MaximumAcknowledgementBytes, 347),
         PayloadKind.MintAuthorization => (MaximumMintAuthorizationBytes, 10_587),

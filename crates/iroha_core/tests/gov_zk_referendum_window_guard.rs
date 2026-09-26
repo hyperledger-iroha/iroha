@@ -104,8 +104,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
             "rejected ballot must not change referendum status",
         );
         let election = tx.world.elections().get(&id.to_owned()).unwrap();
-        assert!(election.ballot_nullifiers.is_empty());
-        assert!(election.ciphertexts.is_empty());
+        assert!(election.accepted_ballots.is_empty());
         assert_eq!(election.tally, [0, 0]);
     }
 }

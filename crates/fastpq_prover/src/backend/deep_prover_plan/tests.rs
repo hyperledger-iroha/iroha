@@ -126,11 +126,11 @@ fn exact_source_and_full_air_plan_refuses_unmasked_private_openings() {
         assert_eq!(plan.widened_row_opening_bytes, 616_448);
         assert!(plan.widened_row_opening_bytes > plan.proof_byte_target);
         assert_eq!(plan.proof_byte_target, 512 * 1024);
-        assert_eq!(plan.two_max_child_frames_bytes, 1_012_702);
+        assert_eq!(plan.two_max_child_frames_bytes, 1_001_566);
         assert_eq!(plan.axt_inner_payload_ceiling_bytes, 1024 * 1024);
         assert_eq!(
             plan.axt_inner_payload_ceiling_bytes - plan.two_max_child_frames_bytes,
-            35_874
+            47_010
         );
         assert_eq!(
             plan.require_private_proof(),

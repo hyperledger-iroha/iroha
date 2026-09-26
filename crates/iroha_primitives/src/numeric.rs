@@ -14,7 +14,7 @@ use norito::{
     Archived, DeserializePayload, Error, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
-use num_bigint::{BigInt as UnboundedBigInt, Sign as UnboundedSign};
+use num_bigint::{BigInt as UnboundedBigInt, BigUint as UnboundedBigUint, Sign as UnboundedSign};
 use num_traits::{One as _, Signed as _, Zero as _};
 use std::{
     alloc::Layout,
@@ -32,11 +32,13 @@ pub const MAX_DECIMAL_SCALE: u32 = 28;
 const MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS: usize = 154;
 /// Longest canonical quantity text: 154 mantissa digits and one decimal point.
 const MAX_CANONICAL_QUANTITY_TEXT_BYTES: usize = MAX_QUANTITY_MANTISSA_DECIMAL_DIGITS + 1;
-// `num-bigint` stores magnitude digits as u64 on 64-bit targets and u32 otherwise.
+// The pinned `num-bigint` fork stores magnitude digits as u64 on 64-bit targets
+// and u32 otherwise. Use that exact native type for a charged decode allocation.
 #[cfg(target_pointer_width = "64")]
-const UNBOUNDED_BIGINT_DIGIT_BYTES: usize = core::mem::size_of::<u64>();
+type NativeBigDigit = u64;
 #[cfg(not(target_pointer_width = "64"))]
-const UNBOUNDED_BIGINT_DIGIT_BYTES: usize = core::mem::size_of::<u32>();
+type NativeBigDigit = u32;
+const UNBOUNDED_BIGINT_DIGIT_BYTES: usize = core::mem::size_of::<NativeBigDigit>();
 /// Maximum number of factors accepted by aggregate decimal-product helpers.
 ///
 /// Each factor is individually bounded to a 512-bit canonical mantissa, but the helpers
@@ -1330,6 +1332,114 @@ fn invalid_quantity_json(message: &'static str) -> json::Error {
         col: 1,
     }
 }
+/// Build a canonical positive quantity mantissa from little-endian bytes.
+///
+/// The decimal parser supplies a minimal, nonzero magnitude. Validate that
+/// shape again so callers cannot reach an allocation with excess width.
+///
+/// # Safety
+/// If `allocate` returns non-null, it must return an owned pointer allocated
+/// with the requested `Layout`, aligned for `NativeBigDigit`, that can be
+/// transferred to `Vec` and deallocated by the global allocator. A null
+/// pointer is allowed. The callback is not called for invalid or zero layouts.
+#[allow(unsafe_code)]
+unsafe fn quantity_mantissa_from_canonical_le_bytes_with(
+    bytes: &[u8],
+    allocate: impl FnOnce(Layout) -> *mut u8,
+) -> Result<BigInt, json::Error> {
+    let Some(&high_byte) = bytes.last() else {
+        return Err(invalid_quantity_json("noncanonical quantity"));
+    };
+    if high_byte == 0
+        || bytes.len() > MAX_MANTISSA_BYTES
+        || (bytes.len() == MAX_MANTISSA_BYTES && high_byte & 0x80 != 0)
+    {
+        return Err(invalid_quantity_json(
+            "quantity mantissa exceeds the signed 512-bit domain",
+        ));
+    }
+    let digit_count = bytes.len().div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES);
+    let layout = Layout::array::<NativeBigDigit>(digit_count)
+        .map_err(|_| json::Error::DecodeResourceLimit)?;
+    if layout.size() == 0 {
+        return Err(json::Error::DecodeResourceLimit);
+    }
+    norito::core::reserve_decode_allocation(layout.size())
+        .map_err(json::Error::from_decode_resource)?;
+    let pointer = allocate(layout);
+    if pointer.is_null() {
+        return Err(json::Error::AllocationFailed);
+    }
+    let digit_pointer = core::ptr::NonNull::new(pointer)
+        .expect("the allocation pointer was checked non-null")
+        .cast::<NativeBigDigit>()
+        .as_ptr();
+    // SAFETY: `pointer` owns exactly `layout`, whose element count is
+    // `digit_count`; the nonzero layout has the alignment of NativeBigDigit.
+    // The Vec starts empty, each push remains within capacity, and it owns
+    // the allocation on all exit paths.
+    let mut digits = unsafe { Vec::from_raw_parts(digit_pointer, 0, digit_count) };
+    for chunk in bytes.chunks(UNBOUNDED_BIGINT_DIGIT_BYTES) {
+        let mut native_bytes = [0_u8; UNBOUNDED_BIGINT_DIGIT_BYTES];
+        native_bytes[..chunk.len()].copy_from_slice(chunk);
+        digits.push(NativeBigDigit::from_le_bytes(native_bytes));
+    }
+    debug_assert_eq!(digits.len(), digits.capacity());
+    debug_assert_ne!(digits.last(), Some(&0));
+    // The pinned fork adopts this canonical, full-capacity Vec unchanged;
+    // `from_biguint` and the signed-width check do not allocate.
+    let inner = UnboundedBigInt::from_biguint(
+        UnboundedSign::Plus,
+        UnboundedBigUint::from_native_digits(digits),
+    );
+    BigInt::from_inner(inner)
+        .map_err(|_| invalid_quantity_json("quantity mantissa exceeds the signed 512-bit domain"))
+}
+#[allow(unsafe_code)]
+fn quantity_mantissa_from_canonical_le_bytes(bytes: &[u8]) -> Result<BigInt, json::Error> {
+    // SAFETY: `std::alloc::alloc` returns a global-allocator-owned pointer for
+    // exactly the requested nonzero layout, or null on refusal.
+    let allocate = |layout| unsafe { std::alloc::alloc(layout) };
+    unsafe { quantity_mantissa_from_canonical_le_bytes_with(bytes, allocate) }
+}
+// Each nonnegative 512-bit-domain mantissa is below 2^511. Aligning at most 28
+// decimal places adds fewer than 94 bits; summing two aligned values fits in
+// at most 606 bits. Ten u64 limbs therefore cover the full conceptual sum.
+const QUANTITY_SUM_RELATION_LIMBS: usize = 10;
+const _: () = assert!(MAX_MANTISSA_BITS == 512 && MAX_DECIMAL_SCALE == 28);
+
+fn aligned_quantity_sum_limbs(
+    quantity: &Quantity,
+    common_scale: u32,
+) -> Option<[u64; QUANTITY_SUM_RELATION_LIMBS]> {
+    if common_scale < quantity.scale() || common_scale > MAX_DECIMAL_SCALE {
+        return None;
+    }
+    let mut limbs = [0_u64; QUANTITY_SUM_RELATION_LIMBS];
+    for (index, digit) in quantity
+        .mantissa()
+        .inner()
+        .magnitude()
+        .iter_u64_digits()
+        .enumerate()
+    {
+        *limbs.get_mut(index)? = digit;
+    }
+    for _ in quantity.scale()..common_scale {
+        let mut carry = 0_u128;
+        for limb in &mut limbs {
+            let product = u128::from(*limb) * 10 + carry;
+            *limb = u64::try_from(product & u128::from(u64::MAX))
+                .expect("masked decimal limb fits u64");
+            carry = product >> 64;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    Some(limbs)
+}
+
 impl Quantity {
     fn from_canonical_json_text(source: &str) -> Result<Self, json::Error> {
         if source.len() > MAX_CANONICAL_QUANTITY_TEXT_BYTES {
@@ -1409,20 +1519,10 @@ impl Quantity {
         }
         debug_assert!(magnitude_len != 0, "canonical nonzero quantity");
 
-        // The exact-pinned `num-bigint` 0.4.6 builds one exactly-sized native-digit Vec from this
-        // trimmed byte slice. Charge that retained allocation before constructing it;
-        // `BigInt::from_inner` performs its signed-width check without another allocation.
-        let allocation_bytes = magnitude_len
-            .div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES)
-            .checked_mul(UNBOUNDED_BIGINT_DIGIT_BYTES)
-            .ok_or(json::Error::DecodeResourceLimit)?;
-        norito::core::reserve_decode_allocation(allocation_bytes)
-            .map_err(json::Error::from_decode_resource)?;
-        let inner =
-            UnboundedBigInt::from_bytes_le(UnboundedSign::Plus, &magnitude[..magnitude_len]);
-        let mantissa = BigInt::from_inner(inner).map_err(|_| {
-            invalid_quantity_json("quantity mantissa exceeds the signed 512-bit domain")
-        })?;
+        // Charge and create the exact native-digit allocation before handing it
+        // to the pinned bigint fork; byte-slice constructors do not promise an
+        // exact-capacity Vec or a fallible allocator path.
+        let mantissa = quantity_mantissa_from_canonical_le_bytes(&magnitude[..magnitude_len])?;
         Ok(Self(Numeric { mantissa, scale }))
     }
     /// Zero quantity.
@@ -1520,6 +1620,33 @@ impl Quantity {
     /// Returns a canonical result-domain failure.
     pub fn checked_add(&self, other: &Self) -> Result<Self, NumericOperationError> {
         self.try_add(other)
+    }
+    /// Test one exact quantity addition without allocating arithmetic scratch.
+    ///
+    /// Returns `false` when the mathematical sum differs from `expected` or
+    /// would leave the canonical quantity domain. The comparison aligns all
+    /// three nonnegative mantissas at their greatest decimal scale on bounded
+    /// stack limbs, so it also covers canonicalization of trailing zeroes.
+    #[must_use]
+    pub fn checked_add_equals(&self, other: &Self, expected: &Self) -> bool {
+        let common_scale = self.scale().max(other.scale()).max(expected.scale());
+        let Some(mut sum) = aligned_quantity_sum_limbs(self, common_scale) else {
+            return false;
+        };
+        let Some(rhs) = aligned_quantity_sum_limbs(other, common_scale) else {
+            return false;
+        };
+        let Some(expected) = aligned_quantity_sum_limbs(expected, common_scale) else {
+            return false;
+        };
+        let mut carry = 0_u128;
+        for (sum_limb, rhs_limb) in sum.iter_mut().zip(rhs) {
+            let value = u128::from(*sum_limb) + u128::from(rhs_limb) + carry;
+            *sum_limb =
+                u64::try_from(value & u128::from(u64::MAX)).expect("masked addition limb fits u64");
+            carry = value >> 64;
+        }
+        carry == 0 && sum == expected
     }
     /// Subtract quantities, rejecting a negative result as underflow.
     ///
@@ -3081,6 +3208,102 @@ mod tests {
     use core::cmp::Ordering;
     use num_bigint::BigInt as ReferenceInt;
     #[test]
+    fn aligned_quantity_sum_limbs_covers_the_complete_decimal_scale() {
+        let aligned = aligned_quantity_sum_limbs(&Quantity::one(), MAX_DECIMAL_SCALE)
+            .expect("one aligns to the maximum decimal scale");
+        assert_eq!(
+            u128::from(aligned[0]) | (u128::from(aligned[1]) << 64),
+            10_u128.pow(MAX_DECIMAL_SCALE)
+        );
+        assert!(aligned[2..].iter().all(|limb| *limb == 0));
+        let smallest = Quantity::from_canonical_numeric(Numeric::new(1, MAX_DECIMAL_SCALE))
+            .expect("smallest decimal quantity");
+        assert_eq!(aligned_quantity_sum_limbs(&smallest, 0), None);
+        assert_eq!(
+            aligned_quantity_sum_limbs(&Quantity::one(), MAX_DECIMAL_SCALE + 1),
+            None
+        );
+    }
+    #[test]
+    fn checked_add_equals_matches_canonical_arithmetic_at_boundaries() {
+        let one = Quantity::one();
+        let zero = Quantity::zero();
+        let maximum = Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), 0))
+            .expect("largest quantity mantissa");
+        let smallest = Quantity::from_canonical_numeric(Numeric::new(1, MAX_DECIMAL_SCALE))
+            .expect("smallest decimal quantity");
+        for (lhs, rhs) in [
+            (zero.clone(), zero.clone()),
+            (maximum.clone(), zero.clone()),
+            (smallest.clone(), smallest.clone()),
+            (quantity("0.1"), quantity("0.9")),
+            (quantity("1.2"), quantity("0.03")),
+            (quantity("18446744073709551615"), one.clone()),
+        ] {
+            let expected = lhs.checked_add(&rhs).expect("bounded boundary sum");
+            assert!(lhs.checked_add_equals(&rhs, &expected));
+            if let Ok(wrong) = expected.checked_add(&one) {
+                assert!(!lhs.checked_add_equals(&rhs, &wrong));
+            } else {
+                assert!(!lhs.checked_add_equals(&rhs, &zero));
+            }
+        }
+        assert_eq!(
+            maximum.checked_add(&one),
+            Err(NumericOperationError::MantissaOverflow)
+        );
+        assert!(!maximum.checked_add_equals(&one, &maximum));
+        assert!(!maximum.checked_add_equals(&smallest, &maximum));
+
+        // The aligned intermediate exceeds the signed 512-bit mantissa limit,
+        // but its trailing decimal zero leaves a canonical integer in range.
+        let near_limit_tenth = Quantity::from_canonical_numeric(Numeric::new(signed_maximum(), 1))
+            .expect("canonical near-limit tenth");
+        let three_tenths =
+            Quantity::from_canonical_numeric(Numeric::new(3, 1)).expect("canonical three tenths");
+        let normalized = near_limit_tenth
+            .checked_add(&three_tenths)
+            .expect("decimal normalization restores the mantissa bound");
+        assert_eq!(normalized.scale(), 0);
+        assert!(near_limit_tenth.checked_add_equals(&three_tenths, &normalized));
+    }
+    #[test]
+    fn checked_add_equals_matches_checked_add_for_deterministic_wide_inputs() {
+        let mut seed = 0x6b8b_4567_327b_23c6_u64;
+        for _ in 0..256 {
+            let mut values = [Quantity::zero(), Quantity::zero()];
+            for value in &mut values {
+                let mut bytes = [0_u8; MAX_MANTISSA_BYTES];
+                for chunk in bytes.chunks_exact_mut(8) {
+                    seed = seed
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    chunk.copy_from_slice(&seed.to_le_bytes());
+                }
+                bytes[MAX_MANTISSA_BYTES - 1] &= 0x7f;
+                let mantissa = BigInt::from_twos_bytes(&bytes).expect("bounded positive mantissa");
+                let scale = u32::try_from(seed % u64::from(MAX_DECIMAL_SCALE + 1))
+                    .expect("bounded decimal scale");
+                *value = Quantity::from_canonical_numeric(Numeric::new(mantissa, scale))
+                    .expect("canonical nonnegative quantity");
+            }
+            let [lhs, rhs] = values;
+            match lhs.checked_add(&rhs) {
+                Ok(sum) => {
+                    assert!(lhs.checked_add_equals(&rhs, &sum));
+                    if let Ok(wrong) = sum.checked_add(&Quantity::one()) {
+                        assert!(!lhs.checked_add_equals(&rhs, &wrong));
+                    }
+                }
+                Err(NumericOperationError::MantissaOverflow) => {
+                    assert!(!lhs.checked_add_equals(&rhs, &lhs));
+                    assert!(!lhs.checked_add_equals(&rhs, &rhs));
+                }
+                Err(other) => panic!("unexpected bounded sum error: {other}"),
+            }
+        }
+    }
+    #[test]
     fn quantity_admission_clone_preserves_canonical_value_with_exact_digit_layout() {
         let zero = Quantity::zero();
         assert_eq!(zero.admission_clone_layout().unwrap().size(), 0);
@@ -4568,6 +4791,74 @@ mod tests {
         );
         assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
         assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+    #[test]
+    fn quantity_native_digit_decode_matches_reference_at_capacity_boundaries() {
+        for length in [1, 4, 8, 9, 16, 31, 32, 63, MAX_MANTISSA_BYTES] {
+            let mut bytes = vec![0xa5_u8; length];
+            if length == MAX_MANTISSA_BYTES {
+                bytes[length - 1] = 0x7f;
+            }
+            let expected_allocation =
+                length.div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES) * UNBOUNDED_BIGINT_DIGIT_BYTES;
+            let (decoded, usage) = norito::core::with_decode_limits_measured(
+                quantity_json_allocation_limits(expected_allocation),
+                || quantity_mantissa_from_canonical_le_bytes(&bytes),
+            );
+            let reference = UnboundedBigInt::from_bytes_le(UnboundedSign::Plus, &bytes);
+            assert_eq!(
+                decoded.expect("canonical magnitude"),
+                BigInt::from_inner(reference).unwrap()
+            );
+            assert_eq!(usage.total_allocated_bytes(), expected_allocation);
+        }
+    }
+    #[test]
+    #[allow(unsafe_code)]
+    fn quantity_native_digit_decode_rejects_before_allocation_and_reports_allocator_refusal() {
+        for invalid in [&[][..], &[0_u8][..], &[1_u8, 0_u8][..], &[0x80_u8; 64][..]] {
+            let (result, usage) = norito::core::with_decode_limits_measured(
+                quantity_json_allocation_limits(usize::MAX),
+                || {
+                    // SAFETY: this callback panics if called, and validation
+                    // must reject before it can supply any pointer.
+                    unsafe {
+                        quantity_mantissa_from_canonical_le_bytes_with(invalid, |_| {
+                            panic!("invalid magnitude must not allocate")
+                        })
+                    }
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
+        let expected_allocation = UNBOUNDED_BIGINT_DIGIT_BYTES;
+        let (rejected, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(expected_allocation - 1),
+            || {
+                // SAFETY: this callback panics if called, and the budget
+                // must reject before it can supply any pointer.
+                unsafe {
+                    quantity_mantissa_from_canonical_le_bytes_with(&[1], |_| {
+                        panic!("budget refusal must precede allocation")
+                    })
+                }
+            },
+        );
+        assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
+        assert_eq!(usage.total_allocated_bytes(), 0);
+
+        let (rejected, usage) = norito::core::with_decode_limits_measured(
+            quantity_json_allocation_limits(expected_allocation),
+            || {
+                // SAFETY: null is an explicitly permitted allocation refusal.
+                unsafe {
+                    quantity_mantissa_from_canonical_le_bytes_with(&[1], |_| core::ptr::null_mut())
+                }
+            },
+        );
+        assert!(matches!(rejected, Err(json::Error::AllocationFailed)));
+        assert_eq!(usage.total_allocated_bytes(), expected_allocation);
     }
     #[test]
     fn owned_quantity_json_decode_charges_text_and_final_storage_exactly() {

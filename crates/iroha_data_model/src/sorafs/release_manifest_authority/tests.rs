@@ -3,6 +3,48 @@ use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use sorafs_manifest::signer::protocol::SignerOperationCustodyV1;
 
+#[test]
+fn release_manifest_outcome_and_action_keep_inline_v1_payloads() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<ReleaseManifestOutcomeV1>();
+    assert_copy::<ReleaseManifestOperationV1>();
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestOutcomeV1>() <= 512);
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestActionV1>() <= 1536);
+
+    let outcome_schema = ReleaseManifestOutcomeV1::schema();
+    let iroha_schema::Metadata::Enum(outcomes) = outcome_schema
+        .get::<ReleaseManifestOutcomeV1>()
+        .expect("release-manifest outcome schema")
+    else {
+        panic!("release-manifest outcome must have an enum schema");
+    };
+    assert_eq!(outcomes.variants.len(), 3);
+    assert_eq!(outcomes.variants[1].discriminant, 1);
+    assert_eq!(
+        outcomes.variants[1].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCompleteV1>())
+    );
+
+    let action_schema = ReleaseManifestActionV1::schema();
+    let iroha_schema::Metadata::Enum(actions) = action_schema
+        .get::<ReleaseManifestActionV1>()
+        .expect("release-manifest action schema")
+    else {
+        panic!("release-manifest action must have an enum schema");
+    };
+    assert_eq!(actions.variants.len(), 7);
+    assert_eq!(actions.variants[4].discriminant, 4);
+    assert_eq!(
+        actions.variants[4].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCompleteV1>())
+    );
+    assert_eq!(actions.variants[6].discriminant, 6);
+    assert_eq!(
+        actions.variants[6].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCheckV1>())
+    );
+}
+
 fn fixture_request() -> SignerReleaseManifestRequestV1 {
     SignerReleaseManifestRequestV1 {
         operation_id: [1; 32],

@@ -137,7 +137,7 @@ owners are not yet a complete smaller proof format or production verifier. The
 September 22 record binds the executable and subsequent registration correction.
 The September 24 [source-projection record](../docs/history/2026-09-24/fastpq-f07-source-projection-and-prover-blocker.md)
 adds a borrowed exact 342-to-301 physical-source bridge with focused Cargo
-validation passing 1/1. The test-only 506,351-byte DEEP DTO still lacks a genuine
+validation passing 1/1. The then-current 506,351-byte DEEP DTO lacked a genuine
 producer. The original degree-`<N` base-field row layout could not consume any
 nonzero subgroup-vanishing mask; opening 64 complete masked Fp4 rows would also
 exceed 512 KiB. The [original DEEP preflight](../docs/history/2026-09-24/fastpq-f07-deep-preflight-and-resource-floor.md)
@@ -149,10 +149,17 @@ now binds the screened `<2N` FRI progression into its transcript and checks all
 128 terminal values at degree `<2` on the folded coset. Its producer preflight
 still refuses every private mask: degree fit alone does not provide the missing
 base-field hiding, quotient blinding, committed composition mask, or security
-argument. The 506,351-byte DTO has not gained the proposed `R(x)` opening or a
+argument. That 506,351-byte DTO had not gained the proposed `R(x)` opening or a
 genuine producer, and no Core admission changes. The selected test-only DEEP
 suite passes 53/53; this does not qualify a private proof or its concrete
 soundness and resource bounds.
+The subsequent [fixed FRI fiber wire cut](../docs/history/2026-09-24/fastpq-f07-fixed-fri-fibers.md)
+removes sequence counts and per-element framing from the inactive DEEP DTO's
+fixed-arity `[16,16,8,8,4]` fibers. Its profile identity binds the new layout;
+the exact maximal frame is 500,783 bytes, 5,568 fewer than the preceding
+candidate; 55 focused DEEP tests pass against this frame and bounded decoder.
+This does not shrink the recorded ~8 MB offline proofs or supply
+the missing `R(x)`, masked producer, privacy argument, or admission path.
 
 ## Completion goals
 

@@ -6,7 +6,7 @@
 //! implementation.
 use anyhow::{Context, Result};
 use clap::Parser;
-use iroha_data_model::{instruction_registry, isi::InstructionRegistry, prelude as dm};
+use iroha_data_model::{instruction_registry, isi::InstructionRegistry};
 use iroha_schema::{
     ArrayMeta, BitmapMeta, EnumMeta, IntoSchema, MapMeta, MetaMapEntry, Metadata, NamedFieldsMeta,
     ResultMeta, UnnamedFieldsMeta,
@@ -25,62 +25,20 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 macro_rules! for_each_instruction_type {
     ($macro:ident) => {
-        $macro!(iroha_data_model::isi::RegisterPeerWithPop);
-        $macro!(iroha_data_model::isi::Register<dm::Domain>);
-        $macro!(iroha_data_model::isi::Register<dm::Account>);
-        $macro!(iroha_data_model::isi::Register<dm::AssetDefinition>);
-        $macro!(iroha_data_model::isi::Register<dm::Nft>);
-        $macro!(iroha_data_model::isi::Register<dm::Role>);
-        $macro!(iroha_data_model::isi::Register<dm::Trigger>);
         $macro!(iroha_data_model::isi::RegisterBox);
-        $macro!(iroha_data_model::isi::Unregister<dm::Peer>);
-        $macro!(iroha_data_model::isi::Unregister<dm::Domain>);
-        $macro!(iroha_data_model::isi::Unregister<dm::Account>);
-        $macro!(iroha_data_model::isi::Unregister<dm::AssetDefinition>);
-        $macro!(iroha_data_model::isi::Unregister<dm::Nft>);
-        $macro!(iroha_data_model::isi::Unregister<dm::Role>);
-        $macro!(iroha_data_model::isi::Unregister<dm::Trigger>);
         $macro!(iroha_data_model::isi::UnregisterBox);
-        $macro!(iroha_data_model::isi::Mint<dm::Quantity, dm::Asset>);
-        $macro!(iroha_data_model::isi::Mint<u32, dm::Trigger>);
         $macro!(iroha_data_model::isi::MintBox);
-        $macro!(iroha_data_model::isi::Burn<dm::Quantity, dm::Asset>);
-        $macro!(iroha_data_model::isi::Burn<u32, dm::Trigger>);
         $macro!(iroha_data_model::isi::BurnBox);
-        $macro!(iroha_data_model::isi::Transfer<dm::Account, iroha_model_base::domain::DomainId, dm::Account>);
-        $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::AssetDefinitionId, dm::Account>);
-        $macro!(iroha_data_model::isi::Transfer<dm::Asset, dm::Quantity, dm::Account>);
-        $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::NftId, dm::Account>);
         $macro!(iroha_data_model::isi::transfer::TransferAssetBatch);
         $macro!(iroha_data_model::isi::TransferBox);
         $macro!(iroha_data_model::isi::repo::RepoInstructionBox);
-        $macro!(iroha_data_model::isi::repo::RepoIsi);
-        $macro!(iroha_data_model::isi::repo::ReverseRepoIsi);
         $macro!(iroha_data_model::isi::settlement::SettlementInstructionBox);
-        $macro!(iroha_data_model::isi::settlement::DvpIsi);
-        $macro!(iroha_data_model::isi::settlement::PvpIsi);
         $macro!(iroha_data_model::isi::SetParameter);
-        $macro!(iroha_data_model::isi::SetKeyValue<dm::Domain>);
-        $macro!(iroha_data_model::isi::SetKeyValue<dm::Account>);
-        $macro!(iroha_data_model::isi::SetKeyValue<dm::AssetDefinition>);
-        $macro!(iroha_data_model::isi::SetKeyValue<dm::Nft>);
-        $macro!(iroha_data_model::isi::SetKeyValue<dm::Trigger>);
         $macro!(iroha_data_model::isi::SetKeyValueBox);
         $macro!(iroha_data_model::isi::SetAssetKeyValue);
-        $macro!(iroha_data_model::isi::RemoveKeyValue<dm::Domain>);
-        $macro!(iroha_data_model::isi::RemoveKeyValue<dm::Account>);
-        $macro!(iroha_data_model::isi::RemoveKeyValue<dm::AssetDefinition>);
-        $macro!(iroha_data_model::isi::RemoveKeyValue<dm::Nft>);
-        $macro!(iroha_data_model::isi::RemoveKeyValue<dm::Trigger>);
         $macro!(iroha_data_model::isi::RemoveKeyValueBox);
         $macro!(iroha_data_model::isi::RemoveAssetKeyValue);
-        $macro!(iroha_data_model::isi::Grant<dm::Permission, dm::Account>);
-        $macro!(iroha_data_model::isi::Grant<dm::RoleId, dm::Account>);
-        $macro!(iroha_data_model::isi::Grant<dm::Permission, dm::Role>);
         $macro!(iroha_data_model::isi::GrantBox);
-        $macro!(iroha_data_model::isi::Revoke<dm::Permission, dm::Account>);
-        $macro!(iroha_data_model::isi::Revoke<dm::RoleId, dm::Account>);
-        $macro!(iroha_data_model::isi::Revoke<dm::Permission, dm::Role>);
         $macro!(iroha_data_model::isi::RevokeBox);
         $macro!(iroha_data_model::isi::ExecuteTrigger);
         $macro!(iroha_data_model::isi::Upgrade);
@@ -136,18 +94,12 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
         $macro!(iroha_data_model::isi::governance::ProposeContractLifecycleGovernance);
         $macro!(iroha_data_model::isi::governance::ProposeContractEmergencyHold);
-        $macro!(
-            iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
-        );
+        $macro!(iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
         $macro!(iroha_data_model::isi::governance::UpdatePlainConviction);
-        $macro!(
-            iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
-        );
-        $macro!(
-            iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
-        );
+        $macro!(iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1);
+        $macro!(iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1);
         $macro!(iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade);
@@ -877,35 +829,95 @@ mod tests {
         let _ = InstructionSpec::new::<Sample>(&instruction_registry::default(), None);
     }
     #[test]
-    fn asset_quantity_instructions_use_the_live_nominal_type() {
-        let specs = gather_instruction_specs(&instruction_registry::default(), None);
-        for expected in [
-            std::any::type_name::<iroha_data_model::isi::Mint<dm::Quantity, dm::Asset>>(),
-            std::any::type_name::<iroha_data_model::isi::Burn<dm::Quantity, dm::Asset>>(),
-            std::any::type_name::<
-                iroha_data_model::isi::Transfer<dm::Asset, dm::Quantity, dm::Account>,
-            >(),
-        ] {
+    fn grouped_instruction_families_export_only_canonical_v1_wire_ids() {
+        let registry = instruction_registry::default();
+        let specs = gather_instruction_specs(&registry, None);
+        let mut exported_wire_ids = std::collections::BTreeSet::new();
+        for spec in &specs {
+            assert_eq!(
+                registry.wire_id(spec.type_name),
+                Some(spec.discriminant.as_str()),
+                "exported type must have its own registered V1 wire identifier"
+            );
             assert!(
-                specs.iter().any(|spec| spec.type_name == expected),
-                "missing live Quantity instruction `{expected}`"
+                exported_wire_ids.insert(spec.discriminant.as_str()),
+                "duplicate exported V1 wire identifier: {}",
+                spec.discriminant
             );
         }
-        assert!(
-            specs.iter().all(|spec| {
-                !spec
-                    .type_name
-                    .contains("Mint<iroha_primitives::numeric::Numeric")
-                    && !spec
-                        .type_name
-                        .contains("Burn<iroha_primitives::numeric::Numeric")
-                    && !spec.type_name.contains(
-                        "Transfer<iroha_data_model::asset::value::model::Asset, \
-                         iroha_primitives::numeric::Numeric",
-                    )
-            }),
-            "retired Numeric asset instruction leaked into the exported manifest"
-        );
+        for (type_name, wire_id) in [
+            (
+                std::any::type_name::<iroha_data_model::isi::RegisterBox>(),
+                "iroha.register",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::UnregisterBox>(),
+                "iroha.unregister",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::MintBox>(),
+                "iroha.mint",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::BurnBox>(),
+                "iroha.burn",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::TransferBox>(),
+                "iroha.transfer",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::repo::RepoInstructionBox>(),
+                "iroha.repo",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::settlement::SettlementInstructionBox>(
+                ),
+                "iroha.settlement",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::SetKeyValueBox>(),
+                "iroha.set_key_value",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::RemoveKeyValueBox>(),
+                "iroha.remove_key_value",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::GrantBox>(),
+                "iroha.grant",
+            ),
+            (
+                std::any::type_name::<iroha_data_model::isi::RevokeBox>(),
+                "iroha.revoke",
+            ),
+        ] {
+            let matching = specs
+                .iter()
+                .filter(|spec| spec.type_name == type_name)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching.len(),
+                1,
+                "one canonical grouped export for {type_name}"
+            );
+            assert_eq!(matching[0].discriminant, wire_id);
+        }
+        for wire_id in ["iroha.mint", "iroha.burn", "iroha.transfer"] {
+            let spec = specs
+                .iter()
+                .find(|spec| spec.discriminant == wire_id)
+                .expect("canonical asset quantity family export");
+            let layout = describe_layout(&spec.layout).expect("grouped instruction layout");
+            assert!(
+                layout.contains("Quantity"),
+                "{wire_id} must retain Quantity"
+            );
+            assert!(
+                !layout.contains("Numeric"),
+                "{wire_id} must not export the retired Numeric asset quantity"
+            );
+        }
     }
     #[test]
     fn kaigi_relay_instructions_are_exported_with_canonical_wire_ids() {
@@ -933,18 +945,14 @@ mod tests {
     fn generic_privacy_types_are_absent_but_specialized_flows_remain_registered() {
         let registry = instruction_registry::default();
         let specs = gather_instruction_specs(&registry, None);
-        assert_eq!(
-            specs.len(),
-            112,
-            "first-release generated instruction count"
-        );
+        assert_eq!(specs.len(), 78, "first-release generated instruction count");
         let governance_specs = specs
             .iter()
             .filter(|spec| spec.type_name.contains("::isi::governance::"))
             .collect::<Vec<_>>();
         assert_eq!(
             governance_specs.len(),
-            6,
+            9,
             "first-release generated governance instruction count"
         );
         for expected in [

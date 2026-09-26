@@ -332,7 +332,7 @@ fn hash_only_case<F: KagemushaPoseidonFieldV1>(mutation: Mutation) -> HashOnlyCa
     builder.assigned_instances = vec![public_cells];
     builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
     let (job_count, block_count, _) = sha_jobs.capacity_profile().expect("actual SHA jobs");
-    assert_eq!((job_count, block_count), (3, 17));
+    assert_eq!((job_count, block_count), (3, 18));
     HashOnlyCase {
         builder,
         sha_jobs,

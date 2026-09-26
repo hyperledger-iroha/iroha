@@ -14,9 +14,12 @@ use iroha_data_model::{
     sorafs::final_promotion_authority::FinalPromotionAuthorityActionV1,
     transaction::{Executable, TransactionBuilder, TransactionPayload},
 };
+use iroha_primitives::production_identity::is_production_identity_v1;
 use sorafs_manifest::signer::{
     custody::SignerCustodyBindingV1,
-    protocol::{SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1},
+    protocol::{
+        SIGNER_MAX_ID_BYTES_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
+    },
 };
 use zeroize::Zeroizing;
 
@@ -107,10 +110,12 @@ fn validate_binding(binding: &SignerCustodyBindingV1) -> Result<(), Error> {
         )
         || !binding
             .runtime_handle
-            .starts_with(ROLE_15_SOFTWARE_HANDLE_PREFIX_V1)
+            .strip_prefix(ROLE_15_SOFTWARE_HANDLE_PREFIX_V1)
+            .is_some_and(|identity| is_production_identity_v1(identity, SIGNER_MAX_ID_BYTES_V1))
         || !binding
             .key_handle
-            .starts_with(ROLE_15_SOFTWARE_HANDLE_PREFIX_V1)
+            .strip_prefix(ROLE_15_SOFTWARE_HANDLE_PREFIX_V1)
+            .is_some_and(|identity| is_production_identity_v1(identity, SIGNER_MAX_ID_BYTES_V1))
         || iroha_config::parameters::validate_production_runtime_handle(&binding.runtime_handle)
             .is_err()
         || iroha_config::parameters::validate_production_runtime_handle(&binding.key_handle)

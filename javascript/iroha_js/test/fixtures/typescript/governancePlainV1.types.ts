@@ -1,10 +1,13 @@
 import type {
+  NetworkId,
   ToriiClient,
   RequiredCanonicalRequestOptions,
   ToriiElectionTally,
   ToriiGovernanceLockRecord,
   ToriiGovernanceReferendumRecord,
   ToriiGovernanceTally,
+  UpdatePlainConvictionInstructionInput,
+  UpdatePlainConvictionTransactionInput,
 } from "../../../index.js";
 
 declare const client: ToriiClient;
@@ -13,6 +16,25 @@ declare const referendum: ToriiGovernanceReferendumRecord;
 declare const lock: ToriiGovernanceLockRecord;
 declare const tally: ToriiGovernanceTally;
 declare const electionTally: ToriiElectionTally;
+declare const networkId: NetworkId;
+
+const update: UpdatePlainConvictionInstructionInput = {
+  referendumId: "ref-1",
+  owner: "i105-account",
+  amount: "12.5",
+  durationBlocks: 250,
+};
+const updateTransaction: UpdatePlainConvictionTransactionInput = {
+  networkId,
+  authority: update.owner,
+  update,
+  privateKey: Buffer.alloc(32),
+};
+const invalidUpdate: UpdatePlainConvictionInstructionInput = {
+  ...update,
+  // @ts-expect-error conviction updates cannot carry a replacement choice
+  direction: 1,
+};
 
 const exactVotes: number | bigint = tally.approve;
 const exactElectionWeight: number | bigint = electionTally.tally[0];
@@ -68,4 +90,4 @@ const missingContext: ToriiGovernanceReferendumRecord = {
   plain_result: { kind: "Pending", content: null },
 };
 void [exactVotes, exactElectionWeight, exactHeight, evaluatedHash, exactDuration, custodyAsset, read,
-  rounded, roundedElectionWeight, nullCustody, missingContext];
+  rounded, roundedElectionWeight, nullCustody, missingContext, updateTransaction, invalidUpdate];

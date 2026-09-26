@@ -249,19 +249,29 @@ hardware no-fork evidence. Its internal eSE is connected, but no access rule
 for the current applet was observed. An app-accessible, provisioned hardware
 counter/checkpoint profile or another physically proven no-fork primitive is
 required to support this device for production offline money.
-The connected Pixel 6 was rechecked on an Android 17 user build with locked,
-green verified boot. It still advertises neither hardware single-use nor
-limited-use Keystore support, and does not advertise the hardware Identity
-Credential feature. `eSE1` is connected but has no observed access
-rule for the current applet AID. The earlier StrongBox attestation was collected
-on Android 16, so the Android 17 feature recheck does not replace a fresh
-attestation or an applet SELECT/recovery qualification.
+The connected Pixel 6 was rechecked on an Android 17 user build
+(`google/oriole/oriole:17/CP2A.260705.006/15641320`) with locked, green
+verified boot. It still advertises neither hardware single-use nor limited-use
+Keystore support, and does not advertise the hardware Identity Credential
+feature. On 2026-09-24, a fresh nonmonetary StrongBox one-use instrumentation
+test passed on that build: the new key's attestation reported StrongBox security
+level 2 for both attestation and KeyMint, hardware tag 303 absent, hardware tag
+405 absent, and software tag 405 equal to one. Its first signature verified and
+its second signing attempt failed with `KeyPermanentlyInvalidatedException`.
+This demonstrates software-enforced one-use only; it does not qualify a
+hardware no-fork monetary ratchet. `eSE1` is connected, but the 2026-09-24
+ordinary-app OMAPI discovery returned `ONLINE_ONLY` for the current applet AID;
+no app access rule was observed and applet SELECT/recovery remains untested.
 An experimental Pixel 6 StrongBox observation collector and testnet-only app
 entry point are source-staged with exact selection/network/release binding and
-local lost-result freezing. Four collector JVM tests and one physical device
-test passed before the latest frame and nonce hardening; the new source and app
-tests still need reruns. Their output is explicitly non-qualified and is not a
-production monetary certificate.
+local lost-result freezing. On 2026-09-24, 15 focused Android JVM tests for the
+collector, store and diagnostic selection passed on the current source. A prior
+physical observation test passed before the latest frame and nonce hardening;
+the same-source JNI build and physical observation rerun remain pending. The
+first Android arm64 production JNI build compiled but failed its source seal
+because Core sources changed during compilation, so no stale native library
+was packaged or installed. Observation output is explicitly non-qualified and
+is not a production monetary certificate.
 
 | Family | Integration work and evidence required |
 | --- | --- |

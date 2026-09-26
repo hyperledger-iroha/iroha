@@ -6,11 +6,74 @@ use crate::generalized_bulletproof::secret_u15_msm_v1::{
 use crate::vega::bulletproof_t256::{
     ZkAmsT256BulletproofSuiteV1 as Suite, zeroizing_t256_scalar_vec_drop_count_v1,
 };
+use crate::vega::zk_ams::mkhe::{
+    rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1,
+    rns_native_proof_hash::RnsNativeProofHashContextV1,
+    rns_native_qpcs_leaf::RnsNativeOracleV1,
+    rns_native_qpcs_opening_work::{
+        RnsNativeQpcsOpeningHashWorkV1, RnsNativeQpcsOpeningWorkErrorV1,
+    },
+    rns_native_resource_budget::RnsNativeResourceErrorV1,
+};
 
 fn stored_v1() -> RnsNativeStoredPlaneReplayV1<core::convert::Infallible> {
     RnsNativeSmallSignedCommitmentsV1::test_completed_signed_v1()
         .into_stored_plane_replay_v1()
         .unwrap()
+}
+
+#[test]
+fn qpcs_work_refusal_keeps_original_completed_source_and_opening_inventory() {
+    let mut source = stored_v1();
+    let table = source.admit_u15_table_v1().unwrap();
+    let mut owner = RetainedSourceSessionV1 {
+        phase: Some(RetainedSourcePhaseV1::StoredPlaneReplay(source)),
+    };
+    assert!(matches!(
+        owner.original_budget_mut_v1(),
+        Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+    ));
+    let Some(RetainedSourcePhaseV1::StoredPlaneReplay(source)) = owner.phase.take() else {
+        panic!("original source must remain after early-phase refusal")
+    };
+    // Project a completed Q-mask phase here, without claiming that this
+    // test-only projection verifies the omitted Q-mask relations.
+    owner.phase = Some(RetainedSourcePhaseV1::QMaskComplete(
+        PreparedQMaskKernelV1 { table, source },
+    ));
+
+    let parameter = RnsNativeProofHashContextV1::canonical()
+        .unwrap()
+        .parameter_digest();
+    let work = RnsNativeQpcsOpeningHashWorkV1::for_opened_leaves_v1(
+        parameter,
+        RnsNativeOracleV1::Initial,
+        320,
+    )
+    .unwrap();
+    {
+        let original = owner.original_budget_mut_v1().unwrap();
+        let remaining = ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 - original.consumed().unwrap();
+        assert!(remaining >= work.field_operations_v1());
+        original
+            .charge(remaining - work.field_operations_v1() + 1)
+            .unwrap();
+        let before = original.consumed().unwrap();
+        assert!(matches!(
+            work.admit_v1(original),
+            Err(RnsNativeQpcsOpeningWorkErrorV1::Resource(
+                RnsNativeResourceErrorV1::WorkLimit
+            ))
+        ));
+        assert_eq!(original.consumed().unwrap(), before);
+    }
+    let Some(RetainedSourcePhaseV1::QMaskComplete(kernel)) = owner.phase.as_mut() else {
+        panic!("original inventory must survive admission refusal")
+    };
+    kernel
+        .table
+        .require_original_budget_v1(kernel.source.original_budget_mut_v1().unwrap())
+        .unwrap();
 }
 
 #[test]

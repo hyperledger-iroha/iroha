@@ -158,17 +158,7 @@ import {
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
-import {
-  assertSorafsOrderbookFixedHeaders,
-  createSorafsOrderbookSubmissionDeadline,
-  prepareSorafsOrderbookSubmission,
-  SorafsOrderbookSubmissionAmbiguousError,
-  sorafsOrderbookHeaderFingerprint,
-  SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-  validateSorafsOrderbookSubmissionTransport,
-  validateSorafsOrderbookSubmissionHeaders,
-  verifySorafsOrderbookSubmissionReceipt,
-} from "./sorafsOrderbookSubmission.js";
+import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
 const CANONICAL_AUTH_FIELD = "canonicalAuth";
@@ -11693,6 +11683,16 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
+    const {
+      assertSorafsOrderbookFixedHeaders,
+      createSorafsOrderbookSubmissionDeadline,
+      prepareSorafsOrderbookSubmission,
+      sorafsOrderbookHeaderFingerprint,
+      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+      validateSorafsOrderbookSubmissionTransport,
+      validateSorafsOrderbookSubmissionHeaders,
+      verifySorafsOrderbookSubmissionReceipt,
+    } = await loadToriiOptionalModule();
     const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
     const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
       rejectType(`${context} requires ToriiClient options.localSigningContext`);

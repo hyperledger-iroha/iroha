@@ -1857,8 +1857,6 @@ pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
     asset: jni::objects::JByteArray<'_>,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
-    vk_shield: jni::objects::JByteArray<'_>,
-    vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
     fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
@@ -1885,15 +1883,10 @@ pub(super) fn java_native_encode_register_zk_asset_signed_transaction(
             )?,
             "unshieldVerifyingKey",
         )?;
-        let vk_shield = java_verifying_key_id(
-            java_optional_text_array(env, &vk_shield, vk_shield_present, "shieldVerifyingKey")?,
-            "shieldVerifyingKey",
-        )?;
         let private_key = java_private_key(algorithm_code, &private_key, env)?;
         let ttl =
             parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
-        register.validate_verifier_roles().map_err(str::to_owned)?;
+        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield);
         let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction_with_nonce_fee_payment_and_metadata(

@@ -1854,6 +1854,12 @@ struct SnapshotJsonBudgetScanner<'a> {
 enum SnapshotJsonContext {
     Root,
     World,
+    ElectionsStorage,
+    ElectionEntries,
+    ElectionState,
+    ElectionAcceptedBallots,
+    ElectionAcceptedBallot,
+    ElectionDigest,
     Other,
 }
 impl<'a> SnapshotJsonBudgetScanner<'a> {
@@ -1888,10 +1894,29 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
                 self.policy.max_decode_depth
             )));
         }
-        match self.peek() {
+        let token = self.peek();
+        if (context == SnapshotJsonContext::ElectionAcceptedBallots && token != Some(b'['))
+            || (context == SnapshotJsonContext::ElectionAcceptedBallot && token != Some(b'{'))
+            || (context == SnapshotJsonContext::ElectionDigest && token != Some(b'"'))
+        {
+            return Err(TryReadError::NonCanonicalSnapshotPayload);
+        }
+        match token {
             Some(b'{') => self.parse_object(depth, context),
-            Some(b'[') => self.parse_array(depth),
-            Some(b'"') => self.parse_string(encoded_blob).map(|_| ()),
+            Some(b'[') => self.parse_array(depth, context),
+            Some(b'"') => {
+                let value = self.parse_string(encoded_blob)?;
+                if context == SnapshotJsonContext::ElectionDigest
+                    && (value.raw.len() != 64
+                        || !value
+                            .raw
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'A'..=b'F')))
+                {
+                    return Err(TryReadError::NonCanonicalSnapshotPayload);
+                }
+                Ok(())
+            }
             Some(b't') => self.consume_exact(b"true"),
             Some(b'f') => self.consume_exact(b"false"),
             Some(b'n') => self.consume_exact(b"null"),
@@ -1905,22 +1930,54 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
         context: SnapshotJsonContext,
     ) -> Result<(), TryReadError> {
         self.consume_byte(b'{')?;
+        let exact_ballot_entry = context == SnapshotJsonContext::ElectionAcceptedBallot;
+        let mut ballot_entry_fields = 0_u8;
         if self.peek() == Some(b'}') {
             self.cursor += 1;
-            return Ok(());
+            return if exact_ballot_entry {
+                Err(TryReadError::NonCanonicalSnapshotPayload)
+            } else {
+                Ok(())
+            };
         }
         loop {
             let key = self.parse_string(false)?;
+            if exact_ballot_entry {
+                let field_bit = match key.raw {
+                    "nullifier" => 1,
+                    "commitment" => 2,
+                    _ => return Err(TryReadError::NonCanonicalSnapshotPayload),
+                };
+                if ballot_entry_fields & field_bit != 0 {
+                    return Err(TryReadError::NonCanonicalSnapshotPayload);
+                }
+                ballot_entry_fields |= field_bit;
+            }
+            if context == SnapshotJsonContext::ElectionState
+                && matches!(key.raw, "ballot_nullifiers" | "ciphertexts")
+            {
+                return Err(TryReadError::NonCanonicalSnapshotPayload);
+            }
             self.consume_byte(b':')?;
             self.charge_item()?;
             if depth == 1 && key.raw == "space_directory_manifests" {
                 self.summary.has_space_directory_manifests = true;
             }
             let value_start = self.cursor;
-            let child_context = if context == SnapshotJsonContext::Root && key.raw == "world" {
-                SnapshotJsonContext::World
-            } else {
-                SnapshotJsonContext::Other
+            let child_context = match (context, key.raw) {
+                (SnapshotJsonContext::Root, "world") => SnapshotJsonContext::World,
+                (SnapshotJsonContext::World, "elections") => SnapshotJsonContext::ElectionsStorage,
+                (SnapshotJsonContext::ElectionsStorage, "revert" | "blocks") => {
+                    SnapshotJsonContext::ElectionEntries
+                }
+                (SnapshotJsonContext::ElectionEntries, _) => SnapshotJsonContext::ElectionState,
+                (SnapshotJsonContext::ElectionState, "accepted_ballots") => {
+                    SnapshotJsonContext::ElectionAcceptedBallots
+                }
+                (SnapshotJsonContext::ElectionAcceptedBallot, "nullifier" | "commitment") => {
+                    SnapshotJsonContext::ElectionDigest
+                }
+                _ => SnapshotJsonContext::Other,
             };
             self.parse_value(
                 depth.saturating_add(1),
@@ -1941,23 +1998,50 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
                 Some(b',') => self.cursor += 1,
                 Some(b'}') => {
                     self.cursor += 1;
-                    return Ok(());
+                    return if exact_ballot_entry && ballot_entry_fields != 3 {
+                        Err(TryReadError::NonCanonicalSnapshotPayload)
+                    } else {
+                        Ok(())
+                    };
                 }
                 _ => return Err(TryReadError::NonCanonicalSnapshotPayload),
             }
         }
     }
-    fn parse_array(&mut self, depth: usize) -> Result<(), TryReadError> {
+    fn parse_array(
+        &mut self,
+        depth: usize,
+        context: SnapshotJsonContext,
+    ) -> Result<(), TryReadError> {
         self.consume_byte(b'[')?;
         if self.peek() == Some(b']') {
             self.cursor += 1;
             return Ok(());
         }
+        let election_limit = match context {
+            SnapshotJsonContext::ElectionAcceptedBallots => {
+                Some(crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1)
+            }
+            _ => None,
+        };
+        let child_context = match context {
+            SnapshotJsonContext::ElectionAcceptedBallots => {
+                SnapshotJsonContext::ElectionAcceptedBallot
+            }
+            _ => SnapshotJsonContext::Other,
+        };
         let mut array_items = 0_usize;
         loop {
             array_items = array_items.checked_add(1).ok_or_else(|| {
                 TryReadError::SnapshotResourceLimit("snapshot array length overflowed".to_owned())
             })?;
+            if let Some(limit) = election_limit
+                && array_items > limit
+            {
+                return Err(TryReadError::SnapshotResourceLimit(format!(
+                    "snapshot election corpus array exceeds {limit} entries"
+                )));
+            }
             if array_items > self.policy.max_blob_bytes.get() {
                 return Err(TryReadError::SnapshotResourceLimit(format!(
                     "snapshot array contains more than {} elements; byte-vector blobs use one element per byte",
@@ -1965,7 +2049,7 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
                 )));
             }
             self.charge_item()?;
-            self.parse_value(depth.saturating_add(1), false, SnapshotJsonContext::Other)?;
+            self.parse_value(depth.saturating_add(1), false, child_context)?;
             match self.peek() {
                 Some(b',') => self.cursor += 1,
                 Some(b']') => {
@@ -2469,13 +2553,38 @@ fn update_snapshot_wsv_array_hash<'a>(
     input: &'a str,
     overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<(), TryReadError> {
-    let items = borrowed_json_array_items(input)?;
+    let mut parser = json::Parser::new(input);
+    parser.expect(b'[').map_err(TryReadError::Serialization)?;
+    parser.skip_ws();
     Digest::update(hasher, b"[");
-    for (index, item) in items.into_iter().enumerate() {
-        if index != 0 {
-            Digest::update(hasher, b",");
+    let mut first = true;
+    if parser.peek() == Some(b']') {
+        parser.bump();
+    } else {
+        loop {
+            let start = parser.position();
+            parser.skip_value().map_err(TryReadError::Serialization)?;
+            if !first {
+                Digest::update(hasher, b",");
+            }
+            first = false;
+            update_snapshot_wsv_hash(
+                hasher,
+                &input[start..parser.position()],
+                CanonicalWsvPath::Other,
+                overrides,
+            )?;
+            parser.skip_ws();
+            match parser.bump() {
+                Some(b',') => {}
+                Some(b']') => break,
+                _ => return Err(TryReadError::NonCanonicalSnapshotPayload),
+            }
         }
-        update_snapshot_wsv_hash(hasher, item, CanonicalWsvPath::Other, overrides)?;
+    }
+    parser.skip_ws();
+    if !parser.eof() {
+        return Err(TryReadError::NonCanonicalSnapshotPayload);
     }
     Digest::update(hasher, b"]");
     Ok(())
@@ -5295,6 +5404,98 @@ pub(crate) fn publish_signed_snapshot_payload_for_physical_test(
 #[cfg(test)]
 mod tests {
     use iroha_model_base::topology::LaneId;
+
+    fn election_corpus_snapshot(field: &str, value: &str, previous: bool) -> Vec<u8> {
+        let mut input = String::from(r#"{"world":{"elections":{"#);
+        input.push_str(if previous {
+            r#""revert":{"vote":{"#
+        } else {
+            r#""blocks":{"vote":{"#
+        });
+        input.push('"');
+        input.push_str(field);
+        input.push_str("\":");
+        input.push_str(value);
+        input.push_str("}}}}}");
+        input.into_bytes()
+    }
+
+    #[test]
+    fn snapshot_scanner_bounds_ordered_election_corpus_before_wsv_hash() {
+        let policy = super::SnapshotResourcePolicy::default();
+        let entry = format!(
+            "{{\"nullifier\":\"{}\",\"commitment\":\"{}\"}}",
+            "AB".repeat(32),
+            "CD".repeat(32)
+        );
+        let at_limit = format!("[{}]", vec![entry.as_str(); 1_000].join(","));
+        for previous in [false, true] {
+            let input = election_corpus_snapshot("accepted_ballots", &at_limit, previous);
+            super::validate_snapshot_json_resources(&input, policy)
+                .expect("exact V1 ballot corpus cap is admitted by lexical scan");
+            super::canonical_snapshot_wsv_hash(&input)
+                .expect("accepted array hashes without retaining all items");
+
+            let too_many = format!("[{},{}]", &at_limit[1..at_limit.len() - 1], entry);
+            let input = election_corpus_snapshot("accepted_ballots", &too_many, previous);
+            assert!(matches!(
+                super::validate_snapshot_json_resources(&input, policy),
+                Err(super::TryReadError::SnapshotResourceLimit(reason))
+                    if reason.contains("election corpus array exceeds 1000")
+            ));
+
+            for malformed in [
+                format!(
+                    "{{\"nullifier\":\"{}\",\"commitment\":\"{}\"}}",
+                    "AB".repeat(33),
+                    "CD".repeat(32)
+                ),
+                format!(
+                    "{{\"nullifier\":\"{}\",\"commitment\":\"{}\"}}",
+                    "AB".repeat(32),
+                    "CD".repeat(31)
+                ),
+                format!("{{\"nullifier\":\"{}\"}}", "AB".repeat(32)),
+                format!(
+                    "{{\"nullifier\":\"{}\",\"commitment\":\"{}\",\"extra\":0}}",
+                    "AB".repeat(32),
+                    "CD".repeat(32)
+                ),
+                "[]".to_owned(),
+            ] {
+                let input = election_corpus_snapshot(
+                    "accepted_ballots",
+                    &format!("[{malformed}]"),
+                    previous,
+                );
+                assert!(matches!(
+                    super::validate_snapshot_json_resources(&input, policy),
+                    Err(super::TryReadError::NonCanonicalSnapshotPayload)
+                ));
+            }
+            let retired = election_corpus_snapshot("ciphertexts", &at_limit, previous);
+            assert!(matches!(
+                super::validate_snapshot_json_resources(&retired, policy),
+                Err(super::TryReadError::NonCanonicalSnapshotPayload)
+            ));
+        }
+    }
+
+    #[test]
+    fn streamed_snapshot_array_hash_preserves_sorted_object_and_ordered_array_semantics() {
+        let first = br#"{"z":[1,2],"a":[[3],[4]]}"#;
+        let same = br#"{"a":[[3],[4]],"z":[1,2]}"#;
+        let changed_order = br#"{"a":[[4],[3]],"z":[1,2]}"#;
+        assert_eq!(
+            super::canonical_snapshot_wsv_hash(first).expect("hash first"),
+            super::canonical_snapshot_wsv_hash(same).expect("hash reordered object")
+        );
+        assert_ne!(
+            super::canonical_snapshot_wsv_hash(first).expect("hash first"),
+            super::canonical_snapshot_wsv_hash(changed_order).expect("hash reordered array")
+        );
+    }
+
     include!("snapshot/support_policy_tests.rs");
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");

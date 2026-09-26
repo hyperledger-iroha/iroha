@@ -215,7 +215,7 @@ ValidationFeeHijiriQuoteV1 quote =
     transport.postValidationFeeHijiriQuote(request, canonicalAuth).join();
 ```
 
-This operation requires `libconnect_norito_bridge` ABI 23 and an HTTPS Torii
+This operation requires `libconnect_norito_bridge` ABI 24 and an HTTPS Torii
 base URL. It signs the exact bounded Norito request with `Cache-Control: no-store`,
 requires a private, non-stored, uncompressed `application/x-norito` response,
 and exposes the typed projection only after native canonical decode,

@@ -34,6 +34,212 @@ fn sccp_submit_ingress_has_closed_endpoint_specific_limits() {
     assert!(super::sccp_submit_ingress_policy("/v1/bridge/messages/").is_none());
 }
 #[tokio::test]
+async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deployment() {
+    let operator = "single-demo-operator";
+    let mcp = limits::RateLimiter::new_per_minute(
+        defaults::torii::mcp::RATE_PER_MINUTE,
+        defaults::torii::mcp::BURST,
+    );
+    // The advertised batch extension charges each tool, including all calls
+    // after the first one paid by the outer MCP request.
+    for _ in 0..6 {
+        assert!(
+            mcp.allow_repeated(operator, crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES)
+                .await,
+            "one operator's bounded MCP batch should fit the demo budget"
+        );
+    }
+    assert!(mcp.allow_repeated(operator, 32).await);
+    assert!(
+        !mcp.allow_repeated(operator, 10_000).await,
+        "the MCP budget must remain finite"
+    );
+    // An API-token overlay uses the fixed-key limiter with the same MCP
+    // configuration. Check that branch's full operator workload as well.
+    let authenticated_mcp = limits::FixedKeyRateLimiter::new_per_minute(
+        defaults::torii::mcp::RATE_PER_MINUTE,
+        defaults::torii::mcp::BURST,
+        [operator.to_owned()],
+    );
+    for _ in 0..6 {
+        assert!(
+            authenticated_mcp
+                .allow_repeated(operator, crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES)
+                .await,
+            "authenticated MCP batch should fit the solo operator budget"
+        );
+    }
+    assert!(authenticated_mcp.allow_repeated(operator, 32).await);
+
+    let deploy = limits::RateLimiter::new(
+        defaults::torii::DEPLOY_RATE_PER_ORIGIN_PER_SEC,
+        defaults::torii::DEPLOY_BURST_PER_ORIGIN,
+    );
+    let proof_cost = super::sccp_submit_ingress_policy("/v1/bridge/proofs/submit")
+        .expect("bridge proof ingress policy")
+        .rate_limit_cost;
+    for _ in 0..8 {
+        assert!(
+            deploy
+                .allow_cost_capped_to_burst(operator, proof_cost)
+                .await,
+            "weighted proof admission should fit alongside contract mutations"
+        );
+    }
+    for _ in 0..48 {
+        assert!(
+            deploy.allow(operator).await,
+            "one operator's contract mutation should fit the demo budget"
+        );
+    }
+    for _ in 0..2 {
+        assert!(
+            deploy.allow(operator).await,
+            "the final contract call should fit after deployment and proof submission"
+        );
+    }
+    assert!(deploy.allow("another-operator").await);
+    assert!(
+        !deploy.allow_cost(operator, 10_000).await,
+        "the deployment budget must remain finite"
+    );
+
+    // Conservatively charge every MCP tool read as a finality-proof read in
+    // the same bucket as 128 direct bridge-finality GETs. The advertised MCP
+    // tool reaches the weighted route, so treating it as an ordinary read
+    // would hide a solo-operator 429.
+    let query = limits::RateLimiter::new(
+        defaults::torii::QUERY_RATE_PER_AUTHORITY_PER_SEC,
+        defaults::torii::QUERY_BURST_PER_AUTHORITY,
+    );
+    for _ in 0..128 {
+        assert!(
+            query
+                .allow_cost_capped_to_burst(operator, super::FINALITY_HEAVY_QUERY_RATE_COST)
+                .await,
+            "the full weighted finality walk should fit"
+        );
+    }
+    for _ in 0..(6 * crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES + 32) {
+        assert!(
+            query
+                .allow_cost_capped_to_burst(operator, super::FINALITY_HEAVY_QUERY_RATE_COST)
+                .await,
+            "MCP finality tools need their full weighted query budget"
+        );
+    }
+    for _ in 0..(32 + 4 + 2) {
+        assert!(
+            query.allow(operator).await,
+            "direct, funding, and contract reads need query headroom"
+        );
+    }
+    assert!(
+        !query.allow_cost(operator, 10_000).await,
+        "the query budget must remain finite"
+    );
+}
+#[tokio::test]
+async fn one_external_operator_walk_passes_the_real_preauth_gate() {
+    let burst = defaults::torii::PREAUTH_BURST_PER_IP.expect("finite pre-auth burst");
+    assert!(
+        burst >= 229,
+        "128 proof reads, 58 mutations, 32 direct readbacks, four funding requests, and seven MCP requests must fit"
+    );
+    let gate = limits::PreAuthGate::new(limits::PreAuthConfig {
+        max_total: None,
+        max_per_ip: None,
+        rate_per_ip: defaults::torii::PREAUTH_RATE_PER_IP_PER_SEC,
+        burst_per_ip: Some(burst),
+        ban_duration: Some(defaults::torii::PREAUTH_BAN_DURATION),
+        ban_capacity: defaults::torii::PREAUTH_BAN_CAPACITY,
+        allow_nets: Vec::new(),
+        scheme_limits: Vec::new(),
+    });
+    let operator = "198.51.100.10".parse().expect("test client IP");
+    for request in 0..229 {
+        drop(
+            gate.acquire(Some(operator), None)
+                .await
+                .unwrap_or_else(|reason| {
+                    panic!("one external operator was throttled at request {request}: {reason:?}")
+                }),
+        );
+    }
+}
+#[tokio::test]
+async fn solo_finality_walk_fits_the_proof_egress_budget() {
+    let (app, _, _) = app_with_indexed_sccp_message_for_test(true);
+    let proof = iroha_core::bridge::build_finality_proof(app.state.as_ref(), 1)
+        .expect("indexed four-validator finality fixture");
+    let response_bytes = u64::try_from(
+        norito::json::to_json_pretty(&proof)
+            .expect("encode the actual bridge-finality JSON response")
+            .len(),
+    )
+    .expect("response length fits u64");
+    let other_proof_response_bytes = 2 * 1024 * 1024;
+    let burst = defaults::torii::PROOF_EGRESS_BURST_BYTES.expect("finite proof egress burst");
+    let finality_reads = 128 + 6 * crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES + 32;
+    assert!(
+        response_bytes
+            .checked_mul(u64::try_from(finality_reads).expect("bounded proof count"))
+            .and_then(|bytes| bytes.checked_add(other_proof_response_bytes))
+            .is_some_and(|bytes| bytes <= burst),
+        "direct and MCP finality responses plus 2 MiB for proof-submit responses must fit"
+    );
+    let egress =
+        limits::RateLimiter::new_u64(defaults::torii::PROOF_EGRESS_BYTES_PER_SEC, Some(burst));
+    for read in 0..finality_reads {
+        assert!(
+            egress.allow_cost("solo-proof-reader", response_bytes).await,
+            "actual finality response {read} exceeded proof egress"
+        );
+    }
+    assert!(
+        egress
+            .allow_cost("solo-proof-reader", other_proof_response_bytes)
+            .await,
+        "proof-submit responses need 2 MiB of shared egress headroom"
+    );
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429() {
+    let mut app = mk_app_state_for_tests();
+    let state = Arc::get_mut(&mut app).expect("unique Torii app fixture");
+    state.query_inflight = Arc::new(tokio::sync::Semaphore::new(
+        defaults::torii::QUERY_MAX_INFLIGHT.get(),
+    ));
+    state.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(
+        defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
+    ));
+    state.query_queue_timeout = Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS);
+    let mut active = Vec::new();
+    for _ in 0..defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get() {
+        active.push(
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("a bounded heavy proof read fits the active permits"),
+        );
+    }
+    let waiting_app = Arc::clone(&app);
+    let waiter =
+        tokio::spawn(async move { acquire_query_admission(waiting_app.as_ref(), true).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !waiter.is_finished(),
+        "the 33rd heavy read must wait for a permit"
+    );
+    drop(active.pop());
+    let admitted = tokio::time::timeout(Duration::from_secs(2), waiter)
+        .await
+        .expect("bounded wait completes before the default deadline")
+        .expect("waiting task remains live")
+        .expect("the next solo heavy read is admitted");
+    drop(admitted);
+    drop(active);
+}
+#[tokio::test]
 async fn sccp_submit_body_caps_chunked_streams_without_content_length() {
     let stream = futures::stream::iter([
         Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"1234")),

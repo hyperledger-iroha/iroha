@@ -3243,13 +3243,16 @@ mod tests {
         )])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let crypto_cfg = state.crypto();
+        let (_clock, time_source) =
+            iroha_primitives::time::TimeSource::new_mock(tx.creation_time());
         assert!(
-            AcceptedTransaction::accept(
+            AcceptedTransaction::accept_with_time_source(
                 tx,
                 &state.network_id,
                 max_clock_drift,
                 tx_limits,
-                crypto_cfg.as_ref()
+                crypto_cfg.as_ref(),
+                &time_source,
             )
             .is_ok(),
             "stateless admission should not special-case genesis authority"

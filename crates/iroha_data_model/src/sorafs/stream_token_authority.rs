@@ -105,6 +105,10 @@ pub struct StreamTokenExpireV1 {
 }
 
 /// Claimed outcome of one original operation; only native retained state can authenticate it.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-11 completion stays inline and Copy in canonical V1 Norito; boxing adds a wire length and heap allocation"
+)]
 #[derive(
     Clone,
     Copy,

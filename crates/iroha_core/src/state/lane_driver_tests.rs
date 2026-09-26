@@ -279,9 +279,11 @@ state_test! { sync native_driver_retains_exact_ingress_and_instance_across_globa
 #[cfg(all(unix, not(target_os = "espidf")))]
 state_test! { sync native_driver_transfers_exact_diagnostic_and_closed_custody
     use crate::sumeragi::{
+        message::BlockMessage,
         output_guard::ConsensusOutputGuard,
         v2_core as core,
-        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput,
+            NativeLaneOwnedAdmission, native_driver_owned_ingress_for_test},
         v2_lane_payload::encode_lane_input,
     };
     use iroha_data_model::block::lane_consensus::{
@@ -316,6 +318,7 @@ state_test! { sync native_driver_transfers_exact_diagnostic_and_closed_custody
     else { panic!("canonical all-route body"); };
     let manifest = *encode_lane_input(lane, &body, 0).unwrap().manifest();
     let original = native_driver_control_for_test(&fixture, lane, 0);
+    let stale_control = original.clone();
     let mut conflicting = original.clone();
     let LaneMessageV1::TimeoutVote(vote) = &mut conflicting.message else { unreachable!() };
     let statement = LaneVoteStatementV1 {
@@ -347,6 +350,9 @@ state_test! { sync native_driver_transfers_exact_diagnostic_and_closed_custody
     assert!(driver.take_diagnostic(id).is_none(), "the exact diagnostic transfers once");
     assert_eq!(driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>(), original_obligations);
     let original_records = driver.process().instance(id).unwrap().native_records().to_vec();
+    let stale_inbound = native_driver_owned_ingress_for_test(
+        BlockMessage::NativeLane(stale_control.clone()), lane.frozen().committee[0].clone());
+    let ownership = stale_inbound.ingress_ownership().unwrap().process_local_projection_hash();
 
     native_process_advance(&fixture, true);
     let closed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
@@ -356,6 +362,25 @@ state_test! { sync native_driver_transfers_exact_diagnostic_and_closed_custody
         assert!(Instant::now() < until, "physical closure must complete");
         std::thread::sleep(Duration::from_millis(1));
     }
+    let NativeLaneAdmission::Retry(NativeLaneInput::Control(retained)) = driver.admit(
+        &observed, NativeLaneInput::Control(stale_control.clone()))
+    else { panic!("stale observation must return the exact old control for local retry"); };
+    assert_eq!(retained, stale_control);
+    let NativeLaneOwnedAdmission::Rejected { inbound: rejected, reason } =
+        driver.admit_owned(stale_inbound).unwrap()
+    else { panic!("finalized closure must reject the original fair-ingress occurrence"); };
+    assert_eq!(rejected.ingress_ownership().unwrap().process_local_projection_hash(), ownership);
+    assert!(rejected.ingress_ownership().unwrap().validate_exact());
+    let BlockMessage::NativeLane(rejected_control) = rejected.message() else {
+        panic!("stale rejection returned a different message family");
+    };
+    assert_eq!(rejected_control, &stale_control);
+    assert_eq!(reason, "native ingress has no exact current opening");
+    driver.poll(&closed, now).unwrap();
+    assert_eq!(driver.process().occupancy().closed, 1,
+        "old signed control cannot reopen a finalized closed instance");
+    assert_eq!(driver.process().instance(id).unwrap().native_records(), original_records);
+    assert_eq!(driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>(), original_obligations);
     let retired = driver.take_closed(id).expect("original drained owner remains available");
     assert!(driver.take_closed(id).is_none());
     assert_eq!(driver.process().occupancy().instances, 0);
@@ -414,6 +439,64 @@ state_test! { sync native_driver_nonmember_decision_handoff_requires_every_exact
     assert!(!guard.restart_required());
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_pre_payload_timeout_respects_exact_canonical_frame_limit
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        message::BlockMessage,
+        v2_lane_driver::{NativeLaneDriver, NativeLaneOwnedAdmission, native_driver_owned_ingress_for_test},
+    };
+    let now = std::time::Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let timeout = native_driver_control_for_test(&fixture, lane, 0);
+    let exact = norito::canonical_frame_len(&timeout).unwrap();
+    assert_eq!(exact, norito::encode_canonical(&timeout).unwrap().len());
+    assert!(exact > 1);
+
+    let rejected_guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.maximum_message_bytes = NonZeroUsize::new(exact - 1).unwrap();
+    let mut rejected_driver = NativeLaneDriver::new(
+        Arc::clone(&fixture.state), Arc::clone(&rejected_guard),
+        native_process_key(&fixture, lane, 0), limits,
+    ).unwrap();
+    let original = native_driver_owned_ingress_for_test(
+        BlockMessage::NativeLane(timeout.clone()),
+        lane.frozen().committee[0].clone(),
+    );
+    let ordinal = original.ingress_ownership().unwrap().physical_admission_ordinal();
+    let NativeLaneOwnedAdmission::Rejected { inbound, reason } =
+        rejected_driver.admit_owned(original).unwrap() else {
+            panic!("the signed pre-payload timeout must exceed the one-byte-short frame limit");
+        };
+    assert!(reason.contains("frame bound"), "{reason}");
+    assert_eq!(inbound.ingress_ownership().unwrap().physical_admission_ordinal(), ordinal);
+    assert!(inbound.ingress_ownership().unwrap().validate_exact());
+    let BlockMessage::NativeLane(returned) = inbound.message() else {
+        panic!("rejection must return the original Native control");
+    };
+    assert_eq!(returned, &timeout);
+    assert_eq!(rejected_driver.process().occupancy().instances, 0);
+    assert!(!rejected_guard.restart_required());
+    rejected_driver.shutdown().join().unwrap();
+
+    // The exact same physical carrier is admissible at its canonical byte
+    // length. This checks the inclusive boundary without minting a new ingress.
+    let accepted_guard = ConsensusOutputGuard::isolated();
+    let mut limits = native_driver_limits_for_test();
+    limits.maximum_message_bytes = NonZeroUsize::new(exact).unwrap();
+    let mut accepted_driver = NativeLaneDriver::new(
+        Arc::clone(&fixture.state), Arc::clone(&accepted_guard),
+        native_process_key(&fixture, lane, 0), limits,
+    ).unwrap();
+    assert!(matches!(accepted_driver.admit_owned(inbound).unwrap(), NativeLaneOwnedAdmission::Accepted));
+    assert_eq!(accepted_driver.process().occupancy().instances, 0);
+    assert!(!accepted_guard.restart_required());
+    accepted_driver.shutdown().join().unwrap();
 }
 
 state_test! { sync native_driver_admits_complete_control_envelope_before_opening_any_signer

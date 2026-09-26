@@ -18,6 +18,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion;
+use iroha_sccp::{SCCP_TAIRA_CHAIN_ID_V1, sccp_taira_finality_network_id_v1};
 use sorafs_manifest::signer::{
     protocol::{
         SignerOperationActionV1, SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
@@ -83,10 +84,12 @@ fn fixture() -> Fixture {
         world.account_permissions.insert(id.clone(), permissions);
     }
     Fixture {
-        state: State::new_for_testing(
+        state: State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
+            SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
+            sccp_taira_finality_network_id_v1(),
         ),
         manager,
         operator,

@@ -1124,6 +1124,30 @@ pub mod sorafs {
         }
     }
     permission! {
+        /// Permission to configure, enroll, or revoke topology signer custody for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanManageSorafsTopologyCustody {
+            /// Stable topology deployment governed by this capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission to reserve, complete, or expire topology approval for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanOperateSorafsTopologyApproval {
+            /// Stable topology deployment governed by this capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
+        /// Permission for an independent observer to check topology approval for one deployment.
+        #[norito(deny_unknown_fields)]
+        pub struct CanCheckSorafsTopologyApproval {
+            /// Stable topology deployment observed by this read-only capability.
+            pub deployment_id: String,
+        }
+    }
+    permission! {
         /// Permission to configure, enroll, or revoke the transaction-account custody of one deployment.
         #[norito(deny_unknown_fields)]
         pub struct CanManageSorafsFinalPromotionAccountCustody {

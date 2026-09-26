@@ -607,6 +607,7 @@
           "required_tokens": [
             "# kind\tname\thex\texpectation",
             "message\tquorum_certificate_merge_carrier\t",
+            "message\tquorum_certificate_transaction_commitments\t",
             "negative_message\texecution_commitment_merge_carrier_wrong_version\t",
             "negative_message\texecution_commitment_missing_merge_carrier_field\t"
           ]
@@ -616,6 +617,7 @@
           "required_tokens": [
             "const WIRE_FIXTURE_BASENAME: &str = \"wire_v2.tsv\";",
             "name: \"quorum_certificate_merge_carrier\",",
+            "name: \"quorum_certificate_transaction_commitments\",",
             "\"execution_commitment_merge_carrier_wrong_version\",",
             "\"execution_commitment_missing_merge_carrier_field\",",
             "&options.output_dir.join(WIRE_FIXTURE_BASENAME),"
@@ -628,6 +630,7 @@
             "fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings()",
             "fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation()",
             "\"quorum_certificate_merge_carrier\",",
+            "\"quorum_certificate_transaction_commitments\",",
             "\"execution_commitment_merge_carrier_wrong_version\",",
             "\"execution_commitment_missing_merge_carrier_field\","
           ]
@@ -7947,7 +7950,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "fn",
-          "symbol": "canonical_executed_block_matches_need",
+          "symbol": "canonical_executed_block_wire_matching_need",
           "required_tokens": [
             "block.encode_wire()",
             "finality.verify()",
@@ -7966,8 +7969,8 @@
             "validate_canonical_executed_block_request",
             "read_block_body(height)",
             "map_err(CanonicalRecoveryReadError::storage)?",
-            "canonical_executed_block_matches_need",
-            "block.encode_wire()",
+            "canonical_executed_block_wire_matching_need",
+            "let wire = canonical_executed_block_wire_matching_need",
             "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
             "LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk",
             "wire[start..end].to_vec()",
@@ -8188,7 +8191,7 @@
             "finality_artifact != local_finality",
             "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
             "decode_versioned_signed_block",
-            "canonical_executed_block_matches_need",
+            "canonical_executed_block_wire_matching_need",
             "cache_block_body",
             "preflight_cached_finalized_merge_carrier_reconstruction",
             "self.needs.pop_front()"
@@ -9334,7 +9337,7 @@
             "self.kura.read_block_body(height).map_err(|error|",
             "self.output_guard.close_admission_for_restart()",
             "validate_canonical_executed_block_need(",
-            "!canonical_executed_block_matches_need(&block, &finality, need)",
+            "canonical_executed_block_wire_matching_need(&block, &finality, need).is_none()",
             ".preflight_cached_finalized_merge_carrier_reconstruction(&block)",
             "self.needs.pop_front();",
             "self.reset_front_assembly();"
@@ -26511,12 +26514,19 @@
             "for hash in &live_reservations",
             "let order = self.fifo_order_by_hash.get(hash)?",
             "live_reservation_fifo_cut.map_or(order.value().ordinal",
+            "let parent_hash = state_view.latest_block_hash()",
+            ".skip(scan_start)",
             "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
             "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
             "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
             "blocked_by_fifo_predecessor = true",
+            "canonical_queue_plan_fence.get_or_insert(scan_start + offset)",
+            "scan_cursor.next_index = fence",
+            "scan_cursor.next_index = scan_start",
+            "self.wake_sumeragi()",
             "if !open {\n                            match State::queue_plan_pending_route_authority_in_view(\n                                state_view, &binding,\n                            ) {\n                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }",
-            "if self.replay_terminal_cleanup_pending(*hash) {\n                    return None;\n                }"
+            "if self.replay_terminal_cleanup_pending(*hash) {\n                    return None;\n                }",
+            "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {\n                        // An uncarried local claim has no canonical ordering\n                        // promise. Keep its exact Queue ownership, but let the\n                        // leader choose later independently eligible work.\n                        return None;\n                    }"
           ]
         },
         {
@@ -27535,7 +27545,54 @@
           "kind": "method",
           "symbol": "Queue::reject_exact_queue_plan_admission_claim",
           "required_tokens": [
-            "reject_exact_queue_plan_admission_claim_inner(binding, true)"
+            "self.reject_unreserved_terminal_plan_claim(&claim)",
+            "binding\n            .validate_structure()",
+            "if self.transaction_selection_durability_faulted()",
+            "self.wait_for_durability_transitions(&[hash]);",
+            ".global_admission_binding()",
+            "!= binding",
+            "self.reject_unreserved_terminal_plan_claim(&claim)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::reject_unreserved_terminal_plan_claim",
+          "required_tokens": [
+            "self.push_remove_lock.lock()",
+            "self.durability_transition_active(&hash)",
+            "self.wait_for_durability_transitions(&[hash])",
+            ".durable_plan_claims",
+            "current != *expected",
+            "self.lane_reservations.lock().owns_entrypoint(hash)",
+            "current.local_custody == QueuePlanLocalCustody::Autonomous",
+            "self.global_selection_owners.lock().contains_key(&hash)",
+            "self.inflight_guards.load(Ordering::Acquire) != 0",
+            "self.selection_attempts.load(Ordering::Acquire) != 0",
+            ".begin_durability_transition_locked([hash])",
+            "self.tombstone_exact_durable_plan_claim(&current)?",
+            "self.remove_transaction_locked(&transaction, &current.routing_plan, None, None)",
+            "return Ok(true)",
+            "if current != *expected",
+            "self.lane_reservations.lock().owns_entrypoint(hash)",
+            "current.local_custody == QueuePlanLocalCustody::Autonomous",
+            ".local_custody = QueuePlanLocalCustody::ReplayTerminalPending;",
+            "self.replay_terminal_cleanup_dirty\n                .store(true, Ordering::Release);",
+            "self.global_selection_owners.lock().contains_key(&hash)",
+            "self.inflight_guards.load(Ordering::Acquire) != 0",
+            "self.selection_attempts.load(Ordering::Acquire) != 0",
+            "self.tombstone_exact_durable_plan_claim(&current)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "LaneQueueReservationStore::owns_entrypoint",
+          "required_tokens": [
+            "self.durable_owned_hashes().any(|owned| owned == hash)",
+            ".plan_tombstoned",
+            "self.durable_owned_hashes().any(|owned| owned == hash)",
+            ".plan_tombstoned"
           ]
         },
         {
@@ -27717,46 +27774,6 @@
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "method",
-          "symbol": "Queue::reject_unreserved_replay_terminal_queue_plan_admission_claim",
-          "required_tokens": [
-            "reject_exact_queue_plan_admission_claim_inner(binding, true)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/queue.rs",
-          "kind": "method",
-          "symbol": "Queue::reject_exact_queue_plan_admission_claim_inner",
-          "required_tokens": [
-            ".validate_structure()",
-            "self.push_remove_lock.lock()",
-            "self.durability_transition_active(&hash)",
-            "self.wait_for_durability_transitions(&[hash])",
-            ".durable_plan_claims",
-            "indexed_binding != binding",
-            "if require_unreserved_replay_terminal_owner",
-            "reservations.live_by_entrypoint.contains_key(&hash)",
-            ".commit_barriers",
-            ".plan_tombstoned",
-            "reservations.release_barriers",
-            "reservations.completed_releases",
-            "self.global_selection_owners.lock().contains_key(&hash)",
-            "self.inflight_guards.load(Ordering::Acquire) != 0",
-            "self.selection_attempts.load(Ordering::Acquire) != 0",
-            ".begin_durability_transition_locked([hash])",
-            "self.tombstone_conflicting_global_admission(binding)?",
-            "self.finalize_conflicting_global_admission_locked(",
-            "return Ok(true)",
-            "if require_unreserved_replay_terminal_owner\n                && self.transaction_selection_durability_faulted()\n            {\n                return Err(LaneQueueReservationError::DurabilityFault);\n            }",
-            "if &indexed_binding != binding {\n                // A delayed losing certificate must not delete a later admission for the same\n                // entrypoint, including an ABA replacement with the same routing-plan digest.\n                return Ok(false);\n            }",
-            "if reservation_owned\n                    || indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous\n                {\n                    return Ok(false);\n                }",
-            "self.durable_plan_claims\n                    .get_mut(&hash)\n                    .expect(\"the Queue lock retains the exact admission claim\")\n                    .local_custody = QueuePlanLocalCustody::ReplayTerminalPending;",
-            "self.replay_terminal_cleanup_dirty\n                    .store(true, Ordering::Release);",
-            "if self.global_selection_owners.lock().contains_key(&hash)\n                    || self.inflight_guards.load(Ordering::Acquire) != 0\n                    || self.selection_attempts.load(Ordering::Acquire) != 0\n                {\n                    return Ok(false);\n                }"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/queue.rs",
-          "kind": "method",
           "symbol": "Queue::remove_state_committed_replay_owners_preserving_globally_bound",
           "required_tokens": [
             "has_committed_replay_identity(state_view)",
@@ -27770,10 +27787,10 @@
             "queue_plan_binding_application_evidence_in_view",
             "evidence == expected_evidence",
             "replay_terminal_bindings.push(binding)",
-            "reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?",
+            "reject_exact_queue_plan_admission_claim(&binding)?",
             "if registry_match == QueuePlanAdmissionRegistryMatch::Exact {",
             "Ok(evidence) if evidence == expected_evidence",
-            "self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)?"
+            "self.reject_exact_queue_plan_admission_claim(&binding)?"
           ]
         },
         {

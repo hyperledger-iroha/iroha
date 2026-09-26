@@ -385,7 +385,7 @@ frame internally, and returns an opaque, schema-bound Norito response frame.
 The lightweight Python package validates media type, schema, flags, checksum,
 and the 8 MiB response bound only. Before any ballot seed is used,
 pass the response and the independently pinned network ID, checkpoint height,
-checkpoint context ID, and ballot-attempt ID to the ABI-23 native verifier.
+checkpoint context ID, and ballot-attempt ID to the ABI-24 native verifier.
 Python does not claim to verify finality, the ordinary-write witness,
 application membership, or the embedded Core archive. Local partial-release
 requests are deliberately bodyless and their public response is rebound to a
@@ -400,7 +400,7 @@ Requests' environment/netrc credential fallback during preparation.
 The separate `get_parliament_timed_ovn_casting_context_v1(...)` response is a
 node-local diagnostic projection, not a finality proof or authorization
 capability. Its archive must not reach a secret-local operation unless the
-casting-proof response has been verified by the ABI-23 native verifier.
+casting-proof response has been verified by the ABI-24 native verifier.
 
 ## Signed SoraFS orderbook submission
 
@@ -442,6 +442,6 @@ and derives the expected network from its local signing context.
 
 Account identity construction, canonical parsing, and controller checks require the
 separate `iroha-native` wheel (`pip install iroha-torii-client[native]`). These
-operations use its ABI-23 Rust owner for all eleven curves and full weighted
+operations use its ABI-24 Rust owner for all eleven curves and full weighted
 multisig policies. Missing native validation is an explicit error; anonymous HTTP
 transport can operate without loading the native package.

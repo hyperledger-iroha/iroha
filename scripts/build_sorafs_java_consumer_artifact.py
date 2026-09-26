@@ -21,7 +21,7 @@ import threading
 import time
 import zipfile
 
-import check_native_sdk_abi23_artifact as native
+import check_native_sdk_artifact as native
 from jvm_classfile import MAX_CLASS_BYTES, parse_class
 from sorafs_evidence_json import decode_evidence_json, read_evidence_bytes
 from sorafs_java_consumer_artifact import (
@@ -251,7 +251,7 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
     # sources. Their byte identities are observations, not an audit sign-off.
     script_directory = Path(__file__).resolve(strict=True).parent
     tool_sources = {}
-    for name in ("build_sorafs_java_consumer_artifact.py", "sorafs_java_consumer_artifact.py", "jvm_classfile.py", "sorafs_evidence_json.py", "check_native_sdk_abi23_artifact.py", "compute_workspace_source_manifest.py"):
+    for name in ("build_sorafs_java_consumer_artifact.py", "sorafs_java_consumer_artifact.py", "jvm_classfile.py", "sorafs_evidence_json.py", "check_native_sdk_artifact.py", "compute_workspace_source_manifest.py"):
         if name != "build_sorafs_java_consumer_artifact.py" and name != "compute_workspace_source_manifest.py":
             module = sys.modules[name.removesuffix(".py")]
             if Path(module.__file__).resolve(strict=True) != script_directory / name:
@@ -280,7 +280,7 @@ def produce(args: argparse.Namespace) -> dict[str, object]:
     fixtures = capture_tree(root / "fixtures/sorafs_manifest", MAX_FIXTURE_BYTES)
     for relative, raw in fixtures.items():
         write_fresh(work / "snapshot/fixtures/sorafs_manifest" / relative, raw)
-    manifest_raw = capture(args.native_manifest, "inputs/native-abi23.json", native.MAX_MANIFEST_BYTES)
+    manifest_raw = capture(args.native_manifest, "inputs/native-abi24.json", native.MAX_MANIFEST_BYTES)
     manifest = parse_native_manifest(manifest_raw)
     if manifest["sdk"] != "c-jni":
         raise ArtifactError("native evidence must authenticate the actual C/JNI owner")

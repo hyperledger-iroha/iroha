@@ -38,7 +38,7 @@ fn final_file(path: &Path, operation_id: [u8; 32]) -> PathBuf {
 #[test]
 fn enospc_after_durable_tombstone_blocks_only_that_operation_after_restart() {
     let (_parent, path) = pending_directory();
-    let files = SignerPendingReserveFilesV1::open(&path).unwrap();
+    let files = SignerPendingReserveFilesV1::open_test(&path).unwrap();
     let first = files.stage(FIRST, b"first signed Reserve").unwrap();
     assert!(final_file(&path, FIRST).exists());
     assert!(!in_progress_file(&path, FIRST).exists());
@@ -69,7 +69,7 @@ fn enospc_after_durable_tombstone_blocks_only_that_operation_after_restart() {
     drop(first);
     drop(files);
 
-    let reopened = SignerPendingReserveFilesV1::open(&path).unwrap();
+    let reopened = SignerPendingReserveFilesV1::open_test(&path).unwrap();
     assert_eq!(
         reopened.recover(FIRST).unwrap().bytes(),
         b"first signed Reserve"
@@ -88,7 +88,7 @@ fn enospc_after_durable_tombstone_blocks_only_that_operation_after_restart() {
 #[test]
 fn interruption_after_signed_bytes_sync_never_publishes_an_unfinished_record() {
     let (_parent, path) = pending_directory();
-    let files = SignerPendingReserveFilesV1::open(&path).unwrap();
+    let files = SignerPendingReserveFilesV1::open_test(&path).unwrap();
     let first = files.stage(FIRST, b"first signed Reserve").unwrap();
     assert!(
         files
@@ -109,7 +109,7 @@ fn interruption_after_signed_bytes_sync_never_publishes_an_unfinished_record() {
     drop(first);
     drop(files);
 
-    let reopened = SignerPendingReserveFilesV1::open(&path).unwrap();
+    let reopened = SignerPendingReserveFilesV1::open_test(&path).unwrap();
     assert_eq!(
         reopened.recover(FIRST).unwrap().bytes(),
         b"first signed Reserve"
@@ -121,7 +121,7 @@ fn interruption_after_signed_bytes_sync_never_publishes_an_unfinished_record() {
 #[test]
 fn no_replace_publish_preserves_a_conflicting_final_record() {
     let (_parent, path) = pending_directory();
-    let files = SignerPendingReserveFilesV1::open(&path).unwrap();
+    let files = SignerPendingReserveFilesV1::open_test(&path).unwrap();
     let conflicting = final_file(&path, INTERRUPTED);
     assert!(
         files
@@ -138,7 +138,7 @@ fn no_replace_publish_preserves_a_conflicting_final_record() {
     assert_eq!(fs::read(&conflicting).unwrap(), b"original signed Reserve");
     // A duplicate same-ID final/tombstone pair indicates tampering, not a completed record.
     drop(files);
-    assert!(SignerPendingReserveFilesV1::open(&path).is_err());
+    assert!(SignerPendingReserveFilesV1::open_test(&path).is_err());
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn in_progress_tombstones_consume_inventory_and_reject_unsafe_files() {
     let (_parent, path) = pending_directory();
     let mut profile = JournalProfile::PENDING_RESERVE;
     profile.max_records = 1;
-    let inner = JournalInner::open(&path, profile).unwrap();
+    let inner = JournalInner::open_test(&path, profile).unwrap();
     assert!(
         inner
             .stage_pending_reserve_with(INTERRUPTED, b"interrupted", |_| {
@@ -160,7 +160,7 @@ fn in_progress_tombstones_consume_inventory_and_reject_unsafe_files() {
 
     let tombstone = in_progress_file(&path, INTERRUPTED);
     fs::set_permissions(&tombstone, Permissions::from_mode(0o000)).unwrap();
-    assert!(SignerPendingReserveFilesV1::open(&path).is_ok());
+    assert!(SignerPendingReserveFilesV1::open_test(&path).is_ok());
     fs::set_permissions(&tombstone, Permissions::from_mode(0o600)).unwrap();
     for attack in ["world-readable", "hardlink", "symlink"] {
         let other = path.parent().unwrap().join("external-link");
@@ -176,7 +176,7 @@ fn in_progress_tombstones_consume_inventory_and_reject_unsafe_files() {
             _ => unreachable!(),
         }
         assert!(
-            SignerPendingReserveFilesV1::open(&path).is_err(),
+            SignerPendingReserveFilesV1::open_test(&path).is_err(),
             "{attack}"
         );
         match attack {
@@ -191,5 +191,5 @@ fn in_progress_tombstones_consume_inventory_and_reject_unsafe_files() {
             _ => unreachable!(),
         }
     }
-    assert!(SignerPendingReserveFilesV1::open(&path).is_ok());
+    assert!(SignerPendingReserveFilesV1::open_test(&path).is_ok());
 }

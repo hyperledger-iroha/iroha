@@ -1,19 +1,25 @@
-//! Fail-closed work preflight for one native qPCS Merkle opening.
+//! Fail-closed work preflight for native qPCS Merkle and initial rebind hashes.
 //!
 //! This private prerequisite derives a conservative hash-work bound from the
-//! canonical six-lane leaf and node frames. It deliberately does not authenticate
-//! a proof, account for transcript/query-binding hashes or source arithmetic,
-//! or grant a qPCS receipt. The original proof-session budget is not yet carried
-//! into the source-bound qPCS verifier, so no production caller uses this cut.
-//! TODO: retain the original session budget through the source/qPCS handoff and
-//! add the remaining qPCS hash and arithmetic work before any authentication.
+//! canonical six-lane leaf and node frames, including the repeated payload and
+//! index hashes in `bind_query_openings_v1`. It deliberately does not authenticate
+//! a proof, account for query-opening digests, transcript or source arithmetic,
+//! or grant a qPCS receipt. The original proof-session budget reaches the
+//! source-bound transition, but no live source constructor reaches that stage.
+//! TODO: retain the budget through complete qPCS authentication and account
+//! for query-opening and transcript hashes, source work, arithmetic, memory,
+//! spool, and I/O.
 
 #![allow(
     dead_code,
-    reason = "the original source-session budget has not reached the private qPCS verifier"
+    reason = "the source-bound qPCS transition has no live production constructor"
 )]
 
 use super::{
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1, ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1,
+    },
+    rns_native_proof_hash::RnsNativeProofHashWorkV1,
     rns_native_qpcs_leaf::RnsNativeOracleV1,
     rns_native_resource_budget::{RnsNativeProofResourceBudgetV1, RnsNativeResourceErrorV1},
 };
@@ -26,10 +32,10 @@ pub(super) enum RnsNativeQpcsOpeningWorkErrorV1 {
     Resource(RnsNativeResourceErrorV1),
 }
 
-/// Upper bound for hashing one canonical multiproof's opened leaves and paths.
+/// Conservative hash work for canonical multiproofs and initial query rebinding.
 /// Each opened leaf is hashed once as a payload and once with its position; at
-/// most one ancestor per tree level is hashed for each opened leaf. The bound
-/// intentionally charges even if the one-entry public-leaf cache hits.
+/// most one ancestor per tree level is hashed per opened leaf. Rebinding charges
+/// both leaf frames again even if the one-entry public-leaf cache hits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RnsNativeQpcsOpeningHashWorkV1 {
     field_operations: u64,
@@ -52,19 +58,10 @@ impl RnsNativeQpcsOpeningHashWorkV1 {
         let [payload, index, node] = oracle
             .full_tree_frame_work(parameter_digest)
             .map_err(|_| RnsNativeQpcsOpeningWorkErrorV1::InvalidOracle)?;
-        let frame_operations = |multiplications: u64, additions: u64| {
-            multiplications
-                .checked_add(additions)
-                .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)
-        };
-        let leaf_operations =
-            frame_operations(payload.field_multiplications, payload.field_additions)?
-                .checked_add(frame_operations(
-                    index.field_multiplications,
-                    index.field_additions,
-                )?)
-                .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
-        let node_operations = frame_operations(node.field_multiplications, node.field_additions)?;
+        let leaf_operations = frame_operations_v1(payload)?
+            .checked_add(frame_operations_v1(index)?)
+            .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        let node_operations = frame_operations_v1(node)?;
         let depth = u64::from(tree_leaves.ilog2());
         let per_leaf = leaf_operations
             .checked_add(
@@ -76,6 +73,53 @@ impl RnsNativeQpcsOpeningHashWorkV1 {
         Ok(Self {
             field_operations: checked_opening_work_v1(opened_leaves, per_leaf)?,
         })
+    }
+
+    /// Conservative sum of every canonical initial, quotient, and correlated-FRI
+    /// Merkle opening plus the second initial-leaf pass for query binding. Each
+    /// tree opens at most two leaves per query, capped by its governed domain
+    /// size; duplicate pairs and cache hits only reduce actual work. The verifier
+    /// hashes at most one ancestor per opened leaf at each level.
+    pub(super) fn for_canonical_merkle_and_rebind_leaf_hashes_v1(
+        parameter_digest: [u8; 32],
+    ) -> Result<Self, RnsNativeQpcsOpeningWorkErrorV1> {
+        let max_opened = u64::from(ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1)
+            .checked_mul(2)
+            .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        let mut field_operations = 0_u64;
+        for oracle in [RnsNativeOracleV1::Initial, RnsNativeOracleV1::Quotient] {
+            let work = Self::for_opened_leaves_v1(parameter_digest, oracle, max_opened)?;
+            field_operations = field_operations
+                .checked_add(work.field_operations)
+                .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        }
+        for layer in 0..ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1 {
+            let oracle = RnsNativeOracleV1::Fri { layer };
+            let length = u64::from(
+                oracle
+                    .length()
+                    .map_err(|_| RnsNativeQpcsOpeningWorkErrorV1::InvalidOracle)?,
+            );
+            let work =
+                Self::for_opened_leaves_v1(parameter_digest, oracle, max_opened.min(length))?;
+            field_operations = field_operations
+                .checked_add(work.field_operations)
+                .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        }
+        // Initial authentication then calls bind_query_openings_v1, which asks
+        // the one-entry cache for each of 160 ordered leaf pairs a second time.
+        // A hit skips only the payload hash, never the index hash; charge both
+        // canonical frames for all 320 calls before the first public read.
+        let [payload, index, _] = RnsNativeOracleV1::Initial
+            .full_tree_frame_work(parameter_digest)
+            .map_err(|_| RnsNativeQpcsOpeningWorkErrorV1::InvalidOracle)?;
+        let per_rebound_leaf = frame_operations_v1(payload)?
+            .checked_add(frame_operations_v1(index)?)
+            .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        field_operations = field_operations
+            .checked_add(checked_opening_work_v1(max_opened, per_rebound_leaf)?)
+            .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)?;
+        Ok(Self { field_operations })
     }
 
     pub(super) const fn field_operations_v1(self) -> u64 {
@@ -93,6 +137,15 @@ impl RnsNativeQpcsOpeningHashWorkV1 {
             .map_err(RnsNativeQpcsOpeningWorkErrorV1::Resource)?;
         Ok(())
     }
+}
+
+fn frame_operations_v1(
+    frame: RnsNativeProofHashWorkV1,
+) -> Result<u64, RnsNativeQpcsOpeningWorkErrorV1> {
+    frame
+        .field_multiplications
+        .checked_add(frame.field_additions)
+        .ok_or(RnsNativeQpcsOpeningWorkErrorV1::ArithmeticOverflow)
 }
 
 fn checked_opening_work_v1(
@@ -130,6 +183,11 @@ mod tests {
             work.field_operations_v1(),
             320 * (4_819_350 + 487_008 + 19 * 476_862)
         );
+        let [payload, index, _] = RnsNativeOracleV1::Initial
+            .full_tree_frame_work(parameter_v1())
+            .unwrap();
+        assert_eq!(frame_operations_v1(payload).unwrap(), 4_819_350);
+        assert_eq!(frame_operations_v1(index).unwrap(), 487_008);
         assert!(matches!(
             RnsNativeQpcsOpeningHashWorkV1::for_opened_leaves_v1(
                 parameter_v1(),
@@ -146,6 +204,57 @@ mod tests {
             ),
             Err(RnsNativeQpcsOpeningWorkErrorV1::InvalidCount)
         ));
+    }
+
+    #[test]
+    fn merkle_and_initial_rebind_sum_uses_original_budget_and_rejects_one_over() {
+        let parameter = parameter_v1();
+        let initial = RnsNativeQpcsOpeningHashWorkV1::for_opened_leaves_v1(
+            parameter,
+            RnsNativeOracleV1::Initial,
+            320,
+        )
+        .unwrap();
+        let all = RnsNativeQpcsOpeningHashWorkV1::for_canonical_merkle_and_rebind_leaf_hashes_v1(
+            parameter,
+        )
+        .unwrap();
+        assert_eq!(all.field_operations_v1(), 57_475_588_392);
+        assert_eq!(
+            all.field_operations_v1() - 55_777_553_832,
+            320 * (4_819_350 + 487_008)
+        );
+        let terminal = RnsNativeQpcsOpeningHashWorkV1::for_opened_leaves_v1(
+            parameter,
+            RnsNativeOracleV1::Fri { layer: 17 },
+            4,
+        )
+        .unwrap();
+        assert_eq!(terminal.field_operations_v1(), 25_040_328);
+        assert!(all.field_operations_v1() > initial.field_operations_v1());
+        assert!(all.field_operations_v1() < ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
+
+        let mut exact = RnsNativeProofResourceBudgetV1::default();
+        exact
+            .charge(ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 - all.field_operations_v1())
+            .unwrap();
+        all.admit_v1(&mut exact).unwrap();
+        assert_eq!(
+            exact.consumed().unwrap(),
+            ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1
+        );
+
+        let mut over = RnsNativeProofResourceBudgetV1::default();
+        over.charge(ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1 - all.field_operations_v1() + 1)
+            .unwrap();
+        let prior = over.consumed().unwrap();
+        assert!(matches!(
+            all.admit_v1(&mut over),
+            Err(RnsNativeQpcsOpeningWorkErrorV1::Resource(
+                RnsNativeResourceErrorV1::WorkLimit
+            ))
+        ));
+        assert_eq!(over.consumed().unwrap(), prior);
     }
 
     #[test]

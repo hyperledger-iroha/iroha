@@ -8,6 +8,29 @@ use sorafs_manifest::signer::{
     stream_token::SignerStreamTokenRequestV1,
 };
 
+#[test]
+fn stream_token_action_keeps_inline_check_and_complete_schema_payloads() {
+    const _: () = assert!(core::mem::size_of::<StreamTokenAuthorityActionV1>() <= 2048);
+    let schema = StreamTokenAuthorityActionV1::schema();
+    let iroha_schema::Metadata::Enum(actions) = schema
+        .get::<StreamTokenAuthorityActionV1>()
+        .expect("stream-token action schema")
+    else {
+        panic!("stream-token action must have an enum schema");
+    };
+    assert_eq!(actions.variants.len(), 4);
+    assert_eq!(actions.variants[1].discriminant, 1);
+    assert_eq!(
+        actions.variants[1].ty,
+        Some(core::any::TypeId::of::<StreamTokenCompleteRequestV1>())
+    );
+    assert_eq!(actions.variants[3].discriminant, 3);
+    assert_eq!(
+        actions.variants[3].ty,
+        Some(core::any::TypeId::of::<StreamTokenCheckV1>())
+    );
+}
+
 fn operator(seed: u8) -> AccountId {
     AccountId::new(
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

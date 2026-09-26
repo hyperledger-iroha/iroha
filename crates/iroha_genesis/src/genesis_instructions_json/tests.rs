@@ -386,7 +386,6 @@ fn value_to_instruction_accepts_base64_string_for_custom_instruction() {
     let instruction = InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
         asset_definition_id,
         None,
-        None,
     ));
     let value = instruction_value(&instruction);
     assert!(

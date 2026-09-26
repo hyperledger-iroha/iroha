@@ -4208,6 +4208,38 @@ pub mod isi {
                 }
             };
             let id = self.election_id.clone();
+            // Check the encoded length before allocating a decoded proof. The inverse
+            // base64 bound is conservative at the final padded quantum; the exact
+            // decoded length is checked again below.
+            let exceeds_encoded_proof_limit = |maximum: usize| {
+                maximum > 0 && self.proof_b64.len() > maximum.div_ceil(3).saturating_mul(4)
+            };
+            if exceeds_encoded_proof_limit(
+                usize::try_from(state_transaction.zk.max_proof_size_bytes).unwrap_or(usize::MAX),
+            ) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "confidential proof exceeds max_proof_size_bytes".into(),
+                    ),
+                )
+                .into());
+            }
+            let max_proof = state_transaction.zk.preverify_max_bytes;
+            if exceeds_encoded_proof_limit(max_proof) {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: self.election_id.clone(),
+                            reason: "proof exceeds configured max bytes".into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "proof exceeds configured max bytes".into(),
+                    ),
+                ));
+            }
             // Validate ballot proof inputs and enforce governance policy before recording state.
             // 1) Decode proof bytes from base64 (reject empty/invalid)
             let proof_bytes =
@@ -4229,7 +4261,6 @@ pub mod isi {
                     }
                 };
             state_transaction.register_confidential_proof(proof_bytes.len())?;
-            let max_proof = state_transaction.zk.preverify_max_bytes;
             if max_proof > 0 && proof_bytes.len() > max_proof {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4245,12 +4276,8 @@ pub mod isi {
                     ),
                 ));
             }
-            let mut st = state_transaction
-                .world
-                .elections
-                .get(&self.election_id)
-                .cloned()
-                .ok_or_else(|| {
+            let (ballot_vk_id, ballot_vk_commitment) = {
+                let Some(st) = state_transaction.world.elections.get(&self.election_id) else {
                     state_transaction.world.emit_events(Some(
                         iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                             iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -4259,23 +4286,25 @@ pub mod isi {
                             },
                         ),
                     ));
-                    InstructionExecutionError::InvariantViolation("unknown election id".into())
-                })?;
-            if st.finalized {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "election already finalized".into(),
-                ));
-            }
-            let ballot_corpus_cap = state_transaction.zk.ballot_history_cap.clamp(1, 1_000);
-            if st.ciphertexts.len() >= ballot_corpus_cap {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "governance ballot corpus is full".into(),
-                ));
-            }
-            let domain_tag = if st.domain_tag.is_empty() {
-                DEFAULT_NULLIFIER_DOMAIN_TAG.to_string()
-            } else {
-                st.domain_tag.clone()
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "unknown election id".into(),
+                    ));
+                };
+                if st.finalized {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "election already finalized".into(),
+                    ));
+                }
+                let ballot_corpus_cap = state_transaction
+                    .zk
+                    .ballot_history_cap
+                    .clamp(1, crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1);
+                if st.accepted_ballots.len() >= ballot_corpus_cap {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance ballot corpus is full".into(),
+                    ));
+                }
+                (st.vk_ballot.clone(), st.vk_ballot_commitment)
             };
             // Early referendum existence/window checks (Zk)
             let referendum = {
@@ -4396,9 +4425,7 @@ pub mod isi {
                 None
             };
             // 3) Verify the proof against the resolved VK (ZK1/H2* envelope dispatch)
-            let vk_id = st
-                .vk_ballot
-                .clone()
+            let vk_id = ballot_vk_id
                 .or_else(|| {
                     state_transaction.gov.vk_ballot.as_ref().map(|v| {
                         iroha_data_model::proof::VerifyingKeyId::new(
@@ -4446,7 +4473,7 @@ pub mod isi {
                     "verifying key is not Active".into(),
                 ));
             }
-            if let Some(expected) = st.vk_ballot_commitment {
+            if let Some(expected) = ballot_vk_commitment {
                 if vk_rec.commitment != expected {
                     state_transaction.world.emit_events(Some(
                         iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4511,8 +4538,24 @@ pub mod isi {
                 return Err(err);
             }
             // A role-shaped VK alone cannot authorize the current two-column ballot relation.
-            // Keep this before proof verification and before nullifier/lock/corpus mutation.
+            // Keep this before cloning retained election state, proof verification, and mutation.
             ensure_qualified_standalone_zk_relation_v1()?;
+            // TODO: Fund the complete successor clone and publication before this guard opens.
+            let mut st = state_transaction
+                .world
+                .elections
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "election disappeared before ballot verification".into(),
+                    )
+                })?;
+            let domain_tag = if st.domain_tag.is_empty() {
+                DEFAULT_NULLIFIER_DOMAIN_TAG.to_string()
+            } else {
+                st.domain_tag.clone()
+            };
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -4690,7 +4733,11 @@ pub mod isi {
                     ));
                 }
             }
-            if !st.ballot_nullifiers.insert(nullifier) {
+            if st
+                .accepted_ballots
+                .iter()
+                .any(|entry| entry.nullifier == nullifier)
+            {
                 return reject_governance_ballot_with_penalty(
                     &self.election_id,
                     authority,
@@ -4851,9 +4898,13 @@ pub mod isi {
                     }
                 }
             }
-            // Preserve the complete accepted corpus. Capacity was checked before any ballot
-            // nullifier, lock, or referendum state could be mutated.
-            st.ciphertexts.push(commit_bytes.to_vec());
+            // Preserve each accepted nullifier with its commitment in execution order.
+            // Capacity and duplicate checks preceded lock and referendum mutation.
+            st.accepted_ballots
+                .push(crate::state::StandaloneBallotCorpusEntryV1 {
+                    nullifier,
+                    commitment: commit_bytes,
+                });
             state_transaction.world.elections.remove(id.clone());
             state_transaction.world.elections.insert(id, st);
             // Emit a governance ballot accepted event (mode = Zk, weight not revealed)
@@ -10718,7 +10769,8 @@ pub mod isi {
             .map_err(|error| invalid_smart_contract_parameter(error.to_string()))
     }
     /// Maximum retained ballots in one first-release standalone PLAIN referendum.
-    pub(crate) const MAX_STANDALONE_PLAIN_BALLOTS_V1: usize = 1_000;
+    pub(crate) const MAX_STANDALONE_PLAIN_BALLOTS_V1: usize =
+        crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1;
     fn ensure_plain_ballot_corpus_size_v1(ballot_count: usize) -> Result<(), Error> {
         if ballot_count > MAX_STANDALONE_PLAIN_BALLOTS_V1 {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15757,8 +15809,6 @@ pub mod isi {
     struct PolicyMetadataContext {
         vk_unshield: Option<iroha_data_model::proof::VerifyingKeyId>,
         vk_unshield_commitment: Option<[u8; 32]>,
-        vk_shield: Option<iroha_data_model::proof::VerifyingKeyId>,
-        vk_shield_commitment: Option<[u8; 32]>,
     }
     fn metadata_context_from_state(
         state: Option<&crate::state::ZkAssetState>,
@@ -15767,14 +15817,10 @@ pub mod isi {
             PolicyMetadataContext {
                 vk_unshield: None,
                 vk_unshield_commitment: None,
-                vk_shield: None,
-                vk_shield_commitment: None,
             },
             |st| PolicyMetadataContext {
                 vk_unshield: st.vk_unshield.as_ref().map(|binding| binding.id.clone()),
                 vk_unshield_commitment: st.vk_unshield.as_ref().map(|binding| binding.commitment),
-                vk_shield: st.vk_shield.as_ref().map(|binding| binding.id.clone()),
-                vk_shield_commitment: st.vk_shield.as_ref().map(|binding| binding.commitment),
             },
         )
     }
@@ -15803,15 +15849,6 @@ pub mod isi {
             "vk_unshield_commitment".into(),
             context
                 .vk_unshield_commitment
-                .map_or(norito::json::native::Value::Null, |commitment| {
-                    norito::json::native::Value::from(hex::encode(commitment))
-                }),
-        );
-        policy_map.insert("vk_shield".into(), vk_to_value(context.vk_shield.clone()));
-        policy_map.insert(
-            "vk_shield_commitment".into(),
-            context
-                .vk_shield_commitment
                 .map_or(norito::json::native::Value::Null, |commitment| {
                     norito::json::native::Value::from(hex::encode(commitment))
                 }),
@@ -16158,19 +16195,14 @@ pub mod isi {
         ) -> Result<(), Error> {
             let asset_def_id = self.asset().clone();
             ensure_can_modify_confidential_policy(authority, state_transaction, &asset_def_id)?;
-            self.validate_verifier_roles().map_err(|message| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    message.into(),
-                ))
-            })?;
-            // Derive the canonical policy from the two verifier roles. Optional
+            // Derive the canonical policy from the unshield verifier role. Optional
             // binding presence is the sole enablement signal in ABI V1.
             let current_policy = *state_transaction
                 .world
                 .asset_definition(&asset_def_id)
                 .map_err(Error::from)?
                 .confidential_policy();
-            let has_confidential_role = self.vk_shield().is_some() || self.vk_unshield().is_some();
+            let has_confidential_role = self.vk_unshield().is_some();
             let policy_mode = match current_policy.mode() {
                 ConfidentialPolicyMode::TransparentOnly if has_confidential_role => {
                     ConfidentialPolicyMode::Convertible
@@ -16204,7 +16236,6 @@ pub mod isi {
                 }))
             };
             let vk_unshield_binding = resolve_binding(self.vk_unshield())?;
-            let vk_shield_binding = resolve_binding(self.vk_shield())?;
             let existing_state = state_transaction
                 .world
                 .zk_assets
@@ -16252,45 +16283,25 @@ pub mod isi {
                     )
                 })?;
             }
-            if vk_shield_binding.is_some() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "vk_shield is not part of the first-release confidential asset model".into(),
-                ));
-            }
-            let mut derived_tree_profile = None;
-            for (role, binding) in [
-                ("vk_unshield", vk_unshield_binding.as_ref()),
-                ("vk_shield", vk_shield_binding.as_ref()),
-            ] {
-                let Some(binding) = binding else {
-                    continue;
-                };
+            let derived_tree_profile = if let Some(binding) = vk_unshield_binding.as_ref() {
                 let record = state_transaction
                     .world
                     .verifying_keys
                     .get(&binding.id)
                     .expect("binding was resolved from the verifying-key registry");
-                let profile = crate::state::ConfidentialTreeProfile::for_circuit_id(
-                    &record.circuit_id,
-                )
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "{role} circuit `{}` does not authenticate a supported confidential tree profile",
-                            record.circuit_id,
-                        )
-                        .into(),
-                    )
-                })?;
-                if derived_tree_profile.is_some_and(|current| current != profile) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "configured confidential verifier roles authenticate different tree profiles"
+                crate::state::ConfidentialTreeProfile::for_circuit_id(&record.circuit_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "vk_unshield circuit `{}` does not authenticate a supported confidential tree profile",
+                                record.circuit_id,
+                            )
                             .into(),
-                    ));
-                }
-                derived_tree_profile = Some(profile);
-            }
-            let derived_tree_profile = derived_tree_profile.unwrap_or_default();
+                        )
+                    })?
+            } else {
+                crate::state::ConfidentialTreeProfile::default()
+            };
             let already_registered = existing_state.is_some();
             let mut st = existing_state.unwrap_or_default();
             st.validate_tree_metadata().map_err(|err| {
@@ -16304,19 +16315,9 @@ pub mod isi {
                 ));
             }
             st.tree_profile = derived_tree_profile;
-            let mut vk_fingerprints: Vec<String> =
-                [self.vk_unshield().clone(), self.vk_shield().clone()]
-                    .into_iter()
-                    .flatten()
-                    .map(|vk| format!("{}::{}", vk.backend, vk.name))
-                    .collect();
-            vk_fingerprints.sort();
-            let vk_set_hash = if vk_fingerprints.is_empty() {
-                None
-            } else {
-                let joined = vk_fingerprints.join("|");
-                Some(iroha_crypto::Hash::new(joined.as_bytes()))
-            };
+            let vk_set_hash = self.vk_unshield().as_ref().map(|vk| {
+                iroha_crypto::Hash::new(format!("{}::{}", vk.backend, vk.name).as_bytes())
+            });
             let policy_struct = AssetConfidentialPolicy {
                 mode: policy_mode,
                 vk_set_hash,
@@ -16336,8 +16337,6 @@ pub mod isi {
                 vk_unshield_commitment: vk_unshield_binding
                     .as_ref()
                     .map(|binding| binding.commitment),
-                vk_shield: self.vk_shield().clone(),
-                vk_shield_commitment: vk_shield_binding.as_ref().map(|binding| binding.commitment),
             };
             persist_policy_metadata(
                 state_transaction,
@@ -16347,7 +16346,6 @@ pub mod isi {
             )?;
             // Persist/Update internal ZK policy state
             st.vk_unshield = vk_unshield_binding;
-            st.vk_shield = vk_shield_binding;
             state_transaction
                 .world
                 .zk_assets
@@ -16778,8 +16776,7 @@ pub mod isi {
                 end_ts: *self.end_ts(),
                 finalized: false,
                 tally: vec![0; tally_slots],
-                ballot_nullifiers: std::collections::BTreeSet::default(),
-                ciphertexts: Vec::new(),
+                accepted_ballots: Vec::new(),
                 vk_ballot: Some(self.vk_ballot().clone()),
                 vk_ballot_commitment: Some(ballot_commitment),
                 vk_tally: Some(self.vk_tally().clone()),
@@ -16811,21 +16808,19 @@ pub mod isi {
             }
             ensure_citizen_for_ballot(authority, &self.election_id, state_transaction)?;
             let id = self.election_id().clone();
-            let mut st = state_transaction
-                .world
-                .elections
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation("unknown election id".into())
-                })?;
+            let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation("unknown election id".into())
+            })?;
             if st.finalized {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "election already finalized".into(),
                 ));
             }
-            let ballot_corpus_cap = state_transaction.zk.ballot_history_cap.clamp(1, 1_000);
-            if st.ciphertexts.len() >= ballot_corpus_cap {
+            let ballot_corpus_cap = state_transaction
+                .zk
+                .ballot_history_cap
+                .clamp(1, crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1);
+            if st.accepted_ballots.len() >= ballot_corpus_cap {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "governance ballot corpus is full".into(),
                 ));
@@ -16843,9 +16838,11 @@ pub mod isi {
                 ));
             }
             let (vk_id, vk_box, vk_rec) =
-                resolve_ballot_vk(&st, &self.ballot_proof, state_transaction)?;
+                resolve_ballot_vk(st, &self.ballot_proof, state_transaction)?;
             // Role resolution is insufficient until the ballot proves credential and bond state.
             ensure_qualified_standalone_zk_relation_v1()?;
+            // TODO: Fund the complete successor clone and publication before this guard opens.
+            let mut st = (*st).clone();
             let backend = vk_id.backend.as_str();
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -16897,12 +16894,20 @@ pub mod isi {
                     "ciphertext does not match proof".into(),
                 ));
             }
-            if !st.ballot_nullifiers.insert(expected_nullifier) {
+            if st
+                .accepted_ballots
+                .iter()
+                .any(|entry| entry.nullifier == expected_nullifier)
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "duplicate ballot nullifier".into(),
                 ));
             }
-            st.ciphertexts.push(self.ciphertext().clone());
+            st.accepted_ballots
+                .push(crate::state::StandaloneBallotCorpusEntryV1 {
+                    nullifier: expected_nullifier,
+                    commitment: commit_bytes,
+                });
             state_transaction.world.elections.remove(id.clone());
             state_transaction.world.elections.insert(id, st);
             Ok(())
@@ -16993,28 +16998,25 @@ pub mod isi {
             let id = self.election_id().clone();
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
-            let (st, expected_tally_len) = {
-                let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation("unknown election id".into())
+            let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation("unknown election id".into())
+            })?;
+            if st.finalized {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "election already finalized".into(),
+                ));
+            }
+            if now_ms < st.end_ts {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "election still active".into(),
+                ));
+            }
+            let expected_tally_len = zk::validate_election_tally_v1(st.options, st.tally.len())
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid stored election shape: {error}").into(),
+                    )
                 })?;
-                if st.finalized {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "election already finalized".into(),
-                    ));
-                }
-                if now_ms < st.end_ts {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "election still active".into(),
-                    ));
-                }
-                let expected_tally_len = zk::validate_election_tally_v1(st.options, st.tally.len())
-                    .map_err(|error| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!("invalid stored election shape: {error}").into(),
-                        )
-                    })?;
-                ((*st).clone(), expected_tally_len)
-            };
             if self.tally().len() != expected_tally_len {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "tally length does not match options".into(),
@@ -17026,9 +17028,11 @@ pub mod isi {
                     "proof backend mismatch".into(),
                 ));
             }
-            let (vk_id, vk_box, vk_rec) = resolve_tally_vk(&st, att, state_transaction)?;
+            let (vk_id, vk_box, vk_rec) = resolve_tally_vk(st, att, state_transaction)?;
             // The current per-option proof inputs do not bind the closed accepted corpus.
             ensure_qualified_standalone_zk_relation_v1()?;
+            // TODO: Fund the complete successor clone and publication before this guard opens.
+            let st = (*st).clone();
             let backend = vk_id.backend.as_str();
             if crate::zk::is_stark_fri_v1_backend(backend) && !state_transaction.zk.stark.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -20195,6 +20199,46 @@ pub mod isi {
                 )
                 .into());
             }
+            // Domain teardown removes every definition directly. Enforce the same
+            // retained-backing guards as single-definition retirement before any write.
+            for asset_definition_id in &remove_asset_definitions {
+                if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
+                    state_transaction,
+                    asset_definition_id,
+                ) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is governed SCCP settlement backing"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if crate::smartcontracts::isi::asset::isi::is_fx_corridor_asset_definition(
+                    state_transaction,
+                    asset_definition_id,
+                )? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained native FX corridor backing"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if crate::smartcontracts::isi::sorafs_reserve::is_reserve_asset_definition(
+                    state_transaction.world(),
+                    asset_definition_id,
+                )? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} backs active SoraFS reserve custody"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
             let remove_assets = state_transaction
                 .world
                 .assets_by_domain
@@ -20337,6 +20381,73 @@ pub mod isi {
                 )
                 .into());
             }
+            // Domain retirement must apply the same liability boundary as direct
+            // asset-definition retirement before deleting any reserve custody.
+            for (storage_key, pool) in state_transaction.world.kagemusha_reserve_pools.iter() {
+                if !remove_asset_definitions.contains(&pool.key.asset) {
+                    continue;
+                }
+                if storage_key != &pool.key.liability_pool_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {} has a Kagemusha V1 reserve pool with a non-canonical storage key",
+                            pool.key.asset
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                pool.validate().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {} has an invalid Kagemusha V1 reserve pool: {error}",
+                            pool.key.asset
+                        )
+                        .into(),
+                    )
+                })?;
+                let outstanding = pool.available().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {} has an invalid Kagemusha V1 reserve liability: {error}",
+                            pool.key.asset
+                        )
+                        .into(),
+                    )
+                })?;
+                if outstanding != 0 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {} has {outstanding} outstanding Kagemusha V1 reserve atomic units",
+                            pool.key.asset
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
+                let pool = operation.pool();
+                if remove_asset_definitions.contains(&pool.asset) {
+                    let stored_pool = state_transaction
+                        .world
+                        .kagemusha_reserve_pools
+                        .get(&pool.liability_pool_id);
+                    crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_retirement_operation_pool_v1(
+                        pool,
+                        stored_pool,
+                    )
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "cannot unregister domain {domain_id}: asset definition {} has a Kagemusha V1 operation with an invalid reserve pool: {error}",
+                                pool.asset
+                            )
+                            .into(),
+                        )
+                    })?;
+                }
+            }
             for account_id in &relabeled_accounts {
                 if account_id == &state_transaction.gov.bond_escrow_account
                     || account_id == &state_transaction.gov.slash_receiver_account
@@ -20389,37 +20500,8 @@ pub mod isi {
                     .into());
                 }
             }
-            let domain_dataspace = state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_alias(domain_id.dataspace().as_ref())
-                .map(|entry| entry.id);
-            remove_domain_associated_permissions(
-                state_transaction,
-                &domain_id,
-                &remove_asset_definitions,
-                domain_dataspace,
-            );
-            state_transaction
-                .world
-                .domain_endorsement_policies
-                .remove(domain_id.clone());
-            let mut endorsement_hashes = BTreeSet::new();
-            if let Some(hashes) = state_transaction
-                .world
-                .domain_endorsements_by_domain
-                .remove(domain_id.clone())
-            {
-                endorsement_hashes.extend(hashes);
-            }
-            for (hash, record) in state_transaction.world.domain_endorsements.iter() {
-                if record.endorsement.domain_id == domain_id {
-                    endorsement_hashes.insert(*hash);
-                }
-            }
-            for hash in endorsement_hashes {
-                state_transaction.world.domain_endorsements.remove(hash);
-            }
+            // Resolve the remaining refusal conditions before permission, endorsement,
+            // NFT, or balance teardown changes this transaction overlay.
             let remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
                 .nfts_in_domain_iter(&domain_id)
@@ -20438,16 +20520,6 @@ pub mod isi {
                     .into(),
                 )
                 .into());
-            }
-            for nft_id in remove_nfts {
-                crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
-                    state_transaction,
-                    &nft_id,
-                );
-                state_transaction.world.remove_nft_entry(&nft_id);
-                state_transaction
-                    .world
-                    .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
             for asset_definition_id in &remove_asset_definitions {
                 if asset_definition_id == &state_transaction.gov.voting_asset_id {
@@ -20607,6 +20679,47 @@ pub mod isi {
                     )
                     .into());
                 }
+            }
+            let domain_dataspace = state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_alias(domain_id.dataspace().as_ref())
+                .map(|entry| entry.id);
+            remove_domain_associated_permissions(
+                state_transaction,
+                &domain_id,
+                &remove_asset_definitions,
+                domain_dataspace,
+            );
+            state_transaction
+                .world
+                .domain_endorsement_policies
+                .remove(domain_id.clone());
+            let mut endorsement_hashes = BTreeSet::new();
+            if let Some(hashes) = state_transaction
+                .world
+                .domain_endorsements_by_domain
+                .remove(domain_id.clone())
+            {
+                endorsement_hashes.extend(hashes);
+            }
+            for (hash, record) in state_transaction.world.domain_endorsements.iter() {
+                if record.endorsement.domain_id == domain_id {
+                    endorsement_hashes.insert(*hash);
+                }
+            }
+            for hash in endorsement_hashes {
+                state_transaction.world.domain_endorsements.remove(hash);
+            }
+            for nft_id in remove_nfts {
+                crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
+                    state_transaction,
+                    &nft_id,
+                );
+                state_transaction.world.remove_nft_entry(&nft_id);
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
             for asset_id in &remove_assets {
                 state_transaction
@@ -22333,6 +22446,73 @@ pub mod isi {
                     &state_transaction,
                 ),
                 "a malformed stored signature must classify the release pulse as unavailable",
+            );
+        }
+
+        #[test]
+        fn parliament_finalized_pulse_seed_requires_the_canonical_slot_and_signature() {
+            let state = blank_test_state();
+            let header = first_test_block_header();
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            let release_height = 41;
+            let (key_record, pulse) = crate::beacon::signed_persisted_pulse_fixture_for_world(
+                state_transaction.network_id,
+                release_height,
+            );
+            state_transaction
+                .world
+                .global_beacon_key_sessions
+                .insert(key_record.session.session_id, key_record);
+            state_transaction
+                .world
+                .global_beacon_pulses
+                .insert(pulse.pulse_id, pulse);
+            let logical_session = BeaconSessionId::for_network_v1(&state_transaction.network_id);
+            let pulse_id = BeaconPulseId::new(pulse.pulse_id);
+
+            let missing_slot = parliament_finalized_pulse_seed_v1(
+                logical_session,
+                release_height,
+                pulse_id,
+                &state_transaction,
+            )
+            .expect_err("an unindexed pulse is not a finalized Parliament source");
+            assert!(
+                format!("{missing_slot:?}")
+                    .contains("failed public DKG or final-signature verification"),
+                "unexpected missing-slot rejection: {missing_slot:?}"
+            );
+
+            state_transaction
+                .world
+                .global_beacon_pulse_slots
+                .insert((logical_session, release_height), pulse.pulse_id);
+            parliament_finalized_pulse_seed_v1(
+                logical_session,
+                release_height,
+                pulse_id,
+                &state_transaction,
+            )
+            .expect("the indexed, signed pulse is a valid Parliament source");
+
+            let mut tampered = pulse;
+            tampered.signature[0] ^= 1;
+            state_transaction
+                .world
+                .global_beacon_pulses
+                .insert(pulse.pulse_id, tampered);
+            let invalid_signature = parliament_finalized_pulse_seed_v1(
+                logical_session,
+                release_height,
+                pulse_id,
+                &state_transaction,
+            )
+            .expect_err("a tampered stored signature cannot release a Parliament ballot");
+            assert!(
+                format!("{invalid_signature:?}")
+                    .contains("failed public DKG or final-signature verification"),
+                "unexpected tampered-signature rejection: {invalid_signature:?}"
             );
         }
 
@@ -25238,8 +25418,7 @@ pub mod isi {
             (!$value:expr, $needle:expr, $($message:tt)+) => {
                 assert!(!$value.contains($needle), $($message)+)
             };
-            ($value:expr, $needle:expr,) => { assert!($value.contains($needle),) };
-            ($value:expr, $needle:expr) => { assert!($value.contains($needle)) };
+            ($value:expr, $needle:expr $(,)?) => { assert!($value.contains($needle)) };
             ($value:expr, $needle:expr, $($message:tt)+) => {
                 assert!($value.contains($needle), $($message)+)
             };
@@ -27730,8 +27909,7 @@ pub mod isi {
                 .elections
                 .get(&referendum_id)
                 .expect("the election remains present");
-            assert!(election.ballot_nullifiers.is_empty());
-            assert!(election.ciphertexts.is_empty());
+            assert!(election.accepted_ballots.is_empty());
             assert!(
                 state_transaction
                     .world
@@ -27802,8 +27980,7 @@ pub mod isi {
                 .elections
                 .get(&referendum_id)
                 .expect("the election remains present");
-            assert!(election.ballot_nullifiers.is_empty());
-            assert!(election.ciphertexts.is_empty());
+            assert!(election.accepted_ballots.is_empty());
             assert!(
                 state_transaction
                     .world
@@ -27877,7 +28054,7 @@ pub mod isi {
                     .elections
                     .get(&referendum_id)
                     .expect("election remains present")
-                    .ciphertexts
+                    .accepted_ballots
                     .is_empty(),
                 "rejected ballots must not mutate the accepted corpus"
             );
@@ -27897,7 +28074,11 @@ pub mod isi {
                 referendum_id.clone(),
                 crate::state::ElectionState {
                     options: 3,
-                    ciphertexts: vec![vec![0xAA]],
+                    tally: vec![0; 3],
+                    accepted_ballots: vec![crate::state::StandaloneBallotCorpusEntryV1 {
+                        nullifier: [0xBB; 32],
+                        commitment: [0xAA; 32],
+                    }],
                     ..Default::default()
                 },
             );
@@ -27931,10 +28112,104 @@ pub mod isi {
                     .elections
                     .get(&referendum_id)
                     .expect("election remains present")
-                    .ciphertexts,
-                vec![vec![0xAA]],
+                    .accepted_ballots,
+                vec![crate::state::StandaloneBallotCorpusEntryV1 {
+                    nullifier: [0xBB; 32],
+                    commitment: [0xAA; 32],
+                }],
                 "the complete accepted corpus must never be pruned"
             );
+        });
+        world_test!(direct_zk_ballot_preflights_base64_length_before_decoding {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.zk.max_proof_size_bytes = 1;
+            state_transaction.zk.preverify_max_bytes = 10;
+            let election_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: election_id.clone(),
+                })]),
+            );
+            let ballot = |proof_b64: &str| gov::CastZkBallot {
+                election_id: election_id.clone(),
+                proof_b64: proof_b64.to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            };
+            let per_proof_oversized = ballot("AAECAw==")
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "encoded per-proof limit must refuse before decode");
+            assert_err!(format!("{per_proof_oversized:?}"), "confidential proof exceeds max_proof_size_bytes");
+            assert_eq!(state_transaction.zk_proof_bytes_in_tx, 0);
+
+            let per_proof_final_quantum = ballot("AAE=")
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "equal encoded quantum must reach exact decoded per-proof check");
+            assert_err!(format!("{per_proof_final_quantum:?}"), "confidential proof exceeds max_proof_size_bytes");
+            assert_eq!(state_transaction.zk_proof_bytes_in_tx, 0);
+
+            state_transaction.zk.max_proof_size_bytes = 10;
+            state_transaction.zk.preverify_max_bytes = 1;
+            let oversized = ballot("AAECAw==")
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "valid oversized proof must be refused before decode");
+            assert_err!(format!("{oversized:?}"), "proof exceeds configured max bytes");
+            assert_eq!(state_transaction.zk_proof_bytes_in_tx, 0);
+
+            let final_quantum = ballot("AAE=")
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "equal encoded quantum must reach exact decoded-length check");
+            assert_err!(format!("{final_quantum:?}"), "proof exceeds configured max bytes");
+            assert_eq!(state_transaction.zk_proof_bytes_in_tx, 2);
+
+            let malformed = ballot("!")
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "short malformed base64 must retain its decode error");
+            assert_err!(format!("{malformed:?}"), "invalid or empty proof");
+            assert_eq!(state_transaction.zk_proof_bytes_in_tx, 2);
+            assert!(state_transaction.world.elections.get(&election_id).is_none());
+        });
+        world_test!(low_level_zk_ballot_rejects_full_corpus_without_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.gov.citizenship_bond_amount = Quantity::zero();
+            state_transaction.zk.ballot_history_cap = 1;
+            let election_id = "election-1".to_owned();
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanSubmitGovernanceBallot {
+                    referendum_id: election_id.clone(),
+                })]),
+            );
+            state_transaction.world.elections.insert(
+                election_id.clone(),
+                crate::state::ElectionState {
+                    options: 3,
+                    accepted_ballots: vec![crate::state::StandaloneBallotCorpusEntryV1 {
+                        nullifier: [0xBB; 32],
+                        commitment: [0xAA; 32],
+                    }],
+                    domain_tag: "retained-domain".repeat(4_096),
+                    ..Default::default()
+                },
+            );
+            let before = norito::to_bytes(state_transaction.world.elections.get(&election_id).unwrap())
+                .expect("encode retained election before ballot");
+            let backend = "halo2/ipa";
+            let proof = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.into(),
+                iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
+                iroha_data_model::proof::VerifyingKeyId::new(backend, "ballot-v1"),
+            );
+            let error = zk::SubmitBallot {
+                election_id: election_id.clone(),
+                ciphertext: vec![0x02],
+                ballot_proof: proof,
+                nullifier: [0x03; 32],
+            }
+            .expect_execute_err(&ALICE_ID, &mut state_transaction, "full corpus must reject before proof key resolution");
+            assert_err!(format!("{error:?}"), "ballot corpus is full");
+            assert_eq!(
+                norito::to_bytes(state_transaction.world.elections.get(&election_id).unwrap())
+                    .expect("encode retained election after ballot"),
+                before,
+            );
+            assert!(state_transaction.world.governance_locks.get(&election_id).is_none());
         });
         world_test!(standalone_referendum_decision_uses_exact_wide_decisive_arithmetic {
             let rejected = super::standalone_referendum_decision_v1(
@@ -28392,6 +28667,63 @@ pub mod isi {
             assert_err!(format!("{error:?}"), "election_id must match", "unexpected selector rejection: {error:?}");
             assert!(state_transaction.world.elections.iter().next().is_none());
         });
+        world_test!(finalize_election_rejects_large_retained_corpus_without_mutation {
+            second_height_transaction!(state, block, state_transaction);
+            state_transaction.world.account_permissions.insert(
+                ALICE_ID.clone(),
+                BTreeSet::from([Permission::from(CanEnactGovernance)]),
+            );
+            let election_id = "large-corpus-election".to_owned();
+            let backend = "halo2/ipa";
+            let vk_id = VerifyingKeyId::new(backend, "tally-v1");
+            let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
+            let commitment = hash_vk(&vk_box);
+            vk_record!(rec, 1, VOTING_TALLY_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active, key = Some(vk_box.clone()), vk_len = u32::try_from(vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            state_transaction.world.verifying_keys.insert(vk_id.clone(), rec);
+            let accepted_ballots = (0..crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1)
+                .map(|index| {
+                    let mut nullifier = [0_u8; 32];
+                    nullifier[..8].copy_from_slice(&u64::try_from(index).unwrap().to_le_bytes());
+                    crate::state::StandaloneBallotCorpusEntryV1 {
+                        nullifier,
+                        commitment: [0xAA; 32],
+                    }
+                })
+                .collect();
+            state_transaction.world.elections.insert(
+                election_id.clone(),
+                crate::state::ElectionState {
+                    options: 2,
+                    tally: vec![0, 0],
+                    accepted_ballots,
+                    vk_tally: Some(vk_id.clone()),
+                    vk_tally_commitment: Some(commitment),
+                    domain_tag: "retained-domain".repeat(4_096),
+                    ..Default::default()
+                },
+            );
+            let before = norito::to_bytes(state_transaction.world.elections.get(&election_id).unwrap())
+                .expect("encode retained election before finalization attempt");
+            state_transaction.world.take_external_events();
+            let tally_proof = iroha_data_model::proof::ProofAttachment::new_ref(
+                backend.into(),
+                iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
+                vk_id,
+            );
+            let error = zk::FinalizeElection {
+                election_id: election_id.clone(),
+                tally: vec![0, 0],
+                tally_proof,
+            }
+            .expect_execute_err(&ALICE_ID, &mut state_transaction, "unqualified tally key must not finalize a large election");
+            assert_err!(format!("{error:?}"), "tally verifying key circuit mismatch");
+            assert_eq!(
+                norito::to_bytes(state_transaction.world.elections.get(&election_id).unwrap())
+                    .expect("encode retained election after rejection"),
+                before,
+            );
+            assert!(state_transaction.world.take_external_events().is_empty());
+        });
         world_test!(slash_and_restitution_reject_noncanonical_selectors_before_permission_lookup {
             second_height_transaction!(state, block, state_transaction);
             let referendum_id = "invalid/referendum";
@@ -28613,35 +28945,6 @@ pub mod isi {
                 assert_err!(format!("{error:?}"), "registering at least one canonical verifier", "unexpected transparent activation rejection: {error:?}");
             }
         });
-        world_test!(register_zk_asset_rejects_shield_without_redemption_verifier {
-            let state = blank_test_state();
-            state_transaction!(state, block, state_block, stx);
-            let domain_id =
-                DomainId::try_new("redeemable", "universal").expect("valid test domain");
-            let asset_definition_id = AssetDefinitionId::derive_from_components(
-                domain_id.clone(),
-                "coin".parse().expect("valid asset name"),
-            );
-            Register::domain(Domain::new(domain_id))
-                .expect_execute(&ALICE_ID, &mut stx, "register test domain");
-            Register::account(Account::new(ALICE_ID.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "register asset owner");
-            Register::asset_definition(AssetDefinition::numeric(
-                asset_definition_id.clone(),
-                "Redeemable confidential coin".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            ))
-            .expect_execute(&ALICE_ID, &mut stx, "register owner-controlled asset definition");
-            let error = zk::RegisterZkAsset::new(
-                asset_definition_id.clone(),
-                None,
-                Some(VerifyingKeyId::new("halo2/ipa", "shield")),
-            )
-            .expect_execute_err(&ALICE_ID, &mut stx, "shield-only registration must not admit unredeemable commitments");
-            assert_contains!(smart_contract_instruction_error_message(error), "vk_shield requires vk_unshield", );
-            assert!(stx.world.zk_assets.get(&asset_definition_id).is_none());
-        });
         world_test!(committed_asset_preserves_unshield_verifier_commitment {
             let original_commitment = [0x31; 32];
             let original = crate::state::ZkAssetVerifierBinding {
@@ -28710,7 +29013,7 @@ pub mod isi {
                 None,
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register unrelated owner-controlled asset definition");
-            let registration = zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None);
+            let registration = zk::RegisterZkAsset::new(asset_definition_id.clone(), None);
             let error = registration
                 .clone()
                 .expect_execute_err(&BOB_ID, &mut stx, "unprivileged non-owner must not configure confidential policy");
@@ -28778,7 +29081,7 @@ pub mod isi {
                 .asset_definition_mut(&asset_definition_id)
                 .expect("asset definition remains")
                 .set_confidential_policy(active_policy);
-            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None)
                 .expect_execute(&BOB_ID, &mut stx, "exact scoped delegate may update verifier bindings");
             let updated_definition = stx
                 .world
@@ -28809,7 +29112,7 @@ pub mod isi {
                 None,
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register owner-controlled asset definition");
-            zk::RegisterZkAsset::new(asset_definition_id.clone(), None, None)
+            zk::RegisterZkAsset::new(asset_definition_id.clone(), None)
                 .expect_execute(&ALICE_ID, &mut stx, "owner configures confidential policy");
             let mut policy = *stx
                 .world
@@ -28940,7 +29243,7 @@ pub mod isi {
                     None,
                 ))
                 .expect_execute(&ALICE_ID, &mut stx, "register owner-controlled asset definition");
-                zk::RegisterZkAsset::new(asset_id.clone(), None, None)
+                zk::RegisterZkAsset::new(asset_id.clone(), None)
                     .expect_execute(&ALICE_ID, &mut stx, "owner configures confidential policy");
                 let mut policy = *stx
                     .world
@@ -33758,6 +34061,64 @@ seiyaku GovernanceLifecycle {
                 "malformed reward row remains as stored"
             );
         });
+        world_test!(unregister_domain_retained_asset_refusal_preserves_permissions_and_endorsements_in_same_transaction {
+            blank_state_transaction!(state, block, state_block, stx);
+            bootstrap_alice_account(&mut stx);
+            let domain_id = DomainId::try_new("retained", "universal")
+                .expect("retained asset domain");
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register retained domain");
+            let definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "vote".parse().expect("voting asset name"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                definition_id.clone(),
+                "vote",
+                AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register retained voting asset");
+            stx.gov.voting_asset_id = definition_id.clone();
+            let grantee = AccountId::new(checked_keypair().public_key().clone());
+            Register::account(new_account_in_domain(&grantee))
+                .expect_execute(&ALICE_ID, &mut stx, "register permission grantee");
+            let permission = Permission::from(CanModifyDomainMetadata {
+                domain: domain_id.clone(),
+            });
+            Grant::account_permission(permission.clone(), grantee.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "grant domain-scoped permission");
+            let endorsement_policy = DomainEndorsementPolicy {
+                committee_id: "default".to_owned(),
+                max_endorsement_age: 10,
+                required: false,
+            };
+            stx.world.domain_endorsement_policies.insert(
+                domain_id.clone(),
+                endorsement_policy.clone(),
+            );
+            stx.world.take_external_events();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "configured voting asset must reject domain retirement without side effects",
+            );
+            assert_contains!(
+                format!("{error:?}"),
+                "governance voting asset definition",
+                "unexpected domain retirement error: {error}",
+            );
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&definition_id).is_some());
+            assert!(stx.world.account_permissions.get(&grantee)
+                .is_some_and(|held| held.contains(&permission)));
+            assert_eq!(
+                stx.world.domain_endorsement_policies.get(&domain_id),
+                Some(&endorsement_policy),
+            );
+            assert!(stx.world.take_external_events().is_empty());
+        });
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_governance_voting_asset {
             let state = blank_state();
             let domain_id: DomainId =
@@ -34052,6 +34413,134 @@ seiyaku GovernanceLifecycle {
                 stx.world.asset_definitions.get(&stake_def).is_some(),
                 "asset definition should remain after rejected unregister"
             );
+        });
+        world_test!(unregister_domain_rejects_outstanding_kagemusha_reserve_liability {
+            use crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
+                KAGEMUSHA_RESERVE_VERSION_V1, KagemushaReservePoolKeyV1, KagemushaReservePoolV1,
+            };
+            use iroha_data_model::isi::{KagemushaOperationKindV1, KagemushaReserveReceiptV1};
+
+            let state = blank_state();
+            let domain_id = DomainId::try_new("kagemusharetirement", "universal")
+                .expect("domain id parses");
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register asset domain");
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "backed".parse().expect("asset name"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "Backed asset",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register backed asset definition");
+            let asset_definition = stx
+                .world
+                .asset_definition(&asset_definition_id)
+                .expect("registered asset definition");
+            crate::smartcontracts::isi::domain::isi::ensure_kagemusha_reserve_account(
+                &asset_definition,
+                &ALICE_ID,
+                &mut stx,
+            )
+            .expect("materialize deterministic reserve custody");
+            let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
+                stx.network_id(),
+                &asset_definition_id,
+            );
+            let reserve_asset_id = AssetId::new(asset_definition_id.clone(), reserve_account);
+            Mint::asset_quantity(1_u32, reserve_asset_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "fund reserve custody");
+            let network_id = *stx.network_id();
+            let incarnation = *stx
+                .world
+                .axt_asset_incarnations
+                .get(&asset_definition_id)
+                .expect("registered asset incarnation");
+            let key = KagemushaReservePoolKeyV1::new(
+                network_id,
+                asset_definition_id.clone(),
+                incarnation,
+            )
+            .expect("canonical reserve key");
+            let receipt = KagemushaReserveReceiptV1 {
+                version: KAGEMUSHA_RESERVE_VERSION_V1,
+                operation_id: [0x41; 32],
+                kind: KagemushaOperationKindV1::TopUp,
+                request_digest: [0x42; 32],
+                mint_statement_digest: [0x43; 32],
+                network_id,
+                asset: asset_definition_id.clone(),
+                asset_incarnation: incarnation,
+                scale: 0,
+                liability_pool_id: key.liability_pool_id,
+                amount: 1,
+                previous_pool_receipt_digest: [0; 32],
+                total_topups: 1,
+                total_redemptions: 0,
+                transaction_hash: [0x45; 32],
+                committed_at_ms: 1,
+            };
+            let pool = KagemushaReservePoolV1 {
+                version: KAGEMUSHA_RESERVE_VERSION_V1,
+                key,
+                scale: 0,
+                total_topups: 1,
+                total_redemptions: 0,
+                latest_receipt: Some(receipt),
+            };
+            pool.validate().expect("self-consistent reserve pool");
+            let pool_id = pool.key.liability_pool_id;
+            stx.world.kagemusha_reserve_pools.insert(pool_id, pool);
+
+            let error = Unregister::domain(domain_id.clone())
+                .expect_execute_err(&ALICE_ID, &mut stx, "outstanding reserve must block domain retirement");
+            assert_contains!(
+                format!("{error:?}"),
+                "1 outstanding Kagemusha V1 reserve atomic units",
+                "domain retirement must identify the outstanding liability: {error}"
+            );
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&asset_definition_id).is_some());
+            assert!(stx.world.assets.get(&reserve_asset_id).is_some());
+            assert!(stx.world.kagemusha_reserve_pools.get(&pool_id).is_some());
+        });
+        world_test!(unregister_domain_rejects_governed_sccp_settlement_backing_atomically {
+            blank_state_transaction!(state, block, state_block, stx);
+            let registry = test_active_eth_registry();
+            let definition_id = registry.lanes[0].routes[0]
+                .settlement
+                .asset_definition_id
+                .clone();
+            let domain_id = DomainId::try_new("sccpretirement", "universal")
+                .expect("SCCP settlement asset owner domain");
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register SCCP settlement domain");
+            Register::asset_definition(AssetDefinition::numeric(
+                definition_id.clone(),
+                "xor",
+                AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register SCCP settlement asset definition");
+            *stx.world.sccp_registry.get_mut() = registry.clone();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "governed SCCP settlement backing must survive domain retirement",
+            );
+            assert_contains!(
+                format!("{error:?}"),
+                "governed SCCP settlement backing",
+                "unexpected domain retirement error: {error}",
+            );
+            assert!(stx.world.domains.get(&domain_id).is_some());
+            assert!(stx.world.asset_definitions.get(&definition_id).is_some());
+            assert_eq!(*stx.world.sccp_registry.get(), registry);
         });
         world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();

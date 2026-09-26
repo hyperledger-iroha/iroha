@@ -223,21 +223,21 @@ if (SccpNetworkV1.EthereumMainnet.ProfileKey() != "ethereum-mainnet"
 {
     throw new InvalidOperationException("Packed SCCP route model is unavailable");
 }
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 23u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 24u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-23 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-24 SoraFS native bridge is unavailable");
 }
 
 var hijiriRequest = new ValidationFeeHijiriQuoteRequestV1(
     "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     2);
 var hijiriRequestNorito = ValidationFeeHijiriQuoteNative.EncodeRequestV1(hijiriRequest);
-if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 23u
+if (ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion != 24u
     || hijiriRequestNorito.Length == 0
     || hijiriRequestNorito.Length > ValidationFeeHijiriQuoteRequestV1.MaximumRequestBytes)
 {
-    throw new InvalidOperationException("Packed ABI-23 Hijiri quote encoder is unavailable");
+    throw new InvalidOperationException("Packed ABI-24 Hijiri quote encoder is unavailable");
 }
 var malformedHijiriResponseRejected = false;
 try
@@ -250,7 +250,7 @@ catch (InvalidDataException)
 }
 if (!malformedHijiriResponseRejected)
 {
-    throw new InvalidOperationException("Packed ABI-23 Hijiri quote verifier did not fail closed");
+    throw new InvalidOperationException("Packed ABI-24 Hijiri quote verifier did not fail closed");
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

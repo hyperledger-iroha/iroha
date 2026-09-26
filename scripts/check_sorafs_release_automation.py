@@ -958,8 +958,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/sorafs_python_child_runner_test.py"',
         '- "scripts/tests/sorafs_python_consumer_artifact_test.py"',
         '- "scripts/build_sorafs_python_consumer_artifact.py"',
-        '- "scripts/check_native_sdk_abi23_artifact.py"',
-        '- "scripts/tests/check_native_sdk_abi23_artifact_test.py"',
+        '- "scripts/check_native_sdk_artifact.py"',
+        '- "scripts/tests/check_native_sdk_artifact_test.py"',
         '- "scripts/tests/check_native_sdk_bounded_probe_test.py"',
         '- "scripts/sorafs_python_environment.py"',
         '- "scripts/sorafs_python_process.py"',
@@ -1370,17 +1370,17 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-23 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-24 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
         "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-23 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-24 connect_norito_bridge with Governance DAG symbols is required.",
         "        requireGovernanceDagNativeBridge()\n",
         "throw AssertionError(requiredMessage)",
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-23 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "ABI-24 connect_norito_bridge with all SoraFS reference symbols is required.",
         "  private static void requireNativeBridge() {\n",
         (
             "  private static void "
@@ -2471,18 +2471,18 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 'exit "$sdkmanager_status"',
                 "cargo fetch --locked",
                 'java-version: "21"',
-                "Build and authenticate the exact ABI-23 Kotlin bridge",
+                "Build and authenticate the exact ABI-24 Kotlin bridge",
                 'test ! -e "$native_root"',
                 "cargo build --locked --offline --release -p connect_norito_bridge",
                 "cargo build --locked --offline --release -p kotlin-fixture-gen",
                 "--features dev-tools --bin kotlin-fixture-gen",
                 '--target "$target" --target-dir "$native_root/cargo-target"',
-                "check_native_sdk_abi23_artifact.py record",
+                "check_native_sdk_artifact.py record",
                 '--sdk c-jni --target "$target"',
                 'echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"',
                 'echo "IROHA_KOTLIN_FIXTURE_GEN_BIN=$native_dir/kotlin-fixture-gen" >> "$GITHUB_ENV"',
                 'echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"',
-                "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
+                "Require fresh ABI-24 JNI bridge in complete Kotlin and Java suites",
                 "working-directory: kotlin",
                 "./gradlew --no-daemon --no-build-cache --rerun-tasks",
                 "--no-configuration-cache",
@@ -2506,14 +2506,14 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "runs-on: ubuntu-24.04",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
-                "Build and authenticate the exact ABI-23 C# bridge",
+                "Build and authenticate the exact ABI-24 C# bridge",
                 "cargo build --locked --release -p connect_norito_bridge",
-                "native-sdk-abi23.json",
-                "check_native_sdk_abi23_artifact.py record",
-                "check_native_sdk_abi23_artifact.py verify",
+                "native-sdk-abi24.json",
+                "check_native_sdk_artifact.py record",
+                "check_native_sdk_artifact.py verify",
                 "dotnet restore Hyperledger.Iroha.Sdk.sln",
                 "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
-                "Run complete C# ABI-23 parity suite",
+                "Run complete C# ABI-24 parity suite",
                 "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
             ),
         }
@@ -2529,9 +2529,9 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     )
             if job_name == "mobile-parity":
                 stages = (
-                    "Build and authenticate the exact ABI-23 Kotlin bridge",
+                    "Build and authenticate the exact ABI-24 Kotlin bridge",
                     "Prepare canonical Kotlin test outputs",
-                    "Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites",
+                    "Require fresh ABI-24 JNI bridge in complete Kotlin and Java suites",
                     "Validate every mobile parity test lane",
                     "Reauthenticate the consumed Kotlin bridge",
                     "Upload Kotlin and Java native parity evidence",
@@ -2549,7 +2549,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                         f"{relative}: mobile native qualification must not be "
                         "conditional; only evidence upload uses always()"
                     )
-                if job.count("check_native_sdk_abi23_artifact.py verify") != 2:
+                if job.count("check_native_sdk_artifact.py verify") != 2:
                     errors.append(
                         f"{relative}: mobile native artifact must be verified "
                         "before and after executing the consumer tests"

@@ -591,6 +591,74 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
 }
 
 #[test]
+fn full_main_residual_layout_source_derived_maximum_is_conditional() {
+    let full = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
+    full.validate_exact_full_profile_registration_v1()
+        .expect("verifier-owned registration");
+    let (registrations, columns) =
+        full_main_opening_partition_for_test_v1(&full).expect("complete MAIN partition");
+    let retained = full
+        .registered_segments
+        .iter()
+        .filter(|registration| {
+            matches!(
+                registration.segment.adapter,
+                SegmentAdapterIdV1::ByteMemory
+                    | SegmentAdapterIdV1::StrictDer
+                    | SegmentAdapterIdV1::Rfc5280
+                    | SegmentAdapterIdV1::Projection
+                    | SegmentAdapterIdV1::P256ScalarBitBus
+            )
+        })
+        .map(|registration| registration.segment)
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), registrations[2]);
+    let residual = AggregateProofLayoutV1::for_equal_log_buckets_v1(&retained)
+        .expect("source-derived retained registration layout");
+    let groups = residual
+        .trace_groups
+        .iter()
+        .map(|group| (group.native_trace_log2, group.base_width, group.aux_width))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
+        vec![(8, 30, 160), (15, 17, 32), (18, 28, 39), (19, 189, 460)]
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .map(|(_, base, aux)| *base + *aux)
+            .sum::<usize>(),
+        columns[2]
+    );
+    assert_eq!(residual.common_lde_log2, full.common_lde_log2);
+
+    // This is a wire-allocation screen only. No child proof, recursive receipt,
+    // terminal linkage, or soundness argument is constructed by this test.
+    let full_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &full.as_shared().expect("canonical MAIN aggregate layout"),
+    )
+    .expect("canonical full MAIN maximum");
+    let residual_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &residual
+            .as_shared()
+            .expect("retained MAIN aggregate layout"),
+    )
+    .expect("retained MAIN maximum under unchanged aggregate parameters");
+    let main_claim = super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize;
+    let ca_section = super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1;
+    let outer = super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
+    let current = super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
+    let cap = super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize;
+    assert_eq!(full_inner + main_claim + ca_section + outer, current);
+    let conditional_residual = residual_inner + main_claim + ca_section + outer;
+    assert_eq!(conditional_residual, 7_974_570);
+    assert_eq!(cap - conditional_residual, 1_462_614);
+}
+
+#[test]
 fn full_main_replacement_partition_rejects_omitted_and_overlapping_columns() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let mut omitted = layout.clone();

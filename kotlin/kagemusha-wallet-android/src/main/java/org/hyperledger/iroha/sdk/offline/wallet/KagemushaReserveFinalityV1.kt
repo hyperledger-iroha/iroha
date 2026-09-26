@@ -32,7 +32,7 @@ class KagemushaUntrustedFinalityHintV1 internal constructor(networkId: ByteArray
  */
 object KagemushaReserveFinalityV1 {
     private const val MAXIMUM_STATUS_JSON_BYTES = 16 * 1024 * 1024
-    private const val REQUIRED_BRIDGE_ABI_VERSION = 23
+    private const val REQUIRED_BRIDGE_ABI_VERSION = 24
     private val available: Boolean by lazy {
         try {
             System.loadLibrary("connect_norito_bridge")

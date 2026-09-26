@@ -31,7 +31,9 @@ use sorafs_manifest::signer::{
     },
 };
 
-use super::super::journal::{PinnedReceipt, SignerPendingReserveFilesV1};
+use super::super::journal::{
+    PinnedReceipt, SignerJournalInventoryPoolV1, SignerPendingReserveFilesV1,
+};
 
 const INTENT_MAX_BYTES: usize = 4096;
 const SIGNED_FRAME_MAX_BYTES: usize = 64 * 1024;
@@ -41,7 +43,12 @@ const RECORD_VERSION: u8 = 1;
 
 /// Secret-free failure of private pending-Reserve staging or recovery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FinalPromotionPendingReserveJournalErrorV1;
+pub enum FinalPromotionPendingReserveJournalErrorV1 {
+    /// Private record or authoritative identity unavailable or invalid.
+    Unavailable,
+    /// Local inventory resources are busy; retain the same signed pending operation.
+    LocalCapacity,
+}
 impl std::fmt::Display for FinalPromotionPendingReserveJournalErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("final-promotion pending Reserve journal unavailable")
@@ -115,10 +122,21 @@ impl FinalPromotionPendingReserveJournalV1 {
     ///
     /// # Errors
     /// Rejects unsafe path components, contents, ownership, permissions or a competing owner.
-    pub fn open(path: &Path) -> Result<Self, Error> {
+    pub fn open(path: &Path, pool: &SignerJournalInventoryPoolV1) -> Result<Self, Error> {
         Ok(Self {
-            files: SignerPendingReserveFilesV1::open(path).map_err(|_| Error)?,
+            files: SignerPendingReserveFilesV1::open(path, pool).map_err(|error| {
+                if error.is_local_capacity() {
+                    Error::LocalCapacity
+                } else {
+                    Error::Unavailable
+                }
+            })?,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_test(path: &Path) -> Result<Self, Error> {
+        Self::open(path, super::super::journal::test_inventory_pool())
     }
 
     /// Recover one exact private record for read-only reconciliation after process loss.
@@ -128,12 +146,18 @@ impl FinalPromotionPendingReserveJournalV1 {
     /// # Errors
     /// Rejects missing, partial, corrupt, substituted or noncanonical records.
     pub fn recover(&self, operation_id: [u8; 32]) -> Result<RecoveredPendingReserveV1, Error> {
-        let pinned = self.files.recover(operation_id).map_err(|_| Error)?;
+        let pinned = self.files.recover(operation_id).map_err(|error| {
+            if error.is_local_capacity() {
+                Error::LocalCapacity
+            } else {
+                Error::Unavailable
+            }
+        })?;
         let record = decode_record(pinned.bytes())?;
         if record.intent.request.operation_id != operation_id {
-            return Err(Error);
+            return Err(Error::Unavailable);
         }
-        pinned.recheck().map_err(|_| Error)?;
+        pinned.recheck().map_err(|_| Error::Unavailable)?;
         Ok(RecoveredPendingReserveV1 { pinned, record })
     }
 
@@ -148,8 +172,8 @@ impl FinalPromotionPendingReserveJournalV1 {
         reserve: &SignedTransaction,
     ) -> Result<RecoveredPendingReserveV1, Error> {
         let reserve_entry = TransactionEntrypoint::External(reserve.clone());
-        let signed_reserve =
-            final_promotion_native_signed_entry_frame_v1(&reserve_entry).map_err(|_| Error)?;
+        let signed_reserve = final_promotion_native_signed_entry_frame_v1(&reserve_entry)
+            .map_err(|_| Error::Unavailable)?;
         let record = PendingReserveRecordV1 {
             intent: PendingReserveIntentV1 {
                 version: RECORD_VERSION,
@@ -168,20 +192,26 @@ impl FinalPromotionPendingReserveJournalV1 {
             signed_reserve,
         };
         validate_record(&record)?;
-        let bytes = norito::encode_canonical(&record).map_err(|_| Error)?;
+        let bytes = norito::encode_canonical(&record).map_err(|_| Error::Unavailable)?;
         if bytes.len() > RECORD_MAX_BYTES {
-            return Err(Error);
+            return Err(Error::Unavailable);
         }
         let staged = self
             .files
             .stage(request.operation_id, &bytes)
-            .map_err(|_| Error)?;
-        staged.recheck().map_err(|_| Error)?;
+            .map_err(|error| {
+                if error.is_local_capacity() {
+                    Error::LocalCapacity
+                } else {
+                    Error::Unavailable
+                }
+            })?;
+        staged.recheck().map_err(|_| Error::Unavailable)?;
         // A separate descriptor readback is mandatory before the original Reserve reaches
         // transport. The immutable file and exclusive directory lease remain pinned afterward.
         let recovered = self.recover(request.operation_id)?;
         if recovered.record != record || recovered.pinned.bytes() != bytes {
-            return Err(Error);
+            return Err(Error::Unavailable);
         }
         Ok(recovered)
     }
@@ -198,9 +228,9 @@ impl RecoveredPendingReserveV1 {
     /// # Errors
     /// Rejects any replacement, in-place mutation, mode change, hardlink or lost ancestor.
     pub fn recheck(&self) -> Result<(), Error> {
-        self.pinned.recheck().map_err(|_| Error)?;
+        self.pinned.recheck().map_err(|_| Error::Unavailable)?;
         if decode_record(self.pinned.bytes())? != self.record {
-            return Err(Error);
+            return Err(Error::Unavailable);
         }
         Ok(())
     }
@@ -236,9 +266,9 @@ impl RecoveredPendingReserveV1 {
                 != final_promotion_native_signed_entry_frame_v1(&TransactionEntrypoint::External(
                     reserve.clone(),
                 ))
-                .map_err(|_| Error)?
+                .map_err(|_| Error::Unavailable)?
         {
-            return Err(Error);
+            return Err(Error::Unavailable);
         }
         Ok(())
     }
@@ -246,20 +276,21 @@ impl RecoveredPendingReserveV1 {
 
 fn decode_record(bytes: &[u8]) -> Result<PendingReserveRecordV1, Error> {
     if bytes.is_empty() || bytes.len() > RECORD_MAX_BYTES {
-        return Err(Error);
+        return Err(Error::Unavailable);
     }
     let record: PendingReserveRecordV1 = norito::decode_canonical_with_limits(
         bytes,
         norito::DecodeLimits::new(16 * 1024, RECORD_MAX_BYTES, 8192, 512 * 1024, 24),
     )
-    .map_err(|_| Error)?;
+    .map_err(|_| Error::Unavailable)?;
     validate_record(&record)?;
     Ok(record)
 }
 
 fn validate_lengths(record: &PendingReserveRecordV1) -> Result<(), Error> {
-    let intent_size = norito::canonical_frame_len(&record.intent).map_err(|_| Error)?;
-    let record_size = norito::canonical_frame_len(record).map_err(|_| Error)?;
+    let intent_size =
+        norito::canonical_frame_len(&record.intent).map_err(|_| Error::Unavailable)?;
+    let record_size = norito::canonical_frame_len(record).map_err(|_| Error::Unavailable)?;
     validate_length_parts(
         intent_size,
         record.signed_current_check.len(),
@@ -283,7 +314,7 @@ fn validate_length_parts(
         || record_size == 0
         || record_size > RECORD_MAX_BYTES
     {
-        return Err(Error);
+        return Err(Error::Unavailable);
     }
     Ok(())
 }
@@ -304,7 +335,7 @@ fn validate_record(record: &PendingReserveRecordV1) -> Result<(), Error> {
         &intent.account_binding.purpose,
     )
     else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
     if intent.version != RECORD_VERSION
         || intent.sequence != 1
@@ -330,20 +361,20 @@ fn validate_record(record: &PendingReserveRecordV1) -> Result<(), Error> {
         || intent.current_check_entry_hash == [0; 32]
         || intent.reserve_entry_hash == [0; 32]
     {
-        return Err(Error);
+        return Err(Error::Unavailable);
     }
     let current = decode_signed_frame(&record.signed_current_check)?;
     let reserve = decode_signed_frame(&record.signed_reserve)?;
     let current_instruction = sole_final_promotion_instruction(&current)?;
     let reserve_instruction = sole_final_promotion_instruction(&reserve)?;
     let FinalPromotionAuthorityActionV1::Check(check) = &current_instruction.action else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
     let FinalPromotionCheckSubjectV1::Current(audit) = &check.subject else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
     let FinalPromotionAuthorityActionV1::Reserve(reservation) = &reserve_instruction.action else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
     if current.hash_as_entrypoint().as_ref() != &intent.current_check_entry_hash
         || reserve.hash_as_entrypoint().as_ref() != &intent.reserve_entry_hash
@@ -364,31 +395,34 @@ fn validate_record(record: &PendingReserveRecordV1) -> Result<(), Error> {
             != intent.request.original_custody.control_state_digest
         || reservation.intent.action != SignerOperationActionV1::Sign
         || reservation.intent.operation_id != intent.request.operation_id
-        || reservation.intent.request_digest != intent.request.digest().map_err(|_| Error)?
+        || reservation.intent.request_digest
+            != intent.request.digest().map_err(|_| Error::Unavailable)?
         || reservation.intent.previous_audit != *audit
         || reservation.custody != intent.request.original_custody
     {
-        return Err(Error);
+        return Err(Error::Unavailable);
     }
     Ok(())
 }
 
 fn decode_signed_frame(frame: &[u8]) -> Result<SignedTransaction, Error> {
     if frame.is_empty() || frame.len() > SIGNED_FRAME_MAX_BYTES {
-        return Err(Error);
+        return Err(Error::Unavailable);
     }
     let entry: TransactionEntrypoint = norito::decode_canonical_with_limits(
         frame,
         norito::DecodeLimits::new(16 * 1024, SIGNED_FRAME_MAX_BYTES, 8192, 256 * 1024, 24),
     )
-    .map_err(|_| Error)?;
-    if final_promotion_native_signed_entry_frame_v1(&entry).map_err(|_| Error)? != frame {
-        return Err(Error);
+    .map_err(|_| Error::Unavailable)?;
+    if final_promotion_native_signed_entry_frame_v1(&entry).map_err(|_| Error::Unavailable)?
+        != frame
+    {
+        return Err(Error::Unavailable);
     }
     let TransactionEntrypoint::External(signed) = entry else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
-    signed.verify_signature().map_err(|_| Error)?;
+    signed.verify_signature().map_err(|_| Error::Unavailable)?;
     Ok(signed)
 }
 
@@ -396,7 +430,7 @@ fn sole_final_promotion_instruction(
     signed: &SignedTransaction,
 ) -> Result<&MutateSorafsFinalPromotionAuthority, Error> {
     let Executable::Instructions(instructions) = signed.instructions() else {
-        return Err(Error);
+        return Err(Error::Unavailable);
     };
     instructions
         .first()
@@ -406,7 +440,7 @@ fn sole_final_promotion_instruction(
                 .as_any()
                 .downcast_ref::<MutateSorafsFinalPromotionAuthority>()
         })
-        .ok_or(Error)
+        .ok_or(Error::Unavailable)
 }
 
 #[cfg(test)]

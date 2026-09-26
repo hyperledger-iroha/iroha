@@ -11,6 +11,8 @@
 mod app_attest_assertion_cbor;
 #[path = "app_attest_assertion_fold.rs"]
 mod app_attest_assertion_fold;
+#[path = "app_attest_state_guard_stage.rs"]
+mod app_attest_state_guard_stage;
 #[path = "apple_compact_credential_id.rs"]
 mod apple_compact_credential_id;
 
@@ -1067,13 +1069,6 @@ fn constrain_signed_subject_u64_v1<F: KagemushaPoseidonFieldV1>(
 /// Send and redeem require a nonzero commitment; every other operation requires
 /// zero. This is only the operation-shape constraint: the exact outgoing body
 /// still needs to be derived from authenticated terminal openings.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_signed_terminal_body_mode_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     operation: AssignedValue<F>,
@@ -1112,13 +1107,6 @@ fn constrain_apple_signed_terminal_body_mode_v1<F: KagemushaPoseidonFieldV1>(
 /// This authenticates which key may enter the staged P-256 assertion equation. The
 /// separate terminal credential opening must still prove that the claimed compact ID
 /// is the canonical issuer credential ID before this can authorize money.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_enrolled_credential_guard_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     credential_id: [u8; 32],
@@ -1168,13 +1156,6 @@ fn constrain_apple_enrolled_credential_guard_v1<F: KagemushaPoseidonFieldV1>(
 ///
 /// The statement/terminal digests, Apple RP policy, and ECDSA relation need their own complete
 /// links before this partial slice can authorize an app transition.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "staged Apple assertion monetary fold remains closed"
-    )
-)]
 fn constrain_apple_signed_subject_state_fields_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
@@ -4754,7 +4735,7 @@ mod tests {
         }
         assert_eq!(
             jobs.compression_blocks().expect("credential hash geometry"),
-            7
+            8
         );
         builder.assigned_instances = vec![cells];
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -5273,7 +5254,7 @@ mod tests {
         assert_eq!(
             jobs.compression_blocks()
                 .expect("mint opening SHA inventory"),
-            17
+            18
         );
         builder.assigned_instances = vec![cells];
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
@@ -5795,8 +5776,13 @@ mod tests {
     #[test]
     fn terminal_receiver_credential_constraint_has_fixed_padding_and_rejects_wrong_widths() {
         assert_receiver_lane_constraint::<Fp>(None, [0; 32], [0; 32], true);
-        assert!(receiver_lane_test_circuit::<Fp>(Some(&[0; 375]), [0; 32], [0; 32]).is_err());
-        assert!(receiver_lane_test_circuit::<Fp>(Some(&[0; 377]), [0; 32], [0; 32]).is_err());
+        let width = iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1;
+        assert!(
+            receiver_lane_test_circuit::<Fp>(Some(&vec![0; width - 1]), [0; 32], [0; 32]).is_err()
+        );
+        assert!(
+            receiver_lane_test_circuit::<Fp>(Some(&vec![0; width + 1]), [0; 32], [0; 32]).is_err()
+        );
     }
 
     #[test]

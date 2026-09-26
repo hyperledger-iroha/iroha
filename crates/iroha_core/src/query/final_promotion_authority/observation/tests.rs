@@ -937,3 +937,249 @@ fn receipt_verified_check_retains_exact_external_and_check_block_after_descendan
     assert_eq!(verified.check_block_hash(), check_hash);
     verified.ensure_live().unwrap();
 }
+
+fn complete_reviewed_request_with_availability(
+    f: &mut Fixture,
+    membership: bool,
+    finality: bool,
+) -> (
+    SignedTransaction,
+    iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
+    MutateSorafsFinalPromotionAuthority,
+) {
+    use iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCompleteV1;
+    use sorafs_manifest::signer::protocol::{
+        SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
+    };
+    let reserved = reserve_reviewed_request(f);
+    let instruction = f.instruction(FinalPromotionAuthorityActionV1::Complete(
+        FinalPromotionCompleteV1 {
+            intent: reserved.intent,
+            custody: reserved.custody,
+            reservation: reserved.reservation,
+            commitment: SignerOperationCommitmentV1 {
+                audit: SignerOperationAuditHeadV1 {
+                    sequence: 1,
+                    digest: [21; 32],
+                },
+                response_digest: [22; 32],
+            },
+            signatures_digest: [23; 32],
+        },
+    ));
+    let signed = f.sign(instruction.clone().into(), 2, NOW + 1);
+    assert_eq!(
+        f.commit(NOW + 1, vec![signed.clone()], membership, finality),
+        [true]
+    );
+    (signed, native_operation_row(f), instruction)
+}
+
+fn pending_completed_check(
+    f: &Fixture,
+    subject: FinalPromotionCheckSubjectV1,
+) -> PendingFinalPromotionCheckV1 {
+    let mut expected = f.expected();
+    expected.floor = f
+        .reserve_floor
+        .expect("independently pinned pre-Reserve floor");
+    expected.subject = subject;
+    let prepared =
+        begin_final_promotion_check_v1(Arc::clone(&f.state), expected, Duration::from_secs(60))
+            .unwrap();
+    let signed = f.sign(prepared.instruction().clone().into(), 3, NOW + 2);
+    prepared.bind_signed_transaction(signed).unwrap()
+}
+
+#[test]
+fn completed_checks_require_both_original_signed_sources_and_successful_finality() {
+    let subjects: [fn(
+        iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
+    ) -> FinalPromotionCheckSubjectV1; 2] = [
+        FinalPromotionCheckSubjectV1::AfterCommit,
+        FinalPromotionCheckSubjectV1::BeforeRelease,
+    ];
+    for subject in subjects {
+        let mut f = Fixture::new();
+        let (complete, row, _) = complete_reviewed_request_with_availability(&mut f, true, true);
+        let pending = pending_completed_check(&f, subject(row.clone()));
+        assert_eq!(
+            f.commit(
+                NOW + 2,
+                vec![pending.signed_transaction().clone()],
+                true,
+                true,
+            ),
+            [true]
+        );
+        let verified = pending
+            .verify_finalized(
+                FinalPromotionCheckSourceV1::Completed {
+                    reserve: f.reserve_signed.as_ref().unwrap(),
+                    complete: &complete,
+                },
+                || Ok(interval(NOW + 2, NOW + 2)),
+            )
+            .unwrap();
+        assert_eq!(verified.snapshot().operation.as_ref(), Some(&row));
+    }
+}
+
+#[test]
+fn completed_checks_reject_wrong_role_substituted_and_replayed_sources_before_clock() {
+    let mut f = Fixture::new();
+    let (complete, row, instruction) =
+        complete_reviewed_request_with_availability(&mut f, true, true);
+    let pending =
+        pending_completed_check(&f, FinalPromotionCheckSubjectV1::AfterCommit(row.clone()));
+    let wrong_role = pending.signed_transaction().clone();
+    let mut altered_instruction = instruction;
+    let FinalPromotionAuthorityActionV1::Complete(ref mut altered) = altered_instruction.action
+    else {
+        unreachable!("reviewed helper builds Complete");
+    };
+    altered.signatures_digest[0] ^= 1;
+    let substituted_complete = f.sign(altered_instruction.into(), 2, NOW + 2);
+    assert_ne!(
+        substituted_complete.hash_as_entrypoint(),
+        complete.hash_as_entrypoint()
+    );
+    assert_eq!(
+        f.commit(
+            NOW + 2,
+            vec![
+                pending.signed_transaction().clone(),
+                substituted_complete.clone()
+            ],
+            true,
+            true,
+        ),
+        [true, false]
+    );
+    assert_eq!(
+        pending
+            .verify_finalized(
+                FinalPromotionCheckSourceV1::Completed {
+                    reserve: f.reserve_signed.as_ref().unwrap(),
+                    complete: &wrong_role,
+                },
+                || panic!("wrong-role source must precede clock"),
+            )
+            .err(),
+        Some(Error::Execution)
+    );
+
+    let pending =
+        pending_completed_check(&f, FinalPromotionCheckSubjectV1::BeforeRelease(row.clone()));
+    assert_eq!(
+        f.commit(
+            NOW + 3,
+            vec![pending.signed_transaction().clone()],
+            true,
+            true,
+        ),
+        [true]
+    );
+    assert_eq!(
+        pending
+            .verify_finalized(
+                FinalPromotionCheckSourceV1::Completed {
+                    reserve: f.reserve_signed.as_ref().unwrap(),
+                    complete: &substituted_complete,
+                },
+                || panic!("rejected Complete retry must precede clock"),
+            )
+            .err(),
+        Some(Error::Execution)
+    );
+
+    let pending = pending_completed_check(&f, FinalPromotionCheckSubjectV1::BeforeRelease(row));
+    assert_eq!(
+        f.commit(
+            NOW + 4,
+            vec![pending.signed_transaction().clone()],
+            true,
+            true,
+        ),
+        [true]
+    );
+    assert_eq!(
+        pending
+            .verify_finalized(
+                FinalPromotionCheckSourceV1::Completed {
+                    reserve: &complete,
+                    complete: &complete,
+                },
+                || panic!("replayed Complete as Reserve must precede clock"),
+            )
+            .err(),
+        Some(Error::Execution)
+    );
+}
+
+#[test]
+fn completed_check_rejects_forked_floor_and_missing_complete_evidence() {
+    let mut f = Fixture::new();
+    let (complete, row, _) = complete_reviewed_request_with_availability(&mut f, true, true);
+    let mut expected = f.expected();
+    expected.floor = f.reserve_floor.unwrap();
+    expected.floor.block_hash[0] ^= 1;
+    expected.subject = FinalPromotionCheckSubjectV1::AfterCommit(row.clone());
+    let prepared =
+        begin_final_promotion_check_v1(Arc::clone(&f.state), expected, Duration::from_secs(60))
+            .unwrap();
+    let signed = f.sign(prepared.instruction().clone().into(), 3, NOW + 2);
+    let pending = prepared.bind_signed_transaction(signed).unwrap();
+    assert_eq!(
+        f.commit(
+            NOW + 2,
+            vec![pending.signed_transaction().clone()],
+            true,
+            true
+        ),
+        [false]
+    );
+    assert!(
+        pending
+            .verify_finalized(
+                FinalPromotionCheckSourceV1::Completed {
+                    reserve: f.reserve_signed.as_ref().unwrap(),
+                    complete: &complete,
+                },
+                || panic!("forked floor must precede clock"),
+            )
+            .is_err()
+    );
+
+    for (membership, finality, expected_error) in [
+        (false, true, Error::Execution),
+        (true, false, Error::Finality),
+    ] {
+        let mut f = Fixture::new();
+        let (complete, row, _) =
+            complete_reviewed_request_with_availability(&mut f, membership, finality);
+        let pending = pending_completed_check(&f, FinalPromotionCheckSubjectV1::AfterCommit(row));
+        assert_eq!(
+            f.commit(
+                NOW + 2,
+                vec![pending.signed_transaction().clone()],
+                true,
+                true
+            ),
+            [true]
+        );
+        assert_eq!(
+            pending
+                .verify_finalized(
+                    FinalPromotionCheckSourceV1::Completed {
+                        reserve: f.reserve_signed.as_ref().unwrap(),
+                        complete: &complete,
+                    },
+                    || panic!("missing Complete evidence must precede clock"),
+                )
+                .err(),
+            Some(expected_error),
+            "Complete membership={membership}, finality={finality}"
+        );
+    }
+}

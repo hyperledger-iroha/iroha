@@ -8,18 +8,15 @@ import java.util.Map;
 public final class RegisterZkAssetInstruction implements InstructionTemplate {
   private final String asset;
   private final String unshieldVerifyingKey;
-  private final String shieldVerifyingKey;
   private final Map<String, String> arguments;
 
   private RegisterZkAssetInstruction(final Builder builder) {
     this.asset = builder.asset;
     this.unshieldVerifyingKey = builder.unshieldVerifyingKey;
-    this.shieldVerifyingKey = builder.shieldVerifyingKey;
     final LinkedHashMap<String, String> args = new LinkedHashMap<>();
     args.put("action", "RegisterZkAsset");
     args.put("asset", asset);
     args.put("vk_unshield", unshieldVerifyingKey == null ? "" : unshieldVerifyingKey);
-    args.put("vk_shield", shieldVerifyingKey == null ? "" : shieldVerifyingKey);
     this.arguments = Collections.unmodifiableMap(args);
   }
 
@@ -29,10 +26,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
   public String unshieldVerifyingKey() {
     return unshieldVerifyingKey;
-  }
-
-  public String shieldVerifyingKey() {
-    return shieldVerifyingKey;
   }
 
   @Override
@@ -53,8 +46,7 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     for (final String key : arguments.keySet()) {
       if (!"action".equals(key)
           && !"asset".equals(key)
-          && !"vk_unshield".equals(key)
-          && !"vk_shield".equals(key)) {
+          && !"vk_unshield".equals(key)) {
         throw new IllegalArgumentException("Unknown instruction argument: " + key);
       }
     }
@@ -62,10 +54,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     final String unshield = optionalArgument(arguments, "vk_unshield");
     if (unshield != null) {
       builder.setUnshieldVerifyingKey(unshield);
-    }
-    final String shield = optionalArgument(arguments, "vk_shield");
-    if (shield != null) {
-      builder.setShieldVerifyingKey(shield);
     }
     return builder.build();
   }
@@ -86,7 +74,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
   public static final class Builder {
     private String asset;
     private String unshieldVerifyingKey;
-    private String shieldVerifyingKey;
 
     private Builder() {}
 
@@ -101,19 +88,9 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
       return this;
     }
 
-    public Builder setShieldVerifyingKey(final String verifyingKey) {
-      this.shieldVerifyingKey =
-          ZkInstructionUtils.optionalVerifyingKeyId(verifyingKey, "shieldVerifyingKey");
-      return this;
-    }
-
     public RegisterZkAssetInstruction build() {
       if (asset == null) {
         throw new IllegalStateException("asset must be provided");
-      }
-      if (shieldVerifyingKey != null && unshieldVerifyingKey == null) {
-        throw new IllegalStateException(
-            "shieldVerifyingKey requires unshieldVerifyingKey so shielded funds remain redeemable");
       }
       return new RegisterZkAssetInstruction(this);
     }

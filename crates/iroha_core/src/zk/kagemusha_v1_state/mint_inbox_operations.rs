@@ -180,7 +180,7 @@ pub enum MintCreditStageOutcomeV1 {
 /// Require an exact retry to carry the certificate retained by the native inbox.
 ///
 /// A detached certificate cannot replace the original Guard evidence or advance its revision.
-fn require_original_mint_stage_certificate_v1(
+pub(super) fn require_original_mint_stage_certificate_v1(
     inbox: &KagemushaMintInboxV1,
     credit_id: CreditIdV1,
     certificate: &MintStageCertificateV1,

@@ -115,6 +115,63 @@ fn exact_weight_uses_floor_sqrt_and_wide_capped_factor() {
 }
 
 #[test]
+fn smallest_unit_weight_kernel_preserves_exact_public_formula() {
+    for (units, duration_blocks, expected) in [
+        (0_u128, 0_u64, 0_u128),
+        (1, 0, 1),
+        (125, 99, 11),
+        (125, 100, 22),
+        (125, 101, 22),
+        (125, 199, 22),
+        (125, 200, 33),
+        (144, 200, 36),
+    ] {
+        assert_eq!(
+            conviction_weight_from_units_v1(units, duration_blocks, 100, 6),
+            Ok(expected)
+        );
+    }
+    assert_eq!(
+        conviction_weight_from_units_v1(0, 0, 0, 6),
+        Err(ConvictionErrorV1::InvalidPolicy)
+    );
+    assert_eq!(
+        conviction_weight_from_units_v1(0, 0, 100, 0),
+        Err(ConvictionErrorV1::InvalidPolicy)
+    );
+    assert_eq!(conviction_weight_from_units_v1(144, u64::MAX, 1, 3), Ok(36));
+    assert_eq!(
+        conviction_weight_from_units_v1(u128::MAX, u64::MAX, 1, u64::MAX),
+        Ok(u128::from(u64::MAX) * u128::from(u64::MAX))
+    );
+
+    for (scale, amount, duration_blocks, units, expected_weight) in [
+        (2, "1.25", 200, 125, 33),
+        (
+            MAX_DECIMAL_SCALE,
+            "0.0000000000000000000000000001",
+            100,
+            1,
+            2,
+        ),
+    ] {
+        let p = policy(scale);
+        let amount: Quantity = amount.parse().unwrap();
+        assert_eq!(p.units(&amount), Ok(units));
+        assert_eq!(p.weight(&amount, duration_blocks), Ok(expected_weight));
+        assert_eq!(
+            conviction_weight_from_units_v1(
+                units,
+                duration_blocks,
+                p.conviction_step_blocks,
+                p.max_conviction,
+            ),
+            Ok(expected_weight)
+        );
+    }
+}
+
+#[test]
 fn policy_rejects_invalid_scale_factor_and_minimum() {
     for (scale, step, maximum) in [(29, 1, 1), (0, 0, 1), (0, 1, 0)] {
         let mut p = policy(scale);

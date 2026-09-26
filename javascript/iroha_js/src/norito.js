@@ -49,6 +49,7 @@ import {
   createNoritoGovernanceInstructionBoundary,
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
+import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
 import {createNoritoGameCodecs} from './noritoGameCodecs.js';
@@ -414,6 +415,7 @@ const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
   (TEXT_IROHA_INSTRUCTION_V1 + "governance::ProposeDeployContract");
 const CAST_ZK_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "governance::CastZkBallot");
 const CAST_PLAIN_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "governance::CastPlainBallot");
+const UPDATE_PLAIN_CONVICTION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "governance::UpdatePlainConviction");
 const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::" + TEXT_CLAIM_TWITTER_FOLLOW_REWARD);
 const SEND_TO_TWITTER_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::SendToTwitter");
 const CANCEL_TWITTER_ESCROW_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::CancelTwitterEscrow");
@@ -472,6 +474,8 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     `${TEXT_IROHA_DATA_MODEL_ISI}governance::CastZkBallot`,
   [CAST_PLAIN_BALLOT_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}governance::CastPlainBallot`,
+  [UPDATE_PLAIN_CONVICTION_WIRE_ID]:
+    `${TEXT_IROHA_DATA_MODEL_ISI}governance::UpdatePlainConviction`,
   [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}social::${TEXT_CLAIM_TWITTER_FOLLOW_REWARD}`,
   [SEND_TO_TWITTER_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}social::SendToTwitter`,
@@ -594,6 +598,12 @@ class BufferReader {
 }
 
 function cloneJson(value) {
+  if (isPublicPlainBallotInstruction(value)) {
+    return parseStrictGovernanceInstructionJson(
+      stringifyStrictLosslessIntegerJson(value, "standalone public ballot"),
+      "standalone public ballot",
+    );
+  }
   if (typeof structuredClone === JS_TYPE_FUNCTION) {
     return structuredClone(value);
   }
@@ -657,6 +667,21 @@ const { isStrictGovernanceInstructionCandidate, validateGovernanceInstructionBou
     isPlainObject,
   });
 
+function isPublicPlainBallotInstruction(value) {
+  return isPlainObject(value) && (
+    Object.prototype.hasOwnProperty.call(value, "CastPlainBallot")
+    || Object.prototype.hasOwnProperty.call(value, "UpdatePlainConviction")
+  );
+}
+
+function parsePublicPlainBallotInstructionJson(json, context) {
+  const parsed = JSON.parse(json);
+  if (!isPublicPlainBallotInstruction(parsed)) return parsed;
+  const exact = parseStrictGovernanceInstructionJson(json, context);
+  validateGovernanceInstructionBoundary(exact);
+  return exact;
+}
+
 const RETIRED_GENERIC_ZK_VARIANTS = Object.freeze([
   ["Shi", "eld"].join(""),
   ["Zk", "Transfer"].join(""),
@@ -677,14 +702,30 @@ function rejectRetiredGenericZkInstruction(instruction) {
 function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
   rejectRetiredGenericZkInstruction(normalized);
   validateGovernanceInstructionBoundary(normalized);
-  const exactElectionJson = exactFinalizeElectionTallyJson(normalized);
-  if (exactElectionJson !== null) {
+  const exactJson = exactFinalizeElectionTallyJson(normalized)
+    ?? exactPublicPlainBallotJson(normalized);
+  if (exactJson !== null) {
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-    return toBuffer(native.noritoEncodeInstruction(exactElectionJson, networkPrefix));
+    return toBuffer(native.noritoEncodeInstruction(exactJson, networkPrefix));
   }
   validateInstructionObjectNumbers(normalized);
   const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
   return toBuffer(native.noritoEncodeInstruction(JSON.stringify(normalized), networkPrefix));
+}
+
+/** Serialize one canonical direct public ballot without rounding its u64 duration. */
+export function exactPublicPlainBallotJson(instruction) {
+  if (!isPublicPlainBallotInstruction(instruction)) return null;
+  const canonical = parseStrictGovernanceInstructionJson(
+    stringifyStrictLosslessIntegerJson(instruction, "standalone public ballot"),
+    "standalone public ballot",
+  );
+  validateGovernanceInstructionBoundary(canonical);
+  const payload = canonical.CastPlainBallot ?? canonical.UpdatePlainConviction;
+  if (typeof payload.duration_blocks === "string") {
+    payload.duration_blocks = BigInt(payload.duration_blocks);
+  }
+  return stringifyStrictLosslessIntegerJson(canonical, "standalone public ballot");
 }
 
 export function exactFinalizeElectionTallyJson(normalized) {
@@ -1576,8 +1617,11 @@ export function noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
 function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
   requireNetworkPrefix(networkPrefix);
   const native = resolveNative("noritoDecodeInstructionBoxArchive", nativeRuntime);
-  const decoded = JSON.parse(native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix));
-  validateInstructionObjectNumbers(decoded);
+  const decoded = parsePublicPlainBallotInstructionJson(
+    native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix),
+    "standalone public ballot InstructionBox",
+  );
+  if (!isPublicPlainBallotInstruction(decoded)) validateInstructionObjectNumbers(decoded);
   validateDecodedInstructionProofAttachments(decoded);
   return decoded;
 }
@@ -1598,11 +1642,16 @@ function decodeInstruction(bytes, networkPrefix, options, nativeRuntime) {
   const buffer = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
   const json = native.noritoDecodeInstruction(buffer, networkPrefix);
-  const decoded = JSON.parse(json);
+  const decoded = parsePublicPlainBallotInstructionJson(
+    json,
+    "standalone public ballot instruction",
+  );
   validateDecodedInstructionProofAttachments(decoded);
   // Raw mode preserves the owner's exact numeric tokens. Parsed mode must
   // never return a rounded integer or non-finite value to signing callers.
-  if (options.parseJson !== false) validateInstructionObjectNumbers(decoded);
+  if (options.parseJson !== false && !isPublicPlainBallotInstruction(decoded)) {
+    validateInstructionObjectNumbers(decoded);
+  }
   return options.parseJson === false ? json : decoded;
 }
 

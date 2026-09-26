@@ -1698,6 +1698,33 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
     assert!(state.is_pristine());
 }
 #[test]
+fn candidate_history_wait_accepts_only_pre_signing_inner_refusal() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(17)),
+        None,
+        None,
+    );
+    let notification = concread::release::ReleaseNotification::default();
+    let post_signing = super::super::v2_candidate::CandidateError::BuiltWithoutProposalWork;
+    let pre_signing = super::super::v2_candidate::CandidateError::LocalStateAdmission(
+        crate::state::StateBlockStartError::History(
+            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+        ),
+    );
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(!state.defer_pre_signing_candidate_history_admission(owner, &post_signing, wake));
+    assert!(state.is_pristine());
+    assert!(state.defer_pre_signing_candidate_history_admission(owner, &pre_signing, wake));
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    drop(notification.guard(()));
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+}
+#[test]
 fn penalty_preparation_failure_keeps_typed_local_candidate_refusal() {
     let budget = mv::allocation::AllocationBudget::new(8);
     let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");

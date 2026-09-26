@@ -370,6 +370,40 @@ fn participant_routes(plan: &RoutingPlan) -> BTreeSet<(LaneId, DataSpaceId)> {
         .collect()
 }
 #[test]
+fn domain_retirement_rejects_governed_fx_corridor_backing_atomically() {
+    let mut fixture = fixture(None);
+    let domain_id = DomainId::try_new("cbuae", "universal").expect("FX source asset domain");
+    let definition_id = fixture.corridor.source_asset_definition_id.clone();
+    let header = BlockHeader::new(
+        NonZeroU64::new(2).expect("second block height"),
+        None,
+        None,
+        LEDGER_TIME_MS + 1,
+        0,
+    );
+    let mut block = fixture.state.block(header);
+    let mut transaction = block.transaction();
+    let error = Unregister::domain(domain_id.clone())
+        .execute(&ALICE_ID, &mut transaction)
+        .expect_err("governed FX source backing must survive domain retirement");
+    assert!(
+        error
+            .to_string()
+            .contains("retained native FX corridor backing")
+    );
+    assert!(transaction.world().domain(&domain_id).is_ok());
+    assert!(transaction.world().asset_definition(&definition_id).is_ok());
+    let registry_id = iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::parameter_id();
+    assert!(
+        transaction
+            .world()
+            .parameters()
+            .custom()
+            .contains_key(&registry_id)
+    );
+}
+
+#[test]
 fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     let fixture = fixture(None);
     let code = vec![0xCA, 0xFE, 0xBA, 0xBE];

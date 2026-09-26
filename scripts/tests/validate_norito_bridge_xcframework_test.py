@@ -110,7 +110,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         rust_commit = "b" * 40
         self.payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 23,
+            "native_bridge_abi_version": 24,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": {

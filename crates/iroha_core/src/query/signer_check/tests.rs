@@ -210,3 +210,22 @@ fn complete_external_bytes_and_signature_are_retained_by_the_single_owner() {
 mod account_envelope;
 mod stream_token;
 mod topology;
+
+#[test]
+fn shared_check_replay_span_rejects_overlong_history_before_finality_io() {
+    let floor = 7_u64;
+    assert_eq!(check_history_span_v1(floor, floor), Ok(()));
+    assert_eq!(
+        check_history_span_v1(floor, floor + MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1 - 1),
+        Ok(())
+    );
+    assert_eq!(
+        check_history_span_v1(floor, floor + MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1),
+        Err(Error::Finality)
+    );
+    assert_eq!(
+        check_history_span_v1(floor, floor - 1),
+        Err(Error::Finality)
+    );
+    assert_eq!(check_history_span_v1(1, u64::MAX), Err(Error::Finality));
+}
