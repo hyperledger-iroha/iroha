@@ -17,7 +17,6 @@ use crate::{
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
     status::{self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind},
-    sumeragi::message::BlockMessage,
 };
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
@@ -112,8 +111,6 @@ use std::{
     },
 };
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
-const PHASE_PREPARE: &str = "prepare";
-const PHASE_COMMIT: &str = "commit";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
@@ -5114,61 +5111,6 @@ impl Telemetry {
         let version = snapshot.version;
         self.metrics.axt_policy_snapshot_version.set(version);
     }
-    /// Record a consensus message sent over the network (votes and QCs).
-    pub fn note_consensus_message_sent(&self, msg: &BlockMessage) {
-        if self.enabled {
-            self.record_consensus_message(msg, true);
-        }
-    }
-    /// Record a consensus message received from the network (votes and QCs).
-    pub fn note_consensus_message_received(&self, msg: &BlockMessage) {
-        if self.enabled {
-            self.record_consensus_message(msg, false);
-        }
-    }
-    fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
-        let BlockMessage::V2(message) = msg else {
-            return;
-        };
-        use iroha_data_model::block::consensus_v2::{ConsensusMessageV2Payload, GlobalPhase};
-        match &message.payload {
-            ConsensusMessageV2Payload::Vote(vote) => {
-                let phase_label = match vote.phase {
-                    GlobalPhase::Prepare => PHASE_PREPARE,
-                    GlobalPhase::Commit => PHASE_COMMIT,
-                };
-                if sent {
-                    self.metrics
-                        .sumeragi_votes_sent_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_votes_received_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                }
-            }
-            ConsensusMessageV2Payload::QuorumCertificate(cert) => {
-                let phase_label = match cert.phase {
-                    GlobalPhase::Prepare => PHASE_PREPARE,
-                    GlobalPhase::Commit => PHASE_COMMIT,
-                };
-                if sent {
-                    self.metrics
-                        .sumeragi_qc_sent_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_qc_received_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                }
-            }
-            _ => {}
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Update gauges tracking missing-block retry posture.
     [set_missing_block_retry_window_ms(retry_window_ms: u64) =>
@@ -7156,7 +7098,6 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::message::BlockMessage,
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -9570,90 +9511,6 @@ mod tests {
         assert_eq!(
             telemetry.pipeline_sig_bls_result_totals(second_lane),
             ((0, 1), (0, 0))
-        );
-    }
-    #[test]
-    fn consensus_message_counters_update() {
-        use iroha_data_model::block::consensus_v2 as wire;
-
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"telemetry-v2-context",
-        )));
-        let round = wire::ConsensusRound {
-            context_id,
-            height: 1,
-            view: 1,
-        };
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
-            payload_hash: Hash::new(b"telemetry-v2-payload"),
-        };
-        let execution_commitment =
-            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"telemetry-parent-state"),
-                Hash::new(b"telemetry-post-state"),
-                Hash::new(b"telemetry-ordinary-writes"),
-                1,
-                Hash::new(b"telemetry-executed-wire"),
-            );
-        let vote = wire::Vote {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Prepare,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: vec![1],
-        };
-        let vote_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(vote),
-        ));
-        telemetry.note_consensus_message_sent(&vote_msg);
-        telemetry.note_consensus_message_received(&vote_msg);
-        assert_eq!(
-            metrics
-                .sumeragi_votes_sent_total
-                .with_label_values(&[super::PHASE_PREPARE])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_votes_received_total
-                .with_label_values(&[super::PHASE_PREPARE])
-                .get(),
-            1
-        );
-        let qc = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0],
-            aggregate_signature: vec![2],
-        };
-        let qc_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(qc),
-        ));
-        telemetry.note_consensus_message_sent(&qc_msg);
-        telemetry.note_consensus_message_received(&qc_msg);
-        assert_eq!(
-            metrics
-                .sumeragi_qc_sent_total
-                .with_label_values(&[super::PHASE_COMMIT])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_qc_received_total
-                .with_label_values(&[super::PHASE_COMMIT])
-                .get(),
-            1
         );
     }
     #[test]

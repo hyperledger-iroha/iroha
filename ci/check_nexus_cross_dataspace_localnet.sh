@@ -4,7 +4,6 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO_ROOT"
 
-bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
 source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"
 

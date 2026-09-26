@@ -142,10 +142,6 @@ zk-tests = ["iroha-core-tests"]
 kagemusha-real-proof-harness = ["zk-halo2-ipa"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
-# Compile the large private Sumeragi main-loop unit-test harness. This remains
-# opt-in so plain `cargo test` does not require a ~10 GiB rustc test-harness
-# compile on WSL and memory-constrained developer machines.
-sumeragi-main-loop-tests = []
 cuda = ["ivm/cuda"]
 
 # Prototype: index ZK1 TLV tags per ProofId in WSV for future proof list/count filters.

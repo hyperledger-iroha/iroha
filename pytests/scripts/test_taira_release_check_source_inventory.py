@@ -19,9 +19,9 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        helper = Path("scripts/formal/sumeragi_v2_rust_text.py")
+        helper = Path("scripts/formal/rust_text.py")
         (self.root / helper).parent.mkdir(parents=True)
-        shutil.copyfile(SCRIPT.parent / "formal/sumeragi_v2_rust_text.py", self.root / helper)
+        shutil.copyfile(SCRIPT.parent / "formal/rust_text.py", self.root / helper)
 
     def source(self, package, path, text):
         source = self.root / "crates" / package / path

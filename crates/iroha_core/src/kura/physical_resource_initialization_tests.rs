@@ -217,7 +217,7 @@ fn physical_reaudit_rejects_busy_resident_owner_and_real_writer_generation_cross
 }
 
 #[test]
-fn physical_initialization_rejects_deferred_finalizing_poisoned_and_recovery_pending_states() {
+fn physical_initialization_rejects_deferred_unauthenticated_poisoned_and_recovery_pending_states() {
     let mut kura = Kura::blank_kura_for_testing();
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
@@ -226,7 +226,12 @@ fn physical_initialization_rejects_deferred_finalizing_poisoned_and_recovery_pen
     std::sync::Arc::get_mut(&mut kura)
         .unwrap()
         .auxiliary_history_deferred = false;
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Finalizing;
+    *kura.provisional_snapshot_bootstrap.lock() =
+        SnapshotBootstrapRuntimeState::Pending(ProvisionalSnapshotBootstrap {
+            hash_only_prefix_height: 1,
+            bootstrap_lineage_hash: None,
+            hash_journal_digest: None,
+        });
     assert!(kura.reconcile_physical_resource_inventory().is_err());
     *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
     kura.canonical_storage_poisoned

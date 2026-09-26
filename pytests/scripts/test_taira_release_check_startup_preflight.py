@@ -70,7 +70,7 @@ class StartupPreflightTests(unittest.TestCase):
                 stack.enter_context(patch.object(gate, "CORE_STARTUP_STAGES", core_startup))
                 stack.enter_context(patch.object(gate, "DAEMON_STARTUP_STAGES", daemon_startup))
                 stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=()))
-                for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
+                for function in ("run_lifecycle_source_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, function))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                 network = stack.enter_context(patch.object(gate, "run_network_checks"))

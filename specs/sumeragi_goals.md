@@ -69,6 +69,10 @@ Measured on 2026-09-25 (`git ls-files`, lines including tests):
 Outside the subsystem, 262 `iroha_core` files and a few files in `iroha_torii`, `irohad`,
 `iroha_kagami`, `iroha_test_network` and `iroha_cli` reference `crate::sumeragi::*`.
 
+Removed so far (2026-09-27): `crates/iroha_sumeragi_core` and the v2 CI, formal and
+release-gate scripts with their tests. `formal/sumeragi_v2/` stays until the v2 runtime goes,
+because runtime tests pin `SumeragiV2InFlightFirstRelease.tla`.
+
 ## Open questions for the owner
 
 These are the open questions of spec §15. The implementation uses the stated default until

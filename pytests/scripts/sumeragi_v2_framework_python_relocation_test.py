@@ -720,18 +720,6 @@ def test_top_level_runtime_source_growth_is_bounded_before_read(
         helper._verify_runtime_sources({"python3": source}, [record])
 
 
-def test_release_runner_selects_relocated_framework_launcher() -> None:
-    source = (ROOT / "scripts/run_sumeragi_v2_release_gates.sh").read_text(
-        encoding="utf-8"
-    )
-    assert (
-        '${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR}/python-runtime/bin/python3'
-        in source
-    )
-    assert '"$release_python_bin" != "$bootstrap_python"' in source
-    assert '"$release_python_bin" != "$release_bootstrap_evidence_dir/python3"' not in source
-
-
 @pytest.mark.skipif(
     sys.platform != "darwin" or not FRAMEWORK_PYTHON_312.is_file(),
     reason="requires Homebrew framework Python 3.12",

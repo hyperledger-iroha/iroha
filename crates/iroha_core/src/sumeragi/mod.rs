@@ -4512,11 +4512,7 @@ impl FairV2Ingress {
     /// Global messages retire with their immutable height. Native transport
     /// retains its exact process-lived ownership while the gate is closed. Open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(any(
-        test,
-        feature = "sumeragi-main-loop-tests",
-        feature = "iroha-core-tests"
-    ))]
+    #[cfg(test)]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -6375,11 +6371,7 @@ impl FairV2Ingress {
     /// coordinator's executor join. Once a blocked entry becomes admissible,
     /// the head-first search selects it before later entries. When every entry
     /// is rejected, the source order and total length remain unchanged.
-    #[cfg(any(
-        test,
-        feature = "sumeragi-main-loop-tests",
-        feature = "iroha-core-tests"
-    ))]
+    #[cfg(test)]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -7400,11 +7392,7 @@ mod emergency_fast_handle_tests {
         ));
     }
 }
-#[cfg(any(
-    test,
-    feature = "sumeragi-main-loop-tests",
-    feature = "iroha-core-tests"
-))]
+#[cfg(test)]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -7414,11 +7402,7 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(any(
-    test,
-    feature = "sumeragi-main-loop-tests",
-    feature = "iroha-core-tests"
-))]
+#[cfg(test)]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,
@@ -7464,7 +7448,6 @@ fn test_sumeragi_handle_with_source_geometry(
     );
     (handle, block, lane_relay_rx)
 }
-include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
     /// Immutable build identity supplied by the executable that owns this worker.

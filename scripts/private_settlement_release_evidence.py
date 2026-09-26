@@ -302,7 +302,7 @@ _FORMAL_SOURCE_PATH_SET = frozenset(_FORMAL_SOURCE_PATHS)
 _FORMAL_EVIDENCE_CODE_SOURCE_PATHS = (
     "scripts/formal/private_settlement_tlc_report.py",
     "scripts/formal/run_atomic_private_settlement_tlc.sh",
-    "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+    "scripts/formal/tlc_result_contract.sh",
     "scripts/formal/resolve_java.sh",
 )
 _FORMAL_EVIDENCE_CODE_SOURCE_PATH_SET = frozenset(

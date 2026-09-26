@@ -25,9 +25,6 @@ OPENAPI_AUTHORITIES = (
     REPO_ROOT / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json",
 )
 OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
-GROUPED_PARITY_HARNESS = (
-    REPO_ROOT / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh"
-)
 OPENAPI_GENERATOR_WRAPPER = REPO_ROOT / "ci" / "run_openapi_generator.sh"
 INTEGRATION_TESTS_BUILD = REPO_ROOT / "integration_tests" / "build.rs"
 TEST_SAMPLES_BUILD = REPO_ROOT / "crates" / "iroha_test_samples" / "build.rs"
@@ -528,7 +525,6 @@ def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
 def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
     generator = OPENAPI_GENERATOR_WRAPPER.read_text(encoding="utf-8")
-    harness = GROUPED_PARITY_HARNESS.read_text(encoding="utf-8")
 
     for wrapper in (gate, generator):
         assert "compgen -e" in wrapper
@@ -683,31 +679,6 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
         "require_signed=%s\\n'"
         in gate
     )
-    assert harness.count('bash "${repo_root}/ci/check_openapi_spec.sh"') == 1
-    assert "openapi_require_signed=0" in harness
-    assert "openapi_require_signed=1" in harness
-    assert (
-        'OPENAPI_NODE_BIN="$sdk_openapi_node_bin" \\\n'
-        '        OPENAPI_NODE_MODULES_ROOT="$sdk_openapi_node_modules_root" \\\n'
-        '        OPENAPI_REQUIRE_SIGNED="$openapi_require_signed" \\\n'
-        '        bash "${repo_root}/ci/check_openapi_spec.sh"'
-        in harness
-    )
-    assert 'sdk_openapi_node_modules_root="$sdk_input_root/openapi/node_modules"' in harness
-    assert 'sdk_openapi_node_modules_root="${repo_root}/tools/openapi/node_modules"' in harness
-    assert 'document.get("bindings", {}).get("openapi_node")' in harness
-    assert 'sdk_openapi_node_bin="${IROHA_RELEASE_NODE_BIN:-}"' in harness
-    assert 'protected OpenAPI Node executable disagrees with runtime inventory' in harness
-    assert "authenticated OpenAPI Node control metadata changed" in harness
-    assert 'record.get("mode") != format(stat.S_IMODE(metadata.st_mode), "04o")' in harness
-    assert "metadata.st_uid != os.geteuid()" in harness
-    assert harness.count("  openapi)\n    observed_test_count=7\n") == 1
-    assert "assert_openapi_replay_marker" in harness
-    assert (
-        "openapi-two-mirror-replay status=success "
-        "candidate_oid=${candidate_oid} candidate_tree=${candidate_tree} "
-        "mirrors=2 artifacts=5 require_signed=${require_signed}" in harness
-    )
     assert "VERSION_VERIFY_POLICY_ARGS" not in gate
 
 
@@ -830,10 +801,8 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
         in policy
     )
     assert 'pinned_arguments=("$subcommand" -j1)' in policy
-    assert 'pinned_arguments=("$subcommand" "$2")' in policy
-    assert "if ((!verus_job_bound_inserted)); then" in policy
     assert 'pinned_arguments+=("$@")' in policy
-    assert "run_cargo accepts only the pinned cargo verus verify action" in policy
+    assert "verus" not in policy
     assert "local status" not in policy
     assert "locked_count != 1 || offline_count != 1" in policy
 

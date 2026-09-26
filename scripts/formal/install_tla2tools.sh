@@ -29,7 +29,7 @@ if [[ -f "$JAR" ]] && [[ "$(hash_file "$JAR")" == "$JAR_SHA256" ]]; then
   exit 0
 fi
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-tla2tools.XXXXXX")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/tla2tools.XXXXXX")"
 trap 'rm -rf -- "$tmp_dir"' EXIT
 curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
   --output "${tmp_dir}/tla2tools.jar" "$URL"

@@ -57,7 +57,7 @@ class ImmutableOwnershipPreflightTests(unittest.TestCase):
                 stack.enter_context(patch.object(gate, name, stages))
             for name in ("require_native_artifact_inspector",
                          "require_network_fixture_prerequisites",
-                         "run_pure_fsm_checks", "run_lifecycle_source_checks",
+                         "run_lifecycle_source_checks",
                          "run_config_checks"):
                 stack.enter_context(patch.object(gate, name))
             stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=()))

@@ -103,30 +103,18 @@ fn v2_emergency_fast_replay_boundary_hash(
 /// Non-forgeable startup authorization for one exact imported snapshot lineage.
 ///
 /// Construction is private to the v2 boundary verifier. The token owns the retained bootstrap
-/// record and the complete signed State block-hash vector that were matched to Kura, so consuming
-/// it is evidence that outer snapshot authentication, typed lineage validation, and first-full
-/// finality checks all completed before the provisional store is promoted.
+/// record whose complete signed State block-hash vector and first-height context were matched to
+/// Kura, so holding it is evidence that outer snapshot authentication, typed lineage validation,
+/// and first-full finality checks all completed.
 #[derive(Debug)]
 pub struct AuthenticatedV2SnapshotStartup {
     record: wire::SnapshotV2BootstrapRecord,
-    block_hashes: Vec<HashOf<BlockHeader>>,
-    first_height_context: PersistedHeightContext,
 }
 impl AuthenticatedV2SnapshotStartup {
     /// Frozen consensus mode authenticated by the retained bootstrap lineage.
     #[must_use]
     pub const fn mode(&self) -> wire::ConsensusMode {
         self.record.context.mode
-    }
-    /// Consume the authorization into the exact evidence verified by the boundary.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        wire::SnapshotV2BootstrapRecord,
-        Vec<HashOf<BlockHeader>>,
-        PersistedHeightContext,
-    ) {
-        (self.record, self.block_hashes, self.first_height_context)
     }
 }
 impl V2StartupReplayPlan {
@@ -713,13 +701,9 @@ pub fn authenticate_v2_snapshot_startup(
             "outer snapshot authentication payload differs from the verified live State",
         ));
     }
-    let verified = VerifiedHeightContext::snapshot_bootstrap(&record)
+    VerifiedHeightContext::snapshot_bootstrap(&record)
         .map_err(|error| snapshot_bootstrap_error(error.to_string()))?;
-    Ok(Some(AuthenticatedV2SnapshotStartup {
-        record,
-        block_hashes,
-        first_height_context: PersistedHeightContext::from_verified(&verified),
-    }))
+    Ok(Some(AuthenticatedV2SnapshotStartup { record }))
 }
 /// Return the authenticated frozen mode for a ledger with a durable hash-only history prefix.
 ///

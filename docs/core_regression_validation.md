@@ -3,6 +3,10 @@
 These records describe focused repairs against the current first-release
 contracts. They do not establish full workspace or release qualification.
 
+The `sumeragi-main-loop-tests` feature, the Sumeragi v2 formal scripts and the
+v2 source-compaction tests named in the historical commands below were removed
+with the v2 consensus tooling; rerun those builds without that feature.
+
 ## September 20 Anonymous-PGC proof decoding stack overflow
 
 The isolated `verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects`

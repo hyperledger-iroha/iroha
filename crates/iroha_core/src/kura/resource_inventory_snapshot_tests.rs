@@ -79,7 +79,12 @@ fn resource_snapshot_rejects_every_deferred_or_unresolved_owner_state_after_init
         Err(Unavailable::Unregistered)
     ));
     Arc::get_mut(&mut kura).unwrap().auxiliary_history_deferred = false;
-    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Finalizing;
+    *kura.provisional_snapshot_bootstrap.lock() =
+        SnapshotBootstrapRuntimeState::Pending(ProvisionalSnapshotBootstrap {
+            hash_only_prefix_height: 1,
+            bootstrap_lineage_hash: None,
+            hash_journal_digest: None,
+        });
     assert!(matches!(
         kura.resource_inventory_snapshot(),
         Err(Unavailable::Unregistered)

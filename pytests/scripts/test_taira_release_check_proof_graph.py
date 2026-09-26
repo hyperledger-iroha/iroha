@@ -43,7 +43,7 @@ class ProofGraphTests(unittest.TestCase):
         existing.isolate_stage_fixture(stack, keep=("PROOF_STAGES", "PROOF_FLOW_STAGES"))
         stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", tuple(self.names["cli"])),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network fixture", tuple(self.names["network"])),)))
-        for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks",
+        for function in ("run_lifecycle_source_checks", "run_config_checks",
                          "require_network_fixture_capacity", "check_test_harnesses"):
             stack.enter_context(patch.object(gate, function))
         stack.enter_context(patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=1024**4)))

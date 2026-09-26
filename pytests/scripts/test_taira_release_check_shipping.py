@@ -129,7 +129,7 @@ class ShippingArtifactTests(unittest.TestCase):
         stack.enter_context(patch.object(gate, "KAGAMI_STAGES", (("Kagami", (self.names["kagami"],)),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network", (self.names["network"],)),)))
         stack.enter_context(patch.object(gate, "shipping_harnesses", wraps=ACTUAL_SHIPPING_AUDIT))
-        for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity",
+        for name in ("run_lifecycle_source_checks", "require_network_fixture_capacity",
                      "check_shipping_binaries", "check_test_harnesses"):
             stack.enter_context(patch.object(gate, name))
         stack.enter_context(patch.object(gate, "native_artifact_guard", side_effect=lambda *_: contextlib.nullcontext()))

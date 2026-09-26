@@ -15,7 +15,7 @@ readonly MODEL="${FORMAL_DIR}/AtomicPrivateSettlementV1.tla"
 readonly INDEXED_MODEL="${FORMAL_DIR}/AtomicPrivateSettlementV1CommitteeFaults.tla"
 readonly REPORT_BUILDER="${REPO_ROOT}/scripts/formal/private_settlement_tlc_report.py"
 readonly RUNNER_SOURCE="${REPO_ROOT}/scripts/formal/run_atomic_private_settlement_tlc.sh"
-readonly RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
+readonly RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/tlc_result_contract.sh"
 readonly JAVA_RESOLVER="${REPO_ROOT}/scripts/formal/resolve_java.sh"
 source "$RESULT_CONTRACT"
 
@@ -386,7 +386,7 @@ for config in "${selected_configs[@]}"; do
   fi
   case "$expected" in
     pass)
-      sumeragi_v2_tlc_assert_fixed_success "$config" "$stdout_log" "$status"
+      tlc_assert_fixed_success "$config" "$stdout_log" "$status"
       ;;
     safety_violation)
       primary_diagnostic_count="$(
@@ -397,18 +397,18 @@ for config in "${selected_configs[@]}"; do
         echo "${config}: expected TLC invariant status 12, got ${status}" >&2
         exit 1
       fi
-      sumeragi_v2_tlc_assert_nonzero_state_space "$config" "$stdout_log"
-      sumeragi_v2_tlc_assert_exact_line \
+      tlc_assert_nonzero_state_space "$config" "$stdout_log"
+      tlc_assert_exact_line \
         "$config" "$stdout_log" "Error: Invariant Safety is violated."
       if [[ "$primary_diagnostic_count" != 1 ]]; then
         cat "$stdout_log" >&2
         echo "${config}: expected exactly one primary TLC diagnostic, got ${primary_diagnostic_count}" >&2
         exit 1
       fi
-      sumeragi_v2_tlc_assert_terminal "$config" "$stdout_log"
+      tlc_assert_terminal "$config" "$stdout_log"
       ;;
     action_property_violation)
-      sumeragi_v2_tlc_assert_action_property_violation \
+      tlc_assert_action_property_violation \
         "$config" "$stdout_log" "$status" \
         "Error: Action property APSDurabilityTemporal is violated."
       ;;

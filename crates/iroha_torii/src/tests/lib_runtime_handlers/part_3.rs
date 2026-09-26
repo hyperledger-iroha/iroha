@@ -801,66 +801,6 @@ fn queue_plan_capacity_handle_for_test(
     None
 }
 #[cfg(feature = "connect")]
-fn queue_plan_capacity_harness_for_test(
-    network_id: NetworkId,
-    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
-    signers: &[KeyPair],
-) -> iroha_core::sumeragi::SumeragiIngressTestHarness {
-    use iroha_data_model::{
-        block::consensus_v2 as wire,
-        isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
-    };
-    let mut signers = signers.iter().collect::<Vec<_>>();
-    signers.sort_by(|a, b| a.public_key().cmp(b.public_key()));
-    let roster = signers
-        .iter()
-        .map(|key| wire::ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 0,
-        validators: roster.iter().enumerate().map(|(index, validator)| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[index as u8 + 1; 32], 0, validator.validator.clone(),
-            ).unwrap()
-        }).collect(),
-    };
-    let context = wire::HeightContext {
-        network_id,
-        protocol_version: wire::PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        epoch_end_height: 100,
-        next_epoch_snapshot: None,
-        mode: wire::ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: wire::DualQuorum::from_roster(&roster).unwrap(),
-        roster,
-        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_roster, 100).unwrap(),
-        kagemusha_mint_finality_authority: mint_roster,
-        nexus_amx_context_hash: Hash::new(b"Torii capacity fixture nexus"),
-        execution_policy_hash: Hash::new(b"Torii capacity fixture policy"),
-        da_layout: layout,
-        leader_seed: [9; 32],
-    };
-    let proofs = signers
-        .iter()
-        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
-        .collect();
-    let ingress = iroha_core::sumeragi::SumeragiIngressTestHarness::new(4);
-    ingress
-        .authenticate_admission_capacity(
-            context,
-            proofs,
-            &iroha_config::parameters::actual::Sumeragi::default(),
-        )
-        .unwrap();
-    ingress
-}
-#[cfg(feature = "connect")]
 fn single_route_queue_plan_authorities(
     context: &iroha_core::queue::QueuePlanAdmissionContextV1,
 ) -> Vec<PeerId> {

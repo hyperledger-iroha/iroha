@@ -62,10 +62,6 @@ Notes:
   developer build. `cargo build --workspace` builds libraries and the shipping
   executables; generators, probes, benchmarks, and evidence programs require
   their explicit target feature, normally `--features dev-tools`.
-- Plain `cargo test` skips the oversized private Sumeragi main-loop unit-test
-  harness so local WSL runs do not need a ~10 GiB `iroha_core --test` compile.
-  Run `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests` on a
-  high-memory host when changing that private consensus harness.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - On WSL, make sure the Windows-side `.wslconfig` gives the VM enough memory,
