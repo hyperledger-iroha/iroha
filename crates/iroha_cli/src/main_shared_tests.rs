@@ -2067,11 +2067,12 @@ fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
                 TransactionAdmissionIntent::Ordinary,
                 expiry,
             ),
-            1 => quote_and_sign_transaction_with_expiry(
+            1 => quote_and_sign_transaction_with_admission_and_expiry(
                 &client,
                 executable,
                 fees,
                 Metadata::default(),
+                TransactionAdmissionIntent::QueuePlanSynced,
                 expiry,
             ),
             2 => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
@@ -2094,7 +2095,7 @@ fn fee_quote_signing_preserves_selected_admission_payload_and_expiry() {
         quote
             .validate_for_signed_payload(transaction.payload())
             .unwrap();
-        let expected_intent = if mode == 3 {
+        let expected_intent = if matches!(mode, 1 | 3) {
             TransactionAdmissionIntent::QueuePlanSynced
         } else {
             TransactionAdmissionIntent::Ordinary

@@ -28,10 +28,6 @@ pub(super) struct GlobalInventoryConfigV1<F: halo2_base::utils::ScalarField> {
 /// root must verify both parity proofs, their four carrier commitments, and
 /// their shared two-challenge RLC values before accepting any slice.
 #[derive(Clone)]
-#[expect(
-    dead_code,
-    reason = "global inventory awaits proof-verified slices and joins"
-)]
 pub(super) struct KagemushaClaimGlobalInventoryCircuitV1<F: KagemushaPoseidonFieldV1> {
     builder: BaseCircuitBuilder<F>,
     carrier_rlc: KagemushaClaimCarrierRlcMachineV1<F>,

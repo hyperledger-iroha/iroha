@@ -1,7 +1,7 @@
 //! Both-Pasta mutation checks for the proof-visible global source carrier.
 
 use ff::{Field as _, WithSmallOrderMulGroup};
-use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
+use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
 use halo2_proofs::{
     dev::MockProver,
     halo2curves::pasta::{Fp, Fq},
