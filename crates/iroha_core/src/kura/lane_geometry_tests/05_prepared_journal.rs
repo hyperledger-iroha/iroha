@@ -98,6 +98,38 @@ fn prepared_geometry_journal_has_exact_phases_and_drop_writes_nothing() {
 }
 
 #[test]
+fn prepared_geometry_journal_bare_encoding_obeys_exact_admission_boundary() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let before = fs::read(kura.lane_geometry_journal_path()).unwrap();
+    let journal = unpersisted_create_journal(&kura);
+    let encoded_len = journal.encoded_len();
+    let canonical = journal.encode();
+    assert_eq!(encoded_len, canonical.len());
+    assert_eq!(
+        prepared_journal::encode_bounded_geometry_journal(
+            &root,
+            &journal,
+            u64::try_from(encoded_len).unwrap(),
+        )
+        .unwrap()
+        .as_slice(),
+        canonical.as_slice()
+    );
+    let refusal = prepared_journal::encode_bounded_geometry_journal(
+        &root,
+        &journal,
+        u64::try_from(encoded_len - 1).unwrap(),
+    )
+    .unwrap_err();
+    assert!(matches!(refusal, Error::IO(error, _) if error.kind() == ErrorKind::InvalidInput));
+    assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), before);
+}
+
+#[test]
 fn prepared_geometry_journal_rejects_identity_and_capacity_before_writes() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().join("kura");

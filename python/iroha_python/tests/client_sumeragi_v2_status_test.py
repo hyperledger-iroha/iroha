@@ -73,6 +73,8 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
         "merge_carrier": None,
         "executed_block_wire_len": 512,
         "executed_block_wire_hash": _canonical_hash(seed + 3),
+        "transaction_input_commitment": None,
+        "transaction_output_commitment": None,
     }
 
 
@@ -325,6 +327,81 @@ def test_status_parses_authoritative_reducer_state() -> None:
     assert not hasattr(status, "operator")
 
 
+def test_status_preserves_qc_selective_transaction_commitments() -> None:
+    payload = _healthy_status()
+    qc = payload["locked_prepare_qc"]
+    assert isinstance(qc, dict)
+    execution = qc["execution_commitment"]
+    assert isinstance(execution, dict)
+    execution["transaction_input_commitment"] = {
+        "root": _canonical_hash(0x81), "leaf_count": 2,
+    }
+    execution["transaction_output_commitment"] = {
+        "root": _canonical_hash(0x82), "leaf_count": 3,
+    }
+
+    status = SumeragiStatusSnapshot.from_payload(payload)
+    assert status.locked_prepare_qc is not None
+    commitment = status.locked_prepare_qc.execution_commitment
+    assert commitment.transaction_input_commitment is not None
+    assert commitment.transaction_input_commitment.root == _canonical_hash(0x81)
+    assert commitment.transaction_input_commitment.leaf_count == 2
+    assert commitment.transaction_output_commitment is not None
+    assert commitment.transaction_output_commitment.root == _canonical_hash(0x82)
+    assert commitment.transaction_output_commitment.leaf_count == 3
+
+
+@pytest.mark.parametrize(
+    "field", ("transaction_input_commitment", "transaction_output_commitment")
+)
+def test_status_requires_explicit_selective_commitment_slots(field: str) -> None:
+    payload = _healthy_status()
+    qc = payload["locked_prepare_qc"]
+    assert isinstance(qc, dict)
+    execution = qc["execution_commitment"]
+    assert isinstance(execution, dict)
+    del execution[field]
+    with pytest.raises(RuntimeError, match=rf"{field} is required"):
+        SumeragiStatusSnapshot.from_payload(payload)
+
+
+def test_status_rejects_selective_commitment_count_mismatch() -> None:
+    payload = _healthy_status()
+    qc = payload["locked_prepare_qc"]
+    assert isinstance(qc, dict)
+    execution = qc["execution_commitment"]
+    assert isinstance(execution, dict)
+    execution["transaction_input_commitment"] = {
+        "root": _canonical_hash(0x81), "leaf_count": 2,
+    }
+    execution["transaction_output_commitment"] = {
+        "root": _canonical_hash(0x82), "leaf_count": 1,
+    }
+    with pytest.raises(RuntimeError, match="selective input/output counts disagree"):
+        SumeragiStatusSnapshot.from_payload(payload)
+
+
+def test_status_rejects_selective_commitment_invalid_root() -> None:
+    payload = _healthy_status()
+    qc = payload["locked_prepare_qc"]
+    assert isinstance(qc, dict)
+    execution = qc["execution_commitment"]
+    assert isinstance(execution, dict)
+    execution["transaction_output_commitment"] = {
+        "root": "not-a-hash", "leaf_count": 1,
+    }
+    with pytest.raises(RuntimeError, match="transaction_output_commitment.root"):
+        SumeragiStatusSnapshot.from_payload(payload)
+
+
+def test_selective_tree_types_are_public_v1_models() -> None:
+    from iroha_torii_client import SumeragiV2TransactionTreeCommitment as CanonicalTree
+    from iroha_python.client import SumeragiV2TransactionTreeCommitment as PublicTree
+
+    assert CanonicalTree.__name__ == "SumeragiV2TransactionTreeCommitment"
+    assert iroha_python.SumeragiV2TransactionTreeCommitment is PublicTree
+
+
 def test_status_rejects_sent_outbound_stage() -> None:
     payload = _healthy_status()
     payload["liveness"]["outbound_intents"][0]["stage"] = {
@@ -452,6 +529,8 @@ def test_qc_reference_preserves_execution_commitment() -> None:
         merge_carrier=None,
         executed_block_wire_len=512,
         executed_block_wire_hash=_canonical_hash(0x54),
+        transaction_input_commitment=None,
+        transaction_output_commitment=None,
     )
 
 

@@ -220,19 +220,11 @@ class ZkAssetInstructionsTest {
         val instruction = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
-            .setShieldVerifyingKey("halo2/ipa:shield-v3")
             .build()
 
         assertEquals(InstructionKind.REGISTER, instruction.kind)
         assertEquals("halo2/ipa:unshield-v3", instruction.arguments["vk_unshield"])
-        assertEquals("halo2/ipa:shield-v3", instruction.arguments["vk_shield"])
-
-        assertFailsWith<IllegalArgumentException> {
-            RegisterZkAssetInstruction.builder()
-                .setAsset("rose#wonderland")
-                .setShieldVerifyingKey("halo2/ipa:shield-v3")
-                .build()
-        }
+        assertEquals(setOf("action", "asset", "vk_unshield"), instruction.arguments.keys)
     }
 
     @Test
@@ -300,11 +292,11 @@ class ZkAssetInstructionsTest {
 
     @Test
     fun nativeSignerRegisterZkAssetBindsFeePaymentWhenBridgeAvailable() {
-        assertEquals(23, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        assertEquals(6, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertEquals(24, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(7, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 23 native-signer contract revision 5 is required",
+            "connect_norito_bridge ABI 24 native-signer contract revision 7 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -350,7 +342,6 @@ class ZkAssetInstructionsTest {
 
         assertEquals(original.asset, restored.asset)
         assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
-        assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
     }
 
@@ -363,8 +354,16 @@ class ZkAssetInstructionsTest {
         val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
 
         assertEquals(null, restored.unshieldVerifyingKey)
-        assertEquals(null, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
+    }
+
+    @Test
+    fun registerZkAssetFromArgumentsRejectsRetiredShieldVerifierField() {
+        val arguments = validRegisterArguments().toMutableMap()
+        arguments["vk_shield"] = "halo2/ipa:shield-v3"
+        assertFailsWith<IllegalArgumentException> {
+            RegisterZkAssetInstruction.fromArguments(arguments)
+        }
     }
 
     @Test

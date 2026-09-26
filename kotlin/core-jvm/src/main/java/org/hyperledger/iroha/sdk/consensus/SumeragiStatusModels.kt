@@ -65,6 +65,14 @@ class SumeragiStatusLaneFinalityManifestCommitment internal constructor(
     override fun equalityFields(): List<Any?> = listOf(root, leafCount)
 }
 
+/** Exact root and non-zero leaf count of one transaction input or output tree. */
+class SumeragiStatusTransactionTreeCommitment internal constructor(
+    @JvmField val root: String,
+    @JvmField val leafCount: BigInteger,
+) : SumeragiStatusValue() {
+    override fun equalityFields(): List<Any?> = listOf(root, leafCount)
+}
+
 /** Exact merge-ledger entry identity authenticated by a global certificate. */
 class SumeragiStatusMergeCarrierCommitment internal constructor(
     @JvmField val version: Int,
@@ -87,6 +95,8 @@ class SumeragiStatusExecutionCommitment internal constructor(
     @JvmField val mergeCarrier: SumeragiStatusMergeCarrierCommitment?,
     @JvmField val executedBlockWireLen: BigInteger,
     @JvmField val executedBlockWireHash: String,
+    @JvmField val transactionInputCommitment: SumeragiStatusTransactionTreeCommitment?,
+    @JvmField val transactionOutputCommitment: SumeragiStatusTransactionTreeCommitment?,
 ) : SumeragiStatusValue() {
     override fun equalityFields(): List<Any?> = listOf(
         parentStateRoot,
@@ -101,6 +111,8 @@ class SumeragiStatusExecutionCommitment internal constructor(
         mergeCarrier,
         executedBlockWireLen,
         executedBlockWireHash,
+        transactionInputCommitment,
+        transactionOutputCommitment,
     )
 }
 
@@ -772,7 +784,8 @@ private object SumeragiStatusParser {
                 "kagemusha_top_up_count", "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root", "native_amx_application_manifest_count",
                 "lane_finality_manifest", "merge_carrier", "executed_block_wire_len",
-                "executed_block_wire_hash",
+                "executed_block_wire_hash", "transaction_input_commitment",
+                "transaction_output_commitment",
             ),
             setOf("kagemusha_top_up_root"),
             context,
@@ -844,6 +857,26 @@ private object SumeragiStatusParser {
                 SumeragiJsonPrimitives.hash(merge["entry_hash"], "$mergeContext.entry_hash"),
             )
         }
+        fun transactionTree(field: String): SumeragiStatusTransactionTreeCommitment? {
+            val tree = record[field] ?: return null
+            val treeContext = "$context.$field"
+            val value = SumeragiJsonPrimitives.exactObject(
+                tree, setOf("root", "leaf_count"), treeContext,
+            )
+            return SumeragiStatusTransactionTreeCommitment(
+                SumeragiJsonPrimitives.hash(value["root"], "$treeContext.root"),
+                SumeragiJsonPrimitives.positiveU64(
+                    value["leaf_count"], "$treeContext.leaf_count",
+                ),
+            )
+        }
+        val transactionInputCommitment = transactionTree("transaction_input_commitment")
+        val transactionOutputCommitment = transactionTree("transaction_output_commitment")
+        require(
+            transactionInputCommitment == null ||
+                (transactionOutputCommitment != null &&
+                    transactionOutputCommitment.leafCount >= transactionInputCommitment.leafCount),
+        ) { "$context.transaction_output_commitment must cover every network input" }
         return SumeragiStatusExecutionCommitment(
             parentStateRoot = SumeragiJsonPrimitives.hash(
                 record["parent_state_root"], "$context.parent_state_root",
@@ -867,6 +900,8 @@ private object SumeragiStatusParser {
             executedBlockWireHash = SumeragiJsonPrimitives.hash(
                 record["executed_block_wire_hash"], "$context.executed_block_wire_hash",
             ),
+            transactionInputCommitment = transactionInputCommitment,
+            transactionOutputCommitment = transactionOutputCommitment,
         )
     }
 

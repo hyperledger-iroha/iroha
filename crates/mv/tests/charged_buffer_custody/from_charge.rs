@@ -131,6 +131,7 @@ fn allocator_null_retains_exact_credit_for_retry_without_another_reservation() {
     let observer = Arc::new(AfterFree {
         budget: budget.clone(),
         expected: 113,
+        expected_align: 1,
         wakes: AtomicUsize::new(0),
     });
     let waker = Waker::from(Arc::clone(&observer));

@@ -1,6 +1,6 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::kagemusha_v1;
+use crate::isi::{kagemusha_v1, retail_daily_limit};
 #[cfg(test)]
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
@@ -69,6 +69,9 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_transfer_control::SetAssetTransferBlacklist => "iroha.asset.transfer.blacklist.set"),
     built_in_wire_id!(asset_transfer_control::SetAssetTransferControl => "iroha.asset.transfer.control.set"),
     built_in_wire_id!(asset_transfer_control::SetAssetHoldingLimit => "iroha.asset.holding_limit.set"),
+    built_in_wire_id!(retail_daily_limit::ActivateRetailDailyLimitV1 => "iroha.asset.retail_day.activate.v1"),
+    built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
+    built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
     built_in_wire_id!(rwa::RwaInstructionBox => "iroha.rwa"),
     built_in_wire_id!(defi::DeFiInstructionBox => "iroha.defi", register),
     built_in_wire_id!(repo::RepoInstructionBox => "iroha.repo"),
@@ -289,9 +292,11 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(sorafs::SubmitSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::SubmitSorafsOrderbookOrder"),
     built_in_wire_id!(sorafs::CancelSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::CancelSorafsOrderbookOrder"),
     built_in_wire_id!(sorafs::MutateSorafsStreamTokenCustody => "iroha.instruction.v1::sorafs::MutateSorafsStreamTokenCustody"),
+    built_in_wire_id!(sorafs::MutateSorafsStreamTokenAuthority => "iroha.instruction.v1::sorafs::MutateSorafsStreamTokenAuthority"),
     built_in_wire_id!(sorafs::MutateSorafsFinalPromotionAuthority => "iroha.instruction.v1::sorafs::MutateSorafsFinalPromotionAuthority"),
     built_in_wire_id!(sorafs::MutateSorafsFinalPromotionAccountCustody => "iroha.instruction.v1::sorafs::MutateSorafsFinalPromotionAccountCustody"),
     built_in_wire_id!(sorafs::MutateSorafsReleaseManifestAuthority => "iroha.instruction.v1::sorafs::MutateSorafsReleaseManifestAuthority"),
+    built_in_wire_id!(sorafs::MutateSorafsTopologyAuthority => "iroha.instruction.v1::sorafs::MutateSorafsTopologyAuthority"),
     built_in_wire_id!(sorafs::MatchSorafsOrderbook => "iroha.instruction.v1::sorafs::MatchSorafsOrderbook"),
     built_in_wire_id!(sorafs::MaintainSorafsOrderbook => "iroha.instruction.v1::sorafs::MaintainSorafsOrderbook"),
     built_in_wire_id!(sorafs::RecordSorafsOrderbookSettlementReceipt => "iroha.instruction.v1::sorafs::RecordSorafsOrderbookSettlementReceipt"),
@@ -435,6 +440,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::CastZkBallot => "iroha.instruction.v1::governance::CastZkBallot"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::CastPlainBallot => "iroha.instruction.v1::governance::CastPlainBallot"),
+    #[cfg(feature = "governance")]
+    governance_wire_id!(governance::UpdatePlainConviction => "iroha.instruction.v1::governance::UpdatePlainConviction"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::SlashGovernanceLock => "iroha.instruction.v1::governance::SlashGovernanceLock"),
     #[cfg(feature = "governance")]

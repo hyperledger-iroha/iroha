@@ -52,6 +52,12 @@ dependencies, and `complete` requires the stated result and recorded evidence.
 Local tests cannot complete a goal whose result requires deployed execution.
 Dependency lists govern closure; independent source work can proceed in parallel.
 
+The [first-release reliability goals](first_release_reliability_goals.md) track
+the 2026-09-26 critique remediation: storage ordering/GC/recovery, live admission,
+complete authenticated publication, bounded retrieval and typed throttling.
+Their acceptance checks refine the existing goals and do not replace release
+qualification in the closure ledger.
+
 | Goal | Outcome and completion criteria | Owners / closure anchors | Depends on | State |
 | --- | --- | --- | --- | --- |
 | G01 | Reconcile every active plan, status, roadmap, and source marker with the closure ledger; verify the release baseline and inventory actual gaps. Freeze one V1 contract and remove remaining competing production paths. Re-run current-tree guards rather than relying on historical pass counts. | SoraFS maintainers; V1-C01–C04; source-marker and competing-authority audit; release automation. | — | active |

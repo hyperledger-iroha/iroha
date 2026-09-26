@@ -75,6 +75,7 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
     fn resume(
         &mut self,
         owner: Self::Owner,
+        _body: &SignedBlock,
     ) -> Result<
         Self::Owner,
         (

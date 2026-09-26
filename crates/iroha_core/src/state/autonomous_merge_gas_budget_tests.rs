@@ -156,12 +156,20 @@ fn autonomous_full_gas_sources_share_one_merge_budget_before_execution_on_consen
         merge_execution_proposal_gas(&right.input.entrypoints).unwrap(),
         limit
     );
-    let selected = select_merge_execution_source_budget(vec![right.clone(), left.clone()], limit)
-        .expect("reserve only one full-cap source");
+    let selected = select_merge_execution_source_budget(
+        vec![right.clone(), left.clone()],
+        limit,
+        MAX_MERGE_EXECUTION_ENTRYPOINTS,
+    )
+    .expect("reserve only one full-cap source");
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].bundle_hash, left.bundle_hash);
-    let remaining = select_merge_execution_source_budget(vec![right.clone()], limit)
-        .expect("the next carrier can reserve the other complete source");
+    let remaining = select_merge_execution_source_budget(
+        vec![right.clone()],
+        limit,
+        MAX_MERGE_EXECUTION_ENTRYPOINTS,
+    )
+    .expect("the next carrier can reserve the other complete source");
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].bundle_hash, right.bundle_hash);
 
@@ -207,16 +215,24 @@ fn autonomous_merge_gas_priority_preserves_old_source_and_canonical_order_on_con
             vec![newer.clone(), older.clone()],
             vec![older.clone(), newer.clone()],
         ] {
-            let selected = select_merge_execution_source_budget(sources, source_gas)
-                .expect("one-source shared budget");
+            let selected = select_merge_execution_source_budget(
+                sources,
+                source_gas,
+                MAX_MERGE_EXECUTION_ENTRYPOINTS,
+            )
+            .expect("one-source shared budget");
             assert_eq!(selected.len(), 1);
             assert_eq!(
                 selected[0].bundle_hash, older.bundle_hash,
                 "new work on a lower-numbered lane cannot overtake the retained source"
             );
         }
-        let selected = select_merge_execution_source_budget(vec![newer, older.clone()], limit)
-            .expect("both sources fit the complete shared budget");
+        let selected = select_merge_execution_source_budget(
+            vec![newer, older.clone()],
+            limit,
+            MAX_MERGE_EXECUTION_ENTRYPOINTS,
+        )
+        .expect("both sources fit the complete shared budget");
         assert_eq!(selected[0].bundle_hash, older.bundle_hash);
         let batch = state
             .build_merge_execution_batch_from_source_prefix(
@@ -236,3 +252,128 @@ fn autonomous_merge_gas_priority_preserves_old_source_and_canonical_order_on_con
         );
     }
 }
+
+state_test!(consensus_stack autonomous_merge_signed_body_owns_source_and_scratch_retry_is_exact
+    autonomous_merge_signed_body_owns_source_and_scratch_retry_is_exact_on_consensus_stack();
+);
+fn autonomous_merge_signed_body_owns_source_and_scratch_retry_is_exact_on_consensus_stack() {
+    let (state, keys, parent) = autonomous_gas_budget_fixture();
+    let key = KeyPair::try_from_seed(vec![0xE4; 32], Algorithm::Ed25519)
+        .expect("merge source ownership signer");
+    let authority = AccountId::new(key.public_key().clone());
+    {
+        let mut world = state.world.block();
+        world.accounts.insert(
+            authority.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.commit();
+    }
+    let marker: iroha_model_base::name::Name = "merge_source_owned".parse().unwrap();
+    let marker_value = iroha_primitives::json::Json::new(17_u32);
+    let mut transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+    )
+    .with_instructions([iroha_data_model::isi::SetKeyValue::account(
+        authority.clone(),
+        marker.clone(),
+        marker_value.clone(),
+    )]);
+    transaction.set_creation_time(Duration::from_millis(1));
+    let entrypoint = TransactionEntrypoint::External(transaction.sign(key.private_key()));
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (binding, certificate) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        &state,
+        routing_plan.clone(),
+        &keys,
+        queue_plan_authority_height_for_state_test(&state),
+        0xE4,
+        &entrypoint,
+    );
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    let source = autonomous_merge_source_for_queue_plan_admission_test(
+        &state,
+        &binding,
+        entrypoint,
+        routing_plan,
+        &keys,
+    )
+    .expect("real authenticated autonomous source");
+    let header = empty_global_block_after(Some(&parent)).header();
+    let mut expected_root = None;
+    for _ in 0..2 {
+        let mut block = state.merge_preexecution_block(header.clone());
+        let executions =
+            State::preexecute_merge_execution_sources_into(&mut block, vec![source.clone()])
+                .expect("authenticated merge source must reach checked signed execution");
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].results.len(), 1);
+        assert!(
+            executions[0].results[0].0.is_ok(),
+            "source ownership failures must never masquerade as signed transaction rejection: {:?}",
+            executions[0].results[0],
+        );
+        assert_eq!(
+            block
+                .world
+                .account(&authority)
+                .unwrap()
+                .metadata()
+                .get(&marker),
+            Some(&marker_value),
+            "reported success must publish its prepared State overlay",
+        );
+        let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+        assert_eq!(
+            ordinary,
+            crate::fastpq::source_reservation::SourceUsage {
+                executed_entries: 1,
+                ..crate::fastpq::source_reservation::SourceUsage::ZERO
+            },
+            "an authenticated no-transfer signed body still owns exactly one logical E",
+        );
+        assert_eq!(
+            mandatory,
+            crate::fastpq::source_reservation::SourceUsage::ZERO
+        );
+        let actual_root = block.merge_execution_write_set_root();
+        if let Some(expected) = expected_root {
+            assert_eq!(
+                actual_root, expected,
+                "scratch retry must reproduce exact effects"
+            );
+        } else {
+            expected_root = Some(actual_root);
+        }
+        drop(block);
+        assert!(
+            state
+                .world
+                .view()
+                .account(&authority)
+                .unwrap()
+                .metadata()
+                .get(&marker)
+                .is_none(),
+            "dropping scratch execution must leave the committed parent unchanged",
+        );
+        assert_eq!(
+            state
+                .queue_plan_admission_binding_registry_match(&binding)
+                .unwrap(),
+            QueuePlanAdmissionRegistryMatch::Exact,
+            "scratch execution must not consume the real pending source obligation",
+        );
+    }
+}
+
+include!("merge_execution_prefix_tests.rs");
+include!("autonomous_merge_source_packing_tests.rs");

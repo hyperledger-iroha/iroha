@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote
 
+from .election_tally import ElectionTally, read_election_tally_response
 from .governance_tally import read_tally_response, require_tally_selector
 
 _RUNTIME_GOVERNANCE_JSON_MAX_BYTES = 16 * 1024 * 1024
@@ -41,6 +42,24 @@ class RuntimeGovernanceAuthMixin:
             context="governance tally",
         )
         return read_tally_response(response, selector)
+
+    def get_election_tally(
+        self, election_id: str, *, canonical_auth: Any
+    ) -> Optional[ElectionTally]:
+        """Read one exact standalone-election tally through a signed V1 POST."""
+
+        selector = require_tally_selector(election_id, "election_id")
+        body = self._encode_json_body({"election_id": selector})
+        response = self._account_request(
+            "POST",
+            "/v1/zk/vote/tally",
+            canonical_auth=canonical_auth,
+            data=body,
+            headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+            stream=True,
+            context="election tally",
+        )
+        return read_election_tally_response(response)
 
     def _account_request(
         self,

@@ -109,7 +109,11 @@ def _local_signing_context() -> ToriiLocalSigningContext:
     return ToriiLocalSigningContext(network_id=OFFLINE_NETWORK_ID)
 
 
-def _contract_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequestAuth:
+def _contract_auth(
+    captured: Optional[List[bytes]] = None,
+    *,
+    account_id: str = CANONICAL_OWNER,
+) -> ToriiCanonicalRequestAuth:
     def signer(message: bytes) -> bytes:
         if captured is not None:
             captured.append(message)
@@ -117,7 +121,7 @@ def _contract_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequ
 
     return ToriiCanonicalRequestAuth(
         network_id=OFFLINE_NETWORK_ID,
-        account_id=CANONICAL_OWNER,
+        account_id=account_id,
         signer=signer,
         timestamp_ms=4_102_444_801_000,
         nonce="public-contract-prepare-test",
@@ -340,6 +344,8 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "merge_carrier": None,
         "executed_block_wire_len": 123,
         "executed_block_wire_hash": _canonical_hash(0x37),
+        "transaction_input_commitment": None,
+        "transaction_output_commitment": None,
     }
     return {
         "protocol_version": 4,
@@ -3495,6 +3501,7 @@ def test_call_contract_rejects_rehashed_non_queue_plan_admission(
     # Hash consistency must not substitute for the required admission policy.
     with pytest.raises(RuntimeError, match="caller-trusted admission_intent"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3882,7 +3889,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     )
 
     client.prepare_contract_call(
-            canonical_auth=_contract_auth(),
+        canonical_auth=_contract_auth(account_id=boundary["authority"]),
         authority=boundary["authority"],
         contract_alias=boundary["contract_alias"],
         entrypoint=boundary["entrypoint"],

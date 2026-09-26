@@ -2,9 +2,11 @@
 //!
 //! Every entry hash owns E=1 across physical execution and fee fragments. Its
 //! transcript counts and sole public statement are replaced from the complete
-//! finalized bundle, never summed from independently prepared occurrences.
-//! State still owns authenticated entry creation, WSV/source publication, and
-//! matching rollback. This component neither enables quotas nor grants finality.
+//! bundle framing, never summed from independently prepared occurrences.
+//! Framing does not validate transfer arithmetic or inter-occurrence chronology;
+//! those belong to the execution/proof relation, independently of resource usage.
+//! State owns authenticated entry creation, WSV/source publication and matching
+//! rollback. This framing adapter does not grant finality or execution authority.
 
 use iroha_crypto::Hash;
 use iroha_data_model::fastpq::TransferTranscript;
@@ -16,15 +18,18 @@ use super::{
 };
 use crate::fastpq::source_capture::{
     FastpqSourceStatementBuildLimits, FastpqSourceTranscriptUsage,
-    measure_fastpq_source_entry_bundle_usage,
 };
+
+use crate::fastpq::source_prefix_lengths::entry::measure_fastpq_source_entry_frame_usage;
 
 /// Failure before complete-entry replacement; every variant leaves usage intact.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum EntryBundleReservationError {
-    /// Canonical public preparation, input shape, or its explicit local bound failed.
+    /// Canonical framing, input shape, or its explicit local bound failed.
     /// This must not be interpreted as ordinary transaction rejection or deferral.
     Preparation(String),
+    /// An explicit framing capacity was exceeded; the authenticated caller selects its meaning.
+    Capacity(String),
     /// The complete measured entry violates capacity or capability invariants.
     Reservation(ReservationError),
 }
@@ -40,6 +45,9 @@ impl std::fmt::Display for EntryBundleReservationError {
         match self {
             Self::Preparation(error) => {
                 write!(formatter, "FASTPQ complete-entry preparation: {error}")
+            }
+            Self::Capacity(error) => {
+                write!(formatter, "FASTPQ complete-entry framing capacity: {error}")
             }
             Self::Reservation(error) => std::fmt::Display::fmt(error, formatter),
         }
@@ -91,6 +99,11 @@ impl EntryBundleReservationLedger {
             },
             construction_limits: self.construction_limits,
         })
+    }
+
+    /// Identities already owned by this pool, in canonical hash order.
+    pub(crate) fn entry_hashes(&self) -> impl Iterator<Item = Hash> + '_ {
+        self.entries.keys().copied()
     }
 
     /// Exact committed E/T/D/I/M/S usage.
@@ -193,24 +206,57 @@ impl EntryBundleReservationTransaction<'_> {
         Ok(EntryBundleOwner { entry_hash, inner })
     }
 
-    /// Atomically replace T/D/I and M=S from the complete finalized entry bundle.
+    /// Look up an already-retained invocation without minting execution authority.
+    pub(crate) fn existing_entry(
+        &self,
+        entry_hash: Hash,
+    ) -> Result<Option<EntryBundleOwner>, ReservationError> {
+        let Some(inner) = self.bindings.entries.get(&entry_hash) else {
+            return Ok(None);
+        };
+        self.inner.validate_owner(inner)?;
+        Ok(Some(EntryBundleOwner {
+            entry_hash,
+            inner: inner.clone(),
+        }))
+    }
+
+    /// Atomically replace T/D/I and M=S from the complete entry bundle framing.
     ///
     /// Empty input clears its source contribution while retaining E=1. This measures
-    /// every original occurrence together, including repeated keys and common scales.
+    /// every original occurrence together, including repeated keys and original quantities.
+    /// This checks framing and entry identity, not arithmetic, digest values or chronology.
     /// The caller must publish this exact bundle and matching WSV changes atomically.
+    /// Borrowed committed, pending and candidate slices may be chained without copying.
     /// No input is mutated, no private tree is built, and failure changes no accounting.
-    pub(crate) fn replace_bundle(
+    pub(crate) fn replace_bundle<'a, I>(
         &mut self,
         owner: &EntryBundleOwner,
-        bundle: &[TransferTranscript],
-    ) -> Result<SourceUsage, EntryBundleReservationError> {
+        bundle: I,
+    ) -> Result<SourceUsage, EntryBundleReservationError>
+    where
+        I: IntoIterator<Item = &'a TransferTranscript>,
+    {
         self.inner.validate_owner(&owner.inner)?;
-        let measured = measure_fastpq_source_entry_bundle_usage(
-            &owner.entry_hash,
+        let measured = measure_fastpq_source_entry_frame_usage(
+            owner.entry_hash,
             bundle,
             self.construction_limits,
         )
-        .map_err(EntryBundleReservationError::Preparation)?;
+        .map_err(|error| {
+            use crate::fastpq::source_prefix_lengths::{
+                PrefixLengthError, entry::EntryFrameLengthError,
+            };
+            match &error {
+                EntryFrameLengthError::Bound(_)
+                | EntryFrameLengthError::Prefix(
+                    PrefixLengthError::Deltas { .. }
+                    | PrefixLengthError::Input { .. }
+                    | PrefixLengthError::Public { .. },
+                ) => EntryBundleReservationError::Capacity(error.to_string()),
+                _ => EntryBundleReservationError::Preparation(error.to_string()),
+            }
+        })?;
         let usage = occurrence_usage(measured)?;
         let state = self.inner.validate_owner(&owner.inner)?;
         // Only this wrapper can mint its owners. It keeps one replaceable slot;

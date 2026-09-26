@@ -52,12 +52,17 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::FastpqTransitionBatch,
             iroha_data_model::fastpq::FastpqStateTransition,
             iroha_data_model::fastpq::FastpqBalanceKeyV1,
+            // Nominal execution-effect candidate roots; not proof-dispatch registrations.
+            iroha_data_model::fastpq::FastpqExecutionEffectStatementV1,
+            iroha_data_model::fastpq::FastpqExecutionQuantityKeyV1,
             iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1,
             iroha_data_model::fastpq::FastpqAxtCompactArtifactV1,
             iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
             iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
+            // Agreed source-capacity candidate; installation is owned by Core.
+            iroha_data_model::parameter::FastpqSourcePolicyV1,
             // Torii qualification is an opaque response owner and needs an explicit public root.
             iroha_data_model::privacy::PrivacyExact12QualificationRecordV1,
             // Frozen public conviction context and immutable closed result are query/snapshot values.
@@ -109,6 +114,11 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody,
             // Native deployment authority and commitment-only retained histories.
             iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
+            // Registered for canonical V1 decoding; Core admission remains closed.
+            iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsTopologyCustody,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsTopologyApproval,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsTopologyApproval,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCustodyRecordV1,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
             iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionCustody,
@@ -212,6 +222,7 @@ mod tests {
     mod final_promotion_account_custody;
     mod privacy_qualification;
     mod stream_token_custody;
+    mod topology_authority;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {
@@ -568,6 +579,10 @@ mod tests {
             schemas.contains_key::<iroha_data_model::fastpq::FastpqPublicTransferStatementV1>()
         );
         assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqExecutionEffectStatementV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqExecutionQuantityKeyV1>());
+        assert!(
             schemas
                 .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1>()
         );
@@ -588,5 +603,10 @@ mod tests {
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceLaneV1>());
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionKindV1>());
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionEntryV1>());
+        assert!(schemas.contains_key::<iroha_data_model::parameter::FastpqSourcePolicyV1>());
+        assert!(schemas.contains_key::<iroha_data_model::parameter::FastpqSourceLimitsV1>());
+        assert!(
+            schemas.contains_key::<iroha_data_model::parameter::FastpqMandatorySourcePolicyV1>()
+        );
     }
 }

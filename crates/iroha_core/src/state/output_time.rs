@@ -25,7 +25,8 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             self.budget
                 .as_mut()
                 .ok_or("output budget already consumed")?
-                .skip_uninvoked(ExecutionOutputPhase::Time, 0)?;
+                .skip_uninvoked(ExecutionOutputPhase::Time, self.unused_time)?;
+            self.unused_time = 0;
             let (event, maximum) = self.state.prepare_owned_time_phase(&self.source.header())?;
             let height = self.source.header().height().get();
             let now = u64::try_from(self.source.header().creation_time().as_millis())

@@ -43,30 +43,20 @@ public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
 
     /// Validate one exact ten-kind proposal wire value before it can enter a draft request.
     public init(validating data: Data) throws {
+        let validated: GovernanceValidatedProposalJSON
         do {
-            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(
-                in: data,
-                integerKeys: ["max_wrapped_supply", "max_outstanding_liability"]
-            )
+            validated = try governanceValidatedProposalJSON(data)
         } catch {
             throw ToriiClientError.invalidPayload(
-                "proposal must be valid UTF-8 JSON without duplicate object keys and with canonical SCCP UInt128 integers."
-            )
-        }
-        let exactIntegerLexemes: [String: String]
-        do {
-            exactIntegerLexemes = try governanceExactJSONIntegerLexemes(data)
-        } catch {
-            throw ToriiClientError.invalidPayload(
-                "proposal must use exact canonical first-release JSON integers."
+                "proposal must be valid UTF-8 JSON without duplicate keys and use exact canonical first-release unsigned integers."
             )
         }
         let decoder = JSONDecoder()
-        decoder.userInfo[governanceExactIntegerLexemesUserInfoKey] = exactIntegerLexemes
+        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = validated.numberLexemes
         kind = try decoder.decode(ToriiGovernanceProposalKind.self, from: data)
-        wireValue = try decoder.decode(ToriiJSONValue.self, from: data)
+        wireValue = validated.value
         exactWireData = data
-        requiresExactIntegerEncoding = exactIntegerLexemes.values.contains { value in
+        requiresExactIntegerEncoding = validated.numberLexemes.values.contains { value in
             value.count > 16 || UInt64(value).map { $0 > 9_007_199_254_740_991 } ?? true
         }
         try ToriiParliamentAPIV1.rejectSigningMaterial(wireValue, context: "proposal")

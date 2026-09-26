@@ -816,7 +816,7 @@ fn double_vote_slashes_plain_lock() {
         .as_ref()
         .expect_err("conflicting sealed ballot must remain rejected");
     assert!(
-        format!("{rejection:?}").contains("re-vote cannot change direction"),
+        format!("{rejection:?}").contains("second plain ballot cannot change direction"),
         "unexpected rejection: {rejection:?}"
     );
     let finality = crate::state::publish_governance_fixture(&state, prepared, &keys);
@@ -875,32 +875,31 @@ fn double_vote_slashes_plain_lock() {
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut sblock4 = state.block(header4);
     let mut stx4 = sblock4.transaction();
-    let unresolved_revote = iroha_data_model::isi::governance::CastPlainBallot {
+    let unresolved_update = iroha_data_model::isi::governance::UpdatePlainConviction {
         referendum_id: rid.clone(),
-        direction: 0,
         owner: ALICE_ID.clone(),
         amount: 20_u64.into(),
         duration_blocks: 200,
     }
     .execute(&ALICE_ID, &mut stx4)
-    .expect_err("a re-vote must not overwrite unresolved slash accounting");
+    .expect_err("a conviction update must not overwrite unresolved slash accounting");
     assert!(
-        unresolved_revote
+        unresolved_update
             .to_string()
-            .contains("re-vote requires prior restitution")
+            .contains("conviction update requires prior restitution")
     );
     let retained = stx4
         .world
         .governance_locks()
         .get(&rid)
         .and_then(|locks| locks.locks.get(&alice))
-        .expect("rejected re-vote retains the slashed lock");
+        .expect("rejected update retains the slashed lock");
     assert_eq!(retained.amount, Quantity::from(16_u64));
     assert_eq!(retained.slashed, Quantity::from(4_u64));
     assert_eq!(
         stx4.world
             .asset(&escrow_asset_id)
-            .expect("escrow remains after rejected re-vote")
+            .expect("escrow remains after rejected update")
             .as_ref()
             .clone(),
         Quantity::from(16_u64)
@@ -908,7 +907,7 @@ fn double_vote_slashes_plain_lock() {
     assert_eq!(
         stx4.world
             .asset(&slash_asset_id)
-            .expect("slash receiver remains after rejected re-vote")
+            .expect("slash receiver remains after rejected update")
             .as_ref()
             .clone(),
         Quantity::from(4_u64)

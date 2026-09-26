@@ -271,8 +271,9 @@ fn native_recorded_economic_relay_success(atomic_group: bool) {
         group.decisions().as_ptr(),
         group.contexts().as_ptr(),
     );
+    drop(carrier);
     let recorded = source
-        .record_execution(carrier, applying)
+        .record_execution(applying)
         .unwrap()
         .expect("the exact captured source State remains current");
     let prepared = recorded.prepared_for_test();
@@ -412,8 +413,9 @@ fn native_recorded_economic_relay_missing_manifest(atomic_group: bool) {
     else {
         panic!("the complete source remains authentic without a relay policy root");
     };
+    drop(carrier);
     let error = source
-        .record_execution(carrier, applying)
+        .record_execution(applying)
         .err()
         .expect("a real receipt cannot be sealed without a manifest root");
     let reason = error.to_string();

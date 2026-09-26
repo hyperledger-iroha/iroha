@@ -3,8 +3,9 @@
   "endpoint_count": 2,
   "expires_at": 600,
   "issued_at": 120,
+  "network_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
   "public_key_hex": "884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
-  "signature_hex": "61262aa10262c1df2872f59e99387cec6868af5fcaf1025b6838461456f0f9aa11b49908ccaee19eaf07b6e32618c9bfcee598c37cb1d05ac25c75e728175e06",
+  "signature_hex": "9239323ab5299654bb43b3a1ce21c1d5ecf2da97690e67371d7662bdc6cae395ad32c2fbc12c5f4faaa303c946e411408ca7e73ebd9e5884a65038fa8a033602",
   "stream_budget": {
     "burst_bytes": 4500000,
     "max_bytes_per_sec": 9000000,

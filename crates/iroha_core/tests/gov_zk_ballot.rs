@@ -179,8 +179,7 @@ fn development_ballot_retries_never_consume_a_nullifier() {
 }
 fn assert_no_ballot_mutation(stx: &mut StateTransaction<'_, '_>, election_id: &str) {
     let election = stx.world.elections().get(election_id).unwrap();
-    assert!(election.ballot_nullifiers.is_empty());
-    assert!(election.ciphertexts.is_empty());
+    assert!(election.accepted_ballots.is_empty());
     assert!(stx.world.governance_locks().get(election_id).is_none());
     assert!(
         !stx.world
@@ -341,8 +340,7 @@ fn development_ballot_with_wrong_owner_never_records() {
         .elections()
         .get(&election_id)
         .expect("election exists");
-    assert!(st_after.ballot_nullifiers.is_empty());
-    assert!(st_after.ciphertexts.is_empty());
+    assert!(st_after.accepted_ballots.is_empty());
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),

@@ -8,7 +8,11 @@ mod closed_registry;
 #[path = "common/governance_closed_state.rs"]
 mod closed_state;
 
-use iroha_core::{smartcontracts::Execute, state::WorldReadOnly, zk::ZK_BACKEND_HALO2_IPA};
+use iroha_core::{
+    smartcontracts::Execute,
+    state::{StandaloneBallotCorpusEntryV1, WorldReadOnly},
+    zk::ZK_BACKEND_HALO2_IPA,
+};
 use iroha_data_model::{
     block::BlockHeader,
     isi::{error::InstructionExecutionError, zk::FinalizeElection},
@@ -27,8 +31,12 @@ fn zk_finalize_rejects_unqualified_tally_keys_without_mutating_state() {
         closed_state::grant_permissions(&mut transaction, "ref-final");
         let (id, record) = closed_registry::unqualified_key(circuit_id);
         let mut retained = closed_registry::retained_election(&id, &record);
-        retained.ballot_nullifiers.insert([0x44; 32]);
-        retained.ciphertexts.push(vec![0x55; 32]);
+        retained
+            .accepted_ballots
+            .push(StandaloneBallotCorpusEntryV1 {
+                nullifier: [0x44; 32],
+                commitment: [0x55; 32],
+            });
         transaction
             .world
             .verifying_keys_mut_for_testing()
@@ -66,7 +74,7 @@ fn zk_finalize_rejects_unqualified_tally_keys_without_mutating_state() {
         assert_eq!(
             norito::to_bytes(after).unwrap(),
             before,
-            "nullifiers and ciphertexts must remain intact"
+            "the ordered ballot corpus must remain intact"
         );
         assert!(transaction.world.take_external_events().is_empty());
     }

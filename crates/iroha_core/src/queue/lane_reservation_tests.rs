@@ -4755,3 +4755,5 @@ pub(crate) fn lane_retirement_release_fixture_for_test() -> (
         .expect("exact reservation blocks lane retirement");
     (queue, wait, key, directory)
 }
+
+include!("source_packing_tests.rs");

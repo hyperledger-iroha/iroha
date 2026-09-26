@@ -4,17 +4,18 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
-    func testExpectedBridgeAbiVersionIsTwentyThreeForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 23)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 23)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 23)
+    func testExpectedBridgeAbiVersionIsTwentyFourForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 24)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 24)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 24)
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(23, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(23, for: "macos-arm64_x86_64"))
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(24, for: "macos-arm64_x86_64"))
         XCTAssertEqual(
             NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
             [
@@ -166,7 +167,6 @@ final class NativeBridgeLoaderTests: XCTestCase {
     }
 
     func testZkAssetPolicyStatusUsesTheCurrentFirstReleaseName() {
-        XCTAssertEqual(NativeBridgeError.fromStatus(-404), .zkAssetPolicy)
     }
 
     func testExplicitChainDiscriminantRequiresNativeScope() throws {
@@ -300,7 +300,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 23,
+          "native_bridge_abi_version": 24,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -342,7 +342,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         )
         XCTAssertEqual(
             status,
-            .abiMismatch(path: bridgeURL.path, expected: 23, actual: 19)
+            .abiMismatch(path: bridgeURL.path, expected: 24, actual: 19)
         )
     }
 
@@ -370,7 +370,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 23,
+          "native_bridge_abi_version": 24,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

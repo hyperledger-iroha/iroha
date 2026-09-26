@@ -46,6 +46,11 @@ The September 23 geometry screen rejects a hypothetical 474,213-byte
 below the required security target and its raw LDE alone reaches 2 GiB.
 The screened batched-opening route has no proved binding or witness-privacy
 construction. Neither changes production admission or the fixed ceilings.
+The [F07 fixed-row budget audit](../docs/history/2026-09-23/fastpq-f07-fixed-row-opening-budget-audit.md)
+corrects the target-only screen's stale 4,279,877-byte variable-row maximum to
+the current 4,017,376-byte source bound. The existing fixed-row codec already
+saves 262,501 bytes, but mandatory raw openings still exceed both ceilings;
+the opening and authentication protocol remains the release blocker.
 
 The [2026-09-09 validation checkpoint](../docs/history/2026-09-09/privacy-validation-checkpoint.md)
 records the retained native23 four-validator failure, completed SDK20 Apple

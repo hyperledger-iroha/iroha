@@ -9,7 +9,7 @@ public integration guidance.
 
 The pure `iroha-python` wheel depends on the separate `iroha-native` wheel,
 whose `iroha_native._crypto` extension owns all cryptographic identity admission.
-Account constructors and exact I105 parsers require ABI 23 and preserve all eleven
+Account constructors and exact I105 parsers require ABI 24 and preserve all eleven
 key algorithms and complete weighted multisig policies. `AccountId` is always
 domainless. Missing native validation fails explicitly, and canonical parsers
 reject surrounding whitespace. SCCP account principals require exact COMPACT_LEN
@@ -512,13 +512,12 @@ signing_client.register_zk_asset_and_wait(
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     vk_unshield="halo2/ipa:vk_unshield",
-    vk_shield="halo2/ipa:vk_shield",
 )
 ```
 
-Asset registration binds the optional confidential shield and unshield
-verifier roles. KAGEMUSHA V1 uses its own reserve-backed mint-fold and
-redemption-voucher protocol rather than those confidential-asset instructions.
+Asset registration binds the optional confidential unshield verifier role.
+KAGEMUSHA V1 uses its own reserve-backed mint-fold and redemption-voucher
+protocol rather than those confidential-asset instructions.
 
 ## Dataspace lifecycle helpers
 
@@ -1401,7 +1400,7 @@ print(hijiri_quote.aggregate_adjusted_fee_minor_units)
 The helper requires HTTPS and explicit canonical account authentication. It
 sends and accepts only bounded `application/x-norito`, requires a private
 `no-store` response with absent or identity content encoding, and delegates
-request encoding plus complete response coherence to the ABI 23 native
+request encoding plus complete response coherence to the ABI 24 native
 verifier. Media type parameters are rejected. The returned frozen projection
 is evaluated-only; admission remains authoritative and rejects quotes made
 stale by an intervening policy or Hijiri-risk update.
@@ -1897,6 +1896,14 @@ response reader and `GovernanceTally` model. Missing referenda return `None`;
 successful responses retain all three `u128` totals and their evaluated block
 height and hash without numeric coercion.
 
+For an existing public standalone ballot, use
+`TransactionDraft(config).update_plain_conviction("ref-1", config.authority, "2.5", 42)`.
+The method appends the native `UpdatePlainConviction` instruction with exactly
+`referendum_id`, `owner`, `amount`, and `duration_blocks`. It cannot carry a
+new choice; Core retains the choice from the finalized ballot and checks the
+bond and lock update. The amount is an exact canonical `Quantity`, interpreted
+under the referendum asset's frozen smallest-unit scale by Core.
+
 ## Runtime upgrades and ABI helpers
 
 ```python
@@ -2238,7 +2245,7 @@ Connect frame encoding and crypto helpers require the compiled
 `iroha-native` wheel from `../iroha_native` before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-23 extension from the current clean source revision:
+3.12 and rebuilds the ABI-24 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -2386,7 +2393,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 23 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 24 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output

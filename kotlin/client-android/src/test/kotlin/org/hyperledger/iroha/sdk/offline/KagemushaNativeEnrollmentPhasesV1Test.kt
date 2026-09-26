@@ -14,7 +14,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
-/** Scripted enrollment phases require the ABI-23 host validator for the universal account ID. */
+/** Scripted enrollment phases require the ABI-24 host validator for the universal account ID. */
 @Tag("host-native")
 class KagemushaNativeEnrollmentPhasesV1Test {
     private val account = AccountAddress.fromAccount(

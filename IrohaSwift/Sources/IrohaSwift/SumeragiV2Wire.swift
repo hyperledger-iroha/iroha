@@ -189,6 +189,36 @@ public struct SumeragiV2LaneFinalityManifestCommitment: Equatable, Sendable {
     }
 }
 
+/// Exact root and non-zero leaf count of a transaction input or output tree.
+public struct SumeragiV2TransactionTreeCommitment: Equatable, Sendable {
+    public let root: SumeragiV2Hash
+    public let leafCount: UInt64
+
+    public init(root: SumeragiV2Hash, leafCount: UInt64) throws {
+        guard leafCount > 0 else {
+            throw SumeragiV2WireError.invalid(
+                "transaction tree commitment leaf count must be non-zero"
+            )
+        }
+        self.root = root
+        self.leafCount = leafCount
+    }
+
+    public func encode() -> Data {
+        sumeragiV2Struct(root.bytes, sumeragiV2U64(leafCount))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            root: SumeragiV2Hash(reader.field("transaction tree root")),
+            leafCount: sumeragiV2DecodeU64(reader.field("transaction tree leaf count"))
+        )
+        try reader.finish("transaction tree commitment")
+        return value
+    }
+}
+
 /// Exact merge-ledger entry identity authenticated by global finality.
 public struct SumeragiV2MergeCarrierCommitment: Equatable, Sendable {
     public static let canonicalVersion: UInt16 = 1
@@ -227,6 +257,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
     /// Maximum participant route/incarnation leaves committed by one global block.
     public static let maximumNativeAmxApplicationManifestLeafCount: UInt32 = 1024
+    /// Maximum canonical result-bearing block wire size authenticated by consensus.
+    public static let maximumExecutedBlockWireBytes: UInt64 = 256 * 1024 * 1024
 
     public let parentStateRoot: SumeragiV2Hash
     public let postStateRoot: SumeragiV2Hash
@@ -240,6 +272,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let mergeCarrier: SumeragiV2MergeCarrierCommitment?
     public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: SumeragiV2Hash
+    public let transactionInputCommitment: SumeragiV2TransactionTreeCommitment?
+    public let transactionOutputCommitment: SumeragiV2TransactionTreeCommitment?
 
     public init(
         parentStateRoot: SumeragiV2Hash,
@@ -253,7 +287,9 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         laneFinalityManifest: SumeragiV2LaneFinalityManifestCommitment? = nil,
         mergeCarrier: SumeragiV2MergeCarrierCommitment? = nil,
         executedBlockWireLen: UInt64,
-        executedBlockWireHash: SumeragiV2Hash
+        executedBlockWireHash: SumeragiV2Hash,
+        transactionInputCommitment: SumeragiV2TransactionTreeCommitment?,
+        transactionOutputCommitment: SumeragiV2TransactionTreeCommitment?
     ) throws {
         guard (kagemushaTopUpCount == 0) == (kagemushaTopUpRoot == nil) else {
             throw SumeragiV2WireError.invalid(
@@ -291,10 +327,19 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
                 "execution commitment Native AMX application-manifest count and root disagree"
             )
         }
-        guard executedBlockWireLen != 0 else {
+        guard executedBlockWireLen > 0,
+              executedBlockWireLen <= Self.maximumExecutedBlockWireBytes else {
             throw SumeragiV2WireError.invalid(
-                "execution commitment executed block wire length must be non-zero"
+                "execution commitment executed block wire length is outside the production bound"
             )
+        }
+        if let transactionInputCommitment {
+            guard let transactionOutputCommitment,
+                  transactionOutputCommitment.leafCount >= transactionInputCommitment.leafCount else {
+                throw SumeragiV2WireError.invalid(
+                    "transaction output commitment must cover every committed input"
+                )
+            }
         }
 
         self.parentStateRoot = parentStateRoot
@@ -309,6 +354,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.mergeCarrier = mergeCarrier
         self.executedBlockWireLen = executedBlockWireLen
         self.executedBlockWireHash = executedBlockWireHash
+        self.transactionInputCommitment = transactionInputCommitment
+        self.transactionOutputCommitment = transactionOutputCommitment
     }
 
     public func encode() -> Data {
@@ -324,7 +371,9 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             sumeragiV2Option(laneFinalityManifest?.encode()),
             sumeragiV2Option(mergeCarrier?.encode()),
             sumeragiV2U64(executedBlockWireLen),
-            executedBlockWireHash.bytes
+            executedBlockWireHash.bytes,
+            sumeragiV2Option(transactionInputCommitment?.encode()),
+            sumeragiV2Option(transactionOutputCommitment?.encode())
         )
     }
 
@@ -365,6 +414,14 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ),
             executedBlockWireHash: SumeragiV2Hash(
                 reader.field("execution commitment executed block wire hash")
+            ),
+            transactionInputCommitment: sumeragiV2DecodeOption(
+                reader.field("execution commitment transaction input tree"),
+                decode: SumeragiV2TransactionTreeCommitment.decode
+            ),
+            transactionOutputCommitment: sumeragiV2DecodeOption(
+                reader.field("execution commitment transaction output tree"),
+                decode: SumeragiV2TransactionTreeCommitment.decode
             )
         )
         try reader.finish("execution commitment")

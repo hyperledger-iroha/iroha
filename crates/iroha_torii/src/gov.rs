@@ -1940,9 +1940,9 @@ fn governance_tally_from_view(
         iroha_core::state::GovernanceReferendumMode::Zk => {
             if let Some(e) = world.elections().get(&rid) {
                 if e.finalized && e.tally.len() >= 2 {
-                    approve = e.tally[0] as u128;
-                    reject = e.tally[1] as u128;
-                    abstain = e.tally.get(2).copied().map_or(0, u128::from);
+                    approve = e.tally[0];
+                    reject = e.tally[1];
+                    abstain = e.tally.get(2).copied().unwrap_or(0);
                 }
             }
         }

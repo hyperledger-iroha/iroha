@@ -39,6 +39,7 @@ ANDROID_TARGETS = (
 COMMON_ROOT_INPUTS = (
     "Cargo.toml",
     "Cargo.lock",
+    "ci/check_connect_norito_bridge_header.sh",
     "ci/privacy_sdk_cargo_lockfile.sh",
     "rust-toolchain.toml",
     "rust-toolchain",

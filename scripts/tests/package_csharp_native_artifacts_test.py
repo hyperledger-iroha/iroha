@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for deterministic, fail-closed C# ABI-23 native NuGet packaging."""
+"""Tests for deterministic, fail-closed C# ABI-24 native NuGet packaging."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import check_native_sdk_abi23_artifact as artifact_checker  # noqa: E402
+import check_native_sdk_artifact as artifact_checker  # noqa: E402
 import package_csharp_native_artifacts as packager  # noqa: E402
 
 
@@ -340,7 +340,7 @@ class CSharpNativePackageTests(unittest.TestCase):
 
         self.assertNotIn("ubuntu-24.04-arm", native_job)
         self.assertNotIn("aarch64-unknown-linux-gnu", native_job)
-        self.assertEqual(native_job.count("check_native_sdk_abi23_artifact.py"), 2)
+        self.assertEqual(native_job.count("check_native_sdk_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
@@ -490,7 +490,7 @@ class CSharpNativePackageTests(unittest.TestCase):
             self.assertNotIn(
                 'cp "target/$target/release/$library_name" "$artifact"', arm_job
             )
-            self.assertEqual(arm_job.count("check_native_sdk_abi23_artifact.py"), 2)
+            self.assertEqual(arm_job.count("check_native_sdk_artifact.py"), 2)
             self.assertIn("--sdk csharp", arm_job)
             self.assertEqual(
                 arm_job.count("name: csharp-native-aarch64-unknown-linux-gnu"), 2

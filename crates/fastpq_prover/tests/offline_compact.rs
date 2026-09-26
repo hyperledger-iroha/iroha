@@ -1,4 +1,4 @@
-//! Public-consumer negative coverage for fixed offline quantity artifacts.
+//! Public-consumer coverage for the normal offline quantity artifact library.
 
 use fastpq_prover::{
     AXT_DEFAULT_PARAMETER, Error, ProofSemantics, PublicInputs, VerifyLimits,
@@ -46,10 +46,10 @@ fn policy() -> VerificationLimits {
             max_wire_bytes: 500_000,
             max_total_segment_bytes: 400_000,
             max_total_statement_bytes: 500_000,
-            max_total_queries: 750,
+            max_total_queries: 128,
             max_total_decode_allocation_charges: 8_000_000,
             segment: VerifyLimits {
-                max_queries: 375,
+                max_queries: 64,
                 ..VerifyLimits::default()
             },
         },
@@ -346,7 +346,7 @@ fn public_verifier_enforces_cumulative_queries_frames_and_statement_caps_before_
             "max_bundle_queries",
             VerificationLimits {
                 bundle: BundleVerificationLimits {
-                    max_total_queries: 749,
+                    max_total_queries: 127,
                     ..policy().bundle
                 },
                 ..policy()
@@ -507,9 +507,11 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
     // obscure the particular admission failure being asserted here.
     let (statement, expected) = fixture();
     let proving = ProvingLimits {
+        digest_execution: fastpq_prover::DigestExecutionV1::Cpu,
         private_smt: TransferSmtBuildLimits::for_update_limit(4).unwrap(),
         max_total_trace_cells: usize::MAX,
         max_segment_charge_bytes: usize::MAX,
+        max_segment_work_units: usize::MAX,
     };
     let mut verification = policy();
     verification.transport.max_wire_bytes = 20 * 1024 * 1024;
@@ -542,6 +544,7 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         "max_bundle_segment_bytes",
         "max_compact_prover_trace_cells",
         "max_compact_prover_segment_charge_bytes",
+        "max_compact_prover_segment_work_units",
         "max_compact_producer_statement_bytes",
     ] {
         let mut limits = verification;
@@ -551,12 +554,13 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
             "max_public_transfer_transcripts" => limits.public_statement.max_transcripts = 0,
             "max_public_transfer_deltas" => limits.public_statement.max_deltas = 0,
             "max_bundle_segments" => limits.bundle.max_segments = 1,
-            "max_queries" => limits.bundle.segment.max_queries = 374,
-            "max_bundle_queries" => limits.bundle.max_total_queries = 749,
+            "max_queries" => limits.bundle.segment.max_queries = 63,
+            "max_bundle_queries" => limits.bundle.max_total_queries = 127,
             "max_proof_bytes" => limits.bundle.segment.max_proof_bytes = 0,
             "max_bundle_segment_bytes" => limits.bundle.max_total_segment_bytes = 0,
             "max_compact_prover_trace_cells" => work.max_total_trace_cells = 0,
             "max_compact_prover_segment_charge_bytes" => work.max_segment_charge_bytes = 0,
+            "max_compact_prover_segment_work_units" => work.max_segment_work_units = 0,
             "max_compact_producer_statement_bytes" => limits.public_statement.max_public_bytes = 0,
             _ => unreachable!(),
         }
@@ -724,4 +728,77 @@ fn public_producer_rejects_limits_expectation_drift_and_false_roots_without_a_tr
         ),
         "mismatched AXT source commitment returned {rejected:?}"
     );
+}
+
+#[path = "support/offline_compact_capture.rs"]
+mod capture;
+
+#[test]
+#[ignore = "requires fresh FASTPQ_TEST_ORDINARY_ARTIFACT and FASTPQ_TEST_AXT_ARTIFACT"]
+fn captured_deep_artifacts_verify_with_normal_library_and_independent_context() {
+    // An integration target links fastpq_prover without its backend cfg(test) helpers.
+    // Reconstruct all expectations before reading either untrusted artifact.
+    let fixture = capture::CaptureFixture::new();
+    let expected = fixture.expected;
+    let context = fixture.context();
+    let limits = capture::capture_policy();
+    for (is_axt, variable, label) in [
+        (false, "FASTPQ_TEST_ORDINARY_ARTIFACT", "ordinary"),
+        (true, "FASTPQ_TEST_AXT_ARTIFACT", "axt"),
+    ] {
+        let bytes = capture::read_capture(variable, label);
+        let verify = |bytes: &[u8], expected| {
+            if is_axt {
+                verify_quantity_axt_artifact(bytes, expected, context, limits)
+            } else {
+                verify_quantity_ordinary_artifact(bytes, expected, limits)
+            }
+        };
+        let accepted = verify(&bytes, expected).unwrap();
+        assert_eq!(accepted.expected_statement(), expected);
+        assert_eq!(accepted.segments(), 2);
+        assert_eq!(accepted.air_row_roots().len(), 2);
+        assert_eq!(accepted.identity().profile_id, quantity_profile_id());
+        assert_eq!(
+            accepted.identity().artifact_bytes,
+            u64::try_from(bytes.len()).unwrap()
+        );
+        assert!(accepted.bundle_frame_bytes() <= 1024 * 1024);
+
+        let mut wrong = expected;
+        wrong.public_statement_digest[0] ^= 1;
+        assert!(matches!(
+            verify(&bytes, wrong),
+            Err(VerificationError::Verify(Error::PublicIoMismatch {
+                field: "compact_artifact_public_statement_digest"
+            }))
+        ));
+        let mut wrong = expected;
+        wrong.inputs.slot ^= 1;
+        assert!(matches!(
+            verify(&bytes, wrong),
+            Err(VerificationError::Verify(Error::PublicIoMismatch {
+                field: "compact_model_public_io"
+            }))
+        ));
+        assert!(verify(&[], expected).is_err());
+        assert!(verify(&bytes[..bytes.len() - 1], expected).is_err());
+        let mut malformed = bytes.clone();
+        *malformed.last_mut().unwrap() ^= 1;
+        assert!(verify(&malformed, expected).is_err());
+        if is_axt {
+            let mut wrong = context;
+            wrong.mirrors.expiry_slot = Some(457);
+            assert!(matches!(
+                verify_quantity_axt_artifact(&bytes, expected, wrong, limits),
+                Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+            ));
+            let mut wrong = context;
+            wrong.remote_spend_claims = None;
+            assert!(matches!(
+                verify_quantity_axt_artifact(&bytes, expected, wrong, limits),
+                Err(VerificationError::Verify(Error::PublicIoMismatch { .. }))
+            ));
+        }
+    }
 }

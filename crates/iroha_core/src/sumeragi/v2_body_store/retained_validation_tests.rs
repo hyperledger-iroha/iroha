@@ -17,6 +17,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+// Moving the outer block preserves this owned BTreeSet node; cloning it does not.
+fn signature_node_address(body: &SignedBlock) -> usize {
+    std::ptr::from_ref(body.signatures().next().expect("fixture body is signed")) as usize
+}
+
 struct Validator {
     commitment: wire::ExecutionCommitment,
     ready: bool,
@@ -26,6 +31,7 @@ struct Validator {
     prepare_refusal_at: Option<usize>,
     panic_after_prepare: bool,
     dropped_payloads_at_producer_drop: Option<Arc<AtomicUsize>>,
+    retained_signature_node_address: Option<Arc<AtomicUsize>>,
 }
 impl CarrierValidator for Validator {
     type Owner = TrackedOwner;
@@ -41,6 +47,9 @@ impl CarrierValidator for Validator {
                 "fixture preexecution admission refusal".to_owned(),
             ));
         }
+        if let Some(address) = &self.retained_signature_node_address {
+            address.store(signature_node_address(body), Ordering::SeqCst);
+        }
         let owner = TrackedOwner::new(context, body, self.commitment, Arc::clone(&self.drops));
         assert!(
             !std::mem::take(&mut self.panic_after_prepare),
@@ -55,8 +64,12 @@ impl CarrierValidator for Validator {
     fn resume(
         &mut self,
         owner: Self::Owner,
+        body: &SignedBlock,
     ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
         self.resume_calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(address) = &self.retained_signature_node_address {
+            assert_eq!(address.load(Ordering::SeqCst), signature_node_address(body));
+        }
         assert!(
             !self.ready,
             "a ready original owner must not resume capture"
@@ -86,6 +99,7 @@ fn validator(
             prepare_refusal_at: None,
             panic_after_prepare: false,
             dropped_payloads_at_producer_drop: None,
+            retained_signature_node_address: None,
         },
         calls,
         drops,
@@ -146,6 +160,111 @@ fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_
         ));
     }
     assert_eq!(resumes.load(Ordering::SeqCst), 2);
+    drop(service);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn retained_decoded_body_is_original_across_resume_and_rejects_changed_signature() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (wire, manifest) = body_and_manifest(&context, &keys, None);
+    let original = decode_framed_signed_block(&wire).unwrap();
+    let mut changed = original.clone();
+    let signature = SignatureOf::try_from_hash(keys[0].private_key(), changed.hash()).unwrap();
+    changed
+        .add_signature(BlockSignature::new(17, signature))
+        .unwrap();
+    assert_eq!(changed.hash(), original.hash());
+    let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+    let durable = store.store(manifest, wire).unwrap();
+    let (mut producer, calls, drops) = validator(&durable);
+    producer.ready = false;
+    let resumes = Arc::clone(&producer.resume_calls);
+    let address = Arc::new(AtomicUsize::new(0));
+    producer.retained_signature_node_address = Some(Arc::clone(&address));
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
+
+    for expected_resumes in 1..=2 {
+        assert!(matches!(
+            store.execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                &mut service,
+            ),
+            Err(V2BodyStoreError::CarrierCustody(
+                CarrierCustodyError::IncompleteCapture
+            ))
+        ));
+        let retained = service.body_for_test(durable.subject()).unwrap();
+        assert_eq!(
+            address.load(Ordering::SeqCst),
+            signature_node_address(retained)
+        );
+        assert_eq!(&original, retained);
+        assert_ne!(&changed, retained);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resumes.load(Ordering::SeqCst), expected_resumes);
+        if expected_resumes == 1 {
+            // The same header hash with a different signed body cannot resume
+            // the original candidate, even through the internal service API.
+            assert!(matches!(
+                service.prepare_marker(&context, changed.clone(), &durable, false),
+                Err(CarrierCustodyError::Identity)
+            ));
+            assert_eq!(resumes.load(Ordering::SeqCst), 1);
+        }
+    }
+    assert!(store.validated.is_empty());
+    assert!(store.rejected.is_empty());
+    drop(service);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn ready_owner_releases_decoded_body_and_rejects_changed_signed_retry() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (wire, manifest) = body_and_manifest(&context, &keys, None);
+    let mut changed = decode_framed_signed_block(&wire).unwrap();
+    let original_hash = changed.hash();
+    let signature = SignatureOf::try_from_hash(keys[0].private_key(), original_hash).unwrap();
+    changed
+        .add_signature(BlockSignature::new(17, signature))
+        .unwrap();
+    assert_eq!(changed.hash(), original_hash);
+    let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+    let durable = store.store(manifest, wire).unwrap();
+    let (producer, calls, drops) = validator(&durable);
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
+    fail_next_marker_file_sync();
+    assert!(matches!(
+        store.execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut service,
+        ),
+        Err(V2BodyStoreError::Io { .. })
+    ));
+    assert!(service.body_for_test(durable.subject()).is_none());
+    assert!(service.preflight_marker(&durable).is_ok());
+    assert!(matches!(
+        service.prepare_marker(&context, changed, &durable, false),
+        Err(CarrierCustodyError::Identity)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let receipt = store
+        .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
+        .unwrap()
+        .into_validated_receipt()
+        .unwrap();
+    assert_eq!(receipt.durable(), &durable);
+    assert!(service.body_for_test(durable.subject()).is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(service);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -227,6 +346,7 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     assert_eq!(service.marker_counts_for_test(), (1, 0));
+    assert!(service.body_for_test(durable.subject()).is_none());
     assert!(store.validated.is_empty());
     assert!(store.rejected.is_empty());
     assert!(
@@ -288,6 +408,7 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
         })
         .unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(service.body_for_test(durable.subject()).is_none());
     assert!(matches!(
         service.select(&receipt),
         Err(CarrierCustodyError::Unconfirmed)
@@ -712,6 +833,7 @@ fn retained_prepare_unwind_keeps_reserved_subject_without_reexecution() {
     assert!(unwound.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(service.body_for_test(durable.subject()).is_none());
     assert!(matches!(
         store.execute_retained_durable_validation(
             durable.clone(),
@@ -977,4 +1099,18 @@ fn retained_descriptor_zero_and_overflow_do_not_allocate_or_execute() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(store.validated.is_empty());
     assert!(store.rejected.is_empty());
+}
+
+#[test]
+fn retained_native_body_descriptors_fit_the_configured_default_shell_pool() {
+    use iroha_config::parameters::defaults;
+
+    let bytes = RetainedBodyValidationService::<
+        crate::sumeragi::v2_apply::native_validation::OwnedNativeCarrierValidator,
+    >::descriptor_bytes(defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+    .unwrap();
+    assert!(
+        bytes < defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
+        "maximum body descriptors must leave shell capacity in the default pool"
+    );
 }

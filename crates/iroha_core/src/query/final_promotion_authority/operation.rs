@@ -28,6 +28,20 @@ fn read_basic(
         || revision > FINAL_PROMOTION_MAX_OPERATIONS_V1 * 2
         || (revision == 1) != (record.predecessor_digest == [0; 32])
         || record.request_digest == [0; 32]
+        || record.reserved_origin.entry_hash == [0; 32]
+        || matches!(record.outcome, FinalPromotionOperationOutcomeV1::Reserved)
+            && record.execution_origin != Some(record.reserved_origin)
+        || matches!(
+            record.outcome,
+            FinalPromotionOperationOutcomeV1::Completed(_)
+        ) && record
+            .execution_origin
+            .is_none_or(|origin| origin.entry_hash == [0; 32])
+        || matches!(
+            record.outcome,
+            FinalPromotionOperationOutcomeV1::Expired
+                | FinalPromotionOperationOutcomeV1::Invalidated
+        ) && record.execution_origin.is_some()
         || !valid_execution(&record.execution)
         || !valid_execution(&record.reserved)
         || record.intent.digest().is_err()
@@ -73,6 +87,7 @@ pub(crate) fn successor_head(
 ) -> Result<FinalPromotionOperationHeadV1, Error> {
     if previous.revision.checked_add(1) != Some(record.revision)
         || record.predecessor_digest != previous.digest
+        || record.reserved_origin.entry_hash == [0; 32]
     {
         return Err(Error::CorruptHistory);
     }
@@ -88,6 +103,7 @@ pub(crate) fn successor_head(
         FinalPromotionOperationOutcomeV1::Reserved => {
             if previous.active_operation.is_some()
                 || record.reserved != record.execution
+                || record.execution_origin != Some(record.reserved_origin)
                 || record.intent.previous_audit != previous.audit
                 || previous.fence.checked_add(1) != Some(record.reservation.fence)
             {
@@ -111,12 +127,19 @@ pub(crate) fn successor_head(
                 || record.custody != old.custody
                 || record.reservation != old.reservation
                 || record.reserved != old.reserved
+                || record.reserved_origin != old.reserved_origin
             {
                 return Err(Error::CorruptHistory);
             }
             head.active_operation = None;
             match record.outcome {
                 FinalPromotionOperationOutcomeV1::Completed(completed) => {
+                    if record
+                        .execution_origin
+                        .is_none_or(|origin| origin.entry_hash == [0; 32])
+                    {
+                        return Err(Error::CorruptHistory);
+                    }
                     let commitment = completed.commitment;
                     let signatures_digest = completed.signatures_digest;
                     if record.execution.authority != record.reserved.authority
@@ -134,12 +157,19 @@ pub(crate) fn successor_head(
                     head.audit = commitment.audit;
                 }
                 FinalPromotionOperationOutcomeV1::Expired => {
+                    if record.execution_origin.is_some() {
+                        return Err(Error::CorruptHistory);
+                    }
                     if record.execution.recorded_at_unix_ms < record.reservation.expires_at_unix_ms
                     {
                         return Err(Error::CorruptHistory);
                     }
                 }
-                FinalPromotionOperationOutcomeV1::Invalidated => {}
+                FinalPromotionOperationOutcomeV1::Invalidated => {
+                    if record.execution_origin.is_some() {
+                        return Err(Error::CorruptHistory);
+                    }
+                }
                 FinalPromotionOperationOutcomeV1::Reserved => return Err(Error::CorruptHistory),
             }
         }
@@ -276,6 +306,39 @@ pub(crate) fn read_operation_slot(
         }
     }
     Ok(Some(row))
+}
+/// Return the immutable admission revision after validating its current operation slot.
+///
+/// A later Complete/Expire/Invalidate rewrites the slot, never the original Reserved row.
+/// Source proofs must use this admission index instead of treating the mutable slot as origin.
+pub(crate) fn read_original_reserved_operation(
+    world: &impl WorldReadOnly,
+    deployment: &str,
+    operation_id: [u8; 32],
+) -> Result<Option<NativeOperation>, Error> {
+    let Some(current) = read_operation_slot(world, deployment, operation_id)? else {
+        return Ok(None);
+    };
+    let admission: OperationIndexV1 = decode(
+        world
+            .smart_contract_state()
+            .get(&operation_admission_key(deployment, operation_id)?)
+            .ok_or(Error::CorruptHistory)?,
+    )
+    .map_err(|_| Error::CorruptHistory)?;
+    let reserved = read_operation_record(world, deployment, admission.head.revision)?;
+    if reserved.index != admission
+        || reserved.record.outcome != FinalPromotionOperationOutcomeV1::Reserved
+        || reserved.record.intent.operation_id != operation_id
+        || reserved.record.reserved_origin != current.record.reserved_origin
+        || reserved.record.intent != current.record.intent
+        || reserved.record.custody != current.record.custody
+        || reserved.record.reservation != current.record.reservation
+        || reserved.record.reserved != current.record.reserved
+    {
+        return Err(Error::CorruptHistory);
+    }
+    Ok(Some(reserved))
 }
 pub(crate) fn read_operation_head_at(
     world: &impl WorldReadOnly,

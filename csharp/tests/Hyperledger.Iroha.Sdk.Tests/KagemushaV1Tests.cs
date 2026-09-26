@@ -115,6 +115,22 @@ public sealed class KagemushaV1Tests
     }
 
     [Fact]
+    public void HardwareCredentialCarriesTheCanonicalAppPolicyBindingBeforeItsSignature()
+    {
+        var credential = TestContext.Create().Credential;
+        var canonical = KagemushaCodec.EncodeHardwareCredential(credential);
+        var decoded = KagemushaCodec.DecodeHardwareCredential(canonical);
+        Assert.Equal(credential.AppPolicyBindingDigest.ToArray(),
+            decoded.AppPolicyBindingDigest.ToArray());
+        Assert.Equal(canonical, KagemushaCodec.EncodeHardwareCredential(decoded));
+
+        Assert.Throws<ArgumentException>(() => KagemushaCodec.EncodeHardwareCredential(
+            credential with { AppPolicyBindingDigest = new byte[32] }));
+        Assert.Throws<ArgumentException>(() => KagemushaCodec.EncodeHardwareCredential(
+            credential with { AppPolicyBindingDigest = new byte[31] }));
+    }
+
+    [Fact]
     public void PaymentBindsRequestStateTransitionCiphertextAndCommitWindow()
     {
         var context = TestContext.Create();
@@ -298,7 +314,8 @@ public sealed class KagemushaV1Tests
             var credential = new KagemushaHardwareCredentialV1(
                 1, Repeat(0x51), networkId, profileId, Repeat(0x52), Repeat(0x45), 9,
                 Repeat(0x53), Repeat(0x54), 1, publicKey,
-                KagemushaCodec.DeviceKeyReference(publicKey), 100, 10_000, signature);
+                KagemushaCodec.DeviceKeyReference(publicKey), 100, 10_000,
+                Repeat(0x56), signature);
             return new TestContext(
                 networkId,
                 asset,

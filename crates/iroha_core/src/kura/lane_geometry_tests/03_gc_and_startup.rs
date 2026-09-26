@@ -1748,6 +1748,63 @@ fn configured_catalog_preflight_refuses_to_bind_a_nonpristine_root() {
     assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
     assert_lane_paths_absent(&root, &lane_config);
 }
+#[cfg(unix)]
+#[test]
+fn configured_catalog_admits_only_the_bound_public_reset_storage_marker() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = TempDir::new().expect("temporary directory");
+    let state = temp.path().join("taira-validator-1");
+    let root = state.join("storage");
+    fs::create_dir_all(&root).expect("create fresh validator storage");
+    for path in [&state, &root] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .expect("retain reset directory custody");
+    }
+    let marker = PublicResetGeneratedMarkerV1 {
+        schema: "iroha.taira.public-reset.generated-path.v1".into(),
+        kind: "fresh_state".into(),
+        host_slug: "taira-validator-1".into(),
+        inventory_sha256: "a".repeat(64),
+        authorization_nonce: "b".repeat(32),
+        revision: "c".repeat(40),
+        created_at_unix_ms: 1,
+    };
+    let marker_path = |directory: &Path| directory.join(".public-reset-generated-v1.json");
+    let write_marker = |directory: &Path, marker: &PublicResetGeneratedMarkerV1| {
+        let path = marker_path(directory);
+        fs::write(
+            &path,
+            norito::json::to_json(marker).expect("canonical reset marker"),
+        )
+        .expect("write reset marker");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("retain reset marker custody");
+    };
+    write_marker(&state, &marker);
+    let mut child = marker.clone();
+    child.kind = "fresh_state_entry".into();
+    write_marker(&root, &child);
+    assert!(exact_public_reset_storage_marker(&root));
+
+    let configured = configured_primary_catalog("public-reset-storage-marker");
+    let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+            .expect("fresh reset storage marker is part of the exact Kura root closure");
+    drop(kura);
+    assert!(root.join(JOURNAL_FILE_NAME).is_file());
+    assert!(marker_path(&root).is_file());
+
+    child.authorization_nonce = "d".repeat(32);
+    write_marker(&root, &child);
+    assert!(!exact_public_reset_storage_marker(&root));
+    child.authorization_nonce = marker.authorization_nonce.clone();
+    write_marker(&root, &child);
+    fs::set_permissions(marker_path(&root), fs::Permissions::from_mode(0o644))
+        .expect("weaken marker mode");
+    assert!(!exact_public_reset_storage_marker(&root));
+}
 #[test]
 fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
     let temp = TempDir::new().expect("temporary directory");

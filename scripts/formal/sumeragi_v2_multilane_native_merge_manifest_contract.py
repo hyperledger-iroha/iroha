@@ -1491,7 +1491,7 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
         (
             "self.kura.read_block_body(height)",
             "validate_canonical_executed_block_need(",
-            "!canonical_executed_block_matches_need(&block, &finality, need)",
+            "canonical_executed_block_wire_matching_need(&block, &finality, need).is_none()",
             ".preflight_cached_finalized_merge_carrier_reconstruction(&block)",
             "self.needs.pop_front();",
         ),

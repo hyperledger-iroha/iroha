@@ -274,6 +274,7 @@ iroha_sumeragi = { workspace = true, features = ["sim"] }
 [[bench]]
 name = "validation"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "kura"

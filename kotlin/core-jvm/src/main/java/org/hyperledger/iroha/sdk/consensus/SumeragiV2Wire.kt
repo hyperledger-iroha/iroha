@@ -204,6 +204,30 @@ object SumeragiV2Wire {
         }
     }
 
+    /** Exact root and non-zero leaf count of one transaction input or output tree. */
+    class TransactionTreeCommitment(
+        @JvmField val root: Hash32,
+        @JvmField val leafCount: Long,
+    ) : WireValue() {
+        init {
+            require(leafCount > 0) { "transaction tree commitment requires a non-zero leaf count" }
+        }
+
+        override fun encode(): ByteArray = struct(root.bytes(), u64(leafCount))
+
+        companion object {
+            internal fun decode(bytes: ByteArray): TransactionTreeCommitment =
+                decodeStruct(bytes) { reader ->
+                    TransactionTreeCommitment(
+                        Hash32(reader.field("transaction_tree.root") { it.hash() }),
+                        reader.field("transaction_tree.leaf_count") {
+                            it.u64Only("transaction_tree.leaf_count")
+                        },
+                    )
+                }
+        }
+    }
+
     /** Deterministic state-transition result authenticated by votes and certificates. */
     class ExecutionCommitment(
         @JvmField val parentStateRoot: Hash32,
@@ -218,8 +242,15 @@ object SumeragiV2Wire {
         @JvmField val mergeCarrier: MergeCarrierCommitment? = null,
         @JvmField val executedBlockWireLen: Long,
         @JvmField val executedBlockWireHash: Hash32,
+        @JvmField val transactionInputCommitment: TransactionTreeCommitment?,
+        @JvmField val transactionOutputCommitment: TransactionTreeCommitment?,
     ) : WireValue() {
         init {
+            require(
+                transactionInputCommitment == null ||
+                    (transactionOutputCommitment != null &&
+                        transactionOutputCommitment.leafCount >= transactionInputCommitment.leafCount),
+            ) { "transaction output tree must cover every network input" }
             require(kagemushaTopUpCount in 0..0xffff_ffffL) {
                 "kagemushaTopUpCount must fit in an unsigned 32-bit integer"
             }
@@ -273,6 +304,8 @@ object SumeragiV2Wire {
             option(mergeCarrier?.encode()),
             u64(executedBlockWireLen),
             executedBlockWireHash.bytes(),
+            option(transactionInputCommitment?.encode()),
+            option(transactionOutputCommitment?.encode()),
         )
 
         companion object {
@@ -296,6 +329,8 @@ object SumeragiV2Wire {
                 null,
                 executedBlockWireLen,
                 executedBlockWireHash,
+                null,
+                null,
             )
 
             /** Canonical root for a global block with no separate Native AMX applications. */
@@ -364,6 +399,18 @@ object SumeragiV2Wire {
                         }
                     val executedBlockWireHash =
                         Hash32(reader.field("execution.executed_block_wire_hash") { it.hash() })
+                    val transactionInputCommitment =
+                        reader.field("execution.transaction_input_commitment") {
+                            optionDecode(it, "execution.transaction_input_commitment") {
+                                TransactionTreeCommitment.decode(it)
+                            }
+                        }
+                    val transactionOutputCommitment =
+                        reader.field("execution.transaction_output_commitment") {
+                            optionDecode(it, "execution.transaction_output_commitment") {
+                                TransactionTreeCommitment.decode(it)
+                            }
+                        }
                     ExecutionCommitment(
                         parentStateRoot,
                         postStateRoot,
@@ -377,6 +424,8 @@ object SumeragiV2Wire {
                         mergeCarrier,
                         executedBlockWireLen,
                         executedBlockWireHash,
+                        transactionInputCommitment,
+                        transactionOutputCommitment,
                     )
                 }
         }

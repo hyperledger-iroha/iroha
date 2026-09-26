@@ -14,11 +14,11 @@
 //! TODO: Bind this unmasked arithmetic into the reviewed protocol transcript,
 //! quotient and LDE owners before production admission.
 
+#[cfg(test)]
+use super::deep_composition::DeepComposition;
 use super::{
-    compact_public_columns::COMMITTED_COLUMN_COUNT,
-    deep_composition::{DeepComposition, OodPair},
-    polynomial_field::PolynomialField,
-    polynomial_transform::validate_coefficients,
+    compact_public_columns::COMMITTED_COLUMN_COUNT, deep_composition::OodPair,
+    polynomial_field::PolynomialField, polynomial_transform::validate_coefficients,
     secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
@@ -115,6 +115,7 @@ impl PreparedDeepPolynomial<'_> {
     }
 
     /// Prepare the independently implemented bounded point evaluator.
+    #[cfg(test)]
     pub(super) fn evaluator(&self) -> Result<DeepComposition> {
         DeepComposition::new(
             self.points,

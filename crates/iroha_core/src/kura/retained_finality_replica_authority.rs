@@ -393,8 +393,7 @@ impl Kura {
         path: &Path,
         bytes: &[u8],
     ) -> Result<KuraRetainedBlockRecord> {
-        let mut input = bytes;
-        KuraRetainedBlockRecord::decode_all(&mut input)
+        decode_bounded_kura_sidecar::<KuraRetainedBlockRecord>(bytes)
             .ok()
             .filter(|record| {
                 let canonical_len = {

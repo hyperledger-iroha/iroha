@@ -14251,7 +14251,7 @@ mod tests {
             lane_catalog,
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-        let instruction = InstructionBox::from(RegisterZkAsset::new(asset_definition, None, None));
+        let instruction = InstructionBox::from(RegisterZkAsset::new(asset_definition, None));
         let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
         assert_eq!(
             router

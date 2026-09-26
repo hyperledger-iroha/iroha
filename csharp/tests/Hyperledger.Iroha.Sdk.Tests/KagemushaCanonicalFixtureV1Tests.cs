@@ -56,6 +56,8 @@ public sealed class KagemushaCanonicalFixtureV1Tests
 
         var requestRaw = Raw(root.GetProperty("payment_request"));
         var request = KagemushaCodec.DecodePaymentRequest(requestRaw);
+        Assert.Equal(Enumerable.Repeat((byte)0xa6, 32).ToArray(),
+            request.HardwareCredential.AppPolicyBindingDigest.ToArray());
         var paymentRaw = Raw(root.GetProperty("payment"));
         var payment = KagemushaCodec.DecodePayment(paymentRaw, request);
         var acknowledgementRaw = Raw(root.GetProperty("acknowledgement"));

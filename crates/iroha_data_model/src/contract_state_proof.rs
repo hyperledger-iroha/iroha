@@ -120,6 +120,10 @@ impl ContractStateValueInclusionProofV1 {
 ///
 /// The `expected_root` must already be authenticated by a trusted finality
 /// chain. In particular, an execution-witness root is not a valid substitute.
+///
+/// # Errors
+/// Rejects an oversized wire frame or noncanonical or over-budget decode, or a
+/// proof with the wrong version, exact path, value size, or authenticated root.
 pub fn decode_verified_contract_state_value_inclusion_proof_v1(
     bytes: &[u8],
     expected_path: &StatePath,
@@ -164,6 +168,10 @@ impl ContractStateMapV1 {
     /// Cold-capture every current physical key/value pair, including entries
     /// that no transaction touched in the current block. Call this only from
     /// the authoritative State owner at initialization or recovery.
+    ///
+    /// # Errors
+    /// Rejects a duplicate physical key or an entry-count overflow while
+    /// inserting the supplied current-state entries.
     pub fn capture<'a>(
         entries: impl IntoIterator<Item = (&'a StatePath, &'a [u8])>,
     ) -> Result<Self, MerkleMapError> {
@@ -196,6 +204,10 @@ impl ContractStateMapV1 {
     ///
     /// `None` is absence; an empty byte string is a present value.
     /// A failed preimage check leaves the map unchanged.
+    ///
+    /// # Errors
+    /// Rejects a mismatch between `expected` and the current value, or an
+    /// update whose entry count cannot be represented by the commitment.
     pub fn replace(
         &mut self,
         path: &StatePath,
@@ -282,7 +294,17 @@ mod tests {
         tampered = proof.clone();
         tampered.version += 1;
         assert!(!tampered.verify(&a, current_root));
-        let encoded = proof.encode();
+        let bare_payload = proof.encode();
+        assert!(
+            decode_verified_contract_state_value_inclusion_proof_v1(
+                &bare_payload,
+                &a,
+                current_root,
+            )
+            .is_err(),
+            "a bare proof payload cannot stand in for canonical Norito wire",
+        );
+        let encoded = norito::encode_canonical(&proof).expect("canonical proof encodes");
         let decoded =
             decode_verified_contract_state_value_inclusion_proof_v1(&encoded, &a, current_root)
                 .expect("canonical proof decodes");

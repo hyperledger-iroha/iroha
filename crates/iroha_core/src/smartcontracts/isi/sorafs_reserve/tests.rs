@@ -194,6 +194,35 @@ fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
         })
 }
 #[test]
+fn domain_retirement_rejects_active_sorafs_reserve_backing_atomically() {
+    let governance = account(&keypair(0x71));
+    let provider = account(&keypair(0x72));
+    let custody = account(&keypair(0x73));
+    let treasury = account(&keypair(0x74));
+    let mut state = state_fixture(&governance, &provider, &custody, &treasury);
+    transact(&mut state, 1, NOW, |transaction| {
+        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
+        SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
+        let domain_id = DomainId::try_new("reserve", "universal").expect("reserve asset domain");
+        let error = Unregister::domain(domain_id.clone())
+            .execute(&governance, transaction)
+            .expect_err("active SoraFS reserve backing must survive domain retirement");
+        assert!(error.to_string().contains("active SoraFS reserve custody"));
+        assert!(transaction.world.domains.get(&domain_id).is_some());
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&asset_definition())
+                .is_some()
+        );
+        assert!(read_reserve_state(transaction.world())?.is_some());
+        Ok(())
+    })
+    .expect("reserve policy remains active after rejected domain retirement");
+}
+
+#[test]
 fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
     let governance = account(&keypair(0x51));
     let provider = account(&keypair(0x52));

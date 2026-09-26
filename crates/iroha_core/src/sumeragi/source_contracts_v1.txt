@@ -373,7 +373,8 @@ region|protected_lock_standalone_auth|replay_authority_certified_body|at|fn auth
 region|protected_lock_pre_admission|registry|at|pub(in crate::sumeragi) fn seal_exact_protected_body_validate(|before|/// Consume the exact local Validate owner and its Store-projected replay seal.
 region|protected_lock_validate_certificate|effects|at|fn exact_remote_proposal_validate_authority_certificate(|before|fn preflight_authenticated_genesis_store_completion(
 region|current_prepare_full_certificate|adapter|at|pub(crate) fn current_prepare_authority_certificate(|before|/// Return the strongest complete body certificate retained by durable reducer state.
-region|protected_lock_validate_reseed|effects|at|// A TC may promote an older PrepareQC|before|        let authority_certificate =\n            self.exact_remote_proposal_validate_authority_certificate
+region|protected_lock_validate_dispatch|effects|at|fn validate_body(|before|fn replay_terminal_validate_body(
+region|protected_lock_validate_reseed|effects|at|fn validate_recovered_protected_body(|before|fn validate_remote_proposal_body(
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
 region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 required|local|store_pending: PendingRuntimeEffectBinding|local replay authority omitted store_pending: PendingRuntimeEffectBinding
@@ -420,6 +421,7 @@ required|protected_lock_validate_certificate|self.protected_decision.is_none()|P
 required|protected_lock_validate_certificate|self.protected_lock\n                        == Some((certificate.proposal_round, certificate.subject))|Prepare fallback stopped requiring the exact currently protected lock
 required|protected_lock_validate_certificate|if !protected {|protected-lock Validate stopped failing closed on ordinary or foreign quorum authority
 forbidden|protected_lock_validate_certificate|replayed_highest_prepare_certificate_ref|cleanup-only durable high must not substitute for the protected full PrepareQC
+required|protected_lock_validate_dispatch|None => {\n                return self.validate_recovered_protected_body(key, effect, ownership, receipt);\n            }|missing Proposal replay stopped dispatching its exact Validate owner and durable receipt to protected-body recovery
 required|protected_lock_validate_reseed|exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?|historical protected-lock Validate stopped authenticating its complete runtime QC
 required|protected_lock_validate_reseed|let Some(certificate) = authority_certificate else {|historical protected body Validate stopped requiring protected full-QC authority
 required|protected_lock_validate_reseed|.recovered_bodies|historical protected-lock Validate stopped sourcing its manifest and receipt from recovered durable storage
@@ -437,7 +439,7 @@ order|protected_lock_validate_reseed|6|if recovered_receipt != receipt|let valid
 forbidden|protected_lock_validate_reseed|PreparedCertifiedFetchReplayPreAdmission|historical protected-lock Validate must not manufacture generic certified Fetch authority
 forbidden|protected_lock_validate_reseed|pending_durable_validate_admissions.insert|historical protected-lock Validate must not bypass the normal admission installer
 forbidden|protected_lock_validate_reseed|AdapterEffect::FetchBody|historical protected-lock Validate must not synthesize a Fetch effect
-forbidden|protected_lock_validate_reseed|prepared.into_pending_durable_validate_admission(),\n                    None,|historical protected-lock Validate must not install without its reconstructed Store predecessor
+forbidden|protected_lock_validate_reseed|prepared.into_pending_durable_validate_admission(),\n            None,|historical protected-lock Validate must not install without its reconstructed Store predecessor
 forbidden|derive_local_pre_intent|Clone|local body pre-intent seal became cloneable
 forbidden|derive_local_pre_intent|Copy|local body pre-intent seal became copyable
 forbidden|local|Decode|local replay authority exposed or reserved Decode
@@ -4949,7 +4951,8 @@ region|replay_verify|effects|at|pub(crate) fn verify_pending_kura_apply_replay(|
 region|runtime_prepare|runtime|at|pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(|before|/// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
 region|runtime_default|effects|after|pub(crate) trait EffectRuntime {|before|/// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
 region|runtime_serialized|effects|after|impl EffectRuntime for SerializedV2Runtime {|before|fn can_admit_network_message_with_ingress_ownership(
-region|validate_child|effects|at|fn validate_body(|before|fn begin_apply<S: V2EffectServices>(
+region|validate_dispatch|effects|at|fn validate_body(|before|fn replay_terminal_validate_body(
+region|validate_child|effects|at|fn validate_pending_kura_body(|before|fn validate_authenticated_genesis_body(
 region|consume_child|effects|at|fn consume_one<S: V2EffectServices>(|before|fn ensure_pending_tip_recovery_effect_is_local(
 region|recovery_step|effects|at|pub(crate) fn step_pending_tip_recovery<S: V2EffectServices>(|before|/// Publish the terminal scheduler observation immediately before the runner
 region|retired_carrier|coordinator_support|begin|-|end|-
@@ -5015,8 +5018,9 @@ required|runtime_default|Err((|generic EffectRuntime did not fail closed for pen
 required|runtime_default|runtime cannot commit a deferred pending-Kura validation marker|generic EffectRuntime fabricated pending-Kura validation authority
 order|runtime_serialized|3|self.prepare_pending_kura_validated_apply(marker, predecessor, ownership)|Ok(prepared) => Ok(prepared.commit())|Err((marker, error)) => Err((marker, error.to_string()))|serialized runtime stopped preparing before committing the exact pending-Kura child
 required|validate_child|take_deferred_validated_marker()?|pending-Kura Validate did not consume its move-only marker
-order|validate_child|8|recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation|recovery.replay_tag() != tag|recovery.durable_round() != round|recovery.durable_subject() != subject|recovery.durable_receipt() != &receipt|self.ensure_pending_slot()?|let _next_apply_work = self.plan_work_id()?|take_deferred_validated_marker()?|pending-Kura Validate omitted exact recovered coordinates or capacity-before-move ordering
-required|validate_child|commit_pending_kura_validated_apply(marker, &effect, &ownership)|pending-Kura Validate omitted the direct adapter commit
+order|validate_dispatch|3|let receipt = self.durable_bodies.get(&key).cloned()|if self.pending_tip_recovery.is_some() {|return self.validate_pending_kura_body(tag, key, &effect, &ownership, &receipt);|pending-Kura Validate stopped dispatching its exact effect owner and durable receipt to the isolated recovery transition
+order|validate_child|9|recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation|recovery.replay_tag() != tag|recovery.durable_round() != round|recovery.durable_subject() != subject|recovery.durable_receipt() != receipt|self.validated_bodies.get(&key) != Some(recovery.validated_receipt())|self.ensure_pending_slot()?|let _next_apply_work = self.plan_work_id()?|take_deferred_validated_marker()?|pending-Kura Validate omitted exact recovered coordinates or capacity-before-move ordering
+required|validate_child|commit_pending_kura_validated_apply(marker, effect, ownership)|pending-Kura Validate omitted the direct adapter commit
 required|validate_child|restore_deferred_validated_marker(marker)|pending-Kura precommit failure did not restore marker ownership
 required|consume_child|if let Some(stage) = recovery_transition {|pending-Kura child dispatch omitted the outer stage commit
 order|consume_child|4|result?|if let Some(stage) = recovery_transition {|.stage = stage|if let Some(successor) = validated_apply_successor|pending-Kura child dispatch did not commit the outer Apply stage before recursion

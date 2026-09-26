@@ -125,16 +125,27 @@ pub(crate) fn canonical_carrier_membership_hashes(
     entrypoints: &[TransactionEntrypoint],
 ) -> Vec<HashOf<TransactionEntrypoint>> {
     let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for_each_canonical_carrier_membership_hash(state_block, entrypoints, |hash| hashes.push(hash));
+    hashes
+}
+/// Visit the exact canonical carrier identities without allocating an intermediate collection.
+///
+/// The caller owns any storage needed to retain these hashes. This keeps the
+/// ordinary carrier's pre-effect source buffer on its original charged owner.
+pub(crate) fn for_each_canonical_carrier_membership_hash(
+    state_block: &StateBlock<'_>,
+    entrypoints: &[TransactionEntrypoint],
+    mut visit: impl FnMut(HashOf<TransactionEntrypoint>),
+) {
     for entrypoint in entrypoints {
         let carrier_hash = entrypoint.hash();
-        hashes.push(carrier_hash);
+        visit(carrier_hash);
         if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
             if execution_hash != carrier_hash {
-                hashes.push(execution_hash);
+                visit(execution_hash);
             }
         }
     }
-    hashes
 }
 /// Return the signed replay alias authenticated by the pre-block state, if any.
 #[must_use]
@@ -1244,6 +1255,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::UpdatePlainConviction,
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,
@@ -2949,34 +2961,6 @@ impl StateBlock<'_> {
             .confidential_gas_used_in_block
             .saturating_add(confidential_gas);
     }
-    /// Commit prevalidated ballot penalties after their originating transaction was rejected.
-    ///
-    /// This shared corridor is used by ordinary scheduler, sealed-entrypoint,
-    /// and autonomous-lane execution paths. Penalties commit before any rejected
-    /// fee transaction, so a fee failure cannot roll them back.
-    pub(crate) fn apply_rejected_governance_ballot_penalties_v1(
-        &mut self,
-        tx: &SignedTransaction,
-        penalties: Vec<crate::state::DeferredGovernanceBallotPenaltyV1>,
-        routing: Option<crate::queue::RoutingDecision>,
-        entrypoint_index: Option<u64>,
-    ) -> Result<(), TransactionRejectionReason> {
-        if penalties.is_empty() {
-            return Ok(());
-        }
-        let mut penalty_tx = self.transaction();
-        if let Some(routing) = routing {
-            penalty_tx.current_lane_id = Some(routing.lane_id);
-            penalty_tx.current_dataspace_id = Some(routing.dataspace_id);
-            penalty_tx.world.current_dataspace_id = Some(routing.dataspace_id);
-        }
-        penalty_tx.current_entrypoint_index = entrypoint_index;
-        penalty_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
-        penalty_tx.current_tx_hash = Some(tx.hash());
-        Self::stage_rejected_governance_ballot_penalties_v1(&mut penalty_tx, &penalties)?;
-        penalty_tx.apply();
-        Ok(())
-    }
     /// Stage the original prevalidated penalties without choosing an apply owner.
     pub(crate) fn stage_rejected_governance_ballot_penalties_v1(
         penalty_tx: &mut StateTransaction<'_, '_>,
@@ -3187,7 +3171,12 @@ impl StateBlock<'_> {
             faucet_claim_to_commit,
         })
     }
-    /// Validate/apply a transaction atomically, returning its entrypoint hash and execution result.
+    /// Execute one immutable accepted entrypoint under the bounded component owner.
+    ///
+    /// Tests and benchmarks share the production attempt/apply/rejection implementation.
+    /// This fixture owner grants no carrier publication authority; a real consuming
+    /// output seal rejects its unjoined invocation journal.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn validate_transaction(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -3219,6 +3208,7 @@ impl StateBlock<'_> {
     /// lane/dataspace routing context and the original fetched-batch entrypoint indices from the
     /// lane descriptor. The caller owns the commit boundary: dropping the block reverts the staged
     /// effects, while committing the block must use a real consensus-approved block context.
+    #[cfg(test)]
     pub(crate) fn validate_lane_block_execution_input_with_routing_context(
         &mut self,
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,
@@ -3271,6 +3261,7 @@ impl StateBlock<'_> {
         }
         Ok(results)
     }
+    #[cfg(test)]
     fn validate_lane_block_execution_input_unique_entrypoints(
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,
     ) -> core::result::Result<(), &'static str> {
@@ -3306,6 +3297,7 @@ impl StateBlock<'_> {
         }
         Ok(())
     }
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     fn validate_transaction_at_entrypoint_index_and_routing(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -3313,143 +3305,13 @@ impl StateBlock<'_> {
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        let signed_transaction = match tx.entrypoint() {
-            TransactionEntrypoint::External(signed) => Some(signed.clone()),
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                Some(reveal.signed_transaction().clone())
-            }
-            TransactionEntrypoint::SealedCommitment(_) => None,
-        };
-        // Capture gas accounting inputs up front to avoid borrowing conflicts.
-        let gas_total_before = self.gas_used_in_block;
-        let gas_limit = self.gas_limit_per_block;
-        let mut state_transaction = self.transaction();
-        state_transaction.current_entrypoint_index = entrypoint_index;
-        if let Some(routing) = routing_decision {
-            state_transaction.current_lane_id = Some(routing.lane_id);
-            state_transaction.current_dataspace_id = Some(routing.dataspace_id);
-            state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
-        }
         let hash = tx.hash_as_entrypoint();
-        let mut result = Self::execute_accepted_transaction_in_overlay(
-            tx,
-            &mut state_transaction,
-            ivm_cache,
-            routing_decision,
-        );
-        let rejected_gas_used = state_transaction.last_tx_gas_used;
-        let rejected_confidential_work = (
-            state_transaction.zk_confidential_ops_in_tx,
-            state_transaction.zk_verify_calls_in_tx,
-            state_transaction.zk_proof_bytes_in_tx,
-            state_transaction.confidential_gas_used_in_tx,
-        );
-        let governance_penalties = if result.is_err() {
-            state_transaction.take_deferred_governance_ballot_penalties_v1()
-        } else {
-            Vec::new()
-        };
-        if result.is_ok() {
-            // Enforce block gas limit if configured; accumulate gas used by last tx (IVM path)
-            let used = state_transaction.last_tx_gas_used;
-            // Compute new total without touching `self` while `state_transaction` borrows it
-            let new_total = gas_total_before.saturating_add(used);
-            if !crate::gas::gas_components_fit_block_limit(gas_limit, [gas_total_before, used]) {
-                let attempted_total = u128::from(gas_total_before) + u128::from(used);
-                drop(state_transaction);
-                self.account_confidential_work_v1(
-                    rejected_confidential_work.0,
-                    rejected_confidential_work.1,
-                    rejected_confidential_work.2,
-                    rejected_confidential_work.3,
-                );
-                return (
-                    hash,
-                    Err(TransactionRejectionReason::Validation(
-                        ValidationFail::NotPermitted(format!(
-                            "block gas limit exceeded: {attempted_total} > {gas_limit}"
-                        )),
-                    )),
-                );
-            }
-            let tx_ops = state_transaction.zk_confidential_ops_in_tx;
-            let tx_verify_calls = state_transaction.zk_verify_calls_in_tx;
-            let tx_proof_bytes = state_transaction.zk_proof_bytes_in_tx;
-            let tx_conf_gas = state_transaction.confidential_gas_used_in_tx;
-            // Apply staged changes first, then update gas accounting after borrow ends
-            state_transaction.apply();
-            if used > 0 {
-                self.gas_used_in_block = new_total;
-            }
-            self.account_confidential_work_v1(tx_ops, tx_verify_calls, tx_proof_bytes, tx_conf_gas);
-        } else {
-            drop(state_transaction);
-            self.account_confidential_work_v1(
-                rejected_confidential_work.0,
-                rejected_confidential_work.1,
-                rejected_confidential_work.2,
-                rejected_confidential_work.3,
-            );
-            let mut penalty_committed = true;
-            if !governance_penalties.is_empty() {
-                let penalty_result = signed_transaction.as_ref().map_or_else(
-                    || {
-                        Err(TransactionRejectionReason::Validation(
-                            ValidationFail::InternalError(
-                                "deferred governance ballot penalty has no signed transaction"
-                                    .to_owned(),
-                            ),
-                        ))
-                    },
-                    |signed| {
-                        self.apply_rejected_governance_ballot_penalties_v1(
-                            signed,
-                            governance_penalties,
-                            routing_decision,
-                            entrypoint_index,
-                        )
-                    },
-                );
-                if let Err(error) = penalty_result {
-                    result = Err(error);
-                    penalty_committed = false;
-                }
-            }
-            if penalty_committed
-                && rejected_transaction_gas_is_accountable(rejected_gas_used, &result)
-            {
-                self.gas_used_in_block = self.gas_used_in_block.saturating_add(rejected_gas_used);
-                if let Some(signed) = signed_transaction.as_ref()
-                    && rejected_live_execution_fee_eligible(signed.instructions(), &result)
-                {
-                    let authority = signed.authority().clone();
-                    let mut fee_tx = self.transaction();
-                    if let Some(routing) = routing_decision {
-                        fee_tx.current_lane_id = Some(routing.lane_id);
-                        fee_tx.current_dataspace_id = Some(routing.dataspace_id);
-                        fee_tx.world.current_dataspace_id = Some(routing.dataspace_id);
-                    }
-                    fee_tx.current_entrypoint_index = entrypoint_index;
-                    fee_tx.tx_call_hash =
-                        Some(iroha_crypto::Hash::from(signed.hash_as_entrypoint()));
-                    fee_tx.current_tx_hash = Some(signed.hash());
-                    let fee_result = crate::executor::charge_fees_for_rejected_live_batch(
-                        &mut fee_tx,
-                        &authority,
-                        signed,
-                        rejected_gas_used,
-                    )
-                    .map_err(TransactionRejectionReason::Validation);
-                    match &fee_result {
-                        Ok(()) => fee_tx.apply(),
-                        Err(_) => drop(fee_tx),
-                    }
-                    if let Err(error) = fee_result {
-                        result = Err(error);
-                    }
-                }
-            }
-        }
+        let result = self
+            .execute_component_network_source(tx, ivm_cache, entrypoint_index, routing_decision)
+            .map_err(|reason| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(reason))
+            })
+            .and_then(|result| result);
         (hash, result)
     }
     /// Execute admission, business logic and callbacks in the caller's overlay.
@@ -12961,7 +12823,31 @@ pub mod tests {
         assert_eq!(wrong_identities, vec![wrong.hash()]);
         let exact_identities =
             canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&exact));
+        let mut visited = Vec::new();
+        for_each_canonical_carrier_membership_hash(
+            &open_block,
+            core::slice::from_ref(&exact),
+            |hash| visited.push(hash),
+        );
+        assert_eq!(visited, exact_identities);
         assert_eq!(exact_identities.len(), 2);
+        let alias_bytes = std::alloc::Layout::array::<HashOf<TransactionEntrypoint>>(2)
+            .unwrap()
+            .size();
+        let alias_budget = mv::allocation::AllocationBudget::new(alias_bytes);
+        let mut paid_aliases = mv::allocation::ChargedBuffer::new(2, &alias_budget)
+            .expect("exact two-identity backing admits at its capacity boundary");
+        for_each_canonical_carrier_membership_hash(
+            &open_block,
+            core::slice::from_ref(&exact),
+            |hash| {
+                paid_aliases.append(std::slice::from_ref(&hash)).unwrap();
+            },
+        );
+        assert_eq!(paid_aliases.as_slice(), exact_identities);
+        assert_eq!(alias_budget.reserved_bytes(), alias_bytes);
+        drop(paid_aliases);
+        assert_eq!(alias_budget.reserved_bytes(), 0);
         assert!(exact_identities.contains(&exact.hash()));
         assert!(exact_identities.contains(&signed.hash_as_entrypoint()));
         drop(open_block);

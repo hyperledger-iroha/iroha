@@ -1223,6 +1223,12 @@ pub mod sorafs {
         pub const MAX_CAPACITY_BYTES: Bytes = Bytes(100 * 1024 * 1024 * 1024);
         /// Maximum concurrent fetch operations served by the gateway.
         pub const MAX_PARALLEL_FETCHES: usize = 32;
+        /// Shared private signer-journal inventory resident-credit ceiling (bytes).
+        pub const SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES: Bytes = Bytes(16 * 1024 * 1024);
+        /// Concurrent logical directory/metadata probe credits across every signer purpose.
+        pub const SIGNER_JOURNAL_INVENTORY_METADATA_PROBES: u64 = 300_000;
+        /// Concurrent pinned path, receipt and scan descriptors across every signer purpose.
+        pub const SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES: u32 = 1_024;
         /// Maximum number of manifests pinned before the node applies back-pressure.
         pub const MAX_PINS: usize = 10_000;
         /// Background Proof-of-Retrievability sampling cadence (seconds).
@@ -2346,8 +2352,9 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap.
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
+    /// Default per-IP pre-auth connection cap, including bounded query waiters.
+    /// A solo client's next heavy-query wave must reach the execution queue.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(256usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -2563,8 +2570,8 @@ pub mod torii {
     pub const APP_API_MAX_LIST_LIMIT: u32 = 500;
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub const APP_API_MAX_FETCH_SIZE: u32 = 500;
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    pub const APP_API_RATE_LIMIT_COST_PER_ROW: u32 = 1;
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub const APP_API_RATE_LIMIT_COST_PER_PAGE: u32 = 1;
     /// Canonical request freshness defaults for app-facing signed HTTP requests.
     pub mod app_auth {
         /// Maximum allowed clock skew for signed app requests (seconds).
@@ -2673,13 +2680,14 @@ pub mod torii {
     // The pre-auth gate charges every external HTTP request, including routine
     // deployment reads and writes. A solo walk with 128 proof reads, 58
     // mutations, 32 direct readbacks, four funding requests and seven outer MCP
-    // requests fits before refill without a 60s IP ban.
+    // requests fits before refill. Ordinary bursts recover with token refill;
+    // operators can explicitly configure a longer rate-violation cooldown.
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
     /// Burst tokens allowed for pre-authorization attempts per IP.
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
-    /// Time to ban IPs that exceed pre-auth rate limits.
-    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
+    pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
     pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
     /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
@@ -3332,6 +3340,60 @@ pub mod nexus {
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
+        /// Exact backing for one maximum-size committed-evidence prune-key plan.
+        pub const CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<iroha_crypto::Hash>();
+        /// Exact in-memory shape of one pending penalty metadata entry.
+        /// Each optional peer's compact bytes hold a separate original charge.
+        pub type ConsensusPenaltyPendingEntry = (
+            iroha_crypto::Hash,
+            u64,
+            Option<(
+                iroha_data_model::block::consensus::ValidatorIndex,
+                iroha_model_base::peer::PeerId,
+                mv::allocation::AllocationCharge,
+            )>,
+        );
+        /// Exact fixed backing for the maximum retained pending penalty plan.
+        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
+        /// Maximum compact peer-key bytes in one pending plan. Actual plans
+        /// reserve each present key's exact tag-plus-payload length instead.
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        /// Minimum pool able to retain one maximum prune plan and one pending plan.
+        pub const CONSENSUS_EVIDENCE_ONE_PLAN_BYTES: usize = CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES;
+        /// Simultaneously retained proposal, validation, application and replay plans.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS: usize = 8;
+        /// Finite pool for eight maximum prune/pending plans and cloned peer keys.
+        /// Stake indexes, proof snapshots and penalty scratch remain unfunded.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_BYTES: usize =
+            CONSENSUS_EVIDENCE_ONE_PLAN_BYTES * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS;
+        /// Minimum original-owner backing for one public-lane stake-share key,
+        /// one validator group, and three cloned Ed25519 account identifiers.
+        /// The Core group is a transparent wrapper around this exact tuple
+        /// layout. Larger keys/multisig controllers are measured against the
+        /// configured finite pool; Quantity owners remain separate obligations.
+        pub const CONSENSUS_STAKE_INDEX_MIN_BYTES: usize = core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            iroha_data_model::account::AccountId,
+        )>() + core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            core::ops::Range<usize>,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+        )>() + 3
+            * (1 + 32 + core::mem::size_of::<mv::allocation::AllocationCharge>());
+        /// Finite process-local pool for stake-index backings and nested account keys.
+        pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).

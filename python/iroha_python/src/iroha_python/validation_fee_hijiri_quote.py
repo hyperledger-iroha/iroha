@@ -14,7 +14,7 @@ VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE = "EVALUATED_PROJECTION_NOT_INDEPENDENTLY_
 VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES = 4 * 1024
 VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES = 64 * 1024
 VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS = 100_000
-VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION = 23
+VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION = 24
 
 _PROJECTION_FIELDS = frozenset(
     {
@@ -168,7 +168,7 @@ def _native_binding() -> Any:
         or not callable(getattr(native, "validation_fee_verify_hijiri_quote_response_v1", None))
     ):
         raise RuntimeError(
-            "iroha_native._crypto lacks the ABI 23 Hijiri validation-fee quote codec"
+            "iroha_native._crypto lacks the ABI 24 Hijiri validation-fee quote codec"
         )
     return native
 

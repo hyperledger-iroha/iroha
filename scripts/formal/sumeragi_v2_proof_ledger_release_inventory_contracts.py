@@ -1482,7 +1482,7 @@ def _production_liveness_release_inventory_errors(
             f"found {tuple(harness_sdk_diagnostics_suites)!r}"
         )
     for no_skip_fragment in (
-        '      assert_node_tap "$javascript_transcript" 45',
+        '      assert_node_tap "$javascript_transcript" 46',
         'if tuple(totals) != (expected, 0, 0, 0):',
         'any("skipped" in line.lower() for line in lines)',
         'f"expected one exact no-skip {expected}-test pytest transcript"',

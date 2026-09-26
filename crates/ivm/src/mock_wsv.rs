@@ -689,7 +689,7 @@ impl MockWorldStateView {
     pub fn finalize_election(
         &mut self,
         election_id: &str,
-        tally: Vec<u64>,
+        tally: Vec<u128>,
         proof: ProofAttachment,
     ) -> bool {
         if !self.validate_vote_proof(&proof) {
@@ -701,6 +701,10 @@ impl MockWorldStateView {
         if e.finalized
             || DMZk::validate_election_tally_v1(e.options, e.tally.len()).is_err()
             || DMZk::validate_election_tally_v1(e.options, tally.len()).is_err()
+            || tally
+                .iter()
+                .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+                .is_none()
         {
             return false;
         }
@@ -1513,7 +1517,7 @@ pub struct ElectionState {
     pub start_ts: u64,
     pub end_ts: u64,
     pub finalized: bool,
-    pub tally: Vec<u64>,
+    pub tally: Vec<u128>,
     pub ballot_nullifiers: HashSet<[u8; 32]>,
     pub ciphertexts: Vec<Vec<u8>>,
 }
@@ -3694,6 +3698,10 @@ impl IVMHost for WsvHost {
                 let (finalized, tally) = if let Some(e) = self.wsv.elections.get(&req.election_id) {
                     DMZk::validate_election_tally_v1(e.options, e.tally.len())
                         .map_err(|_| VMError::NoritoInvalid)?;
+                    e.tally
+                        .iter()
+                        .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+                        .ok_or(VMError::NoritoInvalid)?;
                     (e.finalized, e.tally.clone())
                 } else {
                     (false, Vec::new())
@@ -4931,13 +4939,14 @@ mod tests_governance_elections {
         let mut wsv = MockWorldStateView::new();
         register_vote_vk(&mut wsv);
         assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
+        let large_weight = u128::from(u64::MAX) + 1;
         let proof_ok = dummy_tally_proof([9u8; 32]);
-        assert!(wsv.finalize_election("e2", vec![5, 2, 1], proof_ok));
+        assert!(wsv.finalize_election("e2", vec![large_weight, 2, 1], proof_ok));
         // Second finalize should be rejected
         let proof_second = dummy_tally_proof([0xAA; 32]);
         assert!(!wsv.finalize_election("e2", vec![9, 9, 9], proof_second));
         let e = wsv.elections.get("e2").unwrap();
-        assert_eq!(e.tally, vec![5, 2, 1]);
+        assert_eq!(e.tally, vec![large_weight, 2, 1]);
         assert!(e.finalized);
     }
     #[test]
@@ -4955,6 +4964,12 @@ mod tests_governance_elections {
         // Wrong tally length -> reject even with valid proof
         let proof_bad_len = dummy_tally_proof([0x55; 32]);
         assert!(!wsv.finalize_election("e-invalid", vec![1, 2, 3], proof_bad_len));
+        assert!(!wsv.finalize_election(
+            "e-invalid",
+            vec![u128::MAX, 1],
+            dummy_tally_proof([0x56; 32]),
+        ));
+        assert!(!wsv.elections.get("e-invalid").unwrap().finalized);
         // Valid path succeeds
         let proof_ok = dummy_tally_proof([0x66; 32]);
         assert!(wsv.finalize_election("e-invalid", vec![10, 11], proof_ok));
@@ -5030,7 +5045,7 @@ mod tests_governance_elections {
             stored_over.tally.len(),
             DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1
         );
-        let final_tally: Vec<u64> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u64::from).collect();
+        let final_tally: Vec<u128> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u128::from).collect();
         assert!(wsv.finalize_election(
             "submitted",
             final_tally.clone(),
@@ -5809,12 +5824,19 @@ mod tests_null_decode {
         assert!(tally_gas <= tally_quote);
     }
     #[test]
-    fn vote_tally_query_rejects_zero_and_over_max_shapes_and_returns_exact_max() {
+    fn vote_tally_query_rejects_invalid_shape_or_total_and_returns_exact_max() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        for corrupt_len in [0, DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1] {
+        let mut overflowing = vec![0_u128; DMZk::MAX_ELECTION_OPTIONS_V1 as usize];
+        overflowing[0] = u128::MAX;
+        overflowing[1] = 1;
+        for corrupt_tally in [
+            Vec::new(),
+            vec![0; DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1],
+            overflowing,
+        ] {
             let mut wsv = MockWorldStateView::new();
             assert!(wsv.create_election(
                 "corrupt".to_owned(),
@@ -5823,7 +5845,7 @@ mod tests_null_decode {
                 0,
                 u64::MAX
             ));
-            wsv.elections.get_mut("corrupt").expect("election").tally = vec![0; corrupt_len];
+            wsv.elections.get_mut("corrupt").expect("election").tally = corrupt_tally;
             let host = WsvHost::new_with_subject(wsv, caller.clone());
             let mut vm = IVM::new(u64::MAX);
             vm.set_host(host);
@@ -5838,7 +5860,7 @@ mod tests_null_decode {
             assert_eq!(
                 call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
                 Err(VMError::NoritoInvalid),
-                "stored tally length {corrupt_len} must fail closed"
+                "invalid stored tally must fail closed"
             );
             assert_eq!(
                 vm.register(10),
@@ -5854,7 +5876,8 @@ mod tests_null_decode {
             0,
             u64::MAX
         ));
-        let expected: Vec<u64> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u64::from).collect();
+        let mut expected: Vec<u128> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u128::from).collect();
+        expected[0] = u128::from(u64::MAX) + 1;
         let election = wsv.elections.get_mut("max").expect("election");
         election.tally.clone_from(&expected);
         election.finalized = true;

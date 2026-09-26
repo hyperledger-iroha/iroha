@@ -55,8 +55,6 @@ pub struct ZkAssetState {
     pub nullifiers: std::collections::BTreeSet<[u8; 32]>,
     /// Required verifying key for unshield proofs (if configured).
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
-    /// Required shield-proof verifying key (if configured).
-    pub vk_shield: Option<ZkAssetVerifierBinding>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
 }
@@ -71,7 +69,6 @@ impl Default for ZkAssetState {
             root_history: Vec::new(),
             nullifiers: std::collections::BTreeSet::new(),
             vk_unshield: None,
-            vk_shield: None,
             frontier_checkpoints: Vec::new(),
         }
     }

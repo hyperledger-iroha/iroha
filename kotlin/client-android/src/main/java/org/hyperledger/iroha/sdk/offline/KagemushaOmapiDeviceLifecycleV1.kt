@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * OMAPI access rules authenticate the calling package/signing certificate for the selected AID.
  * Discovery still returns an available bridge only when that applet supplies the complete exact
- * ABI-23 capability frame. StrongBox or an eSE feature flag alone never enables the wallet.
+ * ABI-24 capability frame. StrongBox or an eSE feature flag alone never enables the wallet.
  */
 object KagemushaOmapiDeviceLifecycleV1 {
     /** Exact applet selection and optional reader pin. */

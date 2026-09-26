@@ -22,8 +22,11 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
     let marker: StatePath = "fastpq/unrelated-recorder-isolation".parse().unwrap();
     let transfer = delta();
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(source);
+        let mut tx = if with_transfer {
+            block.transaction_for_fastpq_testing(source)
+        } else {
+            block.transaction()
+        };
         tx.world
             .smart_contract_state
             .insert(marker.clone(), vec![1]);

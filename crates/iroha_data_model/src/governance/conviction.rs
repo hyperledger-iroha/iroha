@@ -53,7 +53,7 @@ pub struct PlainConvictionPolicyV1 {
     pub conviction_step_blocks: u64,
     /// Positive cap on the conviction multiplier.
     pub max_conviction: u64,
-    /// Numerator of the inclusive approval threshold, frozen before voting.
+    /// Positive numerator of the inclusive approval threshold, frozen before voting.
     pub approval_threshold_numerator: u64,
     /// Nonzero denominator of the inclusive approval threshold.
     pub approval_threshold_denominator: u64,
@@ -121,7 +121,7 @@ pub enum PlainVotingResultV1 {
 /// A frozen context or proposed conviction update is outside its exact integer domain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ConvictionErrorV1 {
-    /// Scale or conviction parameters are invalid.
+    /// Scale, conviction parameters, or approval threshold are invalid.
     #[error("invalid frozen conviction policy")]
     InvalidPolicy,
     /// The quantity has fractional units at the frozen asset scale.
@@ -131,10 +131,10 @@ pub enum ConvictionErrorV1 {
     #[error("conviction units or weight exceed u128")]
     Overflow,
     /// A replacement reduces its amount, requested duration or absolute expiry.
-    #[error("re-vote cannot reduce existing lock amount, duration or expiry")]
+    #[error("conviction update cannot reduce existing lock amount, duration or expiry")]
     ReducedLock,
     /// A replacement increases neither its bond nor its absolute expiry.
-    #[error("re-vote must increase the bond or extend its lock")]
+    #[error("conviction update must increase the bond or extend its lock")]
     UnchangedLock,
 }
 
@@ -142,12 +142,14 @@ impl PlainConvictionPolicyV1 {
     /// Check bounded parameters and the minimum's exact unit representation.
     ///
     /// # Errors
-    /// Rejects invalid scale, zero conviction parameters or an unrepresentable minimum.
+    /// Rejects invalid scale or conviction parameters, a zero approval threshold,
+    /// or an unrepresentable minimum.
     pub fn validate(&self) -> Result<(), ConvictionErrorV1> {
         if self.asset_scale > MAX_DECIMAL_SCALE
             || self.conviction_step_blocks == 0
             || self.max_conviction == 0
             || self.approval_threshold_denominator == 0
+            || self.approval_threshold_numerator == 0
             || self.approval_threshold_numerator > self.approval_threshold_denominator
         {
             return Err(ConvictionErrorV1::InvalidPolicy);
@@ -216,11 +218,34 @@ impl PlainConvictionPolicyV1 {
     pub fn weight(&self, amount: &Quantity, duration: u64) -> Result<u128, ConvictionErrorV1> {
         self.validate()?;
         let units = self.units(amount)?;
-        let base = integer_sqrt(units);
-        let factor = (u128::from(duration / self.conviction_step_blocks) + 1)
-            .min(u128::from(self.max_conviction));
-        base.checked_mul(factor).ok_or(ConvictionErrorV1::Overflow)
+        conviction_weight_from_units_v1(
+            units,
+            duration,
+            self.conviction_step_blocks,
+            self.max_conviction,
+        )
     }
+}
+
+/// Compute exact conviction weight from an asset's smallest units.
+///
+/// The caller must authenticate the election, asset scale, bond, ballot and proof separately.
+///
+/// # Errors
+/// Returns an invalid-policy error for a zero step or maximum, or an overflow error if the
+/// checked weight exceeds `u128`.
+pub fn conviction_weight_from_units_v1(
+    units: u128,
+    duration_blocks: u64,
+    step_blocks: u64,
+    max_conviction: u64,
+) -> Result<u128, ConvictionErrorV1> {
+    if step_blocks == 0 || max_conviction == 0 {
+        return Err(ConvictionErrorV1::InvalidPolicy);
+    }
+    let base = integer_sqrt(units);
+    let factor = (u128::from(duration_blocks / step_blocks) + 1).min(u128::from(max_conviction));
+    base.checked_mul(factor).ok_or(ConvictionErrorV1::Overflow)
 }
 
 /// Check the strict increase and nondecrease rules for an existing conviction position.

@@ -6,6 +6,7 @@ pub mod definition;
 pub mod id;
 pub mod instructions;
 pub mod policy;
+pub mod retail_daily_limit;
 pub mod transfer_control;
 pub mod value;
 pub use alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1};
@@ -14,6 +15,12 @@ pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
 pub use policy::{
     ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1, AssetSubjectBindingV1,
     DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY, DomainAssetUsagePolicyV1,
+};
+pub use retail_daily_limit::{
+    RETAIL_IDENTITY_ATTESTATION_DOMAIN_V1, RetailDailyActivationV1, RetailDailyLimitPolicyV1,
+    RetailDailyUsageKeyV1, RetailIdentityAttestationBodyV1, RetailIdentityAttestationV1,
+    RetailIdentityCommitmentV1, RetailInstitutionalExceptionV1, RetailMonetaryPurposeV1,
+    RetailMovementPurposeV1,
 };
 pub use transfer_control::{
     ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1, ASSET_TRANSFER_CONTROL_METADATA_KEY,

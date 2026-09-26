@@ -8970,7 +8970,7 @@ where
 /// The comparison streams the complete header, alignment padding, and payload directly over
 /// `expected`; it does not allocate a second frame-sized buffer. This preserves the ambient layout
 /// behavior of [`core::to_bytes`]. Callers that require the fixed canonical V1 layout should use
-/// [`decode_canonical_with_limits`] instead.
+/// [`verify_exact_canonical_frame`] instead.
 ///
 /// # Errors
 ///
@@ -8992,6 +8992,31 @@ where
     }
     Ok(())
 }
+/// Verify that `value` encodes to the supplied exact canonical V1 frame.
+///
+/// This streams the canonical header, padding and payload over `expected` without allocating a
+/// second frame and ignores ambient layout flags. It is useful when a caller already owns exact
+/// canonical bytes and must bind a borrowed value to those bytes before a side effect.
+///
+/// # Errors
+/// Returns [`Error::NonCanonicalEncoding`] on byte drift, overrun or a trailing suffix; returns
+/// the underlying serializer error when no mismatch was observed.
+pub fn verify_exact_canonical_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+{
+    let mut exact = core::ExactSliceWriter::new(expected);
+    let encode_result = core::write_canonical_to_writer(value, &mut exact);
+    if exact.mismatched() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    encode_result?;
+    if !exact.is_complete() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+    Ok(())
+}
+
 /// Decode one exact canonical V1 frame under default and schema-specific limits.
 ///
 /// Nested Norito limit scopes compose by taking the stricter value in every dimension, so the

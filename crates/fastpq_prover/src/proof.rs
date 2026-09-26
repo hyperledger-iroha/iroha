@@ -1157,6 +1157,7 @@ struct FriFinalVerification<'a> {
 }
 
 /// Fixed FRI geometry shared with the bounded compact verifier.
+#[cfg(test)]
 pub(crate) mod compact_fri_support {
     use super::*;
 

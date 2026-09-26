@@ -5,7 +5,199 @@ installed policy, or live acceptance receipt. BPNG retail activation must remain
 closed while the signed runtime advertises a `singleSignerDailyLimitKina` that
 the admitted ledger cannot enforce for every applicable payment.
 
-## Current native control
+## Current first-release source slice
+
+The candidate source adds an identity-wide retail DAY usage bucket and a one-shot
+native `ActivateRetailDailyLimitV1` instruction. Activation registers a currently
+absent dataspace-restricted definition and installs its exact policy atomically
+under the definition-domain owner's authority. An immutable activation marker
+binds the canonical policy digest and closes governed debits until the following
+UTC day. `BindRetailIdentityV1` accepts an exact issuer-signed account binding;
+it does not permit rebinding. Native account, definition, domain and rekey
+preflights retain the policy, identity and usage state. Five reserved consensus
+state roots are inaccessible to generic IVM state syscalls. No `WorldData` field
+or decoder migration is added.
+
+This is still **not release-qualified**. The target definition, asset owner,
+issuer key, cap, exception roster, signed BPNG allocation, finalized activation
+transaction and live direct-Torii evidence have not been supplied. A currently
+absent definition may have existed in an earlier incarnation; the owner release
+gate must review finalized history for that exact ID. The next-day marker closes
+the same-day accounting gap, but does not itself prove lifetime novelty.
+
+The owner-installed policy now selects exact monetary issuer and reserve
+accounts. `RetailMonetaryMovementV1` admits only issuer mint into the reserve,
+reserve-authorized credit to a bound retail account, retail-authorized defund
+to the reserve, and issuer burn from the reserve. Every operation carries a
+nonzero one-use digest retained in a fifth reserved consensus-state root.
+Generic mint, burn and transfers touching the monetary reserve stay closed.
+Activation and snapshot admission require an exact two-decimal PGK asset
+definition, matching the MiBank adapter's integer minor-unit scale.
+Retail defund consumes the same identity-wide DAY bucket; reserve credit
+requires a signed retail receiver binding. The activation-day debit hold also
+applies to reserve credit, retail defund and reserve burn. A nonempty generic
+institutional exception roster and SCCP inbound release remain closed.
+
+The one-use digest is only transaction linkage. It cannot authenticate a
+MiBank debit receipt, prove bank account settlement, or prove final Iroha
+execution. Core must verify and retain the exact signed MiBank receipt before
+signing/submitting reserve credit, and must authenticate the exact protocol-4
+transaction tuple and finalized execution before marking top-up applied or
+starting a bank defund credit. The current bank-credit verifier is source-only
+and has no independent production anchor or evidence custody. KAGEMUSHA
+top-up/redemption and other protocol custody need separate owner-approved
+typed treatment; their generic paths remain closed. No live top-up, defund,
+protocol-4 or physical-device acceptance follows from this source slice.
+
+## Finalized activation evidence boundary
+
+`verify_finalized_retail_activation_v1` verifies a Sumeragi-v2 `CommitQC`
+against an independently pinned target-height context, then binds the exact
+executed block wire, one direct owner-signed activation instruction, and its
+successful typed Network output. Callers must supply the owner-approved full
+policy, definition, domain, dataspace and entry hash independently. The
+verifier compares the complete policy, including the cap, reserve, monetary
+issuer, identity issuer and key. It derives the canonical policy digest and
+following UTC-day activation marker from the finalized block timestamp.
+The existing full executed-block wire route requires a canonical signed read
+and `CanReadAllLedgerData`; that broad grant cannot be inferred for BPNG Core.
+An authorized owner custody path or a separately reviewed selective carrier
+must supply the block without weakening the ledger privacy boundary.
+
+This is evidence of the historical activation event at that height. It does
+not authenticate a later read of the `retail_day_policy_v1` and
+`retail_day_activation_v1` state-map entries. `ContractStateMapV1` has a
+Core-local cold-capture path, but Core does not maintain and publish its
+accumulated root in a finalized consensus field, and Torii has no corresponding
+value-inclusion proof route. The Sumeragi-v2
+`post_state_root` is a block execution-witness root, not that accumulated
+map root. The existing ledger `state_proof` route returns a finalized block
+envelope without membership proofs for those entries. Production admission
+therefore remains closed until the current-state binding or an independently
+reviewed immutable-state theorem and proof chain is implemented and qualified.
+
+The data model now shares the exact physical policy and activation key
+constructors with native execution. Its
+`verify_retail_policy_activation_against_supplied_root_v1` checks both canonical
+values, their digest/next-day relation, exact physical keys and two Merkle map
+inclusions against **one caller-supplied accumulated root**. The API names the
+root as supplied because no current finalized accumulated root is published.
+Core can now cold-capture every current physical contract-state key/value from
+one generation-bound `StateView`, associate that local map with the same view's
+committed height and block hash, and generate only the exact retail policy and
+activation inclusion proofs. The capture rechecks both values against the
+independently expected policy. Its result remains private to Core and is
+explicitly a **local, unauthenticated root**; there is no Torii proof route and
+no restricted-dataspace disclosure on this source path.
+This check cannot authorize activation from its own output, from Torii's
+per-block execution-witness `post_state_root`, or from an operator-selected
+root. A qualified release still needs a consensus-committed accumulated root,
+an independently verified quorum attestation over the exact root and current
+finalized height, or the separately reviewed immutable-state proof path below.
+The future selective proof route must authenticate
+the exact caller and `CanReadRestrictedDataspace` for the installed physical
+dataspace before returning values; the local Core capture cannot stand in for
+that route or release admission.
+
+### Immutable-state proof path
+
+The source now checks policy and activation immutability at final World commit
+preparation. `retail_daily_limit_state::validate_immutable_policy_transition`
+visits the actual storage journal after deterministic DA and lifecycle writes.
+Every existing policy or activation entry must retain its exact bytes; removal
+and replacement fail before publication, including a self-consistent replacement
+policy and activation digest. A new entry must use its canonical physical key,
+match its exact counterpart, satisfy first-release policy validation, and have
+both counterpart keys absent in the actual predecessor. This check observes
+only touched entries and does not construct another accumulated root.
+
+The native mutation audit supporting this invariant is scoped as follows:
+
+| Mutation surface | Enforcement |
+| --- | --- |
+| `isi/retail_daily_limit.rs::ActivateRetailDailyLimitV1` | Sole native writer of policy and activation; checks owner through fresh definition registration, exact dataspace, and absence of all retained definition records; inserts the pair in one transaction. |
+| `isi/asset.rs`, `isi/domain.rs`, `isi/world.rs`, `isi/multisig.rs` | Definition/domain/account removal and account rekey preflights retain policy, identities, usage and governed balances. |
+| `ivm/host.rs` and `host/contract_state_namespace.rs` | All five retail roots are opaque to generic contract state reads, writes and enumeration; contract state is physically scoped. |
+| `state/world_commit.rs::PreparedWorldCommit::prepare_overlay` | Rechecks immutable policy/activation bytes against the actual predecessor journal after all late World writes and before State publication. |
+| `state/deserialize_world.rs` | Validates current snapshot pair shape, digest and references, plus the retained undo image used by replacement-block execution. Existing predecessor bytes must be identical and first insertion must be atomic. This validates internal consistency, without authenticating snapshot history. |
+
+These source checks support an induction over admitted successor transitions:
+given an authentic predecessor containing the finalized activation pair, every
+successor running this exact qualified implementation preserves that pair.
+The tests exercise fresh pairs, unchanged bytes, deletion, malformed/orphan
+additions, predecessor repair, and self-consistent replacement through the
+actual commit-preparation owner. They do not establish those induction premises
+for Taira or for a process restart.
+
+Focused source verification on 2026-09-25:
+`cargo iroha-fast --target-slot retail-fees -- test -p iroha_core --lib retail_policy_commit_`
+passed all three tests, including the coherent cap-and-digest replacement case.
+
+### Restart and retained-lineage boundary
+
+Snapshot admission also checks the retail policy and activation entries in the
+actual `smart_contract_state` undo journal. An existing predecessor entry must
+have exactly the current bytes; a new pair must have both keys absent in the
+predecessor. The read-only history borrow preserves the journal for replacement
+block execution. A coherent current cap-and-digest replacement, deleted pair,
+or repaired half-pair therefore cannot conceal an invalid predecessor in an
+otherwise well-shaped snapshot. This does not establish where the snapshot
+or its internally consistent predecessor originated.
+
+Focused source verification on 2026-09-25:
+`cargo iroha-fast --target-slot retail-fees -- test -p iroha_core --lib state::retail_daily_limit_state::tests`
+passed all three tests: coherent replacement/deletion rejection, atomic-birth
+and exact-history preservation, and current activation-marker validation.
+
+The existing snapshot/checkpoint machinery has these distinct guarantees:
+
+| Source path | Guarantee and remaining dependency |
+| --- | --- |
+| `snapshot.rs::try_read_snapshot_bundle` | The ordinary signed-bundle path verifies the configured snapshot signing key, exact payload digest, Merkle bytes, canonical WSV hash and signed fast manifest, with exact network and snapshot binding. This authenticates local snapshot custody under that separately trusted key; explicit audited-import authority is a separate path. |
+| `snapshot.rs::validate_snapshot_wsv_checkpoint` | Compares the canonical WSV hash to an available local checkpoint at the exact matching Kura tip. No checkpoint comparison is possible when that local checkpoint is absent; separately admitted snapshot-ahead/import paths have their own authority. |
+| `kura/prune_commit_merge_support.rs::CommitManifest::binds_authenticated_v2_commit_authority` | Checks the exact block, execution-witness roots, QC digest and artifact authority digest. The manifest also stores a WSV checkpoint hash, but that hash is not part of the quorum-signed execution commitment or the artifact authority seal. A locally coherent checkpoint and manifest do not add quorum authentication of accumulated WSV contents. |
+| `sumeragi/v2_recovery.rs::V2StartupReplayPlan::replay_complete_prefix` | Authenticated full-body replay starts after the restored state's committed height. It does not independently re-execute the snapshot's preceding activation history. |
+| `sumeragi/v2_recovery.rs::authenticate_v2_snapshot_replay_boundary` | Verifies the separately authenticated hash-only bootstrap lineage when one exists. The ordinary full-body path has no such bootstrap prefix; this function does not mint a retail snapshot proof for it. |
+| `kura/bound_progress_and_retained_support.rs::KuraRetainedBlockRecord` | Retains the block header, proposal and executed-wire hashes, merge reference and SCCP archive after body eviction. It does not retain the original retail activation input/output needed to verify the activation independently. |
+
+The execution-policy digest in
+`state.rs::execution_policy_digest_with_runtime_policies_v1` binds configured
+runtime policies; it does not hash retail state-map entries. The retained AMX
+context calculation in
+`sumeragi/v2_recovery.rs::nexus_amx_context_hash_with_runtime_policy` binds lane
+and validator/runtime authority, without independently binding this retail
+policy pair. Neither context check supplies the missing accumulated-state
+commitment.
+
+Complete deterministic replay from an independently trusted origin, with the
+original result-bearing activation block and every required successor body,
+can reconstruct the pair and check admitted execution commitments. A current
+restored snapshot skips that historical reconstruction. Retained header and
+hash lineage alone therefore cannot upgrade the historical activation receipt
+to an independently authenticated current policy after restart. An immutable
+proof path must additionally authenticate the exact restored pair and the
+qualified implementation's continuity over the activation-to-checkpoint
+interval; a local WSV root, local signing key or caller-supplied expectation
+does not establish those premises by itself.
+
+TODO: qualify the invariant against the exact immutable node release and bind a
+fresh finalized checkpoint to the verified activation's chain. Admission must
+authenticate release/runtime continuity over that interval and predecessor
+restoration; it cannot infer either from a finality certificate or from the
+local snapshot validator. A substituted snapshot could contain a different
+internally consistent policy pair, so snapshot validation alone does not close
+the proof. The current historical activation result stays historical and the
+local map root stays unauthenticated until that complete proof path is reviewed,
+implemented and independently admitted. No Core readiness gate opens here.
+
+The new first-release wire IDs are
+`iroha.asset.retail_day.activate.v1`,
+`iroha.asset.retail_day.identity.bind.v1`, and
+`iroha.asset.retail_day.monetary_movement.v1`. A source-matched qualified SDK
+or native owner CLI must encode and submit these before provisioning. Current
+application SDKs and admin helpers are not assumed to support them.
+
+## Earlier account-scoped native control
 
 `SetAssetTransferControl` installs a DAY cap for one `(AccountId,
 AssetDefinitionId)` pair. The executing asset path adds each outbound transfer

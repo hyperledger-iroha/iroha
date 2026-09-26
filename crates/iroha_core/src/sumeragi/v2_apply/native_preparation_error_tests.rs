@@ -98,6 +98,88 @@ mod native_preparation_errors {
     }
 
     #[test]
+    fn evidence_preparation_refusal_is_local_and_keeps_its_original_release() {
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
+        let pool = mv::allocation::AllocationBudget::new(1);
+        let occupied = pool.try_reserve_bytes(1).expect("hold original pool");
+        let refusal = pool.try_reserve_bytes(1).expect_err("same pool is full");
+        let error = BlockValidationError::EvidencePreparation(
+            crate::state::EvidencePreparationError::Admission(refusal),
+        );
+        let BlockValidationError::EvidencePreparation(preparation) = &error else {
+            unreachable!("fixture uses evidence preparation")
+        };
+        let expected = preparation
+            .release_wait()
+            .expect("capacity carries the original release")
+            .clone();
+        let classified = fixture
+            .service
+            .classify_validation_failure(None, &fixture.body, &error);
+        assert!(classified.rejection_identity().is_none());
+        let candidate_classified =
+            V2ApplyService::classify_candidate_validation_error(None, &fixture.body, &error);
+        assert!(matches!(
+            candidate_classified.local_refusal(),
+            Some(LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert!(candidate_classified.rejection_identity().is_none());
+        let Some(LocalValidationRefusal::PhysicalBusy(busy)) = classified.local_refusal() else {
+            panic!("evidence pool refusal must remain a local wait: {classified:?}");
+        };
+        assert_eq!(busy.resource, "consensus_penalty_preparation");
+        assert_eq!(busy.wait, expected);
+        drop(occupied);
+
+        let permanent = BlockValidationError::EvidencePreparation(
+            crate::state::EvidencePreparationError::Admission(
+                mv::allocation::AllocationRefusal::DemandOverflow,
+            ),
+        );
+        let classified =
+            fixture
+                .service
+                .classify_validation_failure(None, &fixture.body, &permanent);
+        assert!(matches!(
+            classified.local_refusal(),
+            Some(LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert!(classified.rejection_identity().is_none());
+    }
+
+    #[test]
+    fn evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection() {
+        let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
+        let error = BlockValidationError::EvidencePreparation(
+            crate::state::EvidencePreparationError::DecodeScope {
+                attempted_bytes: 33,
+                limit_bytes: 0,
+            },
+        );
+        let BlockValidationError::EvidencePreparation(preparation) = &error else {
+            unreachable!("fixture uses evidence preparation")
+        };
+        assert!(preparation.release_wait().is_none());
+        let classified = fixture
+            .service
+            .classify_validation_failure(None, &fixture.body, &error);
+        assert!(classified.rejection_identity().is_none());
+        assert!(classified.requires_restart_recovery());
+        assert!(matches!(
+            classified.local_refusal(),
+            Some(LocalValidationRefusal::RecoveryRequired(reason))
+                if reason.contains("attempted 33 bytes above 0 bytes")
+        ));
+        let candidate_classified =
+            V2ApplyService::classify_candidate_validation_error(None, &fixture.body, &error);
+        assert!(candidate_classified.rejection_identity().is_none());
+        assert!(matches!(
+            candidate_classified.local_refusal(),
+            Some(LocalValidationRefusal::RecoveryRequired(_))
+        ));
+    }
+
+    #[test]
     fn native_controls_preserve_local_storage_failure_and_semantic_rejection() {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         for native_control in [false, true] {

@@ -32,7 +32,7 @@ def test_uncompleted_owner_cannot_publish_or_replay(experiment_setup,action):
     assert not (owner._directories.evidence/'report.json').exists()
 
 
-@pytest.mark.parametrize('case', ['complete','late_corruption','replay_substitution'])
+@pytest.mark.parametrize('case', ['complete','late_corruption','late_report_corruption','replay_substitution'])
 def test_ten_original_trials_replay_and_derived_report(experiment_setup,monkeypatch,case):
     c=experiment_setup;state={'owner':None,'changed':False}
     def guard():
@@ -99,8 +99,9 @@ def test_ten_original_trials_replay_and_derived_report(experiment_setup,monkeypa
             raw=original(binding,max_bytes=max_bytes)
             if binding is report and not changed:
                 changed=True
-                journal=owner._runs[0].files.directory/'collector.jsonl'
-                fd=os.open(journal,os.O_WRONLY)
+                path=(owner._directories.evidence/'report.json' if case=='late_report_corruption'
+                      else owner._runs[0].files.directory/'collector.jsonl')
+                fd=os.open(path,os.O_WRONLY)
                 try:os.pwrite(fd,b'!',0)
                 finally:os.close(fd)
             return raw

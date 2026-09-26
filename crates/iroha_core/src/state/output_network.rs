@@ -120,7 +120,8 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 if context.has_current_version()
                     && HashOf::new(context) == expected
                     && context.native_lane_decisions.is_none()
-                    && context.merge_entry.is_none()
+                    && (context.merge_entry.is_none()
+                        || (count == 0 && self.state.merge_prefix_seal().is_some()))
                     && context.external.len() == count =>
             {
                 Some(context)
@@ -450,211 +451,259 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             .begin(ExecutionOutputV1::network_output_limit_rejection(
                 input_index,
             ))?;
-        let gas_before = self.state.gas_used_in_block;
-        let gas_limit = self.state.gas_limit_per_block;
-        let mut attempt = OutputTransaction::new(self.state);
-        let transaction = attempt
-            .transaction
-            .as_mut()
-            .ok_or("Network attempt is absent")?;
-        bind_source(transaction, input, input_index, routing);
-        let mut result = match admitted {
-            Ok(_) if quarantine == QuarantineAdmission::Overflow => {
-                Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted("quarantine overflow".into()),
-                ))
-            }
-            Ok(accepted) => StateBlock::execute_accepted_transaction_in_overlay(
-                accepted,
-                transaction,
-                cache,
-                Some(routing),
-            ),
-            Err(reason) => Err(reason),
-        };
-        require_source(transaction, input, input_index, routing)?;
-        transaction.require_completed_execution_effect_owner()?;
-        let effect_limit_rejection = transaction.execution_effect_limit_exceeded();
-        let mut work = CompletedOutputWork::capture(transaction);
-        let rejection_fee = transaction.take_execution_fee_settlement()?;
-        let penalties = transaction.take_deferred_governance_ballot_penalties_v1();
-        if result.is_ok() && !penalties.is_empty() {
-            return Err("successful Network attempt retains rejection-only penalties".into());
-        }
-        let block_gas_rejection = result.is_ok()
-            && !crate::gas::gas_components_fit_block_limit(gas_limit, [gas_before, work.gas]);
-        if block_gas_rejection {
-            let attempted = u128::from(gas_before) + u128::from(work.gas);
-            result = Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "block gas limit exceeded: {attempted} > {gas_limit}"
-                )),
-            ));
-        }
-        if let Err(reason) = result {
-            transaction
-                .callback_journal
-                .discard_rejected(Hash::from(input.execution_call_hash()))?;
-            drop(attempt);
-            // Confidential work survives every completed attempt. Actual gas/fee
-            // eligibility is decided from the real rejection, never its bounded row.
-            let used_gas = work.gas;
-            work.gas = 0;
-            work.account(self.state);
-            let mut result = Err(reason);
-            let mut penalty_committed = true;
-            if !penalties.is_empty() && signed_source(input).is_none() {
-                result = Err(TransactionRejectionReason::Validation(
-                    ValidationFail::InternalError(
-                        "deferred governance ballot penalty has no signed transaction".to_owned(),
-                    ),
-                ));
-                penalty_committed = false;
-            } else if !penalties.is_empty() {
-                let mut penalty = OutputTransaction::new(self.state);
-                let transaction = penalty
-                    .transaction
-                    .as_mut()
-                    .ok_or("penalty attempt is absent")?;
-                bind_source(transaction, input, input_index, routing);
-                let applied = StateBlock::stage_rejected_governance_ballot_penalties_v1(
-                    transaction,
-                    &penalties,
-                );
-                match applied {
-                    Ok(()) => {
-                        require_rejection_fragment(transaction, input, input_index, routing)?;
-                        penalty.apply();
-                    }
-                    Err(error) => {
-                        drop(penalty);
-                        result = Err(error);
-                        penalty_committed = false;
-                    }
-                }
-            }
-            if !block_gas_rejection && penalty_committed {
-                if rejected_transaction_gas_is_accountable(used_gas, &result) {
-                    self.state.gas_used_in_block =
-                        self.state.gas_used_in_block.saturating_add(used_gas);
-                }
-                let chargeable = !matches!(
-                    &result,
-                    Err(TransactionRejectionReason::Validation(
-                        ValidationFail::InternalError(_)
-                    ))
-                ) && !effect_limit_rejection;
-                if let Some(signed) = signed_source(input)
-                    && chargeable
-                    && let Some(basis) = rejection_fee
-                {
-                    let mut fee = OutputTransaction::new(self.state);
-                    let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
-                    bind_source(transaction, input, input_index, routing);
-                    let charged = match basis.settle(transaction, signed) {
-                        Ok(charged) => Ok(charged),
-                        Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
-                            return Err(error);
-                        }
-                        Err(crate::executor::ExecutionFeeSettlementError::Charge(error)) => {
-                            Err(TransactionRejectionReason::Validation(error))
-                        }
-                    };
-                    match charged {
-                        Ok(true) => {
-                            require_rejection_fragment(transaction, input, input_index, routing)?;
-                            fee.apply();
-                        }
-                        Ok(false) => drop(fee),
-                        Err(error) => {
-                            drop(fee);
-                            result = Err(error);
-                        }
-                    }
-                }
-            }
-            let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                input_index,
-                result: TransactionResult::new(result),
-                completions: Vec::new(),
-            });
-            actual.validate_structure(self.source.header().height().get(), &self.source)?;
-            let row = reservation.finish_network_rejection(actual)?;
-            self.rows[index] = row;
-            self.network_resolved[index] = true;
-            return Ok(disposition);
-        }
-        // The legacy returned DFS vector is not the capture owner. The actual
-        // journal also retains nested by-call steps omitted from that vector.
-        if transaction
-            .world
-            .external_event_buf
-            .iter()
-            .any(|event| matches!(event, EventBox::TriggerCompleted(_)))
-        {
-            return Err("Network completion bypassed its actual callback journal".into());
-        }
-        let call = Hash::from(input.execution_call_hash());
-        let mut receipts = core::mem::take(&mut transaction.pending_batch_transfer_outcomes);
-        let owned = receipts
-            .remove(&HashOf::from_untyped_unchecked(call))
-            .unwrap_or_default();
-        if !receipts.is_empty() {
-            return Err("Network receipts belong to another execution call".into());
-        }
-        let (actual, journal_overflow) = match transaction.callback_journal.take(call)? {
-            DrainedCallbacks::Complete { steps, completions } => {
-                let mut result = TransactionResult::new(Ok(steps));
-                result.set_batch_transfer_outcomes(owned);
-                (
-                    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                        input_index,
-                        result,
-                        completions,
-                    }),
-                    false,
-                )
-            }
-            DrainedCallbacks::OutputLimit => (
-                ExecutionOutputV1::network_output_limit_rejection(input_index),
-                true,
-            ),
-        };
-        actual.validate_structure(self.source.header().height().get(), &self.source)?;
-        let (row, apply) = match reservation.finish(actual)? {
-            ReservedExecutionOutput::Accepted(row) => (row, !journal_overflow),
-            ReservedExecutionOutput::OutputLimit(row) => (row, false),
-        };
-        if apply {
-            let transaction = attempt
-                .transaction
-                .as_mut()
-                .ok_or("Network attempt is absent")?;
-            transaction
-                .world
-                .external_event_buf
-                .try_reserve(row.completions().len())
-                .map_err(|_| "host cannot retain Network completions")?;
-            for completion in row.completions() {
-                transaction.world.external_event_buf.push(
-                    TriggerCompletedEvent::new(
-                        completion.trigger_id.clone(),
-                        HashOf::from_untyped_unchecked(call),
-                        completion.callback_index,
-                        completion.outcome.clone(),
-                    )
-                    .into(),
-                );
-            }
-            attempt.apply();
-        } else {
-            drop(attempt);
-        }
-        work.account(self.state);
+        let row = execute_network_attempt(
+            self.state,
+            &self.source,
+            input,
+            input_index,
+            u64::from(input_index),
+            self.source.header().height().get(),
+            routing,
+            admitted,
+            quarantine == QuarantineAdmission::Overflow,
+            reservation,
+            cache,
+        )?;
         self.rows[index] = row;
         self.network_resolved[index] = true;
         Ok(disposition)
     }
+}
+
+/// Execute one authenticated source under the shared State/witness/output owner.
+/// The caller owns the complete authenticated input projection and frozen route;
+/// this function never derives invocation authority from a supplied hash.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(in crate::state) fn execute_network_attempt(
+    state: &mut StateBlock<'_>,
+    inputs: &(impl iroha_data_model::block::execution_output::ExecutionInputs + ?Sized),
+    input: &TransactionEntrypoint,
+    input_index: u32,
+    execution_index: u64,
+    height: u64,
+    routing: RoutingDecision,
+    admitted: Result<AcceptedTransaction<'_>, TransactionRejectionReason>,
+    quarantine_overflow: bool,
+    reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
+    cache: &mut IvmCache,
+) -> Result<ExecutionOutputV1, String> {
+    if inputs.input_at(input_index as usize) != Some(input)
+        || state._curr_block.height().get() != height
+        || admitted
+            .as_ref()
+            .is_ok_and(|accepted| accepted.entrypoint() != input)
+    {
+        return Err("Network attempt differs from its exact authenticated projection".into());
+    }
+    state.retain_fastpq_source_invocation(Hash::from(input.execution_call_hash()))?;
+    let gas_before = state.gas_used_in_block;
+    let gas_limit = state.gas_limit_per_block;
+    let mut attempt = OutputTransaction::new(state);
+    let transaction = attempt
+        .transaction
+        .as_mut()
+        .ok_or("Network attempt is absent")?;
+    bind_source(transaction, input, execution_index, routing);
+    let mut result = match admitted {
+        Ok(_) if quarantine_overflow => Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("quarantine overflow".into()),
+        )),
+        Ok(accepted) => StateBlock::execute_accepted_transaction_in_overlay(
+            accepted,
+            transaction,
+            cache,
+            Some(routing),
+        ),
+        Err(reason) => Err(reason),
+    };
+    if transaction.fastpq_source_quota.intrinsic_rejected()? {
+        result = Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION.into(),
+            ),
+        ));
+    }
+    require_source(transaction, input, execution_index, routing)?;
+    transaction.require_completed_execution_effect_owner()?;
+    let effect_limit_rejection = transaction.execution_effect_limit_exceeded();
+    let mut work = CompletedOutputWork::capture(transaction);
+    let rejection_fee = transaction.take_execution_fee_settlement()?;
+    let penalties = transaction.take_deferred_governance_ballot_penalties_v1();
+    if result.is_ok() && !penalties.is_empty() {
+        return Err("successful Network attempt retains rejection-only penalties".into());
+    }
+    let block_gas_rejection = result.is_ok()
+        && !crate::gas::gas_components_fit_block_limit(gas_limit, [gas_before, work.gas]);
+    if block_gas_rejection {
+        let attempted = u128::from(gas_before) + u128::from(work.gas);
+        result = Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "block gas limit exceeded: {attempted} > {gas_limit}"
+            )),
+        ));
+    }
+    if let Err(reason) = result {
+        transaction
+            .callback_journal
+            .discard_rejected(Hash::from(input.execution_call_hash()))?;
+        drop(attempt);
+        // Confidential work survives every completed attempt. Actual gas/fee
+        // eligibility is decided from the real rejection, never its bounded row.
+        let used_gas = work.gas;
+        work.gas = 0;
+        work.account(state);
+        let mut result = Err(reason);
+        let mut penalty_committed = true;
+        if !penalties.is_empty() && signed_source(input).is_none() {
+            result = Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError(
+                    "deferred governance ballot penalty has no signed transaction".to_owned(),
+                ),
+            ));
+            penalty_committed = false;
+        } else if !penalties.is_empty() {
+            let mut penalty = OutputTransaction::new(state);
+            let transaction = penalty
+                .transaction
+                .as_mut()
+                .ok_or("penalty attempt is absent")?;
+            bind_source(transaction, input, execution_index, routing);
+            let applied =
+                StateBlock::stage_rejected_governance_ballot_penalties_v1(transaction, &penalties);
+            if transaction.fastpq_source_quota.intrinsic_rejected()? {
+                return Err("rejection penalty exceeded its admitted complete source tail".into());
+            }
+            match applied {
+                Ok(()) => {
+                    require_rejection_fragment(transaction, input, execution_index, routing)?;
+                    penalty.apply()?;
+                }
+                Err(error) => {
+                    drop(penalty);
+                    result = Err(error);
+                    penalty_committed = false;
+                }
+            }
+        }
+        if !block_gas_rejection && penalty_committed {
+            if rejected_transaction_gas_is_accountable(used_gas, &result) {
+                state.gas_used_in_block = state.gas_used_in_block.saturating_add(used_gas);
+            }
+            let chargeable = !matches!(
+                &result,
+                Err(TransactionRejectionReason::Validation(
+                    ValidationFail::InternalError(_)
+                ))
+            ) && !effect_limit_rejection;
+            if let Some(signed) = signed_source(input)
+                && chargeable
+                && let Some(basis) = rejection_fee
+            {
+                let mut fee = OutputTransaction::new(state);
+                let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
+                bind_source(transaction, input, execution_index, routing);
+                let charged = match basis.settle(transaction, signed) {
+                    Ok(charged) => Ok(charged),
+                    Err(crate::executor::ExecutionFeeSettlementError::Owner(error)) => {
+                        return Err(error);
+                    }
+                    Err(crate::executor::ExecutionFeeSettlementError::Charge(error)) => {
+                        Err(TransactionRejectionReason::Validation(error))
+                    }
+                };
+                if transaction.fastpq_source_quota.intrinsic_rejected()? {
+                    return Err("rejection fee exceeded its admitted complete source tail".into());
+                }
+                match charged {
+                    Ok(true) => {
+                        require_rejection_fragment(transaction, input, execution_index, routing)?;
+                        fee.apply()?;
+                    }
+                    Ok(false) => drop(fee),
+                    Err(error) => {
+                        drop(fee);
+                        result = Err(error);
+                    }
+                }
+            }
+        }
+        let actual = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index,
+            result: TransactionResult::new(result),
+            completions: Vec::new(),
+        });
+        actual.validate_structure(height, inputs)?;
+        let row = reservation.finish_network_rejection(actual)?;
+        return Ok(row);
+    }
+    // The legacy returned DFS vector is not the capture owner. The actual
+    // journal also retains nested by-call steps omitted from that vector.
+    if transaction
+        .world
+        .external_event_buf
+        .iter()
+        .any(|event| matches!(event, EventBox::TriggerCompleted(_)))
+    {
+        return Err("Network completion bypassed its actual callback journal".into());
+    }
+    let call = Hash::from(input.execution_call_hash());
+    let mut receipts = core::mem::take(&mut transaction.pending_batch_transfer_outcomes);
+    let owned = receipts
+        .remove(&HashOf::from_untyped_unchecked(call))
+        .unwrap_or_default();
+    if !receipts.is_empty() {
+        return Err("Network receipts belong to another execution call".into());
+    }
+    let (actual, journal_overflow) = match transaction.callback_journal.take(call)? {
+        DrainedCallbacks::Complete { steps, completions } => {
+            let mut result = TransactionResult::new(Ok(steps));
+            result.set_batch_transfer_outcomes(owned);
+            (
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index,
+                    result,
+                    completions,
+                }),
+                false,
+            )
+        }
+        DrainedCallbacks::OutputLimit => (
+            ExecutionOutputV1::network_output_limit_rejection(input_index),
+            true,
+        ),
+    };
+    actual.validate_structure(height, inputs)?;
+    let (row, apply) = match reservation.finish(actual)? {
+        ReservedExecutionOutput::Accepted(row) => (row, !journal_overflow),
+        ReservedExecutionOutput::OutputLimit(row) => (row, false),
+    };
+    if apply {
+        let transaction = attempt
+            .transaction
+            .as_mut()
+            .ok_or("Network attempt is absent")?;
+        transaction
+            .world
+            .external_event_buf
+            .try_reserve(row.completions().len())
+            .map_err(|_| "host cannot retain Network completions")?;
+        for completion in row.completions() {
+            transaction.world.external_event_buf.push(
+                TriggerCompletedEvent::new(
+                    completion.trigger_id.clone(),
+                    HashOf::from_untyped_unchecked(call),
+                    completion.callback_index,
+                    completion.outcome.clone(),
+                )
+                .into(),
+            );
+        }
+        attempt.apply()?;
+    } else {
+        drop(attempt);
+    }
+    work.account(state);
+    Ok(row)
 }
 
 fn signed_source(
@@ -670,10 +719,11 @@ fn signed_source(
 fn bind_source(
     transaction: &mut StateTransaction<'_, '_>,
     input: &TransactionEntrypoint,
-    index: u32,
+    index: u64,
     route: RoutingDecision,
 ) {
-    transaction.current_entrypoint_index = Some(u64::from(index));
+    transaction.current_entrypoint_index = Some(index);
+    transaction.current_network_entrypoint_hash = Some(input.hash());
     transaction.tx_call_hash = Some(Hash::from(input.execution_call_hash()));
     transaction.current_tx_hash = signed_source(input).map(|signed| signed.hash());
     transaction.current_lane_id = Some(route.lane_id);
@@ -684,10 +734,11 @@ fn bind_source(
 fn require_source(
     transaction: &StateTransaction<'_, '_>,
     input: &TransactionEntrypoint,
-    index: u32,
+    index: u64,
     route: RoutingDecision,
 ) -> Result<(), String> {
-    if transaction.current_entrypoint_index != Some(u64::from(index))
+    if transaction.current_entrypoint_index != Some(index)
+        || transaction.current_network_entrypoint_hash != Some(input.hash())
         || transaction.tx_call_hash != Some(Hash::from(input.execution_call_hash()))
         || transaction.current_tx_hash != signed_source(input).map(|signed| signed.hash())
         || transaction.current_lane_id != Some(route.lane_id)
@@ -702,7 +753,7 @@ fn require_source(
 fn require_rejection_fragment(
     transaction: &StateTransaction<'_, '_>,
     input: &TransactionEntrypoint,
-    index: u32,
+    index: u64,
     route: RoutingDecision,
 ) -> Result<(), String> {
     require_source(transaction, input, index, route)?;
@@ -717,4 +768,167 @@ fn require_rejection_fragment(
         return Err("rejection settlement retained rejected business capture".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod source_binding_tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        block::BlockHeader,
+        isi::Log,
+        transaction::{
+            FeePaymentIntent, TransactionBuilder,
+            signed::{SealedTransactionReveal, compute_sealed_transaction_commitment},
+        },
+    };
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn binding_keeps_outer_reveal_identity_distinct_from_inner_call() {
+        let key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519).unwrap();
+        let authority = AccountId::new(key.public_key().clone());
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            FeePaymentIntent::authority(vec![], None),
+        )
+        .with_instructions([Log::new(
+            iroha_data_model::Level::INFO,
+            "source identity".to_owned(),
+        )])
+        .sign(key.private_key());
+        let external = TransactionEntrypoint::External(signed.clone());
+        let salt = [0x92; 32];
+        let commitment = compute_sealed_transaction_commitment(&state.network_id, &signed, salt, 9);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment, signed, salt,
+        ));
+        assert_ne!(
+            Hash::from(reveal.hash()),
+            Hash::from(reveal.execution_call_hash())
+        );
+
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            1,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        let route = RoutingDecision::default();
+        bind_source(&mut transaction, &external, 0, route);
+        assert_eq!(
+            transaction.current_network_entrypoint_hash,
+            Some(external.hash())
+        );
+        require_source(&transaction, &external, 0, route).unwrap();
+        transaction.current_network_entrypoint_hash = None;
+        assert!(require_source(&transaction, &external, 0, route).is_err());
+
+        bind_source(&mut transaction, &reveal, 1, route);
+        assert_eq!(
+            transaction.current_network_entrypoint_hash,
+            Some(reveal.hash())
+        );
+        assert_eq!(
+            transaction.tx_call_hash,
+            Some(Hash::from(reveal.execution_call_hash()))
+        );
+        require_source(&transaction, &reveal, 1, route).unwrap();
+    }
+}
+
+/// Component-only wrapper around the sole production attempt implementation.
+/// Immutable accepted input owns this fixture invocation; no signed carrier,
+/// complete phase archive, finality, or publication authorization is fabricated.
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+impl StateBlock<'_> {
+    pub(crate) fn execute_component_network_source(
+        &mut self,
+        accepted: AcceptedTransaction<'_>,
+        cache: &mut IvmCache,
+        execution_index: Option<u64>,
+        routing: Option<RoutingDecision>,
+    ) -> Result<iroha_data_model::transaction::TransactionResultInner, String> {
+        struct ComponentOwner<'a, 'state> {
+            state: &'a mut StateBlock<'state>,
+            finished: bool,
+        }
+        impl Drop for ComponentOwner<'_, '_> {
+            fn drop(&mut self) {
+                if !self.finished {
+                    self.state.execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+                }
+            }
+        }
+        if self.execution_output_plan.is_some() || self.merge_execution_prefix.is_some() {
+            return Err("component invocation cannot replace a carrier owner".into());
+        }
+        let input = accepted.entrypoint().clone();
+        let routing = match routing {
+            Some(route) => route,
+            None => evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                &self.nexus,
+                &accepted,
+                &self.world,
+                u64::try_from(self._curr_block.creation_time().as_millis())
+                    .map_err(|_| "component timestamp exceeds u64")?,
+                self._curr_block.height().get(),
+            )
+            .map_err(|error| error.to_string())?
+            .coordinator_route(),
+        };
+        let (_, output) = self.fastpq_source_policy_at_block_start();
+        let phases =
+            iroha_data_model::block::output_budget::ExecutionOutputTerminalCeilings::derive()?
+                .envelope(0, 0)
+                .reservations(1, &output.limits())?;
+        let mut budget = ExecutionOutputBudget::new(output.limits(), phases)?;
+        self.execution_output_plan = Some(ExecutionOutputPlanState::Running);
+        let mut owner = ComponentOwner {
+            state: self,
+            finished: false,
+        };
+        let height = owner.state._curr_block.height().get();
+        let reservation = budget.begin(ExecutionOutputV1::network_output_limit_rejection(0))?;
+        let row = execute_network_attempt(
+            owner.state,
+            std::slice::from_ref(&input),
+            &input,
+            0,
+            execution_index.unwrap_or(0),
+            height,
+            routing,
+            Ok(accepted),
+            false,
+            reservation,
+            cache,
+        )?;
+        budget.finish()?;
+        let ExecutionOutputV1::Network(row) = row else {
+            return Err("component invocation produced a non-Network row".into());
+        };
+        if !row.result.batch_transfer_outcomes().is_empty() {
+            owner.state.batch_transfer_outcomes.insert(
+                HashOf::from_untyped_unchecked(Hash::from(input.execution_call_hash())),
+                row.result.batch_transfer_outcomes().to_vec(),
+            );
+        }
+        owner.state.execution_output_plan = None;
+        owner.finished = true;
+        Ok(row.result.0)
+    }
 }

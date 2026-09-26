@@ -25,54 +25,15 @@ def test_unapproved_runner_environment_is_rejected(release_fixture: Fixture) -> 
     _assert_never_launched(release_fixture, result)
 
 
-def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
-    release_fixture: Fixture,
+@pytest.mark.parametrize("name", SCALING_TRUST_ENV)
+def test_retired_scaling_runner_environment_is_rejected(
+    release_fixture: Fixture, name: str,
 ) -> None:
-    scaling_manifest = (
-        release_fixture.retained_root
-        / "output"
-        / "scaling"
-        / "scaling_evidence.json"
+    result = release_fixture.run(
+        [*release_fixture.arguments(), "--runner-environment", f"{name}=retired"]
     )
-    observed_environment = release_fixture.root / "observed-scaling-environment"
-    release_fixture.install_planned_runner(
-        _runner(
-            release_fixture.launch_count,
-            release_fixture.candidate,
-            "success",
-            observed_scaling_environment=observed_environment,
-        ),
-    )
-
-    scaling_environment = {
-        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
-        SCALING_EVIDENCE_ENV: str(scaling_manifest),
-        "IROHA_RELEASE_SCALING_IROHAD_SHA256": "b" * 64,
-        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": "c" * 64,
-        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": "d" * 64,
-    }
-    arguments = [*release_fixture.arguments()]
-    for name in SCALING_TRUST_ENV:
-        arguments = _replace_runner_environment(
-            arguments, name, scaling_environment[name]
-        )
-    arguments = _replace_flag(arguments, "--command-timeout-seconds", "20")
-    result = release_fixture.run(arguments)
-
-    assert result.returncode == 0, result.stderr
-    assert dict(
-        line.split("=", 1)
-        for line in observed_environment.read_text(encoding="utf-8").splitlines()
-    ) == scaling_environment
-    marker = json.loads(
-        (release_fixture.evidence / "BOOTSTRAP_COMPLETED.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert "environment_without_self_digest" not in marker["runner"]
-    assert re.fullmatch(
-        r"[0-9a-f]{64}", marker["runner"]["environment_sha256"]
-    )
+    _assert_never_launched(release_fixture, result)
+    assert "explicitly allowed NAME=VALUE" in result.stderr
 
 
 @pytest.mark.parametrize(

@@ -440,8 +440,8 @@ case "$surface" in
       run_and_capture "$javascript_transcript" \
         env IROHA_JS_SUMERAGI_DIAGNOSTICS_TORII_CLIENT="$javascript_client" \
         node --test --test-reporter=tap "$javascript_test"
-      assert_node_tap "$javascript_transcript" 45
-      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=45 skipped=0\n' \
+      assert_node_tap "$javascript_transcript" 46
+      printf 'sumeragi-v2-sdk-diagnostics-run surface=javascript variant=%s tests=46 skipped=0\n' \
         "$javascript_variant"
     done
     ;;

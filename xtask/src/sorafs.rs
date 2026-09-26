@@ -3021,6 +3021,8 @@ fn checked_ed25519_public_key_array(
         .into()
     })
 }
+// Synthetic fixture identity only; production admissions use an explicit genesis hash.
+const PROVIDER_ADMISSION_FIXTURE_NETWORK_ID: [u8; 32] = [0xA1; 32];
 const PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS: [&str; 2] = [
     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
     "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
@@ -3217,6 +3219,7 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let expires_at = issued_at + 3_600;
     let mut advert = ProviderAdvertV1 {
         version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
+        network_id: PROVIDER_ADMISSION_FIXTURE_NETWORK_ID,
         issued_at,
         expires_at,
         body: advert_body.clone(),
@@ -3249,6 +3252,12 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let retention_epoch = issued_at + 86_400 * 90;
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+        network_id: PROVIDER_ADMISSION_FIXTURE_NETWORK_ID,
+        policy_id: [0xC1; 32],
+        policy_revision: 1,
+        policy_digest: [0xD1; 32],
+        admission_revision: 1,
+        expected_current_event_digest: None,
         proposal: proposal.clone(),
         proposal_digest,
         advert_body: advert_body.clone(),
@@ -3573,6 +3582,26 @@ fn build_envelope_summary(
 ) -> Map {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(envelope.version as u64));
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(hex_lower(&envelope.network_id)),
+    );
+    map.insert(
+        "policy_id_hex".into(),
+        Value::from(hex_lower(&envelope.policy_id)),
+    );
+    map.insert(
+        "policy_revision".into(),
+        Value::from(envelope.policy_revision),
+    );
+    map.insert(
+        "policy_digest_hex".into(),
+        Value::from(hex_lower(&envelope.policy_digest)),
+    );
+    map.insert(
+        "admission_revision".into(),
+        Value::from(envelope.admission_revision),
+    );
     map.insert("issued_at".into(), Value::from(envelope.issued_at));
     map.insert(
         "retention_epoch".into(),

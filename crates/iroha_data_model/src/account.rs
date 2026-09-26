@@ -519,6 +519,29 @@ impl AccountId {
     pub fn controller(&self) -> &AccountController {
         &self.controller
     }
+    /// Visit each exact nested allocation made when this identifier is copied
+    /// into an admitted retained owner, without allocating during the visit.
+    ///
+    /// # Errors
+    /// Rejects malformed stored controller material or layout overflow.
+    pub fn for_each_admission_clone_layout(
+        &self,
+        visit: impl FnMut(std::alloc::Layout),
+    ) -> Result<(), norito::core::Error> {
+        self.controller.for_each_admission_clone_layout(visit)
+    }
+    /// Fallibly clone this identifier for an independently prepaid owner.
+    ///
+    /// The caller must retain the exact nested layout charges reported by
+    /// [`Self::for_each_admission_clone_layout`] until this clone is dropped.
+    ///
+    /// # Errors
+    /// Rejects malformed stored controller material or a resource refusal.
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::core::Error> {
+        Ok(Self {
+            controller: self.controller.try_clone_for_admission()?,
+        })
+    }
     /// Borrow this account identifier.
     #[inline]
     #[must_use]
@@ -1196,6 +1219,40 @@ mod tests {
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked account fixture keypair")
+    }
+    #[test]
+    fn admission_clone_layouts_match_single_and_multisig_retained_owners() {
+        use std::alloc::Layout;
+
+        let first = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let second = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
+        let single = AccountId::new(first.public_key().clone());
+        let mut layouts = Vec::new();
+        single
+            .for_each_admission_clone_layout(|layout| layouts.push(layout))
+            .unwrap();
+        assert_eq!(layouts, [Layout::array::<u8>(33).unwrap()]);
+        assert_eq!(single.try_clone_for_admission().unwrap(), single);
+
+        let multisig = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(first.public_key().clone(), 1).unwrap(),
+                    MultisigMember::new(second.public_key().clone(), 1).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        layouts.clear();
+        multisig
+            .for_each_admission_clone_layout(|layout| layouts.push(layout))
+            .unwrap();
+        assert_eq!(layouts.len(), 3);
+        assert_eq!(layouts[0], Layout::array::<MultisigMember>(2).unwrap());
+        assert_eq!(layouts[1], Layout::array::<u8>(33).unwrap());
+        assert_eq!(layouts[2], Layout::array::<u8>(33).unwrap());
+        assert_eq!(multisig.try_clone_for_admission().unwrap(), multisig);
     }
     #[test]
     fn parse_account_id() {

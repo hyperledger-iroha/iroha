@@ -1338,6 +1338,39 @@ def test_aggregate_preflight_rejects_untrusted_resilience_attachment(
     assert expected in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("readiness_lane_count_delta", False),
+        ("readiness_lane_count_delta", 0.0),
+        ("recognized_requirement_count", 19.0),
+        ("earliest_capture_unix", float(GENERATED_AT - 1)),
+        ("latest_capture_unix", float(GENERATED_AT - 1)),
+    ],
+)
+def test_resilience_summary_rejects_numeric_type_aliases(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    """Signed receipt reconstruction must not accept altered summary field types."""
+
+    summary = copy.deepcopy(RESILIENCE_QUALIFICATION_SUMMARY)
+    summary[field] = replacement
+    path = tmp_path / "l1-resilience-qualification.summary"
+    path.write_bytes(render_resilience_summary(summary))
+    _, errors = MODULE.load_resilience_qualification_binding(
+        path,
+        expected_deployment_id=DEPLOYMENT_ID,
+        expected_environment=ENVIRONMENT,
+        expected_topology_qualification=TOPOLOGY_QUALIFICATION,
+        now_unix=NOW_UNIX,
+        max_age_secs=MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        trusted_public_key=RESILIENCE_SIGNER_PUBLIC_KEY,
+    )
+    assert any(field in error for error in errors)
+
+
 def run_foundational_case(
     root: Path,
     payload: dict,

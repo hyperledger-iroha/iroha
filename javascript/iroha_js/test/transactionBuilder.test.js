@@ -3325,6 +3325,96 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
   assert.equal(captures[0].CastPlainBallot.direction, 0);
 });
 
+test("buildUpdatePlainConvictionTransaction signs one choice-free update", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x12]),
+    hash: Buffer.alloc(32, 0x12),
+  };
+  withTransactionApi(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push(JSON.parse(instructions[0]));
+        return fakeResult;
+      },
+    },
+    (transaction) =>
+      transaction.buildUpdatePlainConvictionTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        update: {
+          referendumId: "ref-2",
+          owner: AUTHORITY_ID_INPUT,
+          amount: "10",
+          durationBlocks: 5,
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  assert.deepEqual(Object.keys(captures[0].UpdatePlainConviction), [
+    "referendum_id", "owner", "amount", "duration_blocks",
+  ]);
+  assert.equal(captures[0].UpdatePlainConviction.amount, "10");
+});
+
+test("public ballot transaction and batch serializers retain raw max-u64 duration tokens", () => {
+  const maximum = 0xffff_ffff_ffff_ffffn;
+  const captures = [];
+  const result = { signed_transaction: Buffer.from([0x12]), hash: Buffer.alloc(32, 0x12) };
+  withTransactionApi({
+    buildTransaction: (_network, _authority, instructions) => {
+      captures.push(instructions[0]);
+      return result;
+    },
+    buildExecutableBatchTransaction: (_network, _authority, entries) => {
+      captures.push(entries[0]);
+      return result;
+    },
+  }, (transaction) => {
+    const shared = {
+      networkId: NETWORK_ID,
+      authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
+      privateKey: PRIVATE_KEY,
+    };
+    const cast = {
+      referendumId: "ref-max-cast",
+      owner: AUTHORITY_ID_INPUT,
+      amount: "10",
+      durationBlocks: maximum,
+      direction: "aye",
+    };
+    const update = {
+      referendumId: "ref-max-update",
+      owner: AUTHORITY_ID_INPUT,
+      amount: "10",
+      durationBlocks: maximum.toString(10),
+    };
+    transaction.buildCastPlainBallotTransaction({ ...shared, ballot: cast });
+    transaction.buildUpdatePlainConvictionTransaction({ ...shared, update });
+    transaction.buildExecutableBatchTransaction({
+      ...shared,
+      entries: [{ kind: "instruction", instruction: {
+        UpdatePlainConviction: {
+          referendum_id: update.referendumId,
+          owner: AUTHORITY_ID_INPUT,
+          amount: update.amount,
+          duration_blocks: maximum,
+        },
+      } }],
+    });
+  });
+  assert.equal(captures.length, 3);
+  for (const serialized of captures) {
+    assert.match(serialized, /"duration_blocks":18446744073709551615/u);
+    assert.doesNotMatch(serialized, /"duration_blocks":"18446744073709551615"/u);
+  }
+  assert.match(captures[0], /^\{"CastPlainBallot":/u);
+  assert.match(captures[1], /^\{"UpdatePlainConviction":/u);
+  assert.match(captures[2], /^\{"kind":"instruction","instruction":\{"UpdatePlainConviction":/u);
+});
+
 test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () => {
   const captures = [];
   const fakeResult = {

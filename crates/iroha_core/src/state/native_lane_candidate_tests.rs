@@ -251,7 +251,8 @@ state_test! { sync native_candidate_uses_exact_decisions_and_canonical_recorded_
         let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(&block, &[]).unwrap()
         else { panic!("actual candidate rejoins original certified input"); };
         let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
-        let recorded = source.record_execution(block, context).unwrap().unwrap();
+        drop(block);
+        let recorded = source.record_execution(context).unwrap().unwrap();
         assert!(recorded.prepared_for_test().executions()[0].result.is_ok());
         recorded.prepared_for_test().overlay().verify_execution_output_seal(recorded.carrier()).unwrap();
         drop(recorded);
@@ -367,7 +368,7 @@ state_test! { sync native_candidate_controls_fit_without_displacing_or_duplicati
     let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(complete.block(), &[]).unwrap()
     else { panic!("complete source with admission control"); };
     let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
-    let recorded = source.record_execution(complete.block().clone(), context).unwrap().unwrap();
+    let recorded = source.record_execution(context).unwrap().unwrap();
     assert!(recorded.prepared_for_test().executions()[0].result.is_ok());
     drop(recorded);
     drop(complete);

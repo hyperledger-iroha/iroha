@@ -212,6 +212,8 @@ public final class ExplicitChainContextTests {
         "nativeEncodeRegisterZkAssetSignedTransaction",
         1,
         byte[].class);
+    assertMethodHasParameterCount(
+        NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 12);
     assertEquals(NetworkId.BYTE_LENGTH, TestNetworkIds.canonical().bytes().length);
   }
 
@@ -240,7 +242,7 @@ public final class ExplicitChainContextTests {
                 feePayment));
 
     if (!NativeSignerBridge.isNativeAvailable()) {
-      throw new AssertionError("connect_norito_bridge ABI 23 is required");
+      throw new AssertionError("connect_norito_bridge ABI 24 is required");
     }
     final NativeSignerBridge.KeypairBytes keypair =
         NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));

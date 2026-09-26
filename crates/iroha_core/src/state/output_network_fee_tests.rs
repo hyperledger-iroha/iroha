@@ -349,6 +349,9 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
             block.pipeline.cache_size,
             block.pipeline_ivm_prepared_cache.clone(),
         );
+        // This component test exercises the actual fee owner after explicit E
+        // admission. The complete Network producer is covered by sibling tests.
+        block.admit_fastpq_source_for_testing(Hash::from(entry.execution_call_hash()));
         let mut failed = block.transaction();
         bind_fee_context(&mut failed, signed);
         assert!(

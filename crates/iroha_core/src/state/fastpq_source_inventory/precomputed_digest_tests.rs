@@ -75,7 +75,7 @@ fn invalid_supplied_digest_is_preserved_and_failure_latches_before_publication()
     assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
     assert_eq!(
         block.verified_fastpq_source_inventory_for_capture(),
-        Err(error.clone())
+        Err("FASTPQ witness capture refuses a poisoned carrier".into())
     );
     assert!(block.exec_witness.is_none());
     assert!(block.fastpq_witness_context.is_none());
@@ -90,7 +90,11 @@ fn invalid_supplied_digest_is_preserved_and_failure_latches_before_publication()
             .contains("already been finalized")
     );
     assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
-    assert_eq!(block.capture_exec_witness(), Err(error));
+    assert_eq!(
+        block.capture_exec_witness(),
+        Err("FASTPQ witness capture refuses a poisoned carrier".into())
+    );
+    assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
 }
 
 #[test]
@@ -103,22 +107,25 @@ fn supplied_valid_and_missing_digests_seal_while_multi_delta_none_stays_unchange
     let supplied_hash = Hash::new(b"valid supplied digest");
     let missing_hash = Hash::new(b"missing digest finalized after validation");
     let multi_hash = Hash::new(b"multi delta none policy unchanged");
-    for hash in [supplied_hash, missing_hash, multi_hash] {
+    for hash in [supplied_hash, missing_hash] {
         apply_source(&mut block, hash, false, None);
     }
     let supplied = precomputed_transcript(supplied_hash).poseidon_preimage_digest;
     block.fastpq_transcripts.get_mut(&supplied_hash).unwrap()[0].poseidon_preimage_digest =
         supplied;
     block.fastpq_transcripts.get_mut(&missing_hash).unwrap()[0].poseidon_preimage_digest = None;
-    let multi = &mut block.fastpq_transcripts.get_mut(&multi_hash).unwrap()[0];
     let mut second = delta();
     second.from_balance_before = Quantity::from(9_u32);
     second.from_balance_after = Quantity::from(8_u32);
     second.to_balance_before = Quantity::from(1_u32);
     second.to_balance_after = Quantity::from(2_u32);
-    multi.deltas.push(second);
-    multi.poseidon_preimage_digest = None;
-    let multi_before = multi.clone();
+    {
+        let mut tx = block.transaction_for_fastpq_testing(multi_hash);
+        tx.record_test_transfer_transcripts(&ALICE_ID, multi_hash, vec![delta(), second]);
+        tx.apply();
+    }
+    let multi_before = block.fastpq_transcripts[&multi_hash][0].clone();
+    assert!(multi_before.poseidon_preimage_digest.is_none());
     block
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
@@ -204,7 +211,11 @@ fn missing_or_zero_wire_commitment_latches_before_any_digest_finalization() {
             );
             assert_eq!(block.fastpq_transcripts, before);
             assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
-            assert_eq!(block.capture_exec_witness(), Err(error));
+            assert_eq!(
+                block.capture_exec_witness(),
+                Err("FASTPQ witness capture refuses a poisoned carrier".into())
+            );
+            assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
             let _ = crate::exec_witness::drain_exec_witness();
         }
     }

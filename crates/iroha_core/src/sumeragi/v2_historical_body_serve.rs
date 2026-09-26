@@ -24,6 +24,10 @@ use iroha_p2p::network::NetworkReplyRoutes;
 
 use super::{
     HistoricalBodyRequestIdentity, V2BlockSyncError, build_historical_body_response,
+    canonical_executed_body_serve::{
+        CanonicalExecutedBodyServeCompletion, CanonicalExecutedBodyServeTask,
+        prepare_canonical_executed_body_output,
+    },
     rebind_cached_historical_body_response,
 };
 use crate::{
@@ -531,10 +535,46 @@ pub(crate) enum HistoricalBodyServeAdmission {
     Busy,
 }
 
+/// Canonical-only admission keeps the original request owner on every refusal.
+#[allow(dead_code)] // TODO: Transfer this typed result to canonical ingress.
+pub(crate) enum CanonicalExecutedBodyServeAdmission {
+    /// The worker now owns the exact request and authenticated reply routes.
+    Queued,
+    /// No task was admitted; the caller retains its byte-identical retry owner.
+    Refused {
+        /// Unchanged original request and fair-ingress capability.
+        task: CanonicalExecutedBodyServeTask,
+        /// Local worker queue or time-budget reason.
+        reason: HistoricalBodyServeAdmission,
+    },
+    /// A local service error also returns the original owner for fail-stop handling.
+    Failed {
+        /// Unchanged original request and fair-ingress capability.
+        task: CanonicalExecutedBodyServeTask,
+        /// Local worker failure.
+        error: V2BlockSyncError,
+    },
+}
+
+enum HistoricalBodyWorkerTask {
+    Certified(HistoricalBodyServeTask),
+    CanonicalExecuted(CanonicalExecutedBodyServeTask),
+}
+
+impl HistoricalBodyWorkerTask {
+    fn into_canonical_executed(self) -> CanonicalExecutedBodyServeTask {
+        let Self::CanonicalExecuted(task) = self else {
+            unreachable!("canonical admission created only a canonical worker task")
+        };
+        task
+    }
+}
+
 /// Actor-side handle for the dedicated historical-body worker.
 pub(crate) struct HistoricalBodyServeService {
-    task_tx: SyncSender<HistoricalBodyServeTask>,
+    task_tx: SyncSender<HistoricalBodyWorkerTask>,
     completion_rx: Receiver<HistoricalBodyServeCompletion>,
+    canonical_completion_rx: Receiver<CanonicalExecutedBodyServeCompletion>,
     deferred_prepared: Option<PreparedHistoricalBodyOutput>,
     admission: HistoricalBodyAdmissionState,
 }
@@ -551,6 +591,7 @@ impl HistoricalBodyServeService {
         let queue_capacity = limits.task_queue_capacity.get();
         let (task_tx, task_rx) = mpsc::sync_channel(queue_capacity);
         let (completion_tx, completion_rx) = mpsc::sync_channel(queue_capacity);
+        let (canonical_completion_tx, canonical_completion_rx) = mpsc::sync_channel(queue_capacity);
         std::thread::Builder::new()
             .name("sumeragi-v2-historical-body".into())
             .spawn(move || {
@@ -561,12 +602,14 @@ impl HistoricalBodyServeService {
                     limits,
                     task_rx,
                     completion_tx,
+                    canonical_completion_tx,
                 );
             })
             .map_err(|error| V2BlockSyncError::HistoricalBodyService(error.to_string()))?;
         Ok(Self {
             task_tx,
             completion_rx,
+            canonical_completion_rx,
             deferred_prepared: None,
             admission: HistoricalBodyAdmissionState::new(limits),
         })
@@ -577,11 +620,81 @@ impl HistoricalBodyServeService {
         &mut self,
         task: HistoricalBodyServeTask,
     ) -> Result<HistoricalBodyServeAdmission, V2BlockSyncError> {
+        self.try_enqueue_work(HistoricalBodyWorkerTask::Certified(task))
+    }
+
+    /// Reserve the same bounded worker for one canonical executed-body chunk.
+    #[allow(dead_code)] // TODO: Connect the dedicated canonical ingress owner.
+    pub(crate) fn try_enqueue_canonical_executed(
+        &mut self,
+        task: CanonicalExecutedBodyServeTask,
+    ) -> CanonicalExecutedBodyServeAdmission {
+        if self.deferred_prepared.is_some() {
+            return CanonicalExecutedBodyServeAdmission::Refused {
+                task,
+                reason: HistoricalBodyServeAdmission::Busy,
+            };
+        }
+        let work = HistoricalBodyWorkerTask::CanonicalExecuted(task);
+        let reserved = self.admission.try_reserve_work(&work, Instant::now());
+        match reserved {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = if self.admission.outstanding >= self.admission.outstanding_capacity {
+                    HistoricalBodyServeAdmission::Busy
+                } else {
+                    HistoricalBodyServeAdmission::RateLimited
+                };
+                return CanonicalExecutedBodyServeAdmission::Refused {
+                    task: work.into_canonical_executed(),
+                    reason,
+                };
+            }
+            Err(error) => {
+                return CanonicalExecutedBodyServeAdmission::Failed {
+                    task: work.into_canonical_executed(),
+                    error,
+                };
+            }
+        }
+        match self.task_tx.try_send(work) {
+            Ok(()) => CanonicalExecutedBodyServeAdmission::Queued,
+            Err(TrySendError::Full(work)) => {
+                let released = self.admission.release_work(&work);
+                match released {
+                    Ok(()) => CanonicalExecutedBodyServeAdmission::Refused {
+                        task: work.into_canonical_executed(),
+                        reason: HistoricalBodyServeAdmission::Busy,
+                    },
+                    Err(error) => CanonicalExecutedBodyServeAdmission::Failed {
+                        task: work.into_canonical_executed(),
+                        error,
+                    },
+                }
+            }
+            Err(TrySendError::Disconnected(work)) => {
+                let error = self
+                    .admission
+                    .release_work(&work)
+                    .err()
+                    .unwrap_or(V2BlockSyncError::HistoricalBodyWorkerDisconnected);
+                CanonicalExecutedBodyServeAdmission::Failed {
+                    task: work.into_canonical_executed(),
+                    error,
+                }
+            }
+        }
+    }
+
+    fn try_enqueue_work(
+        &mut self,
+        task: HistoricalBodyWorkerTask,
+    ) -> Result<HistoricalBodyServeAdmission, V2BlockSyncError> {
         if self.deferred_prepared.is_some() {
             return Ok(HistoricalBodyServeAdmission::Busy);
         }
         let now = Instant::now();
-        if !self.admission.try_reserve(&task, now)? {
+        if !self.admission.try_reserve_work(&task, now)? {
             return Ok(
                 if self.admission.outstanding >= self.admission.outstanding_capacity {
                     HistoricalBodyServeAdmission::Busy
@@ -593,11 +706,11 @@ impl HistoricalBodyServeService {
         match self.task_tx.try_send(task) {
             Ok(()) => Ok(HistoricalBodyServeAdmission::Queued),
             Err(TrySendError::Full(task)) => {
-                self.admission.release(&task)?;
+                self.admission.release_work(&task)?;
                 Ok(HistoricalBodyServeAdmission::Busy)
             }
             Err(TrySendError::Disconnected(task)) => {
-                self.admission.release(&task)?;
+                self.admission.release_work(&task)?;
                 Err(V2BlockSyncError::HistoricalBodyWorkerDisconnected)
             }
         }
@@ -613,6 +726,23 @@ impl HistoricalBodyServeService {
         match self.completion_rx.try_recv() {
             Ok(completion) => {
                 self.admission.release(completion.task())?;
+                Ok(Some(completion))
+            }
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => {
+                Err(V2BlockSyncError::HistoricalBodyWorkerDisconnected)
+            }
+        }
+    }
+
+    /// Take one prepared canonical chunk without transferring its ingress owner.
+    #[allow(dead_code)] // TODO: Connect the typed canonical exact-output post and retry.
+    pub(crate) fn try_recv_canonical_executed(
+        &mut self,
+    ) -> Result<Option<CanonicalExecutedBodyServeCompletion>, V2BlockSyncError> {
+        match self.canonical_completion_rx.try_recv() {
+            Ok(completion) => {
+                self.admission.release_canonical(completion.task())?;
                 Ok(Some(completion))
             }
             Err(TryRecvError::Empty) => Ok(None),
@@ -647,30 +777,46 @@ fn historical_body_worker(
     kura: Arc<Kura>,
     responder_key: KeyPair,
     limits: HistoricalBodyServeLimits,
-    task_rx: Receiver<HistoricalBodyServeTask>,
+    task_rx: Receiver<HistoricalBodyWorkerTask>,
     completion_tx: SyncSender<HistoricalBodyServeCompletion>,
+    canonical_completion_tx: SyncSender<CanonicalExecutedBodyServeCompletion>,
 ) {
     let mut cache = HistoricalBodyResponseCache::new(network_id, limits);
     while let Ok(task) = task_rx.recv() {
-        let result = cache.serve(
-            kura.as_ref(),
-            &task.request,
-            &task.recipient,
-            &responder_key,
-        );
-        let completion = match result {
-            Ok(Some((message, proof))) => {
-                HistoricalBodyServeCompletion::Prepared(PreparedHistoricalBodyOutput {
-                    task,
-                    message,
-                    proof,
-                })
+        match task {
+            HistoricalBodyWorkerTask::Certified(task) => {
+                let result = cache.serve(
+                    kura.as_ref(),
+                    &task.request,
+                    &task.recipient,
+                    &responder_key,
+                );
+                let completion = match result {
+                    Ok(Some((message, proof))) => {
+                        HistoricalBodyServeCompletion::Prepared(PreparedHistoricalBodyOutput {
+                            task,
+                            message,
+                            proof,
+                        })
+                    }
+                    Ok(None) => HistoricalBodyServeCompletion::NoResponse(task),
+                    Err(error) => HistoricalBodyServeCompletion::Failed(task, error),
+                };
+                if completion_tx.send(completion).is_err() {
+                    return;
+                }
             }
-            Ok(None) => HistoricalBodyServeCompletion::NoResponse(task),
-            Err(error) => HistoricalBodyServeCompletion::Failed(task, error),
-        };
-        if completion_tx.send(completion).is_err() {
-            return;
+            HistoricalBodyWorkerTask::CanonicalExecuted(task) => {
+                let completion = prepare_canonical_executed_body_output(
+                    network_id,
+                    kura.as_ref(),
+                    &responder_key,
+                    task,
+                );
+                if canonical_completion_tx.send(completion).is_err() {
+                    return;
+                }
+            }
         }
     }
 }
@@ -708,14 +854,30 @@ impl HistoricalBodyAdmissionState {
         }
     }
 
-    fn try_reserve(
+    fn work_charges(
+        &self,
+        task: &HistoricalBodyWorkerTask,
+    ) -> Result<Option<HistoricalBodyAdmissionCharges>, V2BlockSyncError> {
+        match task {
+            HistoricalBodyWorkerTask::Certified(task) => {
+                task.admission_charges(self.admission_charge, self.max_reply_route_fanout)
+            }
+            HistoricalBodyWorkerTask::CanonicalExecuted(task) => {
+                HistoricalBodyAdmissionPlan::from_reply_routes(&task.reply_routes)?.charges(
+                    &task.request.requester,
+                    self.admission_charge,
+                    self.max_reply_route_fanout,
+                )
+            }
+        }
+    }
+
+    fn try_reserve_work(
         &mut self,
-        task: &HistoricalBodyServeTask,
+        task: &HistoricalBodyWorkerTask,
         now: Instant,
     ) -> Result<bool, V2BlockSyncError> {
-        let Some(charges) =
-            task.admission_charges(self.admission_charge, self.max_reply_route_fanout)?
-        else {
+        let Some(charges) = self.work_charges(task)? else {
             return Ok(false);
         };
         self.try_reserve_charges(&charges, now)
@@ -873,6 +1035,31 @@ impl HistoricalBodyAdmissionState {
                 )
             })?;
         self.release_charges(&charges)
+    }
+
+    fn release_canonical(
+        &mut self,
+        task: &CanonicalExecutedBodyServeTask,
+    ) -> Result<(), V2BlockSyncError> {
+        let charges = HistoricalBodyAdmissionPlan::from_reply_routes(&task.reply_routes)?
+            .charges(
+                &task.request.requester,
+                self.admission_charge,
+                self.max_reply_route_fanout,
+            )?
+            .ok_or_else(|| {
+                V2BlockSyncError::HistoricalBodyService(
+                    "canonical executed-body completion lost its route reservation".into(),
+                )
+            })?;
+        self.release_charges(&charges)
+    }
+
+    fn release_work(&mut self, task: &HistoricalBodyWorkerTask) -> Result<(), V2BlockSyncError> {
+        match task {
+            HistoricalBodyWorkerTask::Certified(task) => self.release(task),
+            HistoricalBodyWorkerTask::CanonicalExecuted(task) => self.release_canonical(task),
+        }
     }
 
     /// Decrement all principal outstanding counters as one transaction. Token

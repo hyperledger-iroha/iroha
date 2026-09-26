@@ -28,9 +28,8 @@ fn transfer_transcripts_flush_into_block_map_on_apply() {
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut tx = block.transaction();
     let call_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-    tx.tx_call_hash = Some(call_hash);
+    let mut tx = block.transaction_for_fastpq_testing(call_hash);
     let asset_definition: iroha_data_model::asset::AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -179,8 +178,7 @@ fn transfer_transcripts_batch_records_multiple_deltas() {
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+    let mut tx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
         [1_u8; iroha_crypto::Hash::LENGTH],
     ));
     let asset_definition: iroha_data_model::asset::AssetDefinitionId =
@@ -234,9 +232,11 @@ fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut tx = block.transaction();
     let call_hash_a = iroha_crypto::Hash::prehashed([2_u8; iroha_crypto::Hash::LENGTH]);
     let call_hash_b = iroha_crypto::Hash::prehashed([3_u8; iroha_crypto::Hash::LENGTH]);
+    block.admit_fastpq_source_for_testing(call_hash_a);
+    block.admit_fastpq_source_for_testing(call_hash_b);
+    let mut tx = block.transaction();
     let asset_definition: iroha_data_model::asset::AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -357,8 +357,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     let state_seq = State::new(world_seq, Arc::clone(&kura_seq), query_seq);
     let mut block_seq = state_seq.block(header);
     {
-        let mut tx = block_seq.transaction();
-        tx.tx_call_hash = Some(call_hash);
+        let mut tx = block_seq.transaction_for_fastpq_testing(call_hash);
         Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
             .execute(&ALICE_ID, &mut tx)
             .expect("sequential transfer");
@@ -380,6 +379,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     let query_det = crate::query::store::LiveQueryStore::start_test();
     let state_det = State::new(world_det, Arc::clone(&kura_det), query_det);
     let mut block_det = state_det.block(header);
+    block_det.admit_fastpq_source_for_testing(call_hash);
     let instruction: InstructionBox =
         Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
     let mut delta = DetachedStateTransactionDelta::default();
@@ -417,8 +417,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     );
     let mut block_existing_tx = state_existing_tx.block(header);
     {
-        let mut tx = block_existing_tx.transaction();
-        tx.tx_call_hash = Some(call_hash);
+        let mut tx = block_existing_tx.transaction_for_fastpq_testing(call_hash);
         delta_for_existing_transaction
             .merge_single_transfer_into_transaction(&mut tx, &ALICE_ID)
             .expect("detached delta should be a single transfer")
@@ -487,6 +486,9 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
         &mut rejected_delta,
     )
     .expect("record an overdrawn attempt for merge-time rejection");
+    for hash in [call_hash, second_call_hash, rejected_call_hash] {
+        block_batch.admit_fastpq_source_for_testing(hash);
+    }
     {
         let mut tx = block_batch.transaction();
         tx.current_lane_id = Some(first_lane);

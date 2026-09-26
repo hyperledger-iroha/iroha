@@ -51,6 +51,8 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 const PROVIDER_ADMISSION_FIXTURES: &str = "fixtures/sorafs_manifest/provider_admission";
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
+const TEST_NETWORK_ID_ARG: &str =
+    "--network-id=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -123,6 +125,64 @@ fn write_advert(tempdir: &TempDir, file_name: &str, advert: &ProviderAdvertV1) -
     let bytes = to_bytes(advert).expect("encode provider advert");
     fs::write(&path, &bytes).expect("write provider advert");
     path
+}
+fn write_signed_fixture_admission(
+    tempdir: &TempDir,
+    advert: &ProviderAdvertV1,
+    network_id: [u8; 32],
+) -> (PathBuf, [u8; 32]) {
+    let proposal_bytes =
+        fs::read(fixture_dir().join("proposal_v1.to")).expect("read proposal fixture");
+    let mut proposal: ProviderAdmissionProposalV1 =
+        decode_from_bytes(&proposal_bytes).expect("decode proposal fixture");
+    proposal
+        .advert_key
+        .copy_from_slice(&advert.signature.public_key);
+    let envelope_template_bytes =
+        fs::read(fixture_dir().join("envelope_v1.to")).expect("read envelope fixture");
+    let envelope_template: ProviderAdmissionEnvelopeV1 =
+        decode_from_bytes(&envelope_template_bytes).expect("decode envelope fixture");
+    let proposal_digest = compute_proposal_digest(&proposal).expect("compute proposal digest");
+    let advert_body = advert.body.clone();
+    let advert_body_digest =
+        compute_advert_body_digest(&advert_body).expect("compute advert body digest");
+    let council_key = SigningKey::from_bytes(&[0x45; 32]);
+    let council_public_key = *council_key.verifying_key().as_bytes();
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
+        version: envelope_template.version,
+        network_id,
+        policy_id: [0xC1; 32],
+        policy_revision: 1,
+        policy_digest: [0xD1; 32],
+        admission_revision: 1,
+        expected_current_event_digest: None,
+        proposal,
+        proposal_digest,
+        advert_body,
+        advert_body_digest,
+        issued_at: envelope_template.issued_at,
+        retention_epoch: envelope_template.retention_epoch,
+        council_signatures: Vec::new(),
+        notes: envelope_template.notes.clone(),
+    };
+    let authorization_digest =
+        compute_envelope_authorization_digest(&envelope).expect("compute authorization digest");
+    envelope.council_signatures.push(CouncilSignature {
+        signer: council_public_key,
+        signature: council_key.sign(&authorization_digest).to_bytes().to_vec(),
+    });
+    let council_policy =
+        ProviderAdmissionCouncilPolicy::new([council_public_key], 1).expect("valid council policy");
+    AdmissionRecord::new(envelope.clone(), &council_policy)
+        .expect("signed admission envelope must be valid");
+    let admission_dir = tempdir.path().join("admission");
+    fs::create_dir(&admission_dir).expect("create admission dir");
+    fs::write(
+        admission_dir.join("envelope_v1.to"),
+        to_bytes(&envelope).expect("encode admission envelope"),
+    )
+    .expect("write admission envelope");
+    (admission_dir, council_public_key)
 }
 fn read_scoreboard_metadata(path: &Path) -> Map {
     let bytes = fs::read(path).expect("read scoreboard file");
@@ -895,70 +955,30 @@ fn fetch_cli_rejects_duplicate_boost_provider() {
 fn fetch_cli_accepts_fixture_advert_with_admission() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
-    let payload = write_payload(&payload_path, 6 * 1024);
+    // The admission fixture advertises a 32-byte maximum range; without manifest bytes the CLI
+    // uses the default chunk profile, so keep this acceptance plan to one canonical chunk.
+    let payload = write_payload(&payload_path, 8);
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("fixtures/sorafs_manifest/provider_admission");
     let advert_path = fixture_dir.join("advert_v1.to");
-    let proposal_path = fixture_dir.join("proposal_v1.to");
-    let envelope_src = fixture_dir.join("envelope_v1.to");
     let fixture_advert = load_fixture_advert("advert_v1.to");
     let plan_path = write_plan_for_payload_with_profile(
         &tempdir,
         &payload,
         chunk_profile_from_advert(&fixture_advert),
     );
-    let mut advert_key = [0u8; 32];
-    advert_key.copy_from_slice(&fixture_advert.signature.public_key);
-    let proposal_bytes = fs::read(&proposal_path).expect("read proposal fixture");
-    let mut proposal: ProviderAdmissionProposalV1 =
-        decode_from_bytes(&proposal_bytes).expect("decode proposal fixture");
-    proposal.advert_key = advert_key;
-    let envelope_template_bytes = fs::read(&envelope_src).expect("read envelope fixture");
-    let envelope_template: ProviderAdmissionEnvelopeV1 =
-        decode_from_bytes(&envelope_template_bytes).expect("decode envelope fixture");
-    let council_key = SigningKey::from_bytes(&[0x45; 32]);
-    let proposal_digest =
-        compute_proposal_digest(&proposal).expect("compute proposal digest from fixture");
-    let advert_body = fixture_advert.body.clone();
-    let advert_body_digest =
-        compute_advert_body_digest(&advert_body).expect("compute advert body digest");
-    let mut new_envelope = ProviderAdmissionEnvelopeV1 {
-        version: envelope_template.version,
-        proposal,
-        proposal_digest,
-        advert_body,
-        advert_body_digest,
-        issued_at: envelope_template.issued_at,
-        retention_epoch: envelope_template.retention_epoch,
-        council_signatures: Vec::new(),
-        notes: envelope_template.notes.clone(),
-    };
-    let authorization_digest = compute_envelope_authorization_digest(&new_envelope)
-        .expect("compute envelope authorization digest");
-    let council_signature = council_key.sign(&authorization_digest);
-    new_envelope.council_signatures.push(CouncilSignature {
-        signer: *council_key.verifying_key().as_bytes(),
-        signature: council_signature.to_bytes().to_vec(),
-    });
-    let council_policy =
-        ProviderAdmissionCouncilPolicy::new([*council_key.verifying_key().as_bytes()], 1)
-            .expect("valid council policy");
-    AdmissionRecord::new(new_envelope.clone(), &council_policy)
-        .expect("updated admission envelope must be valid");
-    let admission_dir = tempdir.path().join("admission");
-    fs::create_dir(&admission_dir).expect("create admission dir");
-    let envelope_dst = admission_dir.join("envelope_v1.to");
-    let new_envelope_bytes = to_bytes(&new_envelope).expect("encode updated envelope");
-    fs::write(&envelope_dst, new_envelope_bytes).expect("write admission envelope");
+    let (admission_dir, council_public_key) =
+        write_signed_fixture_admission(&tempdir, &fixture_advert, [0xA1; 32]);
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
             "--admission-trusted-council-key={}",
-            to_hex(council_key.verifying_key().as_bytes())
+            to_hex(&council_public_key)
         ))
         .arg("--admission-signature-threshold=1")
         .arg("--assume-now=300")
@@ -1012,6 +1032,121 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
     );
 }
 #[test]
+fn fetch_cli_requires_network_id_for_advert_and_admission() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 4 * 1024);
+    let advert = load_fixture_advert("advert_v1.to");
+    let advert_path = fixture_dir().join("advert_v1.to");
+    let plan_path =
+        write_plan_for_payload_with_profile(&tempdir, &payload, chunk_profile_from_advert(&advert));
+    let (admission_dir, council_public_key) =
+        write_signed_fixture_admission(&tempdir, &advert, [0xA1; 32]);
+    for use_admission in [false, true] {
+        let output_path = tempdir
+            .path()
+            .join(format!("missing-network-{use_admission}.bin"));
+        let mut command = sorafs_fetch_cmd();
+        command
+            .arg(format!("--plan={}", plan_path.display()))
+            .arg(format!("--provider=alpha={}", payload_path.display()))
+            .arg(format!("--provider-advert=alpha={}", advert_path.display()))
+            .arg(format!("--output={}", output_path.display()));
+        if use_admission {
+            command
+                .arg(format!("--admission-dir={}", admission_dir.display()))
+                .arg(format!(
+                    "--admission-trusted-council-key={}",
+                    to_hex(&council_public_key)
+                ))
+                .arg("--admission-signature-threshold=1");
+        }
+        let assert = command.assert().failure();
+        let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+        assert!(stderr.contains("require --network-id"), "{stderr}");
+        assert!(
+            !output_path.exists(),
+            "network preflight must not write output"
+        );
+    }
+}
+#[test]
+fn fetch_cli_rejects_validly_signed_foreign_admission_and_advert() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 4 * 1024);
+    let mut foreign_advert = load_fixture_advert("advert_v1.to");
+    foreign_advert.network_id = [0xB2; 32];
+    resign_advert(&mut foreign_advert);
+    let plan_path = write_plan_for_payload_with_profile(
+        &tempdir,
+        &payload,
+        chunk_profile_from_advert(&foreign_advert),
+    );
+    let advert_path = write_advert(&tempdir, "foreign_advert.to", &foreign_advert);
+    let (admission_dir, council_public_key) =
+        write_signed_fixture_admission(&tempdir, &foreign_advert, [0xB2; 32]);
+    let output_path = tempdir.path().join("foreign-output.bin");
+    let assert = sorafs_fetch_cmd()
+        .arg(format!("--plan={}", plan_path.display()))
+        .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
+        .arg(format!("--provider-advert=alpha={}", advert_path.display()))
+        .arg(format!("--admission-dir={}", admission_dir.display()))
+        .arg(format!(
+            "--admission-trusted-council-key={}",
+            to_hex(&council_public_key)
+        ))
+        .arg("--admission-signature-threshold=1")
+        .arg("--assume-now=300")
+        .arg(format!("--output={}", output_path.display()))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+    assert!(
+        stderr.contains("admission envelope") && stderr.contains("differs from --network-id"),
+        "expected foreign admission rejection: {stderr}"
+    );
+    assert!(
+        !output_path.exists(),
+        "foreign admission must not write output"
+    );
+}
+#[test]
+fn fetch_cli_rejects_validly_signed_foreign_advert_without_admission() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 4 * 1024);
+    let mut foreign_advert = load_fixture_advert("advert_v1.to");
+    foreign_advert.network_id = [0xB2; 32];
+    resign_advert(&mut foreign_advert);
+    let plan_path = write_plan_for_payload_with_profile(
+        &tempdir,
+        &payload,
+        chunk_profile_from_advert(&foreign_advert),
+    );
+    let advert_path = write_advert(&tempdir, "foreign_advert.to", &foreign_advert);
+    let output_path = tempdir.path().join("foreign-output.bin");
+    let assert = sorafs_fetch_cmd()
+        .arg(format!("--plan={}", plan_path.display()))
+        .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
+        .arg(format!("--provider-advert=alpha={}", advert_path.display()))
+        .arg("--assume-now=300")
+        .arg(format!("--output={}", output_path.display()))
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+    assert!(
+        stderr.contains("provider advert") && stderr.contains("differs from --network-id"),
+        "expected foreign advert rejection: {stderr}"
+    );
+    assert!(
+        !output_path.exists(),
+        "foreign advert must not write output"
+    );
+}
+#[test]
 fn fetch_cli_rejects_fixture_advert_without_admission() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
@@ -1032,6 +1167,7 @@ fn fetch_cli_rejects_fixture_advert_without_admission() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--admission-dir={}", admission_dir.display()))
         .arg(format!(
@@ -1061,6 +1197,7 @@ fn fetch_cli_rejects_advert_after_refresh_deadline() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={refresh_deadline}"))
         .assert()
@@ -1099,6 +1236,7 @@ fn fetch_cli_rejects_advert_missing_chunk_range_capability() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1124,6 +1262,7 @@ fn fetch_cli_rejects_advert_missing_stream_budget() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1149,6 +1288,7 @@ fn fetch_cli_rejects_advert_missing_transport_hints() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1178,6 +1318,7 @@ fn fetch_cli_rejects_soranet_transport_without_capability() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1205,6 +1346,7 @@ fn fetch_cli_rejects_advert_with_invalid_stream_budget() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1234,6 +1376,7 @@ fn fetch_cli_rejects_unknown_capability_without_opt_in() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()
@@ -1248,7 +1391,7 @@ fn fetch_cli_rejects_unknown_capability_without_opt_in() {
 fn fetch_cli_allows_unknown_capability_with_opt_in() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
-    let payload = write_payload(&payload_path, 4 * 1024);
+    let payload = write_payload(&payload_path, 8);
     let mut advert = load_fixture_advert("advert_v1.to");
     let plan_path =
         write_plan_for_payload_with_profile(&tempdir, &payload, chunk_profile_from_advert(&advert));
@@ -1267,6 +1410,7 @@ fn fetch_cli_allows_unknown_capability_with_opt_in() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--assume-now={assume_now}"))
         .assert()

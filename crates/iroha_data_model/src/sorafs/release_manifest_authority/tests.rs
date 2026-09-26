@@ -3,6 +3,48 @@ use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use sorafs_manifest::signer::protocol::SignerOperationCustodyV1;
 
+#[test]
+fn release_manifest_outcome_and_action_keep_inline_v1_payloads() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<ReleaseManifestOutcomeV1>();
+    assert_copy::<ReleaseManifestOperationV1>();
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestOutcomeV1>() <= 512);
+    const _: () = assert!(core::mem::size_of::<ReleaseManifestActionV1>() <= 1536);
+
+    let outcome_schema = ReleaseManifestOutcomeV1::schema();
+    let iroha_schema::Metadata::Enum(outcomes) = outcome_schema
+        .get::<ReleaseManifestOutcomeV1>()
+        .expect("release-manifest outcome schema")
+    else {
+        panic!("release-manifest outcome must have an enum schema");
+    };
+    assert_eq!(outcomes.variants.len(), 3);
+    assert_eq!(outcomes.variants[1].discriminant, 1);
+    assert_eq!(
+        outcomes.variants[1].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCompleteV1>())
+    );
+
+    let action_schema = ReleaseManifestActionV1::schema();
+    let iroha_schema::Metadata::Enum(actions) = action_schema
+        .get::<ReleaseManifestActionV1>()
+        .expect("release-manifest action schema")
+    else {
+        panic!("release-manifest action must have an enum schema");
+    };
+    assert_eq!(actions.variants.len(), 7);
+    assert_eq!(actions.variants[4].discriminant, 4);
+    assert_eq!(
+        actions.variants[4].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCompleteV1>())
+    );
+    assert_eq!(actions.variants[6].discriminant, 6);
+    assert_eq!(
+        actions.variants[6].ty,
+        Some(core::any::TypeId::of::<ReleaseManifestCheckV1>())
+    );
+}
+
 fn fixture_request() -> SignerReleaseManifestRequestV1 {
     SignerReleaseManifestRequestV1 {
         operation_id: [1; 32],
@@ -152,6 +194,82 @@ fn release_manifest_actions_have_one_bounded_canonical_norito_surface() {
     assert_eq!(
         decode_release_manifest_action_claim_v1(&oversized),
         Err(ReleaseManifestClaimErrorV1::Encoding)
+    );
+}
+
+#[test]
+fn release_manifest_actions_have_one_strict_json_and_schema_surface() {
+    let actions = [
+        ReleaseManifestActionV1::Configure(vec![1, 2]),
+        ReleaseManifestActionV1::Enroll(vec![3, 4]),
+        ReleaseManifestActionV1::Revoke(ReleaseManifestRevocationV1 {
+            signer: true,
+            attester: false,
+        }),
+        ReleaseManifestActionV1::Reserve(fixture_review()),
+        ReleaseManifestActionV1::Complete(fixture_completion()),
+        ReleaseManifestActionV1::Expire(ReleaseManifestExpireV1 {
+            operation_id: [1; 32],
+            reservation: fixture_reservation(),
+        }),
+        ReleaseManifestActionV1::Check(fixture_check(ReleaseManifestCheckPhaseV1::Current(
+            fixture_audit(),
+        ))),
+    ];
+    for action in actions {
+        let json = norito::json::to_json(&action).expect("one role-13 JSON shape");
+        assert_eq!(
+            norito::json::from_str::<ReleaseManifestActionV1>(&json).expect("strict action JSON"),
+            action
+        );
+        let frame = norito::encode_canonical(&action).expect("one Norito frame");
+        assert_eq!(
+            norito::decode_canonical::<ReleaseManifestActionV1>(&frame).expect("Norito decode"),
+            action
+        );
+    }
+    let check = fixture_check(ReleaseManifestCheckPhaseV1::Current(fixture_audit()));
+    let json = norito::json::to_json(&check).expect("check JSON");
+    let foreign = json.replacen("\"challenge\":", "\"extra\":1,\"challenge\":", 1);
+    assert_ne!(foreign, json);
+    assert!(norito::json::from_str::<ReleaseManifestCheckV1>(&foreign).is_err());
+}
+
+#[test]
+fn role13_custody_record_has_one_bounded_canonical_frame_and_strict_json() {
+    let record = ReleaseManifestCustodyRecordV1 {
+        deployment_id: "release-primary".into(),
+        revision: 1,
+        predecessor_digest: [0; 32],
+        request_digest: [31; 32],
+        execution: ReleaseManifestExecutionV1 {
+            height: 7,
+            ordinal: 0,
+            recorded_at_unix_ms: 1_000,
+            authority: fixture_operator(),
+        },
+        control_state: vec![1, 2, 3],
+        enrollment: None,
+    };
+    let frame = norito::encode_canonical(&record).expect("one custody record frame");
+    assert!(frame.len() <= RELEASE_MANIFEST_CUSTODY_MAX_RECORD_BYTES_V1);
+    assert_eq!(
+        norito::decode_canonical::<ReleaseManifestCustodyRecordV1>(&frame)
+            .expect("canonical record"),
+        record
+    );
+    let json = norito::json::to_json(&record).expect("one custody JSON shape");
+    assert_eq!(
+        norito::json::from_str::<ReleaseManifestCustodyRecordV1>(&json)
+            .expect("strict custody JSON"),
+        record
+    );
+    let foreign = json.replacen("\"revision\":", "\"unknown\":1,\"revision\":", 1);
+    assert_ne!(foreign, json);
+    assert!(norito::json::from_str::<ReleaseManifestCustodyRecordV1>(&foreign).is_err());
+    assert_ne!(
+        RELEASE_MANIFEST_CUSTODY_RECORD_DOMAIN_V1,
+        crate::sorafs::final_promotion_authority::FINAL_PROMOTION_CUSTODY_RECORD_DOMAIN_V1
     );
 }
 

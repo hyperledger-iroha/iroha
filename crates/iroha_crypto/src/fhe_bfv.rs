@@ -2582,6 +2582,65 @@ impl BfvRnsModulusChain {
             self.basis_extend_centered_polynomial_target_limbs(params, &sum, target_chain)?;
         target_chain.scale_round_centered_product_polynomial_sum_exact(params, &target_sum, 2)
     }
+    /// Replay two claimed centered RNS products from their `Z_q` operands.
+    ///
+    /// A centered source-bound check alone cannot establish that supplied product residues came
+    /// from the claimed operands: two individually in-bound forgeries can even cancel in the sum.
+    /// This check compares every source limb and coefficient before any target-limb conversion or
+    /// scale-rounding. It is an arithmetic witness validator, not a zero-knowledge proof verifier.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when the chain cannot represent an exact two-product sum, an operand
+    /// or claimed product is malformed, or either claimed product differs from its exact
+    /// centered negacyclic operand product.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_centered_product_pair_from_ciphertext_modulus_operands_exact(
+        &self,
+        params: &BfvParameters,
+        lhs_a: &[u64],
+        rhs_a: &[u64],
+        lhs_b: &[u64],
+        rhs_b: &[u64],
+        claimed_product_a: &BfvRnsPolynomial,
+        claimed_product_b: &BfvRnsPolynomial,
+    ) -> Result<(), BfvError> {
+        self.validate_exact_ciphertext_modulus_negacyclic_product_sum_coverage(params, 2)?;
+        validate_poly(params, lhs_a, "BFV centered first product left operand")?;
+        validate_poly(params, rhs_a, "BFV centered first product right operand")?;
+        validate_poly(params, lhs_b, "BFV centered second product left operand")?;
+        validate_poly(params, rhs_b, "BFV centered second product right operand")?;
+        validate_rns_polynomial_pair(params, self, claimed_product_a, claimed_product_b)?;
+
+        let lhs_a = self.decompose_centered_ciphertext_modulus_polynomial(params, lhs_a)?;
+        let rhs_a = self.decompose_centered_ciphertext_modulus_polynomial(params, rhs_a)?;
+        let lhs_b = self.decompose_centered_ciphertext_modulus_polynomial(params, lhs_b)?;
+        let rhs_b = self.decompose_centered_ciphertext_modulus_polynomial(params, rhs_b)?;
+        let expected_product_a =
+            self.multiply_rns_polynomials_negacyclic(params, &lhs_a, &rhs_a)?;
+        let expected_product_b =
+            self.multiply_rns_polynomials_negacyclic(params, &lhs_b, &rhs_b)?;
+        for (label, claimed, expected) in [
+            ("first", claimed_product_a, &expected_product_a),
+            ("second", claimed_product_b, &expected_product_b),
+        ] {
+            for (limb_index, (claimed_limb, expected_limb)) in claimed
+                .residues_by_limb
+                .iter()
+                .zip(&expected.residues_by_limb)
+                .enumerate()
+            {
+                for (coefficient_index, (&actual, &expected)) in
+                    claimed_limb.iter().zip(expected_limb).enumerate()
+                {
+                    invalid_if!(
+                        actual != expected,
+                        "BFV centered {label} product source limb[{limb_index}] coefficient[{coefficient_index}] does not match operands"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
     fn validate_centered_product_sum_source_bounds(
         &self,
         params: &BfvParameters,
@@ -7909,6 +7968,9 @@ pub enum BfvError {
     /// profile.
     #[error("BFV production qualification unavailable: {0:?}")]
     ProductionQualificationUnavailable(BfvProductionQualificationBlockerV1),
+    /// Eight-party decryption has no sound public verifier for the secret-share and decryption-share relations.
+    #[error("BFV eight-party decryption share relation proof verifier is unavailable")]
+    EightPartyShareRelationProofUnavailable,
     /// The parameter set is invalid.
     #[error("invalid BFV parameters: {0}")]
     InvalidParameters(String),
@@ -39394,6 +39456,17 @@ mod first_release_hard_cut_tests {
         );
     }
 }
+mod eight_party_decryption;
+pub use eight_party_decryption::{
+    BFV_EIGHT_PARTY_DECRYPTION_PARTICIPANTS_V1, BfvEightPartyDecryptionContributionPayloadV1,
+    BfvEightPartyDecryptionMemberV1, BfvEightPartyDecryptionStatementV1,
+    BfvEightPartySignedDecryptionContributionV1, bfv_eight_party_decryption_statement_digest_v1,
+    decode_bfv_eight_party_decryption_contributions_bytes_v1,
+    decode_bfv_eight_party_decryption_statement_bytes_v1,
+    validate_bfv_eight_party_decryption_authentication_v1,
+    validate_bfv_eight_party_decryption_statement_v1, verify_bfv_eight_party_decryption_v1,
+};
+
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests;

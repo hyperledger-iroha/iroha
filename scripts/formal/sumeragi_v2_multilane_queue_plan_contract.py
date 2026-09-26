@@ -2686,9 +2686,26 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '.checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES.checked_next_power_of_two()?)?',
    'norito::canonical_decode_limits(input).max_total_allocated_bytes()',
    '.try_fold(0usize, usize::checked_add)',
-   'let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();',
-   'proposal_clone,',
+   'input_graph,',
+   'metadata_encoding,',
    'decoded,')),
+ ('crates/iroha_data_model/src/block/mod.rs',
+  'method',
+  'SignedBlock::canonical_proposal_wire_hash',
+  ('self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))',)),
+ ('crates/iroha_data_model/src/block/mod.rs',
+  'method',
+  'SignedBlock::borrowed_resultless_wire',
+  ('let proposal = SignedBlockOutputCandidate {',
+   'signatures: OutputFieldRef(&self.signatures)',
+   'payload: OutputFieldRef(&self.payload)',
+   'result: None',
+   'let payload = encode_signed_block_payload(&proposal);',
+   'Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len())',
+   'frame.push(self.version());',
+   'write_signed_block_header(&payload, &mut frame)?;',
+   'frame.extend_from_slice(&payload);',
+   'Ok(frame)')),
  ('crates/iroha_data_model/src/block/mod.rs',
   'fn',
   'decode_framed_versioned_signed_block_inner',
@@ -2922,6 +2939,17 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "acquire_torii_proxy_memory(app)", "tokio::task::block_in_place(",
             "canonical_queue_plan_admitted_input(binding.entrypoint_hash)",
             "hold_torii_proxy_memory_in_response_body(")
+    # Removing the source-graph copy allowance requires the hash path to borrow
+    # that graph throughout encoding. Wire and canonical-comparison buffers keep
+    # their own unchanged working-set charges.
+    for symbol in ("SignedBlock::canonical_proposal_wire_hash", "SignedBlock::borrowed_resultless_wire"):
+        for forbidden in (".clone(", ".to_owned(", ".canonical_resultless_proposal("):
+            if forbidden in code_items.get(symbol, ""):
+                errors.append(f"{symbol}: proposal hashing duplicates an uncharged source graph")
+    ordered("SignedBlock::borrowed_resultless_wire", "let proposal = SignedBlockOutputCandidate {",
+            "encode_signed_block_payload(&proposal)", "frame.push(self.version());",
+            "write_signed_block_header(&payload, &mut frame)?;", "frame.extend_from_slice(&payload);",
+            "Ok(frame)")
     ordered("decode_framed_versioned_signed_block_inner", "view.decode::<SignedBlock>()",
             "encoded_payload_len(&block)", "if canonical_len != raw_for_error.len()",
             ".canonical_wire()", "if canonical.as_framed() != raw_for_error")

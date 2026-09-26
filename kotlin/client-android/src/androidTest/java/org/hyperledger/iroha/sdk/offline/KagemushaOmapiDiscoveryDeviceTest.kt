@@ -47,7 +47,7 @@ class KagemushaOmapiDiscoveryDeviceTest {
             }
 
             assertEquals(
-                "Pinned Pixel 6 embedded reader/AID did not admit the complete ABI-23 capability frame",
+                "Pinned Pixel 6 embedded reader/AID did not admit the complete ABI-24 capability frame",
                 KagemushaDeviceLifecycleBridgeV1.Availability.AVAILABLE,
                 bridge.availability,
             )

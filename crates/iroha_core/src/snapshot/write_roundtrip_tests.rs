@@ -430,6 +430,107 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     );
 }
 #[tokio::test]
+async fn signed_snapshot_restore_preserves_ordered_election_corpus_and_rollback() {
+    let tmp_root = tempdir().expect("snapshot tempdir");
+    let store_dir = tmp_root.path().join("snapshot");
+    let mut state = state_factory();
+    let election_id = "ordered-ballot-corpus";
+    let first = crate::state::StandaloneBallotCorpusEntryV1 {
+        nullifier: [0x11; 32],
+        commitment: [0xa1; 32],
+    };
+    let second = crate::state::StandaloneBallotCorpusEntryV1 {
+        nullifier: [0x22; 32],
+        commitment: [0xb2; 32],
+    };
+    let previous = crate::state::ElectionState {
+        options: 2,
+        start_ts: 10,
+        end_ts: 20,
+        tally: vec![0, 0],
+        accepted_ballots: vec![first],
+        ..crate::state::ElectionState::default()
+    };
+    let mut current = previous.clone();
+    current.accepted_ballots.push(second);
+    assert!(
+        state
+            .world
+            .elections
+            .insert(election_id.to_owned(), previous)
+            .is_none()
+    );
+    {
+        let mut elections = state.world.elections.block();
+        assert!(elections.insert(election_id.to_owned(), current).is_some());
+        elections.commit();
+    }
+
+    let key_pair = checked_random_snapshot_keypair();
+    try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+        .expect("write generated signed snapshot with both election views");
+    assert_canonical_snapshot_generation(&store_dir);
+    let payload = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
+        .expect("read generated signed snapshot payload");
+    let restored = try_read_snapshot(
+        &store_dir,
+        &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
+        &state.nexus_snapshot(),
+        LiveQueryStore::start_test,
+        BlockCount(state.view().height()),
+        TEST_CHUNK_SIZE,
+        key_pair.public_key(),
+        &state.network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+    )
+    .expect("verify signed snapshot and restore both typed election views");
+    assert_eq!(
+        CapturedStateSnapshot::capture(&restored)
+            .expect("capture restored typed state")
+            .json
+            .as_bytes(),
+        payload,
+        "typed restore must preserve the generated signed payload exactly"
+    );
+    assert_eq!(
+        restored
+            .world
+            .elections
+            .view()
+            .get(election_id)
+            .expect("restored current election")
+            .accepted_ballots,
+        vec![first, second],
+        "current view must preserve accepted operation order"
+    );
+    let rollback = restored.world.elections.block_and_revert();
+    assert_eq!(
+        rollback
+            .get(election_id)
+            .expect("restored previous election")
+            .accepted_ballots,
+        vec![first],
+        "rollback view must retain only the previously accepted pair"
+    );
+    rollback.commit();
+    assert_eq!(
+        restored
+            .world
+            .elections
+            .view()
+            .get(election_id)
+            .expect("election after rollback")
+            .accepted_ballots,
+        vec![first],
+        "readback after committed rollback must match the previous view"
+    );
+}
+
+#[tokio::test]
 async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     let tmp_root = tempdir().expect("snapshot tempdir");
     let store_dir = tmp_root.path().join("snapshot");

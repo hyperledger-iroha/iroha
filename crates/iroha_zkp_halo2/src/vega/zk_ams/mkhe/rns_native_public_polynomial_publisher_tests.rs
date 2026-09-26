@@ -42,6 +42,7 @@ enum FixtureSourceFaultV1 {
 }
 
 struct FixtureCoefficientSourceV1 {
+    profile: BgvProfile,
     identity_calls: usize,
     drift_at_identity_call: Option<usize>,
     next_chunk: usize,
@@ -57,6 +58,7 @@ impl FixtureCoefficientSourceV1 {
         fault: FixtureSourceFaultV1,
     ) -> Self {
         Self {
+            profile: candidate_profile_v1(),
             identity_calls: 0,
             drift_at_identity_call: None,
             next_chunk: 0,
@@ -68,6 +70,12 @@ impl FixtureCoefficientSourceV1 {
 }
 
 impl RnsNativePublicPolynomialCoefficientSourceV1 for FixtureCoefficientSourceV1 {
+    fn governed_profile_v1(
+        &mut self,
+    ) -> Result<RnsNativeGovernedSourceProfileV1, RnsNativePublicPolynomialPublisherErrorV1> {
+        RnsNativeGovernedSourceProfileV1::from_profile_v1(&self.profile)
+    }
+
     fn source_identity_v1(
         &mut self,
     ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativePublicPolynomialPublisherErrorV1> {
@@ -749,6 +757,36 @@ fn run_fixture_publication_v1(
 
 fn eliminate_production_source_v1(value: RnsNativePhase23FortyLimbProductionSourceV1) -> ! {
     match value {}
+}
+
+#[test]
+fn full_profile_seal_rejects_release_prefix_and_changed_resource_identity() {
+    let governed = candidate_profile_v1();
+    let seal = RnsNativeGovernedSourceProfileV1::from_profile_v1(&governed).unwrap();
+    assert_eq!(seal.digest, governed.digest().unwrap());
+    assert_eq!(
+        RnsNativeGovernedSourceProfileV1::from_profile_v1(
+            &super::super::manifest::release_profile_v1()
+        ),
+        Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)
+    );
+
+    let mut changed_policy = governed.clone();
+    changed_policy.max_work_units -= 1;
+    assert_eq!(
+        RnsNativeGovernedSourceProfileV1::from_profile_v1(&changed_policy),
+        Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)
+    );
+
+    let position = RnsNativePublicPolynomialPositionV1::from_ordinal_v1(0).unwrap();
+    let mut source = FixtureCoefficientSourceV1::new_v1(position, 1, FixtureSourceFaultV1::None);
+    source.profile = super::super::manifest::release_profile_v1();
+    let mut publisher = FixtureCasV1::new_v1(FixtureCasFaultV1::None);
+    publisher.publication_identity = [0; 32];
+    assert!(matches!(
+        publish_rns_native_public_polynomials_v1(source, publisher),
+        Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidSource)
+    ));
 }
 
 #[test]

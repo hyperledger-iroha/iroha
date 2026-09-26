@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test
 
 class ParliamentTimedOvnWalletV1Test {
     @Test
-    fun `JVM declarations pin the ABI 23 proof JNI descriptors`() {
+    fun `JVM declarations pin the ABI 24 proof JNI descriptors`() {
         val nativeClass = Class.forName(
             "org.hyperledger.iroha.sdk.governance.ParliamentTimedOvnNativeEndpointV1",
         )
@@ -60,7 +60,7 @@ class ParliamentTimedOvnWalletV1Test {
             Integer.TYPE,
         )
 
-        assertEquals(23, ParliamentTimedOvnWalletV1.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(24, ParliamentTimedOvnWalletV1.REQUIRED_BRIDGE_ABI_VERSION)
         assertEquals(Integer.TYPE, abi.returnType)
         assertEquals(java.lang.Boolean.TYPE, verify.returnType)
         assertEquals(ByteArray::class.java, verifyPage.returnType)

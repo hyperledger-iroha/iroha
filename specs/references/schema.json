@@ -2302,6 +2302,11 @@
         "discriminant": 2,
         "tag": "ExecutionOutput",
         "type": "ExecutionOutputPolicyV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "FastpqSource",
+        "type": "FastpqSourcePolicyV1"
       }
     ]
   },
@@ -2318,6 +2323,10 @@
       {
         "name": "execution_output",
         "type": "ExecutionOutputPolicyV1"
+      },
+      {
+        "name": "fastpq_source",
+        "type": "FastpqSourcePolicyV1"
       }
     ]
   },
@@ -2860,6 +2869,14 @@
       }
     ]
   },
+  "CanCheckSorafsTopologyApproval": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
+      }
+    ]
+  },
   "CanExecuteTrigger": {
     "Struct": [
       {
@@ -2910,6 +2927,14 @@
       {
         "name": "provider_id",
         "type": "ProviderId"
+      }
+    ]
+  },
+  "CanManageSorafsTopologyCustody": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
       }
     ]
   },
@@ -2982,6 +3007,14 @@
     ]
   },
   "CanOperateSorafsFinalPromotion": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
+      }
+    ]
+  },
+  "CanOperateSorafsTopologyApproval": {
     "Struct": [
       {
         "name": "deployment_id",
@@ -6392,6 +6425,203 @@
     ]
   },
   "FastpqCompactProfileIdV1": "Array<u8, 32>",
+  "FastpqExecutionAssetV1": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "incarnation",
+        "type": "Hash"
+      }
+    ]
+  },
+  "FastpqExecutionBalanceV1": {
+    "Struct": [
+      {
+        "name": "asset",
+        "type": "FastpqExecutionAssetV1"
+      },
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "scope",
+        "type": "AssetBalanceScope"
+      }
+    ]
+  },
+  "FastpqExecutionEffectContextV1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "FastpqSourceStatementContextV1"
+      },
+      {
+        "name": "entry",
+        "type": "FastpqSourceExecutionEntryV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Transfer",
+        "type": "FastpqExecutionTransferV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Mint",
+        "type": "FastpqExecutionSupplyChangeV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Burn",
+        "type": "FastpqExecutionSupplyChangeV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectStatementV1": {
+    "Struct": [
+      {
+        "name": "public_inputs",
+        "type": "FastpqPublicInputs"
+      },
+      {
+        "name": "ordering_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "transitions",
+        "type": "Vec<FastpqStateTransition>"
+      },
+      {
+        "name": "effects",
+        "type": "FastpqExecutionEffectsV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectV1": {
+    "Struct": [
+      {
+        "name": "ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "authority_digest",
+        "type": "Hash"
+      },
+      {
+        "name": "authorization_context",
+        "type": "Hash"
+      },
+      {
+        "name": "kind",
+        "type": "FastpqExecutionEffectKindV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectsV1": {
+    "Struct": [
+      {
+        "name": "context",
+        "type": "FastpqExecutionEffectContextV1"
+      },
+      {
+        "name": "effects",
+        "type": "Vec<FastpqExecutionEffectV1>"
+      }
+    ]
+  },
+  "FastpqExecutionQuantityKeyV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Balance",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Supply",
+        "type": "FastpqExecutionAssetV1"
+      }
+    ]
+  },
+  "FastpqExecutionSupplyChangeV1": {
+    "Struct": [
+      {
+        "name": "balance",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "amount",
+        "type": "Quantity"
+      },
+      {
+        "name": "balance_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "balance_after",
+        "type": "Quantity"
+      },
+      {
+        "name": "supply_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "supply_after",
+        "type": "Quantity"
+      }
+    ]
+  },
+  "FastpqExecutionTransferV1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "destination",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "amount",
+        "type": "Quantity"
+      },
+      {
+        "name": "source_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "source_after",
+        "type": "Quantity"
+      },
+      {
+        "name": "destination_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "destination_after",
+        "type": "Quantity"
+      }
+    ]
+  },
+  "FastpqMandatorySourcePolicyV1": {
+    "Struct": [
+      {
+        "name": "max_retained_obligations",
+        "type": "u32"
+      },
+      {
+        "name": "per_obligation",
+        "type": "FastpqSourceLimitsV1"
+      }
+    ]
+  },
   "FastpqOperationKind": {
     "Enum": [
       {
@@ -6731,6 +6961,50 @@
       {
         "name": "lane_incarnation",
         "type": "Hash"
+      }
+    ]
+  },
+  "FastpqSourceLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_executed_entries",
+        "type": "u32"
+      },
+      {
+        "name": "max_transcripts",
+        "type": "u32"
+      },
+      {
+        "name": "max_deltas",
+        "type": "u32"
+      },
+      {
+        "name": "max_input_transcript_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_statement_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_total_statement_bytes",
+        "type": "u64"
+      }
+    ]
+  },
+  "FastpqSourcePolicyV1": {
+    "Struct": [
+      {
+        "name": "intrinsic",
+        "type": "FastpqSourceLimitsV1"
+      },
+      {
+        "name": "block",
+        "type": "FastpqSourceLimitsV1"
+      },
+      {
+        "name": "mandatory",
+        "type": "FastpqMandatorySourcePolicyV1"
       }
     ]
   },
@@ -7408,6 +7682,18 @@
       }
     ]
   },
+  "FinalPromotionOperationOriginV1": {
+    "Struct": [
+      {
+        "name": "entry_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "entry_index",
+        "type": "u32"
+      }
+    ]
+  },
   "FinalPromotionOperationOutcomeV1": {
     "Enum": [
       {
@@ -7452,6 +7738,10 @@
         "type": "FinalPromotionExecutionV1"
       },
       {
+        "name": "execution_origin",
+        "type": "Option<FinalPromotionOperationOriginV1>"
+      },
+      {
         "name": "intent",
         "type": "SignerOperationIntentV1"
       },
@@ -7466,6 +7756,10 @@
       {
         "name": "reserved",
         "type": "FinalPromotionExecutionV1"
+      },
+      {
+        "name": "reserved_origin",
+        "type": "FinalPromotionOperationOriginV1"
       },
       {
         "name": "outcome",
@@ -16501,6 +16795,14 @@
       }
     ]
   },
+  "MutateSorafsTopologyAuthority": {
+    "Struct": [
+      {
+        "name": "transition",
+        "type": "TopologyTransitionV1"
+      }
+    ]
+  },
   "Name": "String",
   "NameFrozenStateV1": {
     "Struct": [
@@ -17759,6 +18061,9 @@
   },
   "Option<FeedId>": {
     "Option": "FeedId"
+  },
+  "Option<FinalPromotionOperationOriginV1>": {
+    "Option": "FinalPromotionOperationOriginV1"
   },
   "Option<FinalizedGlobalThresholdBeaconPulseV1>": {
     "Option": "FinalizedGlobalThresholdBeaconPulseV1"
@@ -25651,6 +25956,26 @@
       }
     ]
   },
+  "SignerTopologyRequestV1": {
+    "Struct": [
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "binding_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "original_custody",
+        "type": "SignerOperationCustodyV1"
+      },
+      {
+        "name": "subject_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "SingularQueryBox": {
     "Enum": [
       {
@@ -29506,6 +29831,356 @@
       }
     ]
   },
+  "TopologyActionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Configure",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Enroll",
+        "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Revoke",
+        "type": "TopologyRevocationV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Reserve",
+        "type": "TopologyReserveV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Complete",
+        "type": "TopologyCompleteV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Expire",
+        "type": "TopologyExpireV1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Check",
+        "type": "TopologyCheckV1"
+      }
+    ]
+  },
+  "TopologyApprovalSubjectV1": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
+      },
+      {
+        "name": "network_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "chain_id",
+        "type": "String"
+      },
+      {
+        "name": "chain_discriminant",
+        "type": "u16"
+      },
+      {
+        "name": "release_manifest_sha256",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "qualification_summary_sha256",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "manifest_sha256",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "canonical_manifest_sha256",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "validator_ids_sha256",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "reviewed_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "expires_at_unix_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "TopologyCheckPhaseV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Current",
+        "type": "SignerOperationAuditHeadV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "BeforeProvider",
+        "type": "TopologyOperationRecordV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "AfterProvider",
+        "type": "TopologyOperationRecordV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "BeforeCommit",
+        "type": "TopologyOperationRecordV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "AfterCommit",
+        "type": "TopologyOperationRecordV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "BeforeRelease",
+        "type": "TopologyOperationRecordV1"
+      }
+    ]
+  },
+  "TopologyCheckV1": {
+    "Struct": [
+      {
+        "name": "challenge",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "network_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "floor",
+        "type": "TopologyFloorClaimV1"
+      },
+      {
+        "name": "expected_operator",
+        "type": "AccountId"
+      },
+      {
+        "name": "reviewed",
+        "type": "TopologyReserveV1"
+      },
+      {
+        "name": "phase",
+        "type": "TopologyCheckPhaseV1"
+      }
+    ]
+  },
+  "TopologyCompleteV1": {
+    "Struct": [
+      {
+        "name": "request",
+        "type": "SignerTopologyRequestV1"
+      },
+      {
+        "name": "intent",
+        "type": "SignerOperationIntentV1"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      },
+      {
+        "name": "commitment",
+        "type": "SignerOperationCommitmentV1"
+      },
+      {
+        "name": "signatures_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "TopologyCompletionV1": {
+    "Struct": [
+      {
+        "name": "commitment",
+        "type": "SignerOperationCommitmentV1"
+      },
+      {
+        "name": "signatures_digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "TopologyExecutionClaimV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "recorded_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authority",
+        "type": "AccountId"
+      }
+    ]
+  },
+  "TopologyExpireV1": {
+    "Struct": [
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      }
+    ]
+  },
+  "TopologyFloorClaimV1": {
+    "Struct": [
+      {
+        "name": "height",
+        "type": "u64"
+      },
+      {
+        "name": "block_hash",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "TopologyHeadV1": {
+    "Struct": [
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "digest",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "TopologyOperationRecordV1": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
+      },
+      {
+        "name": "revision",
+        "type": "u64"
+      },
+      {
+        "name": "predecessor_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "transition_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "execution",
+        "type": "TopologyExecutionClaimV1"
+      },
+      {
+        "name": "reserved",
+        "type": "TopologyExecutionClaimV1"
+      },
+      {
+        "name": "reviewed",
+        "type": "TopologyReserveV1"
+      },
+      {
+        "name": "reservation",
+        "type": "SignerOperationReservationV1"
+      },
+      {
+        "name": "outcome",
+        "type": "TopologyOutcomeV1"
+      }
+    ]
+  },
+  "TopologyOutcomeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Reserved"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Completed",
+        "type": "TopologyCompletionV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Expired"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Invalidated"
+      }
+    ]
+  },
+  "TopologyReserveV1": {
+    "Struct": [
+      {
+        "name": "subject",
+        "type": "TopologyApprovalSubjectV1"
+      },
+      {
+        "name": "request",
+        "type": "SignerTopologyRequestV1"
+      },
+      {
+        "name": "intent",
+        "type": "SignerOperationIntentV1"
+      }
+    ]
+  },
+  "TopologyRevocationV1": {
+    "Struct": [
+      {
+        "name": "signer",
+        "type": "bool"
+      },
+      {
+        "name": "attester",
+        "type": "bool"
+      }
+    ]
+  },
+  "TopologyTransitionV1": {
+    "Struct": [
+      {
+        "name": "deployment_id",
+        "type": "String"
+      },
+      {
+        "name": "control",
+        "type": "TopologyHeadV1"
+      },
+      {
+        "name": "operations",
+        "type": "TopologyHeadV1"
+      },
+      {
+        "name": "action",
+        "type": "TopologyActionV1"
+      }
+    ]
+  },
   "TouchManifest": {
     "Struct": [
       {
@@ -30634,6 +31309,9 @@
   },
   "Vec<ExternalExecutionRouteLeg>": {
     "Vec": "ExternalExecutionRouteLeg"
+  },
+  "Vec<FastpqExecutionEffectV1>": {
+    "Vec": "FastpqExecutionEffectV1"
   },
   "Vec<FastpqOrdinarySourceStatementLeafV1>": {
     "Vec": "FastpqOrdinarySourceStatementLeafV1"

@@ -554,24 +554,143 @@ its transcripts cannot be replayed under a production release. This is one
 V1 wire layout, not a compatibility decoder or an alternative production
 security contract.
 
-The current structural device certificate and real-proof corridor are local
-test/harness fixtures, not a public Torii monetary route. Live testnet top-up
-and redemption require the configured command runtime and authenticated proof
-release; submitted operations must reach applied finality before counting as
-funded or redeemed. A testnet experimental device profile therefore needs
-explicit release/network-scoped proof and runtime installation, not a global
-hardware-admission bypass.
-The native testnet State observer now requires operator-pinned network, asset
+The signed V1 release purpose distinguishes `Production` from
+`TestnetExperiment` and commits the exact experimental asset identity,
+incarnation, decimal scale, and reserve pool into the release ID and authority
+attestation. The production Torii runtime and wallet state context reject an
+experimental release; the testnet proof observer accepts only its exact signed
+scope. A process-local, non-spendable mint trial accepts only the opaque result
+of an Applied top-up paired with a verified MintFold and rejects changed
+retries or duplicate credits. The existing release receipt still requires
+production qualification. Kagami can explicitly prepare, threshold-sign,
+assemble and authenticate the experimental release and its distinct
+structural receipt against exact native artifact and evidence hashes. A trusted
+producer now converts an independently pinned verifier projection into a typed
+receipt and content-addressed artifact/evidence handoff that Kagami rehashes.
+Genuine structural evidence, real proof artifacts and independent signing
+authority remain required before a candidate can be issued from real devices.
+
+The structural device certificate and real-proof corridor still require
+genuine release evidence and artifact generation. An explicit Experimental
+node top-up path is source-staged, but it has not yet been validated with a
+real signed release and four-validator Applied finality evidence. Redemption
+and offline peer value movement are not qualified by that top-up path. Node
+admission requires the explicit
+`settlement.kagemusha.allow_testnet_experimental_release = true` opt-in;
+its default is false. This source-stage switch is not proof of live Applied
+finality or genuine device evidence. Live testnet top-up and redemption
+require the configured command runtime and
+authenticated proof release; submitted operations must reach Applied finality
+before counting as funded or redeemed. A testnet experimental device profile
+therefore needs explicit release/network-scoped proof and runtime installation,
+not a global hardware-admission bypass.
+The native testnet State observer requires operator-pinned network, asset
 identity, asset incarnation, scale, reserve liability pool, and authenticated
 release; it verifies the actual paired State proof and returns only an
-unqualified observation. A Rust-only owner retains that concrete
-verifier and one process-local lane lineage. Its MintFold entry now also
-requires the pre-debit reservation, an Applied chain top-up under an independent
-finality anchor, both release-authenticated mint proofs, exact linkage to the
-paired State proof and unique credit ID; a byte-identical process-local retry
-returns the original unqualified observation. No app-facing native
-installation or durable monetary capability exists yet; the terminal hardware
-fold and monetary admission remain separate.
+unqualified observation. A Rust-only owner can retain one process-local lane
+or create a private, exclusive, append-only testnet journal. The durable path
+fsyncs the exact confidential mint reservation before online submission and
+replays every retained State proof and Applied mint against the concrete signed
+release and independently resupplied finality anchors after restart. An exact
+operation anchor must first be pinned through the Rust-only trusted finality
+path; coordinates supplied by JNI cannot pin themselves. The native testnet
+finality-chain helper verifies every consecutive signed Sumeragi bundle from
+an independently authenticated first height-context ID before pinning the last
+context. The native installer now requires an opaque verified bootstrap token.
+Its bounded canonical V1 package carries threshold signatures over the network,
+asset/incarnation/scale/reserve, release and attestation identities, first
+height-context ID, validity interval and sequence. The native verifier checks
+an independently provisioned authority policy and deployment selection; the
+package cannot choose its own trusted keys. It rejects expired, future,
+regressed and same-sequence changed checkpoints, while allowing an exact
+still-valid retry. The canonical checkpoint and threshold verifier live in the
+shared data model. Kagami prepares checkpoints from an authenticated Experimental
+release, signs partial approvals under independently supplied deployment and
+lifetime pins, and assembles distinct approvals into the exact native package.
+Each output is a new private file; issuing a package does not provision a phone
+or establish current time. Native trusted time and a retained sequence/digest
+pin are inputs; ordinary app storage does not establish rollback resistance. The
+verified token has a suspend-inclusive installation lease capped at 120 seconds
+and the checkpoint's remaining validity; loading, journal replay and publication
+must finish within it or require fresh verification. Native verification starts
+that lease before calling the freshness reader, so a suspension between reading
+trusted UTC and verifying signatures cannot renew stale time. The
+installer derives every release/finality pin from that token and authenticates
+the matching release and artifacts before installing the owner. Swift and
+Android can activate a Rust-provisioned native startup context by transporting
+only that bounded signed package. Native provisioning fixes the authority,
+release archives, proof layout, private paths and create/recover mode once;
+native freshness ownership supplies current trusted time and replay state.
+The native online freshness owner creates an unpredictable nonce and retains its
+continuous start before transport. It consumes a threshold-signed response bound
+to that nonce, the exact checkpoint digest and sequence, and independent deployment
+pins. The authority must durably retain the checkpoint before signing and supply
+a trusted UTC interval that includes its uncertainty. Verification requires the
+signed lower bound to follow issuance and the signed upper bound plus all native
+elapsed time to precede expiry. Every provider read advances that upper bound;
+device sleep, slow replies and signature work consume time, and no handset wall
+clock is consulted. The online attempt lasts at most 120 seconds; a subsequent
+installation uses the separate bounded lease described above. This source does
+not supply the deployed authority service, its operational keys, or app provisioning,
+and its retained bootstrap pin is not an offline wallet anti-rollback counter.
+Activation retains the verified checkpoint before installing the actual host,
+and an exact retry rechecks freshness and authentication. A changed checkpoint
+cannot replace a live host. An uncertain durable mutation or partial installation
+requires process restart and authenticated recovery. There is no reset or
+caller-supplied verification callback across C/JNI. Publication, C/JNI dispatch
+and public Rust mutation calls share one native ownership gate; partially
+installed global owners cannot be called before final publication. Rust host
+operations require scoped access with a guard-borrowed permit that cannot move
+across threads. An operation panic permanently revokes dispatch for that process;
+even a callback that swallows the error cannot return a successful result. Inherited
+process identities are rejected before acquiring native ownership or clock
+locks. Approved deployment
+signatures and a concrete independently provisioned native context remain
+required; neither a status hint nor the bundle response can choose the
+checkpoint. JNI finality
+coordinates are comparison evidence only and cannot install a pin. The
+observer's MintFold entry
+requires that original reservation, an Applied chain top-up,
+both release-authenticated mint proofs, exact linkage to the paired State proof
+and a unique credit ID; exact mint and non-mint retries return their original
+unqualified observations, while changed transcripts are rejected. The mobile
+JNI carries the original Torii status JSON, independent
+finality coordinates and paired proof bytes, never the private credit opening.
+The durable owner can project a positive, proof-verified testnet value record
+only for a retained Applied top-up with the exact reservation, signed release
+scope, unique credit ID and independently pinned finality anchor. Its native
+C and Android JNI entrypoints accept only the operation ID; the returned
+Norito archive is copyable inspection evidence, not a spend credential.
+A distinct Rust-only, append-only testnet mint-credit registry consumes the
+opaque native admission, fsyncs each unique positive credit, and rederives
+every retained credit from the durable proof owner on recovery. Exact retries
+are idempotent; changed operation evidence, duplicate credit IDs, and scope
+changes fail. A Rust-only native host API opens this ledger under the installed
+durable owner and credits a finalized top-up by operation ID while holding that
+owner's lock. A process-local Rust host composes release installation, private
+pre-submission reservation, signed-finality pinning and observed crediting with
+typed ordering tokens. It requires matching native-trusted create/recover modes
+for the two journals. Mixed modes fail closed because path absence cannot
+distinguish interrupted installation from rollback; interrupted installation
+requires a trusted external checkpoint and explicit repair before restart.
+The signed finality chain is verified once per pin attempt, and the returned
+anchor comes from the same verified token used by the native owner.
+Its C mobile endpoint accepts only that 32-byte operation ID and
+returns a bounded canonical Norito archive with the counted credit and ledger
+total. The Swift and Android inspection adapters require the exact canonical
+archive layout, the requested operation ID, positive value and finality, and
+`hardware_qualified = false`; Android also checks the native 16-byte alignment
+for both admission and credit frames. Callers cannot pass a copied archive as
+authority. Concrete deployment provisioning, native private mint preparation,
+wallet account crediting, and testnet spending remain required; the registry does
+not enter production monetary state or attest hardware.
+The terminal hardware fold and production admission
+remain separate. File permissions protect the journal's
+confidential opening from other ordinary processes; this is not secure-element
+storage. Both private WALs detect malformed or partially written frames but
+have no trusted hardware head, so an attacker able to replace either with an
+earlier complete prefix can roll its testnet observation or counted-credit
+history back. Neither may serve as the phone's anti-rollback monetary counter.
 The signed release manifest includes the exact genesis-derived network ID.
 Node startup, native proof verification, enrollment and testnet observation
 reject a release signed for another network before admitting its artifacts or
@@ -610,6 +729,116 @@ the app and hardware evidence were real, simulated or absent; only verified
 real evidence may advance production qualification. The public testnet
 ingress and configured authority must actually be live before a remote
 write is counted as a completed test.
+
+## Claim split needed for the phone memory gate
+
+The current structured V1 Claim is not a 128 MiB phone prover. Its configured
+minimum has 96 advice columns at `k = 16`: one Base, fourteen carrier-RLC,
+two 37-column dense-MSM lanes, and seven native-Poseidon columns. One resident
+advice evaluation bank is therefore 192 MiB. The prover also retains thirteen
+fixed and nine permutation evaluation columns at that point, a 236 MiB lower
+bound before coefficient banks, proof scratch, and the app. Compact key storage
+does not change that live memory. Keep the 128 MiB whole-process gate closed.
+
+A candidate replacement must partition the **authenticated source inventory**,
+not merely trim the two 4,090-cell carrier columns. The existing complete
+Claim permits 1,008 sources per parity, with four canonical `u128` cells per
+source and 58 bound cells in each carrier. Its deferred-batch Poseidon challenge
+commits the complete ordered source namespace, verifier-input binding, equation
+tags/selectors, and bound values *before* aggregate coefficients are formed.
+Five k15 arithmetic slices are the minimum for one dense-MSM lane per slice:
+`k15 usable = 32,768 - 9 = 32,759` rows, each source costs 130 rows and the
+job costs three, so `floor((32,759 - 3) / 130) = 251` sources per lane;
+four one-lane subclaims cover only 1,004 sources. For a fixed
+five-slice candidate, let `S` be the circuit-authenticated source count and
+slice `i` cover `[floor(i*S/5), floor((i+1)*S/5))`, for `i = 0..4`.
+At `S = 1,008` the ranges are `[0,201)`, `[201,403)`, `[403,604)`,
+`[604,806)`, `[806,1008)`. Every slice has at most 202 sources and needs at
+most `3 + 130*202 = 26,263` dense rows. A paired slice's two carriers would
+each need at most `4*202 + 58 = 866` active cells before constrained padding.
+These are row bounds for the source terms. The implemented arithmetic slice
+adds a public start point with coefficient one and endpoint with coefficient
+minus one to the identity equation, using `3 + 130*204 = 26,523` dense rows.
+Its fixed 202 slots expose all original canonical point/scalar limbs, alongside
+`S`, slice index, both interval bounds, active count and endpoints: 817 public
+field cells. Bounded Euclidean remainders constrain each floor division;
+every inactive slot must contain the canonical generator and zero coefficient.
+Both parity layouts configure 55 advice, three fixed and 21 permutation columns:
+15 Base gate columns, three lookup columns and one 37-column dense lane. A single
+advice/fixed/permutation evaluation bank therefore already needs 79 MiB; these
+arithmetic layouts exclude global authentication, carrier binding and joins.
+The dense witness now computes the forbidden curve offsets once and chooses
+the first permitted generator multiple within the complete `2A+1` bound for
+`A` active digits. This removes valid-input rejection at the former arbitrary
+256-candidate limit without retrying the full trace for each candidate.
+
+Each parity must first authenticate the same original ordinary parent/shard
+proofs, folds, exact verifier inputs, ordered source identities and equation
+inventory as the unsplit Claim. The new global challenge must be derived once
+from that complete authenticated inventory under a domain-separated transcript;
+all slices must use that exact challenge and prove their own source points,
+coefficients, and partial curve sum. A local challenge per slice, a host-supplied
+source digest, a freely chosen partial sum, or a hash of unauthenticated carrier
+bytes would change the relation. A binary join must verify its children,
+their adjacent index ranges and common global statement, and constrain its
+sum to the group addition of their partial sums. Its root requires range
+`[0,S)`, exact count `S`, and the identity point as the complete batched
+equation result. Duplicate, omitted, reordered, or padded nonzero sources
+must fail. The existing two-challenge common-prime carrier binding must cover
+each paired Eq/Ep slice and link every slice to the same global inventory;
+both fields must validate the other field's canonical point/scalar limbs.
+
+The unsplit Claim now exposes its existing complete-source challenge through a
+typed, circuit-owned helper before coefficient aggregation, with mutation
+fixtures for both Pasta fields. This is a refactoring of the current verifier
+graph, not an independent source-authentication proof. The separate k15 slice
+arithmetic is not linked to that complete inventory or to child proofs and a
+root join, so neither component qualifies the phone gate.
+
+The separate inventory circuit now reuses the complete scalar verifier graph,
+native Poseidon jobs and reciprocal carrier binding, exposing columns of
+113, 4,090 and 4,090 cells. Its two extra semantic cells bind both source counts
+to the verifier graph's shape; the carriers expose the ordered source and
+coefficient limbs, common statement and constrained zero padding. This circuit
+is not selected by the release. Its final root must still verify both parity
+proofs, authenticate their actual carrier commitments, and bind the five slices
+and joins. Full-circuit tests exercise Poseidon and the entire carrier evaluation
+schedule using a small genuine deferred equation; that fixture does not contain
+the complete recursive parent/shard proof graph or establish phone resource use.
+
+The arithmetic tree has exactly five Eq and five Ep slice proofs plus four
+binary joins in each field: eighteen proof instances per transition, before
+any separate source-authentication or final composition proofs. These other
+proof counts are not established yet. The accepted roots must expose the
+unchanged 97-cell external Claim statement, including release and both plan
+digests, complete SHA stage/job cursor, both chaining states, message and
+terminal roots, both protocol/audit/proof-chain digests, and all 34 history
+limbs. The final relation must recompute the typed SHA jobs and bind the
+actual terminal body through the existing terminal fold; copying a claimed
+terminal root from a child is insufficient. The 14 proof-internal carrier
+binding cells and two carrier columns may change shape only as part of a new
+reviewed circuit, never by weakening the external verifier's checks.
+
+The current Poseidon batch geometry would need at most
+`39 + 202 + 7 + 202 + 14 = 464` mandatory permutations for a 202-source
+slice if its proof-input and protocol-point contribution can be partitioned
+without adding rows. One k15 lane fits `floor(32,759/66) = 496`
+permutations, leaving only 32 for optional native transcript work; the
+existing transcript scheduler and whole-inventory source authentication do
+not meet this envelope by construction. One dense and one Poseidon lane plus
+minimum Base and RLC would require at least 56 advice columns, or 56 MiB for
+one k15 advice bank. Actual Base, key, verifier, join, and peak-process
+memory have not been measured. The fixed slice arithmetic is implemented as a
+test-only prerequisite; authenticated subclaims and joins remain unimplemented.
+
+TODO: Implement a standalone circuit-authenticated global-inventory proof,
+five paired bounded slice relations, reciprocal carrier binding and exact
+binary joins; prove the complete source-to-root and terminal bindings with
+positive and omission, duplication, reorder, coefficient, partial-sum,
+cross-parity, and terminal-body mutation tests. Configure and prove both
+fields with real keys, measure every source-authentication/slice/join phase
+including key reload and handoff on target phones, and keep the 128 MiB
+whole-process gate until the maximum observed RSS is below it.
 
 ## Acceptance tests and implementation order
 

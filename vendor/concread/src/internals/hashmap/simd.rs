@@ -1,4 +1,4 @@
-#[cfg(feature = "simd_support")]
+#[cfg(feature = "simd")]
 use core_simd::u64x8;
 use std::borrow::Borrow;
 use std::fmt::Debug;
@@ -22,7 +22,7 @@ impl KeyLoc {
     }
 }
 
-#[cfg(not(feature = "simd_support"))]
+#[cfg(not(feature = "simd"))]
 pub(crate) fn branch_simd_search<K, V>(branch: &Branch<K, V>, h: u64) -> Result<usize, usize>
 where
     K: Hash + Eq + Clone + Debug,
@@ -43,7 +43,7 @@ where
     Err(branch.slots())
 }
 
-#[cfg(feature = "simd_support")]
+#[cfg(feature = "simd")]
 pub(crate) fn branch_simd_search<K, V>(branch: &Branch<K, V>, h: u64) -> Result<usize, usize>
 where
     K: Hash + Eq + Clone + Debug,
@@ -108,7 +108,7 @@ where
     }
 }
 
-#[cfg(not(feature = "simd_support"))]
+#[cfg(not(feature = "simd"))]
 pub(crate) fn leaf_simd_get_slot<K, V>(leaf: &Leaf<K, V>, h: u64) -> Option<usize>
 where
     K: Hash + Eq + Clone + Debug,
@@ -119,7 +119,7 @@ where
     (0..leaf.slots()).find(|&cand_idx| h == unsafe { leaf.ctrl.a.1[cand_idx] })
 }
 
-#[cfg(feature = "simd_support")]
+#[cfg(feature = "simd")]
 pub(crate) fn leaf_simd_get_slot<K, V>(leaf: &Leaf<K, V>, h: u64) -> Option<usize>
 where
     K: Hash + Eq + Clone + Debug,
@@ -174,7 +174,7 @@ where
     None
 }
 
-#[cfg(not(feature = "simd_support"))]
+#[cfg(not(feature = "simd"))]
 pub(crate) fn leaf_simd_search<K, V, Q>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
 where
     K: Hash + Eq + Clone + Debug + Borrow<Q>,
@@ -204,7 +204,7 @@ where
     KeyLoc::Missing(leaf.slots())
 }
 
-#[cfg(feature = "simd_support")]
+#[cfg(feature = "simd")]
 pub(crate) fn leaf_simd_search<K, V, Q>(leaf: &Leaf<K, V>, h: u64, k: &Q) -> KeyLoc
 where
     K: Hash + Eq + Clone + Debug + Borrow<Q>,

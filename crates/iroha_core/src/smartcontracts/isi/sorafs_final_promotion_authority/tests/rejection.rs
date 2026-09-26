@@ -29,6 +29,7 @@ fn native_permissions_and_control_cas_are_exact_and_independent() {
         stale.expected_control_digest = [0xFF; 32];
         assert!(stale.execute(&f.manager, tx).is_err());
         assert_eq!(retained(tx), before);
+        configure_account_control(tx, &f.manager, &f.account_policy);
     });
     enroll(&mut f);
     let request = reserve_request(&f, 31);
@@ -91,11 +92,11 @@ fn reserve_rejects_drift_invalid_actions_and_competing_operations() {
         let exact = instruction(tx, Action::Reserve(request));
         exact.clone().execute(&f.operator, tx).unwrap();
         let reserved = retained(tx);
-        exact.execute(&f.operator, tx).unwrap();
+        assert!(exact.execute(&f.operator, tx).is_err());
         assert_eq!(
             retained(tx),
             reserved,
-            "retry must keep the original fence and expiry"
+            "the consumed direct source cannot be reused for another success"
         );
         let mut changed = request;
         changed.intent.operation_id = [32; 32];
@@ -246,10 +247,12 @@ fn reservation_expiry_is_clipped_to_independent_custody_lifetime() {
     let mut f = fixture();
     configure(&mut f);
     let bytes = attest(&f, 1_500, 5_000);
+    let account_enrollment = account_enrollment(&f, 5_000);
     transact(&mut f.state, 1_500, |tx| {
         instruction(tx, Action::Enroll(bytes))
             .execute(&f.manager, tx)
-            .unwrap()
+            .unwrap();
+        account_enrollment.execute(&f.manager, tx).unwrap();
     });
     let reserved = reserve(&mut f, 31, 2_000);
     assert_eq!(reserved.reservation.expires_at_unix_ms, 5_000);

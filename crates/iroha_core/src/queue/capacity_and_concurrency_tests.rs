@@ -58,6 +58,26 @@ async fn push_tx_overflow() {
         })
     ));
 }
+#[test]
+fn empty_pending_snapshot_does_not_preallocate_for_scan_limit() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new(world_with_test_domains(), kura, query_handle);
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let (pending, lease) = queue
+        .bounded_pending_snapshot(
+            &state.view(),
+            NonZeroUsize::new(usize::MAX).expect("non-zero scan bound"),
+        )
+        .expect("empty queue remains selectable with a large scan bound");
+    assert!(pending.is_empty());
+    assert!(
+        lease.hashes.is_empty(),
+        "empty queue cannot publish a selection owner"
+    );
+}
+
 #[tokio::test]
 async fn concurrent_stress_test() {
     let max_txs_in_block = nonzero!(10_usize);

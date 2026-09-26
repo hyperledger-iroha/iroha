@@ -766,6 +766,32 @@ impl LocalProposalState {
         ));
         true
     }
+    fn defer_pre_signing_candidate_history_admission(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &super::v2_candidate::CandidateError,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let super::v2_candidate::CandidateError::LocalStateAdmission(error) = error else {
+            return false;
+        };
+        self.defer_history_admission(owner, error, wake)
+    }
+    fn defer_evidence_preparation(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &crate::state::EvidencePreparationError,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let Some(wait) = error.release_wait() else {
+            return false;
+        };
+        self.history_wait = Some((
+            owner,
+            super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), wake),
+        ));
+        true
+    }
     /// Keep retrying deferred autonomous work for the bounded observation
     /// window, then arm one ordinary non-empty recovery retry for this owner.
     ///
@@ -1677,6 +1703,16 @@ fn schedule_local_proposal(
             {
                 return Ok(());
             }
+            Err(V2RunnerError::CandidateBuild(
+                super::v2_candidate::CandidateError::LocalEvidencePreparation(error),
+            )) if proposal_state.defer_evidence_preparation(
+                owner,
+                &error,
+                &queue.sumeragi_waker(),
+            ) =>
+            {
+                return Ok(());
+            }
             Err(error) => return Err(error),
         };
         let Some(assembly) = native.assemble_candidate(
@@ -1710,9 +1746,9 @@ fn schedule_local_proposal(
         native.retain_candidate_source(source);
         let assembly = match outcome {
             Ok(assembly) => assembly,
-            Err(super::v2_candidate::CandidateError::LocalStateAdmission(error))
+            Err(error)
                 if !output_guard.restart_required()
-                    && proposal_state.defer_history_admission(
+                    && proposal_state.defer_pre_signing_candidate_history_admission(
                         owner,
                         &error,
                         &queue.sumeragi_waker(),
@@ -2951,17 +2987,7 @@ fn candidate_attachments(
             None,
         )
         .derive_npos_consensus_effects(round_header)
-        .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
-                V2RunnerError::CandidateBuild(
-                    super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::from(refusal.clone()),
-                    ),
-                )
-            } else {
-                V2RunnerError::Candidate(error.to_string())
-            }
-        })?
+        .map_err(classify_penalty_derivation_failure)?
     } else {
         Default::default()
     };
@@ -2989,6 +3015,19 @@ fn candidate_attachments(
         queue_plan_admissions,
         ..CandidateAttachments::default()
     })
+}
+fn classify_penalty_derivation_failure(error: eyre::Report) -> V2RunnerError {
+    if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::from(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+        V2RunnerError::CandidateBuild(
+            super::v2_candidate::CandidateError::LocalEvidencePreparation(refusal.clone()),
+        )
+    } else {
+        V2RunnerError::Candidate(error.to_string())
+    }
 }
 fn adapter_fingerprints(
     build_identity: crate::release_identity::BuildIdentity,

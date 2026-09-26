@@ -131,8 +131,10 @@ from .client_status_models import (
     SumeragiV2QcResponse,
     SumeragiV2Round,
     SumeragiV2TimeoutReference,
+    SumeragiV2TransactionTreeCommitment,
     parse_sumeragi_json_object,
 )
+from .election_tally import ElectionTally
 from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
@@ -731,6 +733,7 @@ __all__ = [
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
     "GovernanceReferendumStatus",
+    "ElectionTally",
     "GovernanceTally",
     "GovernanceUnlockStats",
     "TransactionInstruction",
@@ -825,6 +828,7 @@ __all__ = [
     "SumeragiV2BlockSubject",
     "SumeragiV2LaneFinalityManifestCommitment",
     "SumeragiV2MergeCarrierCommitment",
+    "SumeragiV2TransactionTreeCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QcReference",
     "SumeragiV2QcResponse",
@@ -2074,6 +2078,26 @@ def _lane_finality_manifest_commitment(
             _offline_required(record, "leaf_count", context),
             f"{context}.leaf_count",
             _SUMERAGI_LANE_FINALITY_MANIFEST_MAX_LEAVES,
+            positive=True,
+        ),
+    )
+
+
+def _transaction_tree_commitment(
+    value: Any, context: str
+) -> Optional[SumeragiV2TransactionTreeCommitment]:
+    if value is None:
+        return None
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(record, context, required=("root", "leaf_count"))
+    return SumeragiV2TransactionTreeCommitment(
+        root=_offline_hash_literal(
+            _offline_required(record, "root", context), f"{context}.root"
+        ),
+        leaf_count=_offline_unsigned(
+            _offline_required(record, "leaf_count", context),
+            f"{context}.leaf_count",
+            (1 << 64) - 1,
             positive=True,
         ),
     )
@@ -5335,11 +5359,18 @@ class _SumeragiV2StatusParser:
             "merge_carrier",
             "executed_block_wire_len",
             "executed_block_wire_hash",
+            "transaction_input_commitment",
+            "transaction_output_commitment",
         }
         unknown = set(record) - allowed_fields
         if unknown:
             raise RuntimeError(f"{context} contains unknown field {sorted(unknown)[0]}")
-        for required_field in ("lane_finality_manifest", "merge_carrier"):
+        for required_field in (
+            "lane_finality_manifest",
+            "merge_carrier",
+            "transaction_input_commitment",
+            "transaction_output_commitment",
+        ):
             if required_field not in record:
                 raise RuntimeError(f"{context}.{required_field} is required")
         kagemusha_top_up_count = cls._unsigned(
@@ -5425,7 +5456,23 @@ class _SumeragiV2StatusParser:
                     merge_record["entry_hash"], f"{merge_context}.entry_hash"
                 ),
             )
+        transaction_input_commitment = _transaction_tree_commitment(
+            record["transaction_input_commitment"],
+            f"{context}.transaction_input_commitment",
+        )
+        transaction_output_commitment = _transaction_tree_commitment(
+            record["transaction_output_commitment"],
+            f"{context}.transaction_output_commitment",
+        )
+        if transaction_input_commitment is not None and (
+            transaction_output_commitment is None
+            or transaction_output_commitment.leaf_count
+            < transaction_input_commitment.leaf_count
+        ):
+            raise RuntimeError(f"{context} selective input/output counts disagree")
         return SumeragiV2ExecutionCommitment(
+            transaction_input_commitment=transaction_input_commitment,
+            transaction_output_commitment=transaction_output_commitment,
             parent_state_root=cls._hash(
                 record.get("parent_state_root"), f"{context}.parent_state_root"
             ),

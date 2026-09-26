@@ -510,11 +510,13 @@ immutable. There is no first-voter initialization or live-policy fallback.
 Weight is `floor(sqrt(exact_smallest_units)) * min(1 + duration / step, cap)`;
 conversion and aggregate arithmetic reject fractional frozen units and overflow.
 Every positive PLAIN bond transfers actual funds into escrow, including when the
-minimum is zero. A replacement preserves choice and cannot reduce quantity,
-requested duration or absolute expiry; it must increase quantity or absolute
-expiry. A shorter remaining duration representing the same absolute expiry is
-rejected. Only the latest retained position contributes, and only an increase in
-quantity transfers an additional escrow delta. Slash/restitution retain exact
+minimum is zero. `CastPlainBallot` creates one immutable choice and cannot act
+as an update. `UpdatePlainConviction` has no choice field: Core reads it from the
+existing authority-owned lock. The update cannot reduce quantity, requested
+duration or absolute expiry; it must increase quantity or absolute expiry. A
+shorter remaining duration representing the same absolute expiry is rejected.
+Only the latest retained position contributes, and only an increase in quantity
+transfers an additional escrow delta. Slash/restitution retain exact
 frozen units even if a live asset specification permits more precision.
 Restitution rechecks the complete retained corpus before moving funds because
 later ballots may have consumed the aggregate headroom freed by a slash; it
@@ -540,7 +542,7 @@ decision; a later verified finalization emits that deferred
 `ReferendumDecided` exactly once, while finalization before closure leaves the
 decision to the one-shot close transition.
 
-`CastPlainBallot` and `CastZkBallot` must be the sole direct instruction in a
+`CastPlainBallot`, `UpdatePlainConviction` and `CastZkBallot` must be the sole direct instruction in a
 signed transaction; contracts, triggers, IVM programs, and mixed instruction
 lists receive no ballot entrypoint binding. A penalized ballot still returns
 its normal transaction error. If the rejected overlay prevalidated a nonzero slash,

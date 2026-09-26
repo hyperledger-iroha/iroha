@@ -37,6 +37,14 @@ public abstract record class TransactionInstruction
         return Convert.ToBase64String(EncodeInstructionBox(authorityAccountId));
     }
 
+    /// <summary>Creates one choice-free update of an existing public standalone ballot.</summary>
+    public static UpdatePlainConvictionInstruction UpdatePlainConviction(
+        string referendumId,
+        string ownerAccountId,
+        string amount,
+        ulong durationBlocks) =>
+        new(referendumId, ownerAccountId, amount, durationBlocks);
+
     /// <summary>Create a Kaigi call using the final V1 typed configuration and authorization.</summary>
     public static CreateKaigiInstruction CreateKaigi(Hyperledger.Iroha.Kaigi.NewKaigi call,
         Hyperledger.Iroha.Kaigi.KaigiAuthorizationArtifactsV1? authorization = null) => new(call, authorization);

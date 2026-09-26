@@ -1542,31 +1542,45 @@ where
     Ok(output)
 }
 
-/// Derive the MintHashClaim deferred-equation challenge from a compact,
-/// non-adaptive transcript commitment.
+/// The containing Claim verifier's source inventory and circuit-constrained batch challenge.
 ///
-/// Unlike the generic audit above, this deliberately does not absorb every
-/// equation coefficient. The claim verifier first binds every input from
-/// which those coefficients can be derived: authenticated protocol identities,
-/// public and instance data, final ordinary-proof transcript squeezes, and
-/// final squeezes of both BGH19 folds. This helper then additionally absorbs
-/// the complete source namespace and every equation tag and selector before
-/// deriving `challenge`. The unchanged coefficient gadget evaluates every
-/// original equation at successive powers of that challenge, and the
-/// reciprocal parity still performs the full source-major MSM.
+/// This is deliberately produced from the deferred verifier chip, never from a
+/// caller-provided carrier or digest. The source order, exact source count,
+/// verifier inputs, equation tags/selectors, and bound semantic values are
+/// absorbed before any aggregate coefficient is computed. The caller must
+/// finish all parent/shard proof and fold verification before invoking this
+/// helper; it cannot authenticate a proof omitted from that graph. A future
+/// sliced Claim must bind every slice to this same challenge and these exact
+/// source cells; possessing this scalar-half value alone grants no monetary
+/// authority.
+pub(super) struct KagemushaClaimGlobalSourceChallengeV1<C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
+    pub(super) challenge: AssignedValue<C::ScalarExt>,
+    pub(super) challenge_limbs: [AssignedValue<C::ScalarExt>; 2],
+    pub(super) source_commitments: Vec<[AssignedValue<C::ScalarExt>; 2]>,
+    pub(super) bound_u128_values: Vec<u128>,
+}
+
+/// Constrain the one global Claim challenge over the complete authenticated
+/// source namespace, before a caller can partition sources into arithmetic
+/// slices or evaluate any deferred-equation coefficients.
 ///
-/// This is claim-specific because using it without a complete verifier-input
-/// binding would let a prover choose omitted coefficients after seeing the
-/// batching challenge.
-pub(super) fn derive_mint_hash_claim_native_deferred_batch_v1<C>(
-    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
-    loader: DeferredLoader<'_, C>,
-    equation_tags: Vec<u32>,
-    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
+/// The returned value is only circuit-authenticated when the containing
+/// circuit synthesizes `native_poseidon_jobs` and binds its challenge limbs to
+/// its own public audit. This helper is private to the recursive verifier and
+/// does not accept a host-selected source digest or source-cell list.
+pub(super) fn constrain_mint_hash_claim_global_source_challenge_v1<C>(
+    loader: &DeferredLoader<'_, C>,
+    equation_tags: &[u32],
+    assigned_selectors: &[AssignedValue<C::ScalarExt>],
     verifier_input_binding: &[AssignedValue<C::ScalarExt>],
     bound_values: &[AssignedValue<C::ScalarExt>],
     native_poseidon_jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
-) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
+) -> Result<KagemushaClaimGlobalSourceChallengeV1<C>, Error>
 where
     C: CurveAffineExt,
     C::Base: BigPrimeField,
@@ -1602,6 +1616,9 @@ where
         elements.extend_from_slice(verifier_input_binding);
 
         let source_commitments = chip.assigned_source_commitments_v1(&mut ctx);
+        if source_commitments.is_empty() {
+            return Err(Error::InvalidInstances);
+        }
         elements.push(ctx.main().load_constant(C::ScalarExt::from(
             KAGEMUSHA_MINT_HASH_CLAIM_BATCH_SOURCES_TAG_V1,
         )));
@@ -1620,7 +1637,7 @@ where
         elements.push(ctx.main().load_constant(C::ScalarExt::from(
             u64::try_from(equation_count).map_err(|_| Error::InvalidInstances)?,
         )));
-        for (tag, selector) in equation_tags.iter().zip(&assigned_selectors) {
+        for (tag, selector) in equation_tags.iter().zip(assigned_selectors) {
             elements.push(
                 ctx.main()
                     .load_constant(C::ScalarExt::from(u64::from(*tag))),
@@ -1650,14 +1667,11 @@ where
         (elements, source_commitments, bound_u128_values)
     };
 
-    // The queue retains the exact existing raw transcript and every permutation bridge.
-    // The containing Claim circuit must synthesize it after Base; this witness alone is not
-    // an authenticated digest. The domain prefix is already present and is constrained in place.
+    let fixed_prefix = pasta_poseidon_domain_elements_v1::<C::ScalarExt>(
+        KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1,
+        KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1,
+    );
     let challenge = {
-        let fixed_prefix = pasta_poseidon_domain_elements_v1::<C::ScalarExt>(
-            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_DOMAIN_V1,
-            KAGEMUSHA_MINT_HASH_CLAIM_BATCH_VERSION_V1,
-        );
         let mut ctx = loader.ctx_mut();
         native_poseidon_jobs
             .queue_raw(
@@ -1668,7 +1682,59 @@ where
             )
             .map_err(transcript_error)?
     };
-    let challenge_limbs = assigned_scalar_u128_limbs(&loader, challenge);
+    let challenge_limbs = assigned_scalar_u128_limbs(loader, challenge);
+    Ok(KagemushaClaimGlobalSourceChallengeV1 {
+        challenge,
+        challenge_limbs,
+        source_commitments,
+        bound_u128_values,
+    })
+}
+
+/// Derive the MintHashClaim deferred-equation challenge from a compact,
+/// non-adaptive transcript commitment.
+///
+/// Unlike the generic audit above, this deliberately does not absorb every
+/// equation coefficient. The claim verifier first binds every input from
+/// which those coefficients can be derived: authenticated protocol identities,
+/// public and instance data, final ordinary-proof transcript squeezes, and
+/// final squeezes of both BGH19 folds. This helper then additionally absorbs
+/// the complete source namespace and every equation tag and selector before
+/// deriving `challenge`. The unchanged coefficient gadget evaluates every
+/// original equation at successive powers of that challenge, and the
+/// reciprocal parity still performs the full source-major MSM.
+///
+/// This is claim-specific because using it without a complete verifier-input
+/// binding would let a prover choose omitted coefficients after seeing the
+/// batching challenge.
+pub(super) fn derive_mint_hash_claim_native_deferred_batch_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tags: Vec<u32>,
+    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
+    verifier_input_binding: &[AssignedValue<C::ScalarExt>],
+    bound_values: &[AssignedValue<C::ScalarExt>],
+    native_poseidon_jobs: &mut PastaNativePoseidonJobsV1<C::ScalarExt>,
+) -> Result<KagemushaNativeDeferredBatchV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: KagemushaPoseidonFieldV1,
+{
+    let global = constrain_mint_hash_claim_global_source_challenge_v1(
+        &loader,
+        &equation_tags,
+        &assigned_selectors,
+        verifier_input_binding,
+        bound_values,
+        native_poseidon_jobs,
+    )?;
+    let KagemushaClaimGlobalSourceChallengeV1 {
+        challenge,
+        challenge_limbs,
+        source_commitments,
+        bound_u128_values,
+    } = global;
     let (batch, aggregate_coefficients, aggregate_coefficient_limbs) = {
         let chip = loader.ecc_chip();
         let mut ctx = loader.ctx_mut();

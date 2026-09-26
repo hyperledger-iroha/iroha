@@ -6,6 +6,16 @@ surface for SoraFS storage providers. It expands the high-level process
 outlined in the SoraFS Architecture RFC and keeps rollout evidence, fixtures,
 and operator commands in one place.
 
+Current source status: the Norito V1 admission and revocation signatures cover a
+nonzero council-policy id/revision/digest and exact admission-event revision and
+predecessor digest. A renewal's outer predecessor must equal the signed inner
+predecessor; a revocation signs its expected current event. These are wire and
+in-memory lineage checks only. The local-key/directory registry is still a
+provisional authority. Production admission remains closed until Parliament
+policy enactment, finalized State/Kura provider heads and tombstones, and one
+exact reader replace those local constructors. A successor envelope cannot be
+loaded as a fresh initial admission after restart.
+
 ## Policy Goals
 
 - Ensure only vetted operators can publish `ProviderAdvertV1` records that the
@@ -97,8 +107,12 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- p
   - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
     (default stdout or `--json-out`).
 - `sign`
-  - Inputs: a proposal (`--proposal`), a signed advert (`--advert`), optional advert body
-    (`--advert-body`), retention epoch, and at least one council signature. Signatures can be provided
+  - Inputs: exact `--network-id`, `--policy-id`, `--policy-revision`,
+    `--policy-digest`, and `--admission-revision`, plus a proposal (`--proposal`),
+    signed advert (`--advert`), optional advert body (`--advert-body`), retention
+    epoch, and at least one council signature. Renewal signing also requires
+    `--expected-current-event-digest` and `--previous-envelope`.
+    Signatures can be provided
     inline (`--council-signature=<signer_hex:signature_hex>`) or via files by combining
     `--council-signature-public-key` with `--council-signature-file=<path>`.
   - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
@@ -142,9 +156,10 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- p
    The command validates unchanged capability/profile fields via
    `AdmissionRecord::apply_renewal`, emits `ProviderAdmissionRenewalV1`, and prints digests for the
    governance log.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Replace the previous envelope in `sorafs.discovery.admission.envelopes_dir`, commit the renewal Norito/JSON to the governance repository, and append the renewal hash + retention epoch to `specs/sorafs/migration_ledger.md`.
-4. Notify operators that the new envelope is live and monitor `torii_sorafs_admission_total{result="accepted",reason="stored"}` to confirm ingestion.
-5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+3. Retain the signed renewal as an offline artifact. Do not replace the local
+   registry's initial envelope with a successor: direct successor loading is
+   refused until the finalized State/Kura lineage reader is connected.
+4. Regenerate the canonical fixtures via `cargo run -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
 
 #### Emergency revocation
 1. Identify the compromised envelope and issue a revocation:

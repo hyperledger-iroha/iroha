@@ -156,7 +156,7 @@ verified native artifact directory.
 ## Native SoraFS Reference Validation
 
 The repository SoraFS qualification runner pins
-`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-23 host
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-24 host
 artifact. Plain source-checkout builds remain `debug` unless the profile is
 selected explicitly.
 
@@ -338,7 +338,7 @@ manifest through the Node/N-API client with an HTTPS origin and immutable
 `LocalSigningContext`. Explicit custom fetch implementations are trusted transport
 dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
 Public archive decoding is inspection-only; copying or re-decoding transport
-bytes loses admission authority. The authenticated ABI23 binding applies
+bytes loses admission authority. The authenticated ABI24 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
@@ -1388,6 +1388,17 @@ The Norito encode/decode helpers mirror the Rust codecs. Instruction builders co
 registration and asset transfers; fixtures in `javascript/iroha_js/test/instructionBuilders.test.js`
 and `javascript/iroha_js/test/transactionFixturesParity.test.js` keep the payloads aligned with the
 Rust goldens.
+
+The first-release retail builders `buildActivateRetailDailyLimitV1InstructionJson`,
+`buildBindRetailIdentityV1InstructionJson`, and
+`buildRetailMonetaryMovementV1InstructionJson` return exact JSON text for direct use
+with `noritoEncodeInstruction` or transaction instruction inputs. They preserve
+the full unsigned 64-bit physical dataspace ID without JavaScript number rounding.
+The native instruction codec admits only the three exact typed envelopes and
+their current wire IDs; retail instruction decode returns large integer fields
+as `bigint`. Building an instruction does not install a policy, authenticate a
+bank receipt, or verify ledger finality. A source-matched native addon is
+required to encode and validate the instruction bytes.
 
 ```js
 const registerDomain = noritoEncodeInstruction(
@@ -3265,7 +3276,7 @@ await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
 to an immutable exact `NetworkId`/policy-chain binding and a durable checkpoint.
-The ABI 23 native bridge verifies the Norito proof and returns an immutable
+The ABI 24 native bridge verifies the Norito proof and returns an immutable
 projection; JavaScript never substitutes application-supplied signatures or
 keysets for that trusted boundary. Persist every promoted checkpoint before
 requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
@@ -3302,7 +3313,7 @@ To price the active policy with the execution account's current Hijiri risk,
 request an authenticated live quote. `quoteValidationFeeHijiri` sends and
 accepts only bounded, unencoded, exact `application/x-norito`, rejects
 cacheable responses, and uses the
-ABI 23 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
+ABI 24 native verifier to bind all arithmetic, policy/Hijiri hashes, the echoed
 account/count, and `evaluatedStateHeight + 1` before returning an immutable
 projection. Its assurance label is intentionally evaluated-only; admission
 still rejects a quote made stale by an intervening policy or risk update.

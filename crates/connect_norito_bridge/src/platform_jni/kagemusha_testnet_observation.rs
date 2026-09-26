@@ -114,6 +114,31 @@ const TESTNET_OBSERVATION_JNI_CONTRACT_V1: [jni::sys::jint; 4] = [
     iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1 as jni::sys::jint,
     KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1 as jni::sys::jint,
 ];
+#[cfg(unix)]
+const TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1: [jni::sys::jint; 8] = [
+    1,
+    32,
+    KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 as jni::sys::jint,
+    KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 as jni::sys::jint,
+    KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 as jni::sys::jint,
+    KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1 as jni::sys::jint,
+    iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1 as jni::sys::jint,
+    KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 as jni::sys::jint,
+];
+#[cfg(unix)]
+const TESTNET_VALUE_ADMISSION_JNI_CONTRACT_V1: [jni::sys::jint; 3] = [
+    1,
+    32,
+    crate::kagemusha_testnet_observation_v1::KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1
+        as jni::sys::jint,
+];
+#[cfg(unix)]
+const TESTNET_VALUE_CREDIT_JNI_CONTRACT_V1: [jni::sys::jint; 3] = [
+    1,
+    32,
+    crate::kagemusha_testnet_native_value_ledger_v1::KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1
+        as jni::sys::jint,
+];
 
 fn bounded_nonempty_length(length: jni::sys::jsize, maximum: usize) -> Option<usize> {
     let length = usize::try_from(length).ok()?;
@@ -213,6 +238,285 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTes
     .unwrap_or(ERR_KAGEMUSHA_V1)
 }
 
+/// Advertise the exact native-only finalized-mint diagnostic JNI contract.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jintArray {
+    let Ok(output) =
+        env.new_int_array(TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1.len() as jni::sys::jsize)
+    else {
+        return ptr::null_mut();
+    };
+    if env
+        .set_int_array_region(&output, 0, &TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1)
+        .is_err()
+    {
+        return ptr::null_mut();
+    }
+    output.into_raw()
+}
+
+/// Return a finalized-mint diagnostic archive length, or the exact negative C ABI status.
+///
+/// The Rust owner must have retained the private pre-send reservation and a separately
+/// authenticated exact finality pin. All JNI allocation happens before the C observer
+/// advances the durable trial head.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeObserveV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    operation_id: jni::objects::JByteArray<'_>,
+    status_json: jni::objects::JByteArray<'_>,
+    anchor_network_id: jni::objects::JByteArray<'_>,
+    anchor_height_bits: jni::sys::jlong,
+    anchor_context_id: jni::objects::JByteArray<'_>,
+    public_inputs: jni::objects::JByteArray<'_>,
+    paired_proof: jni::objects::JByteArray<'_>,
+    output: jni::objects::JByteBuffer<'_>,
+) -> jni::sys::jint {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(operation_id) = bounded_java_archive(&mut env, &operation_id, 32) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if operation_id.len() != 32 {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let Some(status_json) = bounded_java_archive(
+            &mut env,
+            &status_json,
+            KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1,
+        ) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        let Some(anchor_network_id) = bounded_java_archive(
+            &mut env,
+            &anchor_network_id,
+            KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1,
+        ) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if anchor_network_id.len() != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let Some(anchor_context_id) = bounded_java_archive(
+            &mut env,
+            &anchor_context_id,
+            KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1,
+        ) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if anchor_context_id.len() != KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let Some(public_inputs) = bounded_java_archive(
+            &mut env,
+            &public_inputs,
+            KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1,
+        ) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        let Some(paired_proof) = bounded_java_archive(
+            &mut env,
+            &paired_proof,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
+        ) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        let Ok(capacity) = env.get_direct_buffer_capacity(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if capacity != KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 {
+            return ERR_BUFFER_TOO_SMALL;
+        }
+        let Ok(output_ptr) = env.get_direct_buffer_address(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if output_ptr.is_null() {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let mut output_length = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
+                operation_id.as_ptr(),
+                operation_id.len(),
+                status_json.as_ptr(),
+                status_json.len(),
+                anchor_network_id.as_ptr(),
+                anchor_network_id.len(),
+                anchor_height_bits as u64,
+                anchor_context_id.as_ptr(),
+                anchor_context_id.len(),
+                public_inputs.as_ptr(),
+                public_inputs.len(),
+                paired_proof.as_ptr(),
+                paired_proof.len(),
+                output_ptr,
+                capacity,
+                &mut output_length,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if output_length == 0 || output_length > capacity {
+            return ERR_KAGEMUSHA_V1;
+        }
+        output_length as jni::sys::jint
+    }))
+    .unwrap_or(ERR_KAGEMUSHA_V1)
+}
+
+/// Advertise the testnet-only value-admission archive transport contract.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeContractV1(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jintArray {
+    let Ok(output) =
+        env.new_int_array(TESTNET_VALUE_ADMISSION_JNI_CONTRACT_V1.len() as jni::sys::jsize)
+    else {
+        return ptr::null_mut();
+    };
+    if env
+        .set_int_array_region(&output, 0, &TESTNET_VALUE_ADMISSION_JNI_CONTRACT_V1)
+        .is_err()
+    {
+        return ptr::null_mut();
+    }
+    output.into_raw()
+}
+
+/// Return an archive length only after the durable native owner verifies a retained mint.
+///
+/// The Java side supplies only the operation ID. It cannot install a release, reserve a mint,
+/// pin finality coordinates, or convert this copyable archive into a production spend token.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    operation_id: jni::objects::JByteArray<'_>,
+    output: jni::objects::JByteBuffer<'_>,
+) -> jni::sys::jint {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(operation_id) = bounded_java_archive(&mut env, &operation_id, 32) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if operation_id.len() != 32 || operation_id.iter().all(|byte| *byte == 0) {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let Ok(capacity) = env.get_direct_buffer_capacity(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if capacity
+            != crate::kagemusha_testnet_observation_v1::KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1
+        {
+            return ERR_BUFFER_TOO_SMALL;
+        }
+        let Ok(output_ptr) = env.get_direct_buffer_address(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if output_ptr.is_null() {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let mut output_length = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_testnet_value_admit_v1(
+                operation_id.as_ptr(),
+                operation_id.len(),
+                output_ptr,
+                capacity,
+                &mut output_length,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if output_length == 0 || output_length > capacity {
+            return ERR_KAGEMUSHA_V1;
+        }
+        output_length as jni::sys::jint
+    }))
+    .unwrap_or(ERR_KAGEMUSHA_V1)
+}
+
+/// Advertise the bounded, operation-ID-only testnet ledger-credit transport.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jintArray {
+    let Ok(output) =
+        env.new_int_array(TESTNET_VALUE_CREDIT_JNI_CONTRACT_V1.len() as jni::sys::jsize)
+    else {
+        return ptr::null_mut();
+    };
+    if env
+        .set_int_array_region(&output, 0, &TESTNET_VALUE_CREDIT_JNI_CONTRACT_V1)
+        .is_err()
+    {
+        return ptr::null_mut();
+    }
+    output.into_raw()
+}
+
+/// Return a copyable credit archive only after the native ledger commits an eligible mint.
+#[unsafe(no_mangle)]
+#[cfg(unix)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    operation_id: jni::objects::JByteArray<'_>,
+    output: jni::objects::JByteBuffer<'_>,
+) -> jni::sys::jint {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(operation_id) = bounded_java_archive(&mut env, &operation_id, 32) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if operation_id.len() != 32 || operation_id.iter().all(|byte| *byte == 0) {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let Ok(capacity) = env.get_direct_buffer_capacity(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if capacity
+            != crate::kagemusha_testnet_native_value_ledger_v1::KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1
+        {
+            return ERR_BUFFER_TOO_SMALL;
+        }
+        let Ok(output_ptr) = env.get_direct_buffer_address(&output) else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        if output_ptr.is_null() {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let mut output_length = 0;
+        let status = unsafe {
+            crate::connect_norito_kagemusha_testnet_value_credit_v1(
+                operation_id.as_ptr(),
+                operation_id.len(),
+                output_ptr,
+                capacity,
+                &mut output_length,
+            )
+        };
+        if status != 0 {
+            return status;
+        }
+        if output_length == 0 || output_length > capacity {
+            return ERR_KAGEMUSHA_V1;
+        }
+        output_length as jni::sys::jint
+    }))
+    .unwrap_or(ERR_KAGEMUSHA_V1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +529,23 @@ mod tests {
                 .iter()
                 .all(|word| *word > 0)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finalized_mint_jni_contract_is_exact_and_has_no_reservation_transport() {
+        assert_eq!(
+            TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1,
+            [1, 32, 16_777_216, 32, 32, 4096, 6528, 512]
+        );
+        assert_eq!(TESTNET_FINALIZED_MINT_JNI_CONTRACT_V1.len(), 8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn testnet_value_jni_contract_carries_only_operation_id_and_bounded_output() {
+        assert_eq!(TESTNET_VALUE_ADMISSION_JNI_CONTRACT_V1, [1, 32, 768]);
+        assert_eq!(TESTNET_VALUE_CREDIT_JNI_CONTRACT_V1, [1, 32, 512]);
     }
 
     #[test]

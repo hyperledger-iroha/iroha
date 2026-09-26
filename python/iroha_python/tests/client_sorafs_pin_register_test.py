@@ -65,7 +65,7 @@ def test_pin_register_rejects_transaction_hash_without_iroha_marker() -> None:
         max_retries=0,
     )
 
-    with pytest.raises(ValueError, match="exact lowercase marked"):
+    with pytest.raises(ValueError, match="must match .*canonical Iroha HashOf marker"):
         client.register_sorafs_pin_manifest(
             SimpleNamespace(signed_transaction_versioned=b"\x01signed")
         )

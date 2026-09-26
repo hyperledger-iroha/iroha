@@ -1783,10 +1783,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
-        "fn validate_body<S: V2EffectServices>(",
+        "fn validate_pending_kura_body(",
         "take_deferred_validated_marker()?",
         "clone_deferred_validated_marker()?",
-        "direct pending-Kura Validate-to-Apply child",
+        "pending-Kura Validate exact Apply child",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -3560,7 +3560,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
-        "fn validate_body<S: V2EffectServices>(",
+        "fn validate_pending_kura_body(",
         ".take_deferred_validated_marker()?;",
         ".take_deferred_validated_marker_for_mutation()?;",
         "pending-Kura Validate exact Apply child",
@@ -3623,17 +3623,17 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
-        "fn validate_body<S: V2EffectServices>(",
+        "fn validate_pending_kura_body(",
         "self.ensure_pending_slot()?;",
         "let _ = self.remaining_capacity();",
-        "direct pending-Kura Validate-to-Apply child",
+        "pending-Kura Validate exact Apply child",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
-        "fn validate_body<S: V2EffectServices>(",
+        "fn validate_pending_kura_body(",
         ".restore_deferred_validated_marker(marker);",
         ".discard_deferred_validated_marker(marker);",
-        "direct pending-Kura Validate-to-Apply child",
+        "pending-Kura Validate exact Apply child",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -4292,9 +4292,10 @@ _TERMINAL_VALIDATE_OWNER_MUTATIONS = (
     ("original_outcome", "outcome: completion.outcome,", "outcome: replacement_outcome,"),
     ("original_occurrence", "seal\n                    .permits_resolved_readmission(effect, evidence, frontier)", "seal\n                    .permits_resolved_readmission(effect, strengthened_evidence, frontier)"),
     ("original_occurrence", "if self.pending_durable_validate_admissions.contains_key(&key)", "if false"),
-    ("replay_before_admission", "if recovered != receipt", "if false"),
-    ("replay_before_admission", "previous.terminal().as_ref() != terminal.as_ref()", "false"),
-    ("replay_before_admission", "assert_eq!(previous.is_some(), replacing_resolved);\n            return Ok(None);", "assert_eq!(previous.is_some(), replacing_resolved);\n            continue_fresh_admission();"),
+    ("replay_before_admission", "return self.replay_terminal_validate_body(", "self.replay_terminal_validate_body("),
+    ("replay_terminal_owner", "if recovered != receipt", "if false"),
+    ("replay_terminal_owner", "previous.terminal().as_ref() != terminal.as_ref()", "false"),
+    ("replay_terminal_owner", "assert_eq!(previous.is_some(), replacing_resolved);\n        Ok(None)", "assert_eq!(previous.is_some(), replacing_resolved);\n        continue_fresh_admission()"),
 )
 
 

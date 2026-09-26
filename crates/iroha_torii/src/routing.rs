@@ -4638,8 +4638,8 @@ pub struct AppQueryLimits {
     pub max_page_limit: u64,
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub max_fetch_size: u64,
-    /// Rate-limiter cost applied per requested row when backpressure is enforced.
-    pub rate_limit_cost_per_row: u64,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub rate_limit_cost_per_page: u64,
 }
 impl AppQueryLimits {
     /// Construct limits with sane floors and ordering.
@@ -4647,17 +4647,17 @@ impl AppQueryLimits {
         default_page_limit: u64,
         max_page_limit: u64,
         max_fetch_size: u64,
-        rate_limit_cost_per_row: u64,
+        rate_limit_cost_per_page: u64,
     ) -> Self {
         let default_page_limit = default_page_limit.max(1);
         let max_page_limit = max_page_limit.max(default_page_limit);
         let max_fetch_size = max_fetch_size.max(default_page_limit).max(1);
-        let rate_limit_cost_per_row = rate_limit_cost_per_row.max(1);
+        let rate_limit_cost_per_page = rate_limit_cost_per_page.max(1);
         Self {
             default_page_limit,
             max_page_limit,
             max_fetch_size,
-            rate_limit_cost_per_row,
+            rate_limit_cost_per_page,
         }
     }
     /// Clamp the requested page limit to the configured bounds.
@@ -4694,10 +4694,10 @@ impl AppQueryLimits {
             Some(size) => Ok(Some(size)),
         }
     }
-    /// Compute rate-limiter cost for a given page size.
+    /// Compute cost in default-sized pages, charging at least one page.
     pub fn rate_limit_cost(&self, page_size: u64) -> u64 {
-        self.rate_limit_cost_per_row
-            .saturating_mul(page_size.max(1))
+        self.rate_limit_cost_per_page
+            .saturating_mul(page_size.max(1).div_ceil(self.default_page_limit))
     }
 }
 impl Default for AppQueryLimits {
@@ -4706,7 +4706,7 @@ impl Default for AppQueryLimits {
             defaults::torii::APP_API_DEFAULT_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_FETCH_SIZE as u64,
-            defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW as u64,
+            defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE as u64,
         )
     }
 }
@@ -4740,6 +4740,28 @@ mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::RwLock;
+    routing_test! { sync app_query_cost_counts_default_sized_pages
+        let limits = AppQueryLimits::default();
+        for (page_size, expected) in [(0, 1), (1, 1), (99, 1), (100, 1), (101, 2), (499, 5), (500, 5)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+        assert_eq!(limits.clamp_page_limit(None).unwrap(), 100);
+        assert!(limits.clamp_page_limit(Some(501)).is_err());
+        assert!(limits.clamp_fetch_size(Some(501)).is_err());
+    }
+    routing_test! { sync app_query_cost_respects_custom_page_size_and_multiplier
+        let limits = AppQueryLimits::new(25, 500, 500, 3);
+        for (page_size, expected) in [(0, 3), (1, 3), (25, 3), (26, 6), (500, 60)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+    }
+    routing_test! { sync app_query_cost_saturates_and_preserves_constructor_floors
+        let limits = AppQueryLimits::new(1, u64::MAX, u64::MAX, u64::MAX);
+        assert_eq!(limits.rate_limit_cost(2), u64::MAX);
+        let limits = AppQueryLimits::new(u64::MAX, u64::MAX, u64::MAX, 1);
+        assert_eq!(limits.rate_limit_cost(u64::MAX), 1);
+        assert_eq!(AppQueryLimits::new(0, 0, 0, 0).rate_limit_cost(0), 1);
+    }
     routing_test! { sync read_app_query_limits_recovers_from_poison
         let lock = RwLock::new(AppQueryLimits::default());
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -5988,8 +6010,8 @@ pub struct ZkVoteGetTallyResponseDto {
     pub evaluated_block_hash: String,
     /// True when the election has been finalized on-chain.
     pub finalized: bool,
-    /// Public tally counts per option (length equals number of options).
-    pub tally: Vec<u64>,
+    /// Exact public conviction weights per option (length equals number of options).
+    pub tally: Vec<u128>,
 }
 }
 #[cfg(test)]
@@ -10652,6 +10674,25 @@ fn validated_zk_vote_tally_response(
             "invalid V1 election state for `{election_id}`: {error}"
         ))
     })?;
+    election
+        .tally
+        .iter()
+        .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+        .ok_or_else(|| {
+            zk_query_conversion_error(format!(
+                "invalid V1 election state for `{election_id}`: tally total exceeds u128"
+            ))
+        })?;
+    if election.end_ts < election.start_ts {
+        return Err(zk_query_conversion_error(format!(
+            "invalid V1 election state for `{election_id}`: end_ts precedes start_ts"
+        )));
+    }
+    if !election.finalized && election.tally.iter().any(|weight| *weight != 0) {
+        return Err(zk_query_conversion_error(format!(
+            "invalid V1 election state for `{election_id}`: unfinalized tally is nonzero"
+        )));
+    }
     Ok(ZkVoteGetTallyResponseDto {
         evaluated_block_height,
         evaluated_block_hash,
@@ -10698,7 +10739,7 @@ pub async fn handle_v1_zk_vote_tally(
 #[cfg(test)]
 mod zk_vote_tally_response_tests {
     use super::*;
-    fn election(options: u32, tally: Vec<u64>) -> iroha_core::state::ElectionState {
+    fn election(options: u32, tally: Vec<u128>) -> iroha_core::state::ElectionState {
         iroha_core::state::ElectionState {
             options,
             tally,
@@ -10708,9 +10749,11 @@ mod zk_vote_tally_response_tests {
     routing_test! { sync tally_response_rejects_corrupt_or_oversized_election_state
         for (options, tally) in [
             (0, Vec::new()),
+            (1, vec![0]),
             (64, Vec::new()),
             (64, vec![0; 65]),
             (65, vec![0; 65]),
+            (2, vec![u128::MAX, 1]),
         ] {
             let state = election(options, tally);
             assert!(
@@ -10721,9 +10764,24 @@ mod zk_vote_tally_response_tests {
             );
         }
     }
+    routing_test! { sync tally_response_rejects_invalid_window_or_partial_public_result
+        let mut state = election(2, vec![0, 0]);
+        state.start_ts = 10;
+        state.end_ts = 9;
+        assert!(validated_zk_vote_tally_response(
+            "invalid-window", &state, 7, hex::encode([9_u8; 32]),
+        ).is_err());
+
+        state.end_ts = 10;
+        state.tally = vec![1, 0];
+        assert!(validated_zk_vote_tally_response(
+            "partial-result", &state, 7, hex::encode([9_u8; 32]),
+        ).is_err());
+    }
     routing_test! { sync tally_response_accepts_v1_boundaries_with_snapshot_identity
-        for (options, tally_len) in [(1, 1), (64, 64)] {
-            let state = election(options, vec![7; tally_len]);
+        for (options, tally_len) in [(2, 2), (64, 64)] {
+            let mut state = election(options, vec![7; tally_len]);
+            state.finalized = true;
             let expected_hash = hex::encode([9_u8; 32]);
             let response =
                 validated_zk_vote_tally_response("bounded", &state, 7, expected_hash.clone())
@@ -10732,6 +10790,24 @@ mod zk_vote_tally_response_tests {
             assert_eq!(response.evaluated_block_height, 7);
             assert_eq!(response.evaluated_block_hash, expected_hash);
         }
+    }
+    routing_test! { sync tally_response_preserves_weight_above_u64_max
+        let weight = u128::from(u64::MAX) + 1;
+        let mut state = election(2, vec![weight, 0]);
+        state.finalized = true;
+        let response = validated_zk_vote_tally_response(
+            "exact-weight",
+            &state,
+            7,
+            hex::encode([9_u8; 32]),
+        )
+        .expect("exact u128 election response");
+        assert_eq!(response.tally, vec![weight, 0]);
+        let json = norito::json::to_string(&response).expect("encode exact tally JSON");
+        assert!(json.contains(&weight.to_string()), "JSON must retain all weight digits");
+        let decoded: ZkVoteGetTallyResponseDto =
+            norito::json::from_str(&json).expect("decode exact tally JSON");
+        assert_eq!(decoded.tally, response.tally);
     }
 }
 fn sumeragi_evidence_response_encode_error() -> Error {

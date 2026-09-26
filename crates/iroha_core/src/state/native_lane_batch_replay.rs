@@ -23,7 +23,6 @@ use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, SignedBlock, lane_decision_batch::LaneDecisionBatchV1},
 };
-use std::sync::Arc;
 
 /// Both entry points retain the exact first-source recovery dependency.
 /// The caller keeps its carrier and every completed private input until replay ends.
@@ -49,7 +48,7 @@ pub(crate) struct PreparedNativeLaneBatchSourceV1<'state> {
     state: &'state State,
     observed: VerifiedLaneContexts,
     generation: u64,
-    input: Arc<SignedBlock>,
+    input: SignedBlock,
     groups: Vec<VerifiedLaneDecisionGroupV1>,
 }
 
@@ -125,7 +124,6 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     /// owner remains unpublished and does not authenticate the global proposal.
     pub(crate) fn record_execution(
         self,
-        carrier: SignedBlock,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     ) -> Result<Option<RecordedNativeLaneBatchV1<'state>>, MergeLedgerCommitError> {
         // A recorder-owning caller must not wait for a State writer which may
@@ -135,17 +133,11 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
         if !self.is_current() {
             return Ok(None);
         }
-        if carrier != *self.input {
-            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                "recorded Native carrier differs from the prepared source".into(),
-            ));
-        }
-        // The equality check joins the complete retained source to the moved
-        // carrier. Release its duplicate bytes before actual execution begins.
-        drop(self.input);
-        let recorded = self
-            .state
-            .record_native_lane_decision_batch(carrier, self.groups, context);
+        // Source authentication and any global preflight inspect this exact frozen
+        // input. Move it into recording; there is no replacement carrier argument.
+        let recorded =
+            self.state
+                .record_native_lane_decision_batch(self.input, self.groups, context);
         if !super::is_stable_state_view_generation(
             self.generation,
             self.state.state_view_generation(),
@@ -556,7 +548,7 @@ impl State {
                 state: self,
                 observed,
                 generation,
-                input: Arc::new(carrier.clone()),
+                input: carrier.clone(),
                 groups,
             },
         ))

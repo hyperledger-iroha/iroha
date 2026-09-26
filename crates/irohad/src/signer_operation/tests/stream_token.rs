@@ -6,14 +6,16 @@ use super::super::{
         SignerStreamTokenErrorV1, SignerStreamTokenReceiptBytesV1, SignerStreamTokenServiceV1,
     },
 };
+use super::credential_provider::credential;
 use super::*;
+use iroha_data_model::sorafs::stream_token_authority::StreamTokenReviewedV1;
 use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenV1,
     signer::{
         protocol::signer_operation_signatures_digest_v1,
         stream_token::{
             SignerStreamTokenExpectedV1, SignerStreamTokenReceiptErrorV1,
-            SignerStreamTokenReceiptV1,
+            SignerStreamTokenReceiptV1, SignerStreamTokenRequestV1,
         },
     },
 };
@@ -22,6 +24,265 @@ use std::{fs, os::unix::fs::PermissionsExt as _};
 #[path = "stream_token_support.rs"]
 mod support;
 use support::*;
+
+#[test]
+fn role11_reservation_source_receives_exact_body_window_and_reviewed_digest() {
+    let harness = Harness::new();
+    let body = body(0x74);
+    let receipt = harness.sign(&body).unwrap();
+    let decoded = SignerStreamTokenReceiptV1::decode_canonical(receipt.bytes()).unwrap();
+    let source_reviewed = harness
+        .source
+        .last_reserved_review
+        .lock()
+        .unwrap()
+        .expect("purpose-bound review reached the reservation source");
+    assert_eq!(source_reviewed.request, decoded.request);
+    assert_eq!(source_reviewed.intent, decoded.intent);
+    assert_eq!(
+        source_reviewed.request.issued_at_unix_ms,
+        body.issued_at * 1_000
+    );
+    assert_eq!(
+        source_reviewed.request.expires_at_unix_ms,
+        body.ttl_epoch * 1_000
+    );
+    assert_eq!(
+        source_reviewed.intent.request_digest,
+        decoded.request.digest().unwrap()
+    );
+    assert_eq!(harness.source.counts().reserves, 1);
+}
+
+#[test]
+fn role11_reservation_rejects_body_window_and_digest_substitution_before_source() {
+    let fixture = fixture_for(
+        SignerRoleV1::StreamToken,
+        SignerPurposeBindingV1::StreamToken {
+            provider_id: [0x62; 32],
+        },
+    );
+    let body = body(0x75);
+    let signing_payload = payload(&body);
+    let expected = SignerStreamTokenExpectedV1::new(&body, &fixture.coordinator.binding).unwrap();
+    let snapshot = fixture
+        .source
+        .observe_signing_state(&fixture.coordinator.binding)
+        .unwrap();
+    let custody = verify_signer_custody_use_v1(
+        &fixture.coordinator.record,
+        &fixture.coordinator.binding,
+        &fixture.coordinator.trust,
+        &snapshot.custody,
+    )
+    .unwrap();
+    let request = SignerStreamTokenRequestV1::new(&custody, &expected, &body).unwrap();
+    let intent = SignerOperationIntentV1 {
+        action: SignerOperationActionV1::Sign,
+        operation_id: expected.operation_id(),
+        request_digest: request.digest().unwrap(),
+        previous_audit: snapshot.audit_head,
+    };
+    let reviewed = StreamTokenReviewedV1 { request, intent };
+
+    assert!(matches!(
+        fixture.coordinator.begin(intent),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    let mut changed_body = body.clone();
+    changed_body.ttl_epoch += 1;
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &changed_body,
+            &signing_payload,
+            &expected,
+            &reviewed,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &changed_body,
+            &payload(&changed_body),
+            &expected,
+            &reviewed,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    let mut changed_window = reviewed;
+    changed_window.request.expires_at_unix_ms += 1_000;
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &body,
+            &signing_payload,
+            &expected,
+            &changed_window,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    let mut changed_review = reviewed;
+    changed_review.request.signing_payload_digest[0] ^= 1;
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &body,
+            &signing_payload,
+            &expected,
+            &changed_review,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    let mut changed_custody = reviewed;
+    changed_custody.request.original_custody.record_digest[0] ^= 1;
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &body,
+            &signing_payload,
+            &expected,
+            &changed_custody,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    let mut changed_intent = reviewed;
+    changed_intent.intent.request_digest[0] ^= 1;
+    assert!(matches!(
+        fixture.coordinator.begin_stream_token(
+            intent,
+            &body,
+            &signing_payload,
+            &expected,
+            &changed_intent,
+        ),
+        Err(SignerOperationErrorV1::InvalidOperation)
+    ));
+    assert!(fixture.source.state.lock().unwrap().used_ids.is_empty());
+    assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn software_stream_token_service_signs_and_recovers_only_the_completed_receipt() {
+    let mut harness = Harness::new();
+    drop(harness.service.take());
+    let (_credential_directory, credential_path) = credential(0x21);
+    let source = Arc::clone(&harness.source);
+    let service = SignerStreamTokenServiceV1::from_software_supervisor_credential(
+        &credential_path,
+        source.base.binding.clone(),
+        source.record.clone(),
+        source.trust.clone(),
+        Some(source.clone()),
+        SignerReceiptJournalV1::open_test(&source.directory, SignerReceiptPurposeV1::StreamToken)
+            .unwrap(),
+    )
+    .expect("active software custody and injected completed-operation source");
+    let token_body = body(0x72);
+    source.register(&token_body);
+    let payload = payload(&token_body);
+    let receipt = service.sign(&payload).expect("exact durable completion");
+    let decoded: SignerStreamTokenReceiptV1 =
+        norito::decode_canonical(receipt.bytes()).expect("canonical receipt");
+    assert_eq!(decoded.signatures.len(), 4);
+    assert_eq!(source.counts().commits, 1);
+    assert_eq!(source.staged_checked.load(Ordering::SeqCst), 1);
+    let before = source.counts();
+    fs::remove_file(&credential_path).expect("remove private credential after construction");
+    assert_eq!(service.recover(&payload).unwrap().bytes(), receipt.bytes());
+    let after = source.counts();
+    assert_eq!(
+        (after.signing, after.reserves, after.commits),
+        (before.signing, before.reserves, before.commits),
+        "recovery cannot reserve, complete, or use the removed key"
+    );
+    assert!(
+        service.sign(&payload).is_err(),
+        "spent operation ID cannot sign again"
+    );
+    assert_eq!(source.counts().commits, 1);
+    source
+        .base
+        .state
+        .lock()
+        .unwrap()
+        .mutate(Mutation::SignerRevoked);
+    assert!(
+        service.recover(&payload).is_err(),
+        "revocation blocks release"
+    );
+}
+
+#[test]
+fn software_stream_token_assembly_refuses_missing_source_and_wrong_purpose_before_key_io() {
+    let mut harness = Harness::new();
+    drop(harness.service.take());
+    let source = Arc::clone(&harness.source);
+    let missing_credential = source.directory.join("missing-private-key");
+    let binding = source.base.binding.clone();
+    let record = source.record.clone();
+    let trust = source.trust.clone();
+    let journal = |purpose| SignerReceiptJournalV1::open_test(&source.directory, purpose).unwrap();
+    let before = source.counts();
+    assert!(matches!(
+        SignerStreamTokenServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            binding.clone(),
+            record.clone(),
+            trust.clone(),
+            None,
+            journal(SignerReceiptPurposeV1::StreamToken),
+        ),
+        Err(SignerStreamTokenErrorV1::Operation(
+            SignerOperationErrorV1::StateUnavailable
+        ))
+    ));
+    assert!(matches!(
+        SignerStreamTokenServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            binding.clone(),
+            record.clone(),
+            trust.clone(),
+            Some(source.clone()),
+            journal(SignerReceiptPurposeV1::ReleaseManifest),
+        ),
+        Err(SignerStreamTokenErrorV1::Journal)
+    ));
+    let mut wrong_role = binding.clone();
+    wrong_role.role = SignerRoleV1::ReleaseManifest;
+    assert!(matches!(
+        SignerStreamTokenServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            wrong_role,
+            record.clone(),
+            trust.clone(),
+            Some(source.clone()),
+            journal(SignerReceiptPurposeV1::StreamToken),
+        ),
+        Err(SignerStreamTokenErrorV1::Receipt(_))
+    ));
+    assert_eq!(
+        source.counts(),
+        before,
+        "preflight never reads source or key"
+    );
+    assert!(matches!(
+        SignerStreamTokenServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            binding,
+            record,
+            trust,
+            Some(source.clone()),
+            journal(SignerReceiptPurposeV1::StreamToken),
+        ),
+        Err(SignerStreamTokenErrorV1::Operation(
+            SignerOperationErrorV1::ProviderUnavailable
+        ))
+    ));
+    assert_eq!(source.counts().reserves, 0);
+    assert_eq!(source.counts().commits, 0);
+}
 
 #[test]
 fn ordinary_only_source_can_complete_signing_without_custody_control_capabilities() {
@@ -96,6 +357,49 @@ fn stream_receipt_persists_four_exact_signatures_and_restart_recovery_never_uses
         harness.calls(),
         4,
         "duplicate signing never retries a completed key operation"
+    );
+}
+
+#[test]
+fn staged_stream_receipt_fences_key_replay_after_source_rollback() {
+    let harness = Harness::new();
+    let token_body = body(0x73);
+    let original_audit = harness.source.base.state.lock().unwrap().audit;
+    harness
+        .sign(&token_body)
+        .expect("first completed operation");
+    assert_eq!(harness.calls(), 4);
+    let before = harness.source.counts();
+    {
+        let mut state = harness.source.base.state.lock().unwrap();
+        // Model a bad restored source that would otherwise reserve the already staged ID.
+        state.audit = original_audit;
+        state.used_ids.clear();
+        state.completed = None;
+        state.reservation = None;
+    }
+    assert_eq!(
+        harness.sign(&token_body).unwrap_err(),
+        SignerStreamTokenErrorV1::Journal
+    );
+    let after = harness.source.counts();
+    assert_eq!(after.signing, before.signing);
+    assert_eq!(after.reserves, before.reserves);
+    assert_eq!(after.commits, before.commits);
+    assert_eq!(
+        harness.calls(),
+        4,
+        "a second key operation was not attempted"
+    );
+    assert!(
+        harness
+            .source
+            .base
+            .state
+            .lock()
+            .unwrap()
+            .used_ids
+            .is_empty()
     );
 }
 
@@ -512,7 +816,7 @@ fn stream_constructor_rejects_wrong_journal_role_and_unavailable_fresh_custody()
         };
         let error = SignerStreamTokenServiceV1::new(
             fixture.coordinator,
-            SignerReceiptJournalV1::open(&path, purpose).unwrap(),
+            SignerReceiptJournalV1::open_test(&path, purpose).unwrap(),
         )
         .unwrap_err();
         let expected = match failure {
@@ -599,12 +903,10 @@ fn same_key_custody_renewal_cannot_replay_or_relabel_a_stream_receipt() {
         harness.service().recover(&payload(&body)).unwrap_err(),
         SignerStreamTokenErrorV1::Receipt(SignerStreamTokenReceiptErrorV1::TokenMismatch)
     );
-    assert!(matches!(
-        harness.sign(&body),
-        Err(SignerStreamTokenErrorV1::Operation(
-            SignerOperationErrorV1::ReservationConflict
-        ))
-    ));
+    assert_eq!(
+        harness.sign(&body).unwrap_err(),
+        SignerStreamTokenErrorV1::Journal
+    );
     assert_eq!(
         harness.calls(),
         5,
@@ -640,5 +942,7 @@ fn same_key_custody_renewal_cannot_replay_or_relabel_a_stream_receipt() {
     assert_eq!(harness.calls(), 5);
 }
 
+#[path = "stream_token_completed_read.rs"]
+mod completed_read;
 #[path = "stream_token_transport.rs"]
 mod transport;

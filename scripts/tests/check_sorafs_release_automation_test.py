@@ -313,7 +313,7 @@ def test_mobile_native_qualification_cannot_skip_or_reorder_execution(
     workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
     source = workflow.read_text(encoding="utf-8")
     before = (
-        "      - name: Require fresh ABI-23 JNI bridge "
+        "      - name: Require fresh ABI-24 JNI bridge "
         "in complete Kotlin and Java suites\n"
     )
     after = "      - name: Reauthenticate the consumed Kotlin bridge\n"
@@ -1251,7 +1251,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
-        "ABI-23 connect_norito_bridge with Governance DAG symbols is required."
+        "ABI-24 connect_norito_bridge with Governance DAG symbols is required."
         in validator_tests
     )
 
@@ -1552,11 +1552,11 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "check_native_sdk_abi23_artifact.py verify",
+            "check_native_sdk_artifact.py verify",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "Build and authenticate the exact ABI-23 C# bridge",
+            "Build and authenticate the exact ABI-24 C# bridge",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
@@ -2877,7 +2877,7 @@ def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() ->
         "scripts/tests/sorafs_python_child_runner_test.py",
         "scripts/tests/sorafs_python_consumer_artifact_test.py",
         "scripts/tests/build_sorafs_python_consumer_artifact_test.py",
-        "scripts/tests/check_native_sdk_abi23_artifact_test.py",
+        "scripts/tests/check_native_sdk_artifact_test.py",
         "scripts/tests/check_native_sdk_bounded_probe_test.py",
         "scripts/tests/sorafs_python_environment_test.py",
         "scripts/tests/sorafs_python_process_test.py",

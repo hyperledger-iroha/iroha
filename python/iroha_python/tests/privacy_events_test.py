@@ -62,6 +62,7 @@ class _Response(requests.Response):
         super().__init__()
         self.status_code = status
         self._content = body
+        self._content_consumed = True
         self.closed_by_client = False
 
     def close(self) -> None:

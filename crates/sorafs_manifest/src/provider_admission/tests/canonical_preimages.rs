@@ -8,6 +8,12 @@ fn admission_digest_preimages_ignore_caller_layout() {
     )]
     struct ReviewedRevocationBody<'a> {
         version: u8,
+        network_id: [u8; 32],
+        policy_id: [u8; 32],
+        policy_revision: u64,
+        policy_digest: [u8; 32],
+        transition_revision: u64,
+        expected_current_event_digest: [u8; 32],
         provider_id: [u8; 32],
         envelope_digest: [u8; 32],
         revoked_at: u64,
@@ -33,6 +39,12 @@ fn admission_digest_preimages_ignore_caller_layout() {
     let envelope_digest = independently_hash_frame(ENVELOPE_DIGEST_DOMAIN, &envelope);
     let mut revocation = ProviderAdmissionRevocationV1 {
         version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+        network_id: [0xA1; 32],
+        policy_id: envelope.policy_id,
+        policy_revision: envelope.policy_revision,
+        policy_digest: envelope.policy_digest,
+        transition_revision: envelope.admission_revision + 1,
+        expected_current_event_digest: envelope_digest,
         provider_id: envelope.proposal.provider_id,
         envelope_digest,
         revoked_at: 10,
@@ -44,6 +56,12 @@ fn admission_digest_preimages_ignore_caller_layout() {
     // neither the preimage nor the signature below comes from `revocation.digest()`.
     let reviewed_body = ReviewedRevocationBody {
         version: revocation.version,
+        network_id: revocation.network_id,
+        policy_id: revocation.policy_id,
+        policy_revision: revocation.policy_revision,
+        policy_digest: revocation.policy_digest,
+        transition_revision: revocation.transition_revision,
+        expected_current_event_digest: revocation.expected_current_event_digest,
         provider_id: revocation.provider_id,
         envelope_digest: revocation.envelope_digest,
         revoked_at: revocation.revoked_at,

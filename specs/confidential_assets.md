@@ -71,8 +71,8 @@ fixture remains a local wallet codec fixture and grants no monetary authority.
 - `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
 - `policy_transition_window_blocks` defaults to 200 blocks, and `policy_transition_max_per_height` defaults to 256. Nodes reject governance requests that attempt shorter notice or exceed the exact-height capacity.
 - Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- `vk_shield` is not part of the first-release confidential-asset model and is
-  rejected. An optional `vk_unshield` binding may activate the confidential
+- No `vk_shield` field exists in the canonical first-release confidential-asset
+  instruction or state schema. An optional `vk_unshield` binding may activate the confidential
   policy and, after the first commitment exists, cannot be cleared or changed
   to a different verifier commitment. KAGEMUSHA V1 does not use either
   asset-bound role; its paired artifact set is authenticated by its release
@@ -125,7 +125,7 @@ scheduled the `pending_transition` field is `null`.
 
 | Current mode | Next mode | Prerequisites | Effective-height handling | Notes |
 |---|---|---|---|---|
-| `TransparentOnly` | `Convertible` | Call `RegisterZkAsset` with at least one active canonical `vk_shield` or `vk_unshield` binding. | Activation is immediate; this is not a scheduled transition. | Confidential activation is irreversible in ABI V1. |
+| `TransparentOnly` | `Convertible` | Call `RegisterZkAsset` with an active canonical `vk_unshield` binding. | Activation is immediate; this is not a scheduled transition. | Confidential activation is irreversible in ABI V1. |
 | `Convertible` | `ShieldedOnly` | Schedule with the required lead time and conversion window. Transparent supply must be zero at cut-over. | On success the policy becomes `ShieldedOnly`. If transparent supply remains, the pending transition is cleared and the current `Convertible` mode is retained. | Disables public redemption without invalidating confidential notes. |
 | `ShieldedOnly` | `Convertible` | Schedule with the required lead time. | State flips at `effective_height`; proof-bound public redemption becomes available again. | Existing notes and verifier bindings remain valid. |
 | Either confidential mode | Same as current | Cancel the exact pending `transition_id`. | The pending entry is removed immediately. | Cancellation never restores `TransparentOnly`. |
@@ -250,6 +250,16 @@ tree does not by itself authorize settlement against a particular backing
 pool, so no generic dispatch, InstructionBox discriminant, IVM bridge, relay,
 CLI command, or SDK transaction builder may expose either circuit directly.
 
+For a governed privacy public reserve, Core accepts the transparent payout leg
+only through its exact verified pool-bridge source. At application it rejoins
+the prepared transfer's authorized amount and both live balances, then checks
+that the source debit and destination credit equal that exact amount before
+either balance is written. The bounded decimal relation uses fixed stack limbs
+instead of new BigInt arithmetic scratch. This transparent conservation guard
+does not establish the private
+proof's ownership, note conservation, or production qualification; those gates
+still require their complete verifier and adversarial evidence.
+
 ## Ledger Flow
 1. **`TopUpKagemushaV1 { request }`**
    - Runtime validates the payer, recipient hardware lane, active release,
@@ -262,6 +272,12 @@ CLI command, or SDK transaction builder may expose either circuit directly.
      unique terminal nullifier.
    - It atomically debits the reserve and credits the requested account. Proof
      failure, replay, or reserve underflow leaves all monetary state unchanged.
+- Retiring an asset definition directly or by unregistering its owning domain
+  rejects outstanding KAGEMUSHA reserve liability before custody or the
+  definition is removed. Fully redeemed pools remain archived for replay audit.
+- Domain retirement also rejects definitions retained by active SoraFS reserve
+  custody, governed SCCP settlement routes, or native FX corridor policies.
+
 ## Data Model Additions
 - `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
 - `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
@@ -520,8 +536,7 @@ or encoders. SDK manifests and generated
 instruction catalogs must omit all three retired data-model types and their
 wire fingerprints.
 
-`vk_shield` is rejected in the first release; `vk_unshield` is an optional
-generic confidential-asset binding. Neither grants KAGEMUSHA authority.
+`vk_unshield` is the only first-release generic confidential-asset verifier binding. Neither grants KAGEMUSHA authority.
 Wallet implementations must build and sign the complete KAGEMUSHA V1 object;
 a proof envelope, amount, nullifier list, or opaque commitment is never
 sufficient authority on its own.

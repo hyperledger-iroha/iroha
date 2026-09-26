@@ -114,6 +114,7 @@ fn run() -> Result<(), String> {
     let mut gateway_specs: Vec<GatewayProviderSpec> = Vec::new();
     let mut provider_advert_paths: HashMap<String, PathBuf> = HashMap::new();
     let mut admission_dir: Option<PathBuf> = None;
+    let mut expected_network_id: Option<[u8; 32]> = None;
     let mut admission_trusted_council_keys: Vec<[u8; 32]> = Vec::new();
     let mut admission_signature_threshold: Option<usize> = None;
     let mut assume_now: Option<u64> = None;
@@ -260,6 +261,16 @@ fn run() -> Result<(), String> {
             failure_threshold = Some(parse_usize(rest, "--provider-failure-threshold")?);
         } else if let Some(rest) = arg.strip_prefix("--admission-dir=") {
             admission_dir = Some(PathBuf::from(rest));
+        } else if let Some(rest) = arg.strip_prefix("--network-id=") {
+            if expected_network_id.is_some() {
+                return Err("duplicate --network-id option supplied".into());
+            }
+            let network_id =
+                parse_digest_hex(rest).map_err(|err| format!("invalid --network-id: {err}"))?;
+            if network_id == [0; 32] {
+                return Err("--network-id must not be all zeroes".into());
+            }
+            expected_network_id = Some(network_id);
         } else if let Some(rest) = arg.strip_prefix("--admission-trusted-council-key=") {
             admission_trusted_council_keys.push(
                 parse_digest_hex(rest)
@@ -363,6 +374,11 @@ fn run() -> Result<(), String> {
             "specify at least one --provider=name=/path/to/payload[#concurrency] or --gateway-provider=name=...,provider-id=...,gateway-key=...,base-url=...,stream-token=..."
                 .into(),
         );
+    }
+    if (!provider_advert_paths.is_empty() || admission_dir.is_some())
+        && expected_network_id.is_none()
+    {
+        return Err("--provider-advert and --admission-dir require --network-id".into());
     }
     let manifest_report: Option<Value> = if let Some(source) = &manifest_source {
         Some(load_json(source)?)
@@ -569,6 +585,8 @@ fn run() -> Result<(), String> {
     }
     let admission_registry = match admission_dir.as_ref() {
         Some(dir) => {
+            let network_id = expected_network_id
+                .ok_or_else(|| "--admission-dir requires --network-id".to_string())?;
             let threshold = admission_signature_threshold.ok_or_else(|| {
                 "--admission-dir requires --admission-signature-threshold".to_string()
             })?;
@@ -577,7 +595,7 @@ fn run() -> Result<(), String> {
                 threshold,
             )
             .map_err(|err| format!("invalid provider admission council policy: {err}"))?;
-            Some(load_admission_registry(dir, &policy)?)
+            Some(load_admission_registry(dir, &policy, network_id)?)
         }
         None => {
             if admission_signature_threshold.is_some() || !admission_trusted_council_keys.is_empty()
@@ -589,6 +607,8 @@ fn run() -> Result<(), String> {
     };
     let mut advert_data: HashMap<String, AdvertMetadata> = HashMap::new();
     for (name, path) in provider_advert_paths {
+        let network_id = expected_network_id
+            .ok_or_else(|| "--provider-advert requires --network-id".to_string())?;
         if !provider_specs.iter().any(|spec| spec.name == name) {
             return Err(format!(
                 "--provider-advert specified for unknown provider '{name}'"
@@ -599,6 +619,7 @@ fn run() -> Result<(), String> {
             plan_profile_handle.as_deref(),
             admission_registry.as_ref(),
             assume_now,
+            network_id,
         )?;
         advert_data.insert(name, metadata);
     }
@@ -1002,6 +1023,7 @@ const USAGE: &str = concat!(
      [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] \
      [--provider-advert=name=/path/to/advert.norito ...] \
      [--admission-dir=governance/envelopes/] \
+     [--network-id=genesis_block_hash_hex32] \
      [--admission-trusted-council-key=hex32 ...] \
      [--admission-signature-threshold=count] \
      [--manifest-report=report.json|-] \
@@ -1033,7 +1055,8 @@ fields (`metadata.range_capability`, `metadata.stream_budget`, \
 `metadata.transport_hints`) when adverts supply them. Scoreboard metadata \
 checks are enabled by default; provide `--provider-advert=name=PATH` for every \
 `--provider` entry or pass `--allow-implicit-provider-metadata` when replaying \
-fixtures that rely on baked-in capability hints.\n\n",
+fixtures that rely on baked-in capability hints. `--network-id` is required \
+when either provider adverts or an admission directory is supplied.\n\n",
     include_str!("../../../../specs/sorafs/snippets/multi_source_flag_notes.txt")
 );
 fn usage() -> &'static str {
@@ -1837,6 +1860,7 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
 fn load_admission_registry(
     dir: &Path,
     policy: &ProviderAdmissionCouncilPolicy,
+    expected_network_id: [u8; 32],
 ) -> Result<HashMap<[u8; 32], AdmissionRecord>, String> {
     if !dir.is_dir() {
         return Err(format!(
@@ -1863,6 +1887,13 @@ fn load_admission_registry(
         let bytes = fs::read(&path)
             .map_err(|err| format!("failed to read admission envelope {path:?}: {err}"))?;
         let envelope = decode_admission_envelope(&bytes, &path)?;
+        if envelope.network_id != expected_network_id {
+            return Err(format!(
+                "admission envelope {path:?} network id {} differs from --network-id {}",
+                hex_encode(envelope.network_id),
+                hex_encode(expected_network_id)
+            ));
+        }
         let record = AdmissionRecord::new(envelope, policy)
             .map_err(|err| format!("invalid admission envelope {path:?}: {err}"))?;
         let provider_id = *record.provider_id();
@@ -2012,9 +2043,17 @@ fn load_provider_advert(
     expected_profile: Option<&str>,
     admissions: Option<&HashMap<[u8; 32], AdmissionRecord>>,
     now_override: Option<u64>,
+    expected_network_id: [u8; 32],
 ) -> Result<AdvertMetadata, String> {
     let bytes = read_provider_advert_bytes(path)?;
     let advert = decode_provider_advert_v1(&bytes).map_err(|err| err.to_string())?;
+    if advert.network_id != expected_network_id {
+        return Err(format!(
+            "provider advert {path:?} network id {} differs from --network-id {}",
+            hex_encode(advert.network_id),
+            hex_encode(expected_network_id)
+        ));
+    }
     let now = now_override
         .or_else(unix_time_now)
         .unwrap_or(advert.expires_at);

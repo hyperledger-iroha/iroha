@@ -61,6 +61,27 @@ fn claimed_qpcs_source_carrier_keeps_every_downstream_gate_closed() {
 }
 
 #[test]
+fn merkle_and_initial_rebind_admission_precedes_public_read_on_same_owner() {
+    let source = include_str!("claimed_qpcs_source_carrier_v2.rs");
+    let admission = source
+        .split_once("pub(super) fn admit_canonical_merkle_and_rebind_leaf_hash_work_v2")
+        .expect("budget admission must be exposed only on the started owner")
+        .1
+        .split_once("impl<K, P, S> RnsNativeQpcsOpeningHashWorkAdmittedStartedV2")
+        .expect("qPCS transition must require the admitted owner")
+        .0;
+    assert!(admission.contains("self.source.original_budget_mut_v1()"));
+    assert!(admission.contains("for_canonical_merkle_and_rebind_leaf_hashes_v1"));
+    assert!(admission.contains("work.admit_v1(budget)"));
+    assert!(admission.contains("Err((self, RnsNativeClaimedQpcsSourceCarrierErrorV2::Qpcs))"));
+    assert!(
+        admission.contains("Ok(RnsNativeQpcsOpeningHashWorkAdmittedStartedV2 { started: self })")
+    );
+    assert!(!admission.contains("RnsNativeSingleQpcsScheduleBatchV2::begin_v2"));
+    assert!(!admission.contains("authenticate_rns_native_qpcs_pre_auth_claimed_v1"));
+}
+
+#[test]
 fn local_ledger_explicitly_excludes_existing_subtransition_costs() {
     let source = include_str!("claimed_qpcs_source_carrier_v2.rs");
     let ledger_docs = source

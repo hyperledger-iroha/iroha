@@ -133,6 +133,23 @@ fn pure_priority_context_and_full_set_roundtrip_without_admission_authority() {
 }
 
 #[test]
+fn value_origin_requires_a_published_view_and_frozen_committee_member() {
+    let (frozen, decision) = decision();
+    let round = decision.commit_qc.statement.round;
+    let committee_len = frozen.committee.len();
+    let mut value = decision.value().clone();
+    value_shape(&value, round, committee_len).expect("original origin is in range");
+    value.origin_view = round.voting_view + 1;
+    assert!(value_shape(&value, round, committee_len).is_err());
+    value.origin_view = round.voting_view;
+    value_shape(&value, round, committee_len).expect("current voting view is in range");
+    value.origin_producer = committee_len as u32;
+    assert!(value_shape(&value, round, committee_len).is_err());
+    value.origin_producer = (committee_len - 1) as u32;
+    value_shape(&value, round, committee_len).expect("last committee member is in range");
+}
+
+#[test]
 fn native_decision_roundtrips_and_binds_exact_commit_value_and_rs16() {
     let (frozen, decision) = decision();
     decision.validate_shape(&frozen).unwrap();

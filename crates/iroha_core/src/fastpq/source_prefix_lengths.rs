@@ -1,4 +1,4 @@
-//! Incremental canonical frame sizing for one growing transfer occurrence.
+//! Canonical frame sizing for growing occurrences and complete logical entries.
 //!
 //! This counts framing only: it does not validate arithmetic, chronology, a
 //! digest's value, source authority, or resource admission. Each supplied delta
@@ -296,6 +296,10 @@ impl SourcePrefixFrameSizer {
     }
 }
 
+#[path = "source_prefix_lengths/entry.rs"]
+pub(crate) mod entry;
+
+#[cfg(test)]
 #[path = "source_prefix_lengths/checked.rs"]
 pub(crate) mod checked;
 

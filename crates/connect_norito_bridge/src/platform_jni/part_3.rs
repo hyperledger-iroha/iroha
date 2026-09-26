@@ -144,8 +144,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     asset: jni::objects::JByteArray<'_>,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
-    vk_shield: jni::objects::JByteArray<'_>,
-    vk_shield_present: jni::sys::jboolean,
     private_key: jni::objects::JByteArray<'_>,
     fee_payment_json: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
@@ -161,8 +159,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         asset,
         vk_unshield,
         vk_unshield_present,
-        vk_shield,
-        vk_shield_present,
         private_key,
         fee_payment_json,
     )

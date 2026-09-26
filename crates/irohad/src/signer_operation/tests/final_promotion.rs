@@ -80,8 +80,11 @@ fn ceremony(
         fixture.coordinator,
         reviewed(&message),
         Arc::from(message.clone()),
-        SignerReceiptJournalV1::open(directory, SignerReceiptPurposeV1::FinalPromotionProvenance)
-            .unwrap(),
+        SignerReceiptJournalV1::open_test(
+            directory,
+            SignerReceiptPurposeV1::FinalPromotionProvenance,
+        )
+        .unwrap(),
     )
     .unwrap();
     (service, fixture.source, fixture.provider, message)
@@ -148,6 +151,43 @@ fn final_promotion_signs_durably_and_public_verification_matches_read_only_recov
 }
 
 #[test]
+fn staged_final_promotion_receipt_fences_key_replay_after_source_rollback() {
+    let directory = private_directory();
+    let path = directory.path().canonicalize().unwrap();
+    let (service, source, provider, _message) = ceremony(&path);
+    let receipt = service.sign().expect("first completed operation");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    {
+        let mut state = source.state.lock().unwrap();
+        // Model an invalid restored source that would otherwise reserve the same ID.
+        state.audit = receipt.intent.previous_audit;
+        state.used_ids.clear();
+        state.completed = None;
+        state.reservation = None;
+    }
+    assert_eq!(
+        service.sign().unwrap_err(),
+        SignerFinalPromotionErrorV1::Journal
+    );
+    let state = source.state.lock().unwrap();
+    assert_eq!(
+        state.signing_reads, 1,
+        "the staged ID fails before another source observation"
+    );
+    assert!(
+        state.used_ids.is_empty(),
+        "no second reservation was attempted"
+    );
+    assert_eq!(state.commits, 1);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    drop(state);
+    assert!(
+        service.recover().is_err(),
+        "journal cannot invent native completion"
+    );
+}
+
+#[test]
 fn final_promotion_uses_fresh_audit_head_and_rejects_a_racing_predecessor() {
     for race in [false, true] {
         let directory = private_directory();
@@ -188,7 +228,7 @@ fn final_promotion_rejects_exactly_reviewed_but_noncanonical_statement_before_io
         fixture.coordinator,
         reviewed(&message),
         Arc::from(message.clone()),
-        SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .unwrap(),
     )
     .unwrap_err();
@@ -218,8 +258,11 @@ fn final_promotion_wrong_reviewed_digest_or_size_never_observes_reserves_or_sign
             fixture.coordinator,
             expected,
             Arc::from(message),
-            SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
-                .unwrap(),
+            SignerReceiptJournalV1::open_test(
+                &path,
+                SignerReceiptPurposeV1::FinalPromotionProvenance,
+            )
+            .unwrap(),
         )
         .unwrap_err();
         assert_eq!(
@@ -269,7 +312,7 @@ fn final_promotion_constructor_rejects_foreign_journal_role_and_empty_coordinate
             fixture.coordinator,
             expected,
             Arc::from([b'x']),
-            SignerReceiptJournalV1::open(&path, purpose).unwrap(),
+            SignerReceiptJournalV1::open_test(&path, purpose).unwrap(),
         )
         .unwrap_err();
         assert_eq!(
@@ -311,8 +354,11 @@ fn final_promotion_constructor_rejects_canonical_foreign_binding_before_io() {
             fixture.coordinator,
             reviewed(&message),
             Arc::from(message),
-            SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
-                .unwrap(),
+            SignerReceiptJournalV1::open_test(
+                &path,
+                SignerReceiptPurposeV1::FinalPromotionProvenance,
+            )
+            .unwrap(),
         )
         .unwrap_err();
         assert_eq!(
@@ -336,7 +382,7 @@ fn final_promotion_constructor_checks_fresh_custody_after_validating_the_pinned_
         fixture.coordinator,
         reviewed(&message),
         Arc::from(message),
-        SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .unwrap(),
     )
     .unwrap_err();
@@ -367,7 +413,7 @@ fn final_promotion_sign_and_recovery_use_only_the_constructor_pinned_statement()
         fixture.coordinator,
         caller_expected,
         Arc::clone(&caller_statement),
-        SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .unwrap(),
     )
     .unwrap();

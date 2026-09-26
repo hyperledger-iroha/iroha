@@ -1168,14 +1168,17 @@ _TERMINAL_VALIDATE_OWNER_RELATIONS = (
     )),
     ("replay_before_admission", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "<R: EffectRuntime> V2EffectExecutor<R>", "validate_body", (), (
         "let terminal = self.resolved_validate_outcome(key)?.cloned(); if let Some(terminal) = terminal",
+        "return self.replay_terminal_validate_body( key, effect, ownership, terminal, replacing_resolved, );",
+        "if let Some(marker) = self .published_lifecycle_validate_retry_markers .get_mut(&key)",
+    )),
+    ("replay_terminal_owner", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "<R: EffectRuntime> V2EffectExecutor<R>", "replay_terminal_validate_body", ("#[inline(never)]",), (
         "self.durable_bodies.get(&key).cloned().ok_or_else",
         "self .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?",
         "self.recovered_bodies.get(&key).cloned().ok_or_else",
         "if recovered != receipt { return Err(",
         "if let Some(previous) = self.pending_resolved_validate_replay.as_ref() && previous.terminal().as_ref() != terminal.as_ref() { return Err(",
         "PendingResolvedValidateReplayV1::seal_exact_protected_body( effect, ownership, manifest, receipt, certificate, terminal, )",
-        "let previous = self.pending_resolved_validate_replay.replace(pending); assert_eq!(previous.is_some(), replacing_resolved); return Ok(None);",
-        "if let Some(marker) = self .published_lifecycle_validate_retry_markers .get_mut(&key)",
+        "let previous = self.pending_resolved_validate_replay.replace(pending); assert_eq!(previous.is_some(), replacing_resolved); Ok(None)",
     )),
 )
 

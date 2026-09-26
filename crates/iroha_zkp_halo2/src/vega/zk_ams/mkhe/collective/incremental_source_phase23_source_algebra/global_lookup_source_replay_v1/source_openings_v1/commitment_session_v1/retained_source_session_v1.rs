@@ -40,6 +40,20 @@ pub(in super::super) struct RetainedSourceSessionV1<R> {
 }
 
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RetainedSourceSessionV1<R> {
+    /// The qPCS continuation may charge the original session only after the
+    /// complete Q-mask phase; the inventory and blindings remain owned here.
+    pub(in super::super) fn original_budget_mut_v1(
+        &mut self,
+    ) -> Result<
+        &mut crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
+        ZkAmsMkheErrorV1,
+    > {
+        let Some(RetainedSourcePhaseV1::QMaskComplete(owner)) = self.phase.as_mut() else {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        };
+        owner.source.original_budget_mut_v1()
+    }
+
     pub(in super::super) fn from_source_complete_v1(
         session: GlobalLookupCommitmentSessionV1<R, SourceOpeningCompleteStageV1>,
     ) -> Result<Self, ZkAmsMkheErrorV1> {

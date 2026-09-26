@@ -21,8 +21,8 @@ use iroha_data_model::isi::kagemusha_v1::{
 };
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1, KagemushaHardwareCredentialV1,
-    KagemushaMintAuthorizationV1, kagemusha_mint_credit_opening_commitment_v1,
-    kagemusha_recipient_credential_commitment_v1,
+    KagemushaMintAuthorizationV1, KagemushaMintCreditStatementV1,
+    kagemusha_mint_credit_opening_commitment_v1, kagemusha_recipient_credential_commitment_v1,
 };
 
 const RESERVATION_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-inbox-reservation";
@@ -539,12 +539,15 @@ fn verify_mint_stage_v1(
     artifacts: KagemushaRecursionArtifactsV1,
     reservation: &MintInboxReservationV1,
     credit: &KagemushaMintCreditV1,
+    verify_authorization: fn(
+        &KagemushaAuthenticatedRecursiveVerifierV1,
+        &KagemushaMintAuthorizationV1,
+    ) -> Result<(), String>,
 ) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
     // Complete borrowed shape/size checks before hashing, proof verification, or owned cloning.
     validate_mint_inputs(reservation, credit)?;
     let envelope_digest = canonical_sha256_digest(MINT_CREDIT_DOMAIN, credit)?;
-    verifier
-        .verify_mint_authorization(reservation.authorization())
+    verify_authorization(verifier, reservation.authorization())
         .map_err(KagemushaStateErrorV1::ProofRejected)?;
     let mint_finality = verify_kagemusha_mint_finality_helper_v1(verifier, artifacts, credit)
         .map_err(|_| KagemushaStateErrorV1::InvalidMintCredit)?;
@@ -605,6 +608,64 @@ pub fn verify_applied_top_up_mint_stage_v1(
     status: &KagemushaOperationStatusV1,
     trust_anchor: &KagemushaFinalityTrustAnchorV1,
 ) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
+    verify_applied_top_up_mint_stage_with_authorization_v1(
+        verifier,
+        artifacts,
+        reservation,
+        status,
+        trust_anchor,
+        KagemushaAuthenticatedRecursiveVerifierV1::verify_mint_authorization,
+    )
+}
+
+/// Observe an actual Applied testnet top-up and both mint proofs under an Experimental release.
+/// The result carries public proof facts only; it cannot be staged as a wallet mint.
+pub(crate) struct KagemushaTestnetVerifiedMintProofsV1 {
+    /// Verified public mint statement, without its wallet staging reservation.
+    pub(crate) statement: KagemushaMintCreditStatementV1,
+    /// Exact semantic digest consumed by the paired State MintFold.
+    pub(crate) semantic_digest: DigestV1,
+    /// Exact cross-parity helper binding consumed by the paired State MintFold.
+    pub(crate) proof_binding_digest: DigestV1,
+    /// Canonical digest of the verified online mint credit.
+    pub(crate) envelope_digest: DigestV1,
+}
+
+/// Verify a finalized testnet mint without issuing a wallet-staging capability.
+pub(crate) fn verify_applied_top_up_mint_stage_experimental_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    artifacts: KagemushaRecursionArtifactsV1,
+    reservation: &MintInboxReservationV1,
+    status: &KagemushaOperationStatusV1,
+    trust_anchor: &KagemushaFinalityTrustAnchorV1,
+) -> Result<KagemushaTestnetVerifiedMintProofsV1, KagemushaStateErrorV1> {
+    let stage = verify_applied_top_up_mint_stage_with_authorization_v1(
+        verifier,
+        artifacts,
+        reservation,
+        status,
+        trust_anchor,
+        KagemushaAuthenticatedRecursiveVerifierV1::verify_experimental_mint_authorization_for_testnet_observation,
+    )?;
+    Ok(KagemushaTestnetVerifiedMintProofsV1 {
+        statement: stage.credit().statement.clone(),
+        semantic_digest: stage.mint_finality().semantic_digest(),
+        proof_binding_digest: stage.mint_finality().proof_binding_digest(),
+        envelope_digest: stage.envelope_digest(),
+    })
+}
+
+fn verify_applied_top_up_mint_stage_with_authorization_v1(
+    verifier: &KagemushaAuthenticatedRecursiveVerifierV1,
+    artifacts: KagemushaRecursionArtifactsV1,
+    reservation: &MintInboxReservationV1,
+    status: &KagemushaOperationStatusV1,
+    trust_anchor: &KagemushaFinalityTrustAnchorV1,
+    verify_authorization: fn(
+        &KagemushaAuthenticatedRecursiveVerifierV1,
+        &KagemushaMintAuthorizationV1,
+    ) -> Result<(), String>,
+) -> Result<VerifiedMintStageV1, KagemushaStateErrorV1> {
     // TODO: Exercise the complete positive path with one signed Applied status and a loaded
     // authenticated verifier once a shared real-release mint fixture is available.
     reservation.validate_inputs()?;
@@ -617,7 +678,13 @@ pub fn verify_applied_top_up_mint_stage_v1(
         result.request.operation_id,
         result.request.mint_authorization.as_ref(),
     )?;
-    verify_mint_stage_v1(verifier, artifacts, reservation, &result.mint_credit)
+    verify_mint_stage_v1(
+        verifier,
+        artifacts,
+        reservation,
+        &result.mint_credit,
+        verify_authorization,
+    )
 }
 
 /// Return the exact same canonical mint identity committed by the existing monetary replay tree.

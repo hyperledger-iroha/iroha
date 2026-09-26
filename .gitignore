@@ -307,7 +307,7 @@ _apalache-out*
 /sora-single/
 /storage/
 /crates/sorafs_node/storage/
-/crates/iroha_torii/storage/torii/contract_deploy_bundles/
+/crates/iroha_torii/storage/
 /sora-one/
 /bench_trace.json
 /fastpq_*.json

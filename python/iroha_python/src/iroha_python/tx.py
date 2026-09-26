@@ -429,6 +429,37 @@ class TransactionDraft:
         self._entries.append(instruction)
         return instruction
 
+    def update_plain_conviction(
+        self,
+        referendum_id: str,
+        owner: str,
+        amount: QuantityLike,
+        duration_blocks: int,
+    ) -> TransactionDraft:
+        """Append a choice-free update for the authority's existing public ballot."""
+
+        referendum_id = _require_exact_non_empty_string(referendum_id, "referendum_id")
+        owner = _require_exact_non_empty_string(owner, "owner")
+        if owner != self._config.authority:
+            raise ValueError("owner must equal the transaction authority")
+        duration = _optional_uint(
+            duration_blocks,
+            "duration_blocks",
+            maximum=_U64_MAX,
+            allow_zero=True,
+        )
+        if duration is None:
+            raise TypeError("duration_blocks is required")
+        self.add_instruction(
+            Instruction.update_plain_conviction(
+                referendum_id,
+                owner,
+                _normalize_quantity(amount),
+                duration,
+            )
+        )
+        return self
+
     def extend_instructions(self, instructions: Iterable[Instruction]) -> None:
         """Append multiple instructions in order."""
 
@@ -665,14 +696,9 @@ class TransactionDraft:
         asset_definition_id: str,
         *,
         vk_unshield: Optional[VerifyingKeyLike] = None,
-        vk_shield: Optional[VerifyingKeyLike] = None,
     ) -> TransactionDraft:
         """Append a `RegisterZkAsset` instruction."""
 
-        if vk_shield is not None and vk_unshield is None:
-            raise ValueError(
-                "vk_shield requires vk_unshield so shielded funds remain redeemable"
-            )
         definition = _require_non_empty_string(
             asset_definition_id,
             "asset_definition_id",
@@ -681,7 +707,6 @@ class TransactionDraft:
             Instruction.register_zk_asset(
                 definition,
                 vk_unshield=vk_unshield,
-                vk_shield=vk_shield,
             )
         )
         return self

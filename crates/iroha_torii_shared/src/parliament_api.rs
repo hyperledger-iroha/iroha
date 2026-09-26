@@ -2007,7 +2007,7 @@ mod tests {
             native_wallet
                 .get("bridge_abi")
                 .and_then(json::Value::as_u64),
-            Some(23)
+            Some(24)
         );
         assert_eq!(
             native_wallet

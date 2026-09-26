@@ -5,75 +5,65 @@ private let maximumUInt128 = "340282366920938463463374607431768211455"
 private let maximumTonCoins = "1329227995784915872903807060280344575"
 private let keccak256EmptyBytes = Data(hexString: "C5D2460186F7233C927E7DB2DCC703C0E500B653CA82273B7BFAD8045D85A470")!
 
-let governanceExactIntegerLexemesUserInfoKey = CodingUserInfoKey(
-    rawValue: "org.hyperledger.iroha.governance.exact-integer-lexemes"
-)!
-
-private func governanceCodingPathKey(_ path: [CodingKey]) -> String {
-    path.map { key in
-        if let index = key.intValue {
-            return "i:\(index)"
-        }
-        return "k:\(key.stringValue)"
-    }.joined(separator: "/")
+/// One proposal parsed with the shared exact-number scanner and governance's
+/// stricter all-unsigned-integer policy.
+struct GovernanceValidatedProposalJSON {
+    let value: ToriiJSONValue
+    let numberLexemes: [String: String]
 }
 
-/// Scan one proposal with the SCCP exact JSON parser and retain every integer lexeme.
-///
-/// `JSONDecoder` routes JSON numbers through Foundation numeric types and therefore
-/// cannot preserve all UInt128 values. The proposal entry point installs this table in
-/// `Decoder.userInfo`, allowing the SCCP cap decoders to validate the original token.
-func governanceExactJSONIntegerLexemes(_ data: Data) throws -> [String: String] {
-    let root = try SccpStrictJSON.object(data, label: "governance proposal")
-    var lexemes: [String: String] = [:]
+func governanceValidatedProposalJSON(_ data: Data) throws -> GovernanceValidatedProposalJSON {
+    let lexemes = try ExactJSONNumberLexemeScanner.scan(data)
+    let decoder = JSONDecoder()
+    decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = lexemes
+    let root = try decoder.decode(ToriiJSONValue.self, from: data)
+    guard case .object = root else {
+        throw SccpV1Error.invalid("governance proposal must be a JSON object")
+    }
 
-    func walk(_ value: Any, path: [GovernanceProposalCodingKey]) throws {
-        if value is Bool || value is String || value is NSNull {
-            return
+    func walk(_ value: ToriiJSONValue, path: [GovernanceProposalCodingKey]) throws {
+        let field = path.last?.stringValue
+        let isCapField = field == "max_wrapped_supply"
+            || field == "max_outstanding_liability"
+        if isCapField {
+            switch value {
+            case .number, .integer:
+                break
+            default:
+                throw SccpV1Error.invalid(
+                    "governance proposal cap must be an unquoted JSON integer"
+                )
+            }
         }
-        if let exact = value as? SccpStrictJSON.ExactUnsignedInteger {
-            let field = path.last?.stringValue
-            guard field == "max_wrapped_supply" || field == "max_outstanding_liability" else {
+        switch value {
+        case .bool, .string, .null:
+            break
+        case .number, .integer:
+            let pathKey = exactJSONNumberCodingPathKey(path)
+            guard let token = lexemes[pathKey],
+                  let parsed = SccpUInt128.parse(token) else {
+                throw SccpV1Error.invalid(
+                    "governance proposal requires canonical unsigned JSON integer tokens"
+                )
+            }
+            if !isCapField && parsed.exceedsMaximumSafeJSONInteger {
                 throw SccpV1Error.invalid(
                     "governance proposal integer is outside the exact first-release JSON range"
                 )
             }
-            lexemes[governanceCodingPathKey(path)] = exact.text
-            return
-        }
-        if let number = value as? NSNumber,
-           CFGetTypeID(number) != CFBooleanGetTypeID(),
-           !CFNumberIsFloatType(number)
-        {
-            let text = number.stringValue
-            let field = path.last?.stringValue
-            if field != "max_wrapped_supply" && field != "max_outstanding_liability" {
-                guard let parsed = UInt64(text), parsed <= 9_007_199_254_740_991 else {
-                    throw SccpV1Error.invalid(
-                        "governance proposal integer is outside the exact first-release JSON range"
-                    )
-                }
-            }
-            lexemes[governanceCodingPathKey(path)] = text
-            return
-        }
-        if let object = value as? [String: Any] {
+        case .object(let object):
             for (key, item) in object {
                 try walk(item, path: path + [GovernanceProposalCodingKey(key)])
             }
-            return
-        }
-        if let array = value as? [Any] {
+        case .array(let array):
             for (index, item) in array.enumerated() {
                 try walk(item, path: path + [GovernanceProposalCodingKey(intValue: index)!])
             }
-            return
         }
-        throw SccpV1Error.invalid("governance proposal contains an unsupported JSON value")
     }
 
     try walk(root, path: [])
-    return lexemes
+    return GovernanceValidatedProposalJSON(value: root, numberLexemes: lexemes)
 }
 
 private func governanceExactPositiveInteger<Key: CodingKey>(
@@ -83,14 +73,15 @@ private func governanceExactPositiveInteger<Key: CodingKey>(
     maximum: String
 ) throws -> String {
     let path = decoder.codingPath + [key]
-    let pathKey = governanceCodingPathKey(path)
+    let pathKey = exactJSONNumberCodingPathKey(path)
     let text: String
-    if let lexemes = decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+    if let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
         as? [String: String],
        let exact = lexemes[pathKey]
     {
         text = exact
-    } else if let value = try? container.decode(UInt64.self, forKey: key) {
+    } else if let value = try? container.decode(UInt64.self, forKey: key),
+              value <= 9_007_199_254_740_991 {
         text = String(value)
     } else {
         throw DecodingError.dataCorruptedError(
@@ -157,10 +148,17 @@ func governanceRequireExactJSONIntegers(
         }
     case let .number(number):
         let isSafelyRepresentable = number.isFinite
+            && number >= 0
             && number.rounded(.towardZero) == number
             && abs(number) <= governanceFirstReleaseMaxExactJSONInteger
-        let hasValidatedExactLexeme = exactIntegerLexemes?[governanceCodingPathKey(codingPath)] != nil
-        guard isSafelyRepresentable || hasValidatedExactLexeme else {
+        let token = exactIntegerLexemes?[exactJSONNumberCodingPathKey(codingPath)]
+        let parsed = token.flatMap(SccpUInt128.parse)
+        let field = codingPath.last?.stringValue
+        let hasValidatedExactLexeme = parsed.map {
+            field == "max_wrapped_supply" || field == "max_outstanding_liability"
+                || !$0.exceedsMaximumSafeJSONInteger
+        } ?? false
+        guard token == nil ? isSafelyRepresentable : hasValidatedExactLexeme else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: codingPath,
@@ -169,7 +167,12 @@ func governanceRequireExactJSONIntegers(
             )
         }
     case .integer:
-        guard exactIntegerLexemes?[governanceCodingPathKey(codingPath)] != nil else {
+        let token = exactIntegerLexemes?[exactJSONNumberCodingPathKey(codingPath)]
+        let parsed = token.flatMap(SccpUInt128.parse)
+        let field = codingPath.last?.stringValue
+        guard let parsed,
+              field == "max_wrapped_supply" || field == "max_outstanding_liability"
+                || !parsed.exceedsMaximumSafeJSONInteger else {
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: codingPath,

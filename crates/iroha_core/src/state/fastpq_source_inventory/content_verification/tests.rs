@@ -20,8 +20,9 @@ fn fixture(
     cache_canonical_test_transaction_set(&mut block, &[]);
     for key_index in 0..key_count {
         let hash = Hash::new([key_index as u8, 91]);
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        // This component fixture owns a bounded invocation before staging
+        // occurrences; it does not claim authenticated carrier publication.
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         for occurrence in 0..occurrences {
             let mut deltas = Vec::new();
             for delta_index in 0..deltas_per_occurrence {

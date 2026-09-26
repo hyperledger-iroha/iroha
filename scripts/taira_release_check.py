@@ -1766,6 +1766,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
 
 
 STAGES += (("native beacon reset authority, bounded recovery and public input assembly", (
+    'taira_public_reset::host::beacon::tests::beacon_observation_clients_dispatch_with_the_retained_operator_signer',
     'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
     'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
     'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
@@ -2141,7 +2142,7 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
         'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
         'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
+        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
         'sumeragi::v2_apply::tests::current_carrier_accepts_signed_direct_ordinary_route_without_local_queue',
         'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
         'state::tests::native_preparation_preserves_local_recorder_conflict',

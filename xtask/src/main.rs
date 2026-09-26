@@ -8061,9 +8061,14 @@ where
         }
         "norito-rpc-fixtures" => {
             let mut output_root: Option<PathBuf> = None;
+            let mut local_integration = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
+                    "--local-integration" if !local_integration => local_integration = true,
+                    "--local-integration" => {
+                        return Err("--local-integration was supplied more than once".into());
+                    }
                     "--output-root" if output_root.is_none() => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --output-root".into());
@@ -8082,7 +8087,11 @@ where
                 "norito-rpc-fixtures requires --output-root <absent-absolute-external-directory>",
             )?;
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions::new(Some(output_root)),
+                options: if local_integration {
+                    NoritoRpcFixtureOptions::local_integration(output_root)
+                } else {
+                    NoritoRpcFixtureOptions::new(Some(output_root))
+                },
             })
         }
         "norito-rpc-verify" => {
@@ -14454,9 +14463,7 @@ fn normalize_norito_rpc_output_root(value: &str) -> Result<PathBuf, Box<dyn Erro
             )
         })
     {
-        return Err(
-            "--output-root requires an absolute unambiguous external directory path".into(),
-        );
+        return Err("--output-root requires an absolute unambiguous directory path".into());
     }
     if requested.parent().is_none() {
         return Err("--output-root must not be the filesystem root".into());

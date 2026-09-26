@@ -52,6 +52,7 @@ import {
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
+  buildUpdatePlainConvictionInstruction,
   buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
@@ -75,8 +76,11 @@ import {
 } from "../src/proofAttachment.js";
 import {
   _createNoritoInstructionApi,
+  exactPublicPlainBallotJson,
   noritoDecodeInstruction,
+  noritoDecodeInstructionBoxArchive,
   noritoEncodeInstruction,
+  noritoEncodeInstructionBoxArchive,
   validateNoritoFrame,
 } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
@@ -3816,8 +3820,228 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
     },
   };
   assert.deepEqual(instruction, expected);
+  for (const extra of ["referendum_id", "duration_blocks", "choice", "action"]) {
+    assert.throws(() => buildCastPlainBallotInstruction({
+      referendumId: "ref-2", owner: ACCOUNT_ID, amount: "1", durationBlocks: 50,
+      direction: "aye", [extra]: 1,
+    }), /must contain exactly/u);
+  }
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildUpdatePlainConvictionInstruction retains no choice field", () => {
+  assert.deepEqual(
+    buildUpdatePlainConvictionInstruction({
+      referendumId: "ref-2",
+      owner: ACCOUNT_ID,
+      amount: "18446744073709551616.25",
+      durationBlocks: 50,
+    }),
+    {
+      UpdatePlainConviction: {
+        referendum_id: "ref-2",
+        owner: ACCOUNT_ID_CANONICAL,
+        amount: "18446744073709551616.25",
+        duration_blocks: 50,
+      },
+    },
+  );
+  assert.throws(
+    () => buildUpdatePlainConvictionInstruction({
+      referendumId: "ref-2",
+      owner: ACCOUNT_ID,
+      amount: "10",
+      durationBlocks: 50,
+      direction: "nay",
+    }),
+    /must contain exactly/u,
+  );
+  assert.throws(
+    () => buildUpdatePlainConvictionInstruction({
+      referendumId: "ref-2",
+      owner: ACCOUNT_ID,
+      amount: "01",
+      durationBlocks: 50,
+    }),
+    /canonical/u,
+  );
+});
+
+baseTest("public cast and conviction update preserve the full u64 duration", () => {
+  const maximum = 0xffff_ffff_ffff_ffffn;
+  const requests = [
+    [buildCastPlainBallotInstruction, {
+      referendumId: "ref-max-cast",
+      owner: ACCOUNT_ID,
+      amount: "10",
+      durationBlocks: maximum.toString(10),
+      direction: "aye",
+    }, "CastPlainBallot"],
+    [buildUpdatePlainConvictionInstruction, {
+      referendumId: "ref-max-update",
+      owner: ACCOUNT_ID,
+      amount: "10",
+      durationBlocks: maximum,
+    }, "UpdatePlainConviction"],
+  ];
+  for (const [build, request, variant] of requests) {
+    const instruction = build(request);
+    assert.equal(instruction[variant].duration_blocks, maximum);
+    const exact = exactPublicPlainBallotJson(instruction);
+    assert.match(exact, /"duration_blocks":18446744073709551615/u);
+    assert.doesNotMatch(exact, /"duration_blocks":"18446744073709551615"/u);
+    assert.match(
+      exactPublicPlainBallotJson(build({ ...request, durationBlocks: 50 })),
+      /"duration_blocks":50/u,
+    );
+    assert.equal(exactPublicPlainBallotJson({
+      [variant]: { ...instruction[variant], duration_blocks: maximum.toString(10) },
+    }), exact);
+    assert.match(exactPublicPlainBallotJson({
+      [variant]: { ...instruction[variant], duration_blocks: "50" },
+    }), /"duration_blocks":50/u);
+
+    const calls = [];
+    const codec = _createNoritoInstructionApi(createNativeRuntime({
+      noritoEncodeInstruction(json) {
+        calls.push(json);
+        return Buffer.from([1]);
+      },
+      noritoDecodeInstruction() {
+        return exact;
+      },
+      noritoDecodeInstructionBoxArchive() {
+        return exact;
+      },
+    }));
+    assert.deepEqual(codec.noritoEncodeInstruction(instruction, 753), Buffer.from([1]));
+    assert.deepEqual(calls, [exact]);
+    assert.equal(codec.noritoDecodeInstruction(Buffer.from([1]), 753)[variant].duration_blocks,
+      maximum);
+    assert.equal(codec.noritoDecodeInstructionBoxArchive(Buffer.from([1]), 753)[variant].duration_blocks,
+      maximum);
+    assert.equal(codec.noritoDecodeInstruction(Buffer.from([1]), 753, { parseJson: false }),
+      exact);
+
+    for (const bad of [Number.MAX_SAFE_INTEGER + 1, 2n ** 64n, "18446744073709551616", "01", -1]) {
+      assert.throws(() => build({ ...request, durationBlocks: bad }),
+        /durationBlocks/u);
+    }
+  }
+});
+
+baseTest("public ballot exact duration rejects duplicate and malformed native JSON", () => {
+  const fields = (duration) =>
+    `{"referendum_id":"ref-strict","owner":${JSON.stringify(ACCOUNT_ID_CANONICAL)},` +
+    `"amount":"1","duration_blocks":${duration}}`;
+  const body = fields("1");
+  const invalid = [
+    `{"UpdatePlainConviction":${body},"UpdatePlainConviction":${body}}`,
+    `{"UpdatePlainConviction":${body.replace('"duration_blocks":1',
+      '"duration_blocks":1,"duration_blocks":2')}}`,
+    `{"UpdatePlainConviction":${fields("18446744073709551616")}}`,
+    `{"UpdatePlainConviction":${fields("1e0")}}`,
+    `{"UpdatePlainConviction":${fields("01")}}`,
+  ];
+  let encodeCalls = 0;
+  let nativeJson = "";
+  const codec = _createNoritoInstructionApi(createNativeRuntime({
+    noritoEncodeInstruction() {
+      encodeCalls += 1;
+      return Buffer.from([1]);
+    },
+    noritoDecodeInstruction() {
+      return nativeJson;
+    },
+    noritoDecodeInstructionBoxArchive() {
+      return nativeJson;
+    },
+  }));
+  for (const malformed of invalid) {
+    nativeJson = malformed;
+    assert.throws(() => codec.noritoEncodeInstruction(malformed, 753));
+    assert.throws(() => codec.noritoDecodeInstruction(Buffer.from([1]), 753));
+    assert.throws(() => codec.noritoDecodeInstruction(Buffer.from([1]), 753,
+      { parseJson: false }));
+    assert.throws(() => codec.noritoDecodeInstructionBoxArchive(Buffer.from([1]), 753));
+  }
+  assert.equal(encodeCalls, 0);
+});
+
+baseTest("UpdatePlainConviction uses the registered native Norito frame", () => {
+  const instruction = {
+    UpdatePlainConviction: {
+      referendum_id: "ref-quantity",
+      owner: ACCOUNT_ID_CANONICAL,
+      amount: "18446744073709551616.25",
+      duration_blocks: 50,
+    },
+  };
+  const encoded = assertNativeInstructionAdapterParity(
+    instruction,
+    "UpdatePlainConviction",
+  );
+  assert.equal(encoded[39], 0x02);
+  withNativeInstructionCodec(({ noritoDecodeInstruction }) => {
+    assert.deepEqual(noritoDecodeInstruction(encoded, 753), instruction);
+  });
+});
+
+baseTest("UpdatePlainConviction matches the Rust direct-instruction golden", () => {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(repoRoot, "fixtures/governance/plain_v1/update_plain_conviction_instruction_v1.json"),
+    "utf8",
+  ));
+  const inputs = fixture.inputs;
+  const instruction = buildUpdatePlainConvictionInstruction({
+    referendumId: inputs.referendum_id,
+    owner: inputs.owner,
+    amount: inputs.amount,
+    durationBlocks: inputs.duration_blocks,
+  });
+  assert.deepEqual(instruction, { UpdatePlainConviction: { ...inputs } });
+  assert.equal(fixture.wire_id, "iroha.instruction.v1::governance::UpdatePlainConviction");
+
+  const boxedFrame = assertNativeInstructionAdapterParity(instruction, "UpdatePlainConviction golden");
+  const pair = Buffer.from(noritoEncodeInstructionBoxArchive(instruction, 753));
+  assert.equal(boxedFrame.toString("hex"), fixture.standalone_instruction_box_frame_hex);
+  assert.equal(pair.toString("hex"), fixture.instruction_box_pair_hex);
+  const boxed = validateNoritoFrame(boxedFrame, { requireNonEmptyPayload: true });
+  assert.equal(boxed.flags, fixture.header_flags);
+  assert.deepEqual(boxed.payload, pair);
+  assert.deepEqual(noritoDecodeInstruction(boxedFrame, 753), instruction);
+  assert.deepEqual(noritoDecodeInstructionBoxArchive(pair, 753), instruction);
+
+  const concreteFrame = Buffer.from(fixture.concrete_frame_hex, "hex");
+  assert.equal(fixture.concrete_schema_name,
+    "iroha_data_model::isi::governance::UpdatePlainConviction");
+  const concrete = validateNoritoFrame(concreteFrame, {
+    expectedTypeName: fixture.concrete_schema_name,
+    expectedSchemaHash: Buffer.from(fixture.concrete_schema_hash, "hex"),
+    requireNonEmptyPayload: true,
+  });
+  assert.equal(concrete.flags, fixture.header_flags);
+  assert.equal(concrete.payload.toString("hex"), fixture.bare_payload_hex);
+  assert.equal(concreteFrame.length, fixture.framed_instruction_len);
+  assert.equal(concreteFrame.toString("base64"), fixture.framed_instruction_base64);
+  assert.deepEqual(pair.subarray(pair.length - concreteFrame.length), concreteFrame);
+  assert.ok(pair.includes(Buffer.from(fixture.wire_id, "ascii")));
+
+  for (const alias of ["direction", "choice"]) {
+    assert.throws(() => buildUpdatePlainConvictionInstruction({
+      referendumId: inputs.referendum_id,
+      owner: inputs.owner,
+      amount: inputs.amount,
+      durationBlocks: inputs.duration_blocks,
+      [alias]: 1,
+    }), /must contain exactly/u);
+    const injected = { UpdatePlainConviction: { ...inputs, [alias]: 1 } };
+    assert.throws(() => noritoEncodeInstruction(injected, 753));
+    assert.throws(() => noritoEncodeInstructionBoxArchive(injected, 753));
+  }
+  assert.throws(() => noritoDecodeInstruction(Buffer.concat([boxedFrame, Buffer.of(0)]), 753));
+  assert.throws(() => noritoDecodeInstructionBoxArchive(Buffer.concat([pair, Buffer.of(0)]), 753));
 });
 
 test("buildCastPlainBallotInstruction rejects lossy and noncanonical Quantity inputs", () => {
@@ -4060,18 +4284,22 @@ test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   });
   const payload = encodeAndDecode(instruction).zk.RegisterZkAsset;
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
+  assert.equal(Object.hasOwn(payload, "vk_shield"), false);
 });
 
 test("buildRegisterZkAssetInstruction rejects unknown retired fields", () => {
   const base = { assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" };
-  assert.throws(
-    () =>
-      buildRegisterZkAssetInstruction({
+  for (const field of ["shieldVerifyingKey", "vkShield", "vk_shield"]) {
+    assert.throws(
+      () => buildRegisterZkAssetInstruction({
         ...base,
-        shieldVerifyingKey: "halo2/ipa:vk_shield",
+        unshieldVerifyingKey: "halo2/ipa:vk_unshield",
+        [field]: "halo2/ipa:vk_shield",
       }),
-    /requires vkUnshield/,
-  );
+      /is not supported/,
+      `${field} must be rejected even when an unshield key is provided`,
+    );
+  }
   assert.throws(
     () => buildRegisterZkAssetInstruction({ ...base, mode: "Hybrid" }),
     /is not supported/,

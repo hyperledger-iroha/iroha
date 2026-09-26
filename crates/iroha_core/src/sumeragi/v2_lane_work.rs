@@ -4450,7 +4450,12 @@ impl V2LaneWorkAdapter {
         batch: &PendingAutonomousReservationBatch,
         active_view: wire::View,
     ) -> Result<AutonomousProducerBatchOutcome, V2LaneWorkError> {
+        let source_input_limit = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        )
+        .map_err(V2LaneWorkError::InvalidContext)?;
         if batch.reservations.is_empty()
+            || batch.reservations.len() > source_input_limit
             || batch.reservations.len() > self.limits.body_buckets_per_session.get()
         {
             self.release_autonomous_reservation_batch(batch)?;
@@ -4957,9 +4962,13 @@ impl V2LaneWorkAdapter {
                     "autonomous carrier headroom exhausts the configured payload budget".to_owned(),
                 )
             })?;
-        let block_gas_limit = {
+        let (block_gas_limit, source_input_limit) = {
             let world = self.state.world_view();
-            crate::state::gas_limit_from_parameters(world.parameters())
+            (
+                crate::state::gas_limit_from_parameters(world.parameters()),
+                crate::state::autonomous_source_input_capacity(world.parameters().block())
+                    .map_err(V2LaneWorkError::InvalidContext)?,
+            )
         };
         let drain_route = self
             .state
@@ -5040,7 +5049,8 @@ impl V2LaneWorkAdapter {
                 route_count,
                 route_index,
                 route_rotation,
-            );
+            )
+            .min(source_input_limit);
             let envelope_byte_limit = Self::autonomous_route_quota(
                 usable_envelope_bytes,
                 route_count,
@@ -9715,6 +9725,15 @@ impl V2LaneWorkAdapter {
         {
             return Ok(AutonomousPayloadDurabilityOutcome::AlreadyTerminalApplication);
         }
+        let source_input_limit = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        )
+        .map_err(AutonomousPayloadDurabilityError::Fatal)?;
+        if payload.entrypoints.len() > source_input_limit {
+            return Err(fatal(
+                "autonomous payload exceeds the agreed FASTPQ source capacity",
+            ));
+        }
         if !self
             .proposal_body_available(proposal)
             .map_err(|error| fatal(&error.to_string()))?
@@ -10057,6 +10076,17 @@ impl V2LaneWorkAdapter {
             Err(_) => return V2LaneIngressOutcome::Rejected,
         } {
             return V2LaneIngressOutcome::Duplicate;
+        }
+        // Source/output capacity is immutable after genesis. Apply its whole-input
+        // bound before retaining fresh payloads or installing any READY authority.
+        // An already applied exact replay returned above remains a terminal duplicate.
+        let Ok(source_input_limit) = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        ) else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        if payload.entrypoints.len() > source_input_limit {
+            return V2LaneIngressOutcome::Rejected;
         }
         if proposal_height != self.context.height
             || self.expected_autonomous_lane_author(&payload.origin_proposal)
@@ -26641,7 +26671,11 @@ pub(super) mod tests {
         context: &wire::HeightContext,
     ) {
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut state_block = state.block(block.as_ref().header());
+        let mut state_block = state
+            .block_with_pristine_carrier_stage(block.as_ref(), |_| {
+                Ok::<(), core::convert::Infallible>(())
+            })
+            .expect("fund signed fixture carrier membership before State start");
         let _events = state_block.apply_without_execution(block, topology.as_ref().to_owned());
         state_block.commit().expect("commit synthetic state block");
     }
@@ -31370,6 +31404,7 @@ pub(super) mod tests {
         (successor, keys, request)
     }
     include!("v2_lane_work/strict_historical_read_tests.rs");
+    include!("v2_lane_work/canonical_executed_body_worker_source_tests.rs");
     include!("v2_lane_work/strict_volatile_owner_tests.rs");
     include!("v2_lane_work/strict_receipt_gate_tests.rs");
     fn canonical_executed_block_recovery_fixture() -> (
@@ -33133,6 +33168,7 @@ pub(super) mod tests {
             payload
         );
     }
+    include!("v2_lane_work/source_packing_tests.rs");
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
     include!("v2_lane_work/queue_plan_owner_tests.rs");

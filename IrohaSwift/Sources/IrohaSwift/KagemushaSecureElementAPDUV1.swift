@@ -11,7 +11,7 @@ protocol KagemushaSecureElementAPDUChannelV1: AnyObject {
   func close()
 }
 
-/// Short-APDU transport for exact ABI-23 lifecycle frames.
+/// Short-APDU transport for exact ABI-24 lifecycle frames.
 ///
 /// This type only transports bytes. `KagemushaDeviceLifecycleBridgeV1` independently admits the
 /// applet only after it returns the exact complete `IKGMJCP1` capability frame.
@@ -44,7 +44,7 @@ final class KagemushaSecureElementAPDUEndpointV1: KagemushaDeviceLifecycleEndpoi
   func execute(_ command: Data) throws -> Data {
     try locked {
       guard (Self.minimumCommandBytes...Self.maximumCommandBytes).contains(command.count) else {
-        throw Self.invalid("secure-element command is outside the ABI-23 bound")
+        throw Self.invalid("secure-element command is outside the ABI-24 bound")
       }
       let commandDigest = Self.sha256(command)
       do {
@@ -99,7 +99,7 @@ final class KagemushaSecureElementAPDUEndpointV1: KagemushaDeviceLifecycleEndpoi
         let responseLength = try Self.readUInt32LE(metadata, at: 0)
         guard (Self.minimumResponseBytes...Self.maximumResponseBytes).contains(Int(responseLength))
         else {
-          throw Self.invalid("secure-element response is outside the ABI-23 bound")
+          throw Self.invalid("secure-element response is outside the ABI-24 bound")
         }
         let expectedDigest = Data(metadata[Self.lengthBytes..<Self.responseMetadataBytes])
         var response = Data(capacity: Int(responseLength))

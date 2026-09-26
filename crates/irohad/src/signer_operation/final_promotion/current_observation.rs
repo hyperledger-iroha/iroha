@@ -11,7 +11,7 @@
 use std::{sync::Arc, time::Duration};
 
 use iroha_core::query::final_promotion_authority::observation::{
-    FinalPromotionCheckExpectedV1, FinalPromotionCheckFloorV1,
+    FinalPromotionCheckExpectedV1, FinalPromotionCheckFloorV1, FinalPromotionCheckSourceV1,
     FinalPromotionEligibilityTimeIntervalV1, FinalPromotionObservationErrorV1,
     PendingFinalPromotionCheckV1, VerifiedFinalPromotionCheckV1, begin_final_promotion_check_v1,
 };
@@ -40,18 +40,18 @@ use super::{
     },
 };
 
-/// Fixed failures of the finalized Current Check handoff; no candidate payload escapes.
+/// Fixed failures of finalized final-promotion Check handoffs; no candidate payload escapes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FinalPromotionCurrentObservationErrorV1 {
+pub enum FinalPromotionCheckObservationErrorV1 {
     /// Exact signed Check execution, finality or same-cut current authority did not verify.
     Check,
-    /// The observer, protected binding, operator or subject was not the configured Current Check.
+    /// The observer, protected binding, operator or subject was not the configured Check.
     Binding,
     /// Independently qualified UTC was unavailable or failed the original phase interval.
     Clock,
     /// The independent rollback floor was unavailable, changed or not durably advanced.
     Floor,
-    /// Current enrolled custody could not be reconstructed from the verified snapshot.
+    /// Enrolled custody could not be reconstructed from the verified snapshot.
     Custody,
     /// A configured builder supplied no exact approved observer transaction.
     Payload,
@@ -59,23 +59,29 @@ pub enum FinalPromotionCurrentObservationErrorV1 {
     Provider,
     /// Exact submission or same-envelope reconciliation was unavailable or unresolved.
     Submission,
+    /// The private pending-Reserve journal is unavailable, changed or noncanonical.
+    Journal,
+    /// Local inventory resources are busy; reconcile the original signed operation.
+    LocalCapacity,
 }
-impl std::fmt::Display for FinalPromotionCurrentObservationErrorV1 {
+impl std::fmt::Display for FinalPromotionCheckObservationErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Self::Check => "final-promotion Current Check rejected",
-            Self::Binding => "final-promotion Current Check binding rejected",
-            Self::Clock => "final-promotion Current Check clock unavailable",
-            Self::Floor => "final-promotion Current Check floor unavailable",
-            Self::Custody => "final-promotion Current Check custody rejected",
-            Self::Payload => "final-promotion Current Check payload rejected",
-            Self::Provider => "final-promotion Current Check observer unavailable",
-            Self::Submission => "final-promotion Current Check submission unavailable",
+            Self::Check => "final-promotion Check rejected",
+            Self::Binding => "final-promotion Check binding rejected",
+            Self::Clock => "final-promotion Check clock unavailable",
+            Self::Floor => "final-promotion Check floor unavailable",
+            Self::Custody => "final-promotion Check custody rejected",
+            Self::Payload => "final-promotion Check payload rejected",
+            Self::Provider => "final-promotion Check observer unavailable",
+            Self::Submission => "final-promotion Check submission unavailable",
+            Self::Journal => "final-promotion pending Reserve journal unavailable",
+            Self::LocalCapacity => "final-promotion pending Reserve journal capacity unavailable",
         })
     }
 }
-impl std::error::Error for FinalPromotionCurrentObservationErrorV1 {}
-type Error = FinalPromotionCurrentObservationErrorV1;
+impl std::error::Error for FinalPromotionCheckObservationErrorV1 {}
+type Error = FinalPromotionCheckObservationErrorV1;
 
 /// Independently qualified UTC for one finalized Check and its post-persistence use.
 ///
@@ -117,7 +123,7 @@ pub trait FinalPromotionRetainedFloorV1 {
 ///
 /// The existing observer owner checks the exact instruction, account, network and approved fee
 /// intent before key I/O. This builder must independently approve timing and spending.
-pub trait FinalPromotionCurrentCheckPayloadV1 {
+pub trait FinalPromotionObserverCheckPayloadV1 {
     /// Prepare the complete unsigned transaction around the exact challenged instruction.
     ///
     /// # Errors
@@ -125,11 +131,11 @@ pub trait FinalPromotionCurrentCheckPayloadV1 {
     fn prepare(
         &mut self,
         instruction: &MutateSorafsFinalPromotionAuthority,
-    ) -> Result<TransactionPayload, FinalPromotionCurrentObservationErrorV1>;
+    ) -> Result<TransactionPayload, FinalPromotionCheckObservationErrorV1>;
 }
 
 /// Configuration-owned independent observer key; the protected role-14 key cannot implement it.
-pub trait FinalPromotionCurrentCheckSignerV1 {
+pub trait FinalPromotionObserverCheckSignerV1 {
     /// Sign the exact ordinary transaction prehash selected by the observer owner.
     ///
     /// # Errors
@@ -140,20 +146,20 @@ pub trait FinalPromotionCurrentCheckSignerV1 {
     ) -> Result<Signature, FinalPromotionObserverTransactionErrorV1>;
 }
 
-/// Result of submitting the original signed Check, without claiming native finality.
+/// Result of submitting one original signed native transaction, without claiming finality.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FinalPromotionCurrentCheckSubmitOutcomeV1 {
+pub enum FinalPromotionNativeSubmitOutcomeV1 {
     /// The transport accepted or already recognized the exact signed transaction.
     Accepted,
     /// The result is unknown; reconcile this same signed transaction within the original round.
     Ambiguous,
 }
 
-/// Deployment-owned ordinary native submission and same-envelope reconciliation.
+/// Deployment-owned native submission and same-envelope reconciliation.
 ///
 /// A successful transport result is never finality proof. Core must still establish exact
 /// successful execution in the retained State and Kura before the driver returns anything.
-pub trait FinalPromotionCurrentCheckSubmissionV1 {
+pub trait FinalPromotionNativeSubmissionV1 {
     /// Submit only the original signed transaction, once.
     ///
     /// # Errors
@@ -161,7 +167,7 @@ pub trait FinalPromotionCurrentCheckSubmissionV1 {
     fn submit_exact(
         &mut self,
         transaction: &SignedTransaction,
-    ) -> Result<FinalPromotionCurrentCheckSubmitOutcomeV1, FinalPromotionCurrentObservationErrorV1>;
+    ) -> Result<FinalPromotionNativeSubmitOutcomeV1, FinalPromotionCheckObservationErrorV1>;
 
     /// Reconcile an ambiguous submission using the unchanged original signed transaction.
     ///
@@ -170,7 +176,7 @@ pub trait FinalPromotionCurrentCheckSubmissionV1 {
     fn reconcile_exact(
         &mut self,
         transaction: &SignedTransaction,
-    ) -> Result<(), FinalPromotionCurrentObservationErrorV1>;
+    ) -> Result<(), FinalPromotionCheckObservationErrorV1>;
 }
 
 /// Non-signing runtime owner for one independently reviewed role-14 request.
@@ -195,7 +201,7 @@ impl FinalPromotionCurrentCheckRuntimeV1 {
         observer: FinalPromotionObserverTransactionsV1,
         request: SignerFinalPromotionRequestV1,
         max_elapsed: Duration,
-    ) -> Result<Self, FinalPromotionCurrentObservationErrorV1> {
+    ) -> Result<Self, FinalPromotionCheckObservationErrorV1> {
         if max_elapsed.is_zero()
             || max_elapsed > Duration::from_secs(60)
             || state.network_id_ref().as_bytes() != &observer.receipt_binding().network_id
@@ -227,12 +233,12 @@ impl FinalPromotionCurrentCheckRuntimeV1 {
     /// submission, missing finalized application, unqualified time or rollback.
     pub fn observe_current_with(
         &self,
-        payload: &mut impl FinalPromotionCurrentCheckPayloadV1,
-        signer: &mut impl FinalPromotionCurrentCheckSignerV1,
-        submission: &mut impl FinalPromotionCurrentCheckSubmissionV1,
+        payload: &mut impl FinalPromotionObserverCheckPayloadV1,
+        signer: &mut impl FinalPromotionObserverCheckSignerV1,
+        submission: &mut impl FinalPromotionNativeSubmissionV1,
         clock: &mut impl FinalPromotionQualifiedUtcV1,
         floor: &mut impl FinalPromotionRetainedFloorV1,
-    ) -> Result<FinalPromotionCurrentObservationV1, FinalPromotionCurrentObservationErrorV1> {
+    ) -> Result<FinalPromotionCurrentObservationV1, FinalPromotionCheckObservationErrorV1> {
         let original_floor = floor.read().map_err(|_| Error::Floor)?;
         let view = self.state.view();
         let height = u64::try_from(view.height()).map_err(|_| Error::Check)?;
@@ -281,7 +287,7 @@ impl FinalPromotionCurrentCheckRuntimeV1 {
         let outcome = submission
             .submit_exact(pending.signed_transaction())
             .map_err(|_| Error::Submission)?;
-        if outcome == FinalPromotionCurrentCheckSubmitOutcomeV1::Ambiguous {
+        if outcome == FinalPromotionNativeSubmitOutcomeV1::Ambiguous {
             pending.ensure_live().map_err(|_| Error::Check)?;
             submission
                 .reconcile_exact(pending.signed_transaction())
@@ -308,13 +314,18 @@ impl FinalPromotionCurrentObservationV1 {
         self.verified.applied_floor()
     }
 
-    /// Consume the current custody and audit pair while the original Check remains live.
+    /// Consume the same-cut signing state together with its exact verified Current Check.
+    ///
+    /// The Check is move-only and is required by role-15 Reserve preparation. Returning only
+    /// custody and audit here would discard the authenticated source of that preparation.
     ///
     /// # Errors
     /// Rejects a Check whose original monotonic lifetime has elapsed before its consumer uses it.
-    pub fn into_signing_state(self) -> Result<SignerOperationSigningStateV1, Error> {
+    pub fn into_reserve_context(
+        self,
+    ) -> Result<(VerifiedFinalPromotionCheckV1, SignerOperationSigningStateV1), Error> {
         self.verified.ensure_live().map_err(|_| Error::Check)?;
-        Ok(self.signing_state)
+        Ok((self.verified, self.signing_state))
     }
 }
 
@@ -337,7 +348,7 @@ impl FinalPromotionObserverTransactionsV1 {
     ) -> Result<FinalPromotionCurrentObservationV1, Error> {
         let retained = floor.read().map_err(|_| Error::Floor)?;
         let verified = pending
-            .verify_finalized(|| {
+            .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
                 clock
                     .sample()
                     .map_err(|_| FinalPromotionObservationErrorV1::Clock)
@@ -398,7 +409,7 @@ impl FinalPromotionObserverTransactionsV1 {
     }
 }
 
-fn signing_context(
+pub(super) fn signing_context(
     verified: &VerifiedFinalPromotionCheckV1,
     binding: &SignerCustodyBindingV1,
     interval: FinalPromotionEligibilityTimeIntervalV1,

@@ -13,7 +13,7 @@ import types
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("bounded_native_probe_under_test", ROOT / "scripts/check_native_sdk_abi23_artifact.py")
+SPEC = importlib.util.spec_from_file_location("bounded_native_probe_under_test", ROOT / "scripts/check_native_sdk_artifact.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
@@ -163,10 +163,10 @@ def test_node_and_python_probe_keep_same_shared_owner(monkeypatch, tmp_path):
     calls = []
     def observed(argv, **kwargs):
         calls.append((tuple(argv), kwargs))
-        return subprocess.CompletedProcess(argv, 0, b"23", b"")
+        return subprocess.CompletedProcess(argv, 0, b"24", b"")
     monkeypatch.setattr(MODULE, "_run_bounded_probe", observed)
-    assert MODULE.probe_node_abi(tmp_path / "inert.node", (), node="node") == 23
-    assert MODULE.probe_python_abi(tmp_path / "inert.so", (), python=sys.executable) == 23
+    assert MODULE.probe_node_abi(tmp_path / "inert.node", (), node="node") == 24
+    assert MODULE.probe_python_abi(tmp_path / "inert.so", (), python=sys.executable) == 24
     assert calls[0][0][0:2] == ("node", "--eval")
     assert calls[1][0][0:4] == (sys.executable, "-I", "-B", "-c")
     assert all(options == {"stdout_limit": 4096, "stderr_limit": 4096} for _, options in calls)
@@ -235,7 +235,7 @@ def test_actual_outer_owner_stops_nested_probe_without_session_escape(tmp_path, 
               + f"Path({str(ready)!r}).write_text(str(os.getpid())+' '+str(os.getpgrp())+' '+str(os.getsid(0))); "
               + f"time.sleep(1.5); Path({str(late)!r}).write_text('escaped')")
     checker = ("import importlib.util,sys; "
-               + f"spec=importlib.util.spec_from_file_location('nested_checker',{str(ROOT / 'scripts/check_native_sdk_abi23_artifact.py')!r}); "
+               + f"spec=importlib.util.spec_from_file_location('nested_checker',{str(ROOT / 'scripts/check_native_sdk_artifact.py')!r}); "
                + "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
                + f"module._run_bounded_probe((sys.executable,'-I','-B','-c',{nested!r}),stdout_limit=1024,stderr_limit=1024,timeout_seconds=3)")
     children = track_children(monkeypatch)

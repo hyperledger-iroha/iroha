@@ -1,7 +1,8 @@
 # Topology transition reducer V1
 
-Status: prerequisite implemented as a pure reducer; native integration and qualification remain
-open. This module supplies no signing/execution/finality capability. It depends on the distinct
+Status: prerequisite implemented as a pure reducer with one registered typed V1 instruction;
+Core execution, native integration and qualification remain closed. This module supplies no
+signing/execution/finality capability. It depends on the distinct
 role 16 topology receipt contract, whose generic signer and promotion gates remain closed.
 
 `iroha_data_model::sorafs::topology_authority::reducer::TopologyStateViewV1` is the sole transition
@@ -67,8 +68,8 @@ transaction rollback, candidate forks, snapshot completeness, drain and durable 
 
 ## Required next integration
 
-- Add a topology-only ISI in `iroha_data_model/src/isi/sorafs.rs` and actual InstructionBox/visitor
-  dispatch, with separate manage/operate/check permissions in `iroha_executor_data_model` and
+- The topology-only `MutateSorafsTopologyAuthority` ISI and sole Norito wire ID are registered;
+  Core explicitly rejects it until native execution is implemented. Add separate manage/operate/check permissions in `iroha_executor_data_model` and
   executor enforcement. Configure/Enroll/Revoke need manage permission; Reserve/Complete/Expire
   need operate permission; Check needs a distinct registered observer with check permission and a
   still-authorized expected operator. No bool supplied by a caller may substitute for permissions.
@@ -84,7 +85,12 @@ transaction rollback, candidate forks, snapshot completeness, drain and durable 
   index is corruption; empty defaults are forbidden. Replay must use this reducer and compare
   resulting records and metadata to persisted rows. Actual storage publication, rollback and restart
   atomicity need funded/permissioned native tests and fault tests; pure model tests do not prove them.
-- Add a topology-owned prepared native Check observation. Consume the original challenge/deadline/
+- The private common native Check proof path now binds a role-16 signed Check's exact challenge,
+  network, floor height/hash and sole direct instruction, and rejects a finalized failed Core
+  result. It issues no topology authority. The signed Check does not contain the floor context ID;
+  the verifier receives that pin independently. Add a topology-owned prepared native Check
+  observation and, if required for the final authority contract, coordinate a single V1 wire cut
+  to sign the context ID. Consume the original challenge/deadline/
   finalized-floor owner and prove the exact successful ordered input, result and execution output
   under canonical revision 4 finality. Re-read permissions, custody/revocation and operation from one
   current StateQueryView before producing a non-decodable native observation. A signed arbitrary

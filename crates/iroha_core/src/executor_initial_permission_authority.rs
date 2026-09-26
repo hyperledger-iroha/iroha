@@ -1398,6 +1398,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::UpdatePlainConviction,
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,

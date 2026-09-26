@@ -109,7 +109,7 @@ test("fee verification binds every projection to the selected prefix before ente
   const calls = [];
   const stop = new Error("owner reached");
   const runtime = createNativeRuntime({
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeCurrentPolicyProofRequestV1() {},
     validationFeeHijiriQuoteRequestV1() {},
     validationFeeVerifyCurrentPolicyProofV1(...args) { calls.push(["policy", args.at(-1)]); throw stop; },

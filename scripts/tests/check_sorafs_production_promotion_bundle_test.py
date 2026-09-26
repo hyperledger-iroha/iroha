@@ -1559,13 +1559,22 @@ def test_signed_topology_replay_rejects_numeric_type_substitution(
     assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
 
 
-def test_topology_envelope_cannot_claim_a_completed_native_operation(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "claim",
+    (
+        "completed_operation_state_sha256",
+        "native_role16_receipt_sha256",
+        "native_current_check_sha256",
+        "current_signer_authorization_sha256",
+    ),
+)
+def test_detached_topology_envelope_cannot_claim_native_authority(
+    tmp_path: Path, claim: str,
 ) -> None:
     args, positive = signed_inner_approval_inputs(tmp_path)
     envelope_path = args.inner_topology_qualification_envelope
     envelope = json.loads(envelope_path.read_bytes())
-    envelope["completed_operation_state_sha256"] = digest("claimed-topology-completion")
+    envelope[claim] = digest(f"claimed-{claim}")
     raw = MODULE.render_checker_summary(envelope).encode("utf-8")
     envelope_path.write_bytes(raw)
     positive.input_sha256["topology_qualification_envelope"] = hashlib.sha256(raw).hexdigest()
@@ -1573,6 +1582,29 @@ def test_topology_envelope_cannot_claim_a_completed_native_operation(
     errors = MODULE.validate_inner_approval_chain(args, positive)
     assert any("signed topology qualification envelope fields must match" in error for error in errors)
     assert MODULE.TOPOLOGY_NATIVE_AUTHORITY_BLOCKER not in errors
+    assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
+
+
+@pytest.mark.parametrize(
+    "claim",
+    (
+        "native_role16_receipt_sha256",
+        "native_current_check_sha256",
+        "current_signer_authorization_sha256",
+    ),
+)
+def test_pinned_topology_trust_cannot_supply_native_authority(
+    tmp_path: Path, claim: str,
+) -> None:
+    args, positive = signed_inner_approval_inputs(tmp_path)
+    trust = json.loads(args.inner_approval_trust.read_bytes())
+    trust["topology"][claim] = digest(f"claimed-{claim}")
+    raw = MODULE.render_checker_summary(trust).encode("utf-8")
+    args.inner_approval_trust.write_bytes(raw)
+    args.inner_approval_trust_sha256 = hashlib.sha256(raw).hexdigest()
+
+    errors = MODULE.validate_inner_approval_chain(args, positive)
+    assert "inner approval topology requires an exact independent signer tuple" in errors
     assert errors[-1] == MODULE.INNER_APPROVAL_RELEASE_BLOCKER
 
 

@@ -4046,6 +4046,7 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::zk::CancelConfidentialPolicyTransition,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::UpdatePlainConviction,
         iroha_data_model::isi::governance::RegisterCitizen,
         iroha_data_model::isi::governance::UnregisterCitizen,
         iroha_data_model::isi::governance::SlashGovernanceLock,

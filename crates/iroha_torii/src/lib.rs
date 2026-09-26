@@ -4163,6 +4163,7 @@ async fn enforce_preauth(
         }
         Err(reason) => {
             app.record_preauth_reject(reason);
+            let retry_after_seconds = reason.retry_after_seconds();
             let (status, code, message) = match reason {
                 limits::RejectReason::GlobalCap => (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -4174,24 +4175,24 @@ async fn enforce_preauth(
                     "preauth_ip_capacity",
                     "Torii pre-auth per-IP connection limit reached.",
                 ),
-                limits::RejectReason::RateLimited => (
+                limits::RejectReason::RateLimited { .. } => (
                     StatusCode::TOO_MANY_REQUESTS,
                     "preauth_rate_limited",
                     "Torii pre-auth rate limit exceeded.",
                 ),
-                limits::RejectReason::Banned => (
+                limits::RejectReason::Banned { .. } => (
                     StatusCode::TOO_MANY_REQUESTS,
                     "preauth_temporarily_banned",
                     "Torii pre-auth temporary ban is in effect.",
                 ),
                 limits::RejectReason::SchemeCap => (
-                    StatusCode::TOO_MANY_REQUESTS,
+                    StatusCode::SERVICE_UNAVAILABLE,
                     "preauth_scheme_capacity",
                     "Torii pre-auth transport connection limit reached.",
                 ),
             };
             let payload = ErrorEnvelope::new(code, message).with_details(ErrorDetails {
-                retry_after_seconds: Some(1),
+                retry_after_seconds: Some(retry_after_seconds),
                 ..Default::default()
             });
             let mut response = utils::respond_with_status_and_format(
@@ -4201,7 +4202,8 @@ async fn enforce_preauth(
             );
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
-                HeaderValue::from_static("1"),
+                HeaderValue::from_str(&retry_after_seconds.to_string())
+                    .expect("unsigned retry delay is a valid header value"),
             );
             append_vary_accept(response.headers_mut());
             Ok(response)
@@ -45918,7 +45920,7 @@ impl Torii {
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
             config.app_api.max_fetch_size.get().into(),
-            config.app_api.rate_limit_cost_per_row.get().into(),
+            config.app_api.rate_limit_cost_per_page.get().into(),
         );
         let app_auth_config = crate::app_auth::CanonicalRequestAuthConfig::from(&config.app_api);
         app_auth_config.validate().map_err(|error| {
@@ -46230,7 +46232,7 @@ impl Torii {
             })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-        let sorafs_admission = load_sorafs_admission(&config)?;
+        let sorafs_admission = load_sorafs_admission(&config, state.network_id_ref())?;
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
             config.sorafs_por.enabled,
@@ -49757,6 +49759,7 @@ fn require_sorafs_potr_finalized_reader_inputs(
 }
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<Option<Arc<sorafs::AdmissionRegistry>>, ToriiBuildError> {
     let Some(admission_cfg) = config.sorafs_discovery.admission.as_ref() else {
         if config.sorafs_discovery.discovery_enabled {
@@ -49797,8 +49800,12 @@ fn load_sorafs_admission(
         admission_cfg.signature_threshold.get(),
     )
     .map_err(|error| ToriiBuildError::invalid_configuration("sorafs.discovery.admission", error))?;
-    let registry = sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-        .map_err(|error| {
+    let registry = sorafs::AdmissionRegistry::load_from_dir(
+        &admission_cfg.envelopes_dir,
+        *network_id.as_bytes(),
+        policy,
+    )
+    .map_err(|error| {
         ToriiBuildError::component_initialization(
             "sorafs.discovery.admission.registry",
             format!(

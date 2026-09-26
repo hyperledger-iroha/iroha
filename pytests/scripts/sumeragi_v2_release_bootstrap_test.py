@@ -49,17 +49,12 @@ FORMAL_REPLAY_ENV = (
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
 )
-DEFAULT_SCALING_DIGESTS = {
-    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
-    "IROHA_RELEASE_SCALING_IROHAD_SHA256": "b" * 64,
-    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": "c" * 64,
-    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": "d" * 64,
-}
 APPROVAL_EVIDENCE_ROOT_ID = "fixture-release-evidence-root"
 APPROVAL_DURATIONS = (900, 901, 902, 903)
 RELEASE_BOOTSTRAP_TEST_COMPONENT_FILES = (
     "sumeragi_v2_release_bootstrap_terminal_cases.py",
     "sumeragi_v2_release_bootstrap_environment_cases.py",
+    "sumeragi_v2_release_bootstrap_direct_cases.py",
 )
 
 
@@ -83,196 +78,7 @@ def _load_bootstrap_module() -> object:
     return module
 
 
-def test_release_trust_inputs_are_the_only_new_runner_environment_names(
-    tmp_path: Path,
-) -> None:
-    module = _load_bootstrap_module()
-    preexisting_allowlist = {
-        "CARGO_HOME",
-        "CARGO_NET_GIT_FETCH_WITH_CLI",
-        "CARGO_NET_OFFLINE",
-        "NIX_SSL_CERT_FILE",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
-        "SSL_CERT_FILE",
-    }
-    expected_release_environment = (
-        set(SCALING_TRUST_ENV)
-        | set(RELEASE_CONTROL_ENV)
-        | set(FORMAL_REPLAY_ENV)
-    )
-    assert (
-        module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist
-        == expected_release_environment
-    )
-    assert module._RUNNER_ENV_ALLOWLIST == preexisting_allowlist | set(
-        expected_release_environment
-    )
-
-    names = tuple(path.name for path in BOOTSTRAP_COMPONENTS)
-    assert module._BOOTSTRAP_COMPONENT_FILES == names
-    assert set(module._BOOTSTRAP_COMPONENT_SHA256) == set(names)
-    assert all(path.is_file() and not path.is_symlink() for path in BOOTSTRAP_COMPONENTS)
-    assert {
-        path.name: _sha256(path) for path in BOOTSTRAP_COMPONENTS
-    } == module._BOOTSTRAP_COMPONENT_SHA256
-
-    copied = tmp_path / BOOTSTRAP.name
-    copied.write_text(
-        BOOTSTRAP.read_text(encoding="utf-8").replace(
-            next(iter(module._BOOTSTRAP_COMPONENT_SHA256.values())),
-            "0" * 64,
-            1,
-        ),
-        encoding="utf-8",
-    )
-    copied.chmod(0o500)
-    for component in BOOTSTRAP_COMPONENTS:
-        shutil.copy2(component, tmp_path / component.name)
-    result = subprocess.run(
-        [str(PYTHON), "-I", "-B", "-S", str(copied), "--help"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert b"bootstrap component binding is invalid" in result.stderr
-
-
-def test_release_runner_waits_for_natural_completion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = _load_bootstrap_module()
-    spawned: list[dict[str, object]] = []
-    completed: list[bool] = []
-
-    class FakeProcess:
-        def __init__(self, _argv: object, **kwargs: object) -> None:
-            spawned.append(kwargs)
-
-        def wait(self) -> int:
-            completed.append(True)
-            return 23
-
-    monkeypatch.setattr(module.subprocess, "Popen", FakeProcess)
-    result = module._run_release_runner(
-        tmp_path / "runner",
-        (),
-        cwd=tmp_path,
-        environment={},
-        stdout_descriptor=1,
-        stderr_descriptor=2,
-    )
-
-    assert result.returncode == 23
-    assert completed == [True]
-    assert len(spawned) == 1
-    assert "start_new_session" not in spawned[0]
-
-
-def test_authenticated_sdk_source_manifest_pruning_is_exact(
-    tmp_path: Path,
-) -> None:
-    module = _load_bootstrap_module()
-    evidence = tmp_path / "evidence"
-    evidence.mkdir(mode=0o700)
-    manifest = _write(
-        evidence / "sdk-dependency-bundle-manifest.json",
-        b'{"schema_version":1}\n',
-        0o400,
-    )
-    snapshot = module._read_file(
-        manifest,
-        "SDK source manifest fixture",
-        maximum_bytes=module._MAX_SDK_MANIFEST_BYTES,
-    )
-    evidence_fd = os.open(evidence, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        module._prune_authenticated_sdk_source_manifest(evidence_fd, snapshot)
-        module._require_sdk_source_manifest_pruned(evidence_fd, snapshot)
-        assert not os.path.lexists(manifest)
-
-        _write(manifest, snapshot.data, snapshot.mode)
-        with pytest.raises(
-            module.BootstrapError,
-            match="survived acknowledgment pruning",
-        ):
-            module._require_sdk_source_manifest_pruned(evidence_fd, snapshot)
-    finally:
-        os.close(evidence_fd)
-
-
-@pytest.mark.parametrize(
-    ("timeout_seconds", "maximum_output_bytes", "program", "message"),
-    [
-        (
-            0,
-            1024,
-            "import time; time.sleep(0.05)",
-            "bounded runtime",
-        ),
-        (
-            5,
-            32,
-            "import sys; "
-            "sys.stdout.buffer.write(b'O' * 131072); sys.stdout.flush(); "
-            "sys.stderr.buffer.write(b'E' * 131072); sys.stderr.flush()",
-            "bounded output limit",
-        ),
-    ],
-)
-def test_bounded_helper_finishes_naturally_before_reporting_latched_violation(
-    tmp_path: Path,
-    timeout_seconds: int,
-    maximum_output_bytes: int,
-    program: str,
-    message: str,
-) -> None:
-    module = _load_bootstrap_module()
-    sentinel = tmp_path / "natural-completion"
-    child = (
-        f"{program}; from pathlib import Path; "
-        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
-    )
-
-    with pytest.raises(module.BootstrapError, match=message):
-        module._run_bounded(
-            PYTHON,
-            ("-I", "-S", "-c", child),
-            cwd=tmp_path,
-            environment={"PATH": os.defpath},
-            timeout_seconds=timeout_seconds,
-            maximum_output_bytes=maximum_output_bytes,
-        )
-
-    assert sentinel.read_text(encoding="utf-8") == "complete"
-
-
-def test_bounded_helper_drains_inherited_pipes_until_descendant_finishes(
-    tmp_path: Path,
-) -> None:
-    module = _load_bootstrap_module()
-    sentinel = tmp_path / "descendant-natural-completion"
-    descendant = (
-        "import time; from pathlib import Path; time.sleep(0.05); "
-        f"Path({str(sentinel)!r}).write_text('complete', encoding='utf-8')"
-    )
-    child = (
-        "import subprocess; "
-        f"subprocess.Popen([{str(PYTHON)!r}, '-I', '-S', '-c', {descendant!r}])"
-    )
-
-    with pytest.raises(module.BootstrapError, match="bounded runtime"):
-        module._run_bounded(
-            PYTHON,
-            ("-I", "-S", "-c", child),
-            cwd=tmp_path,
-            environment={"PATH": os.defpath},
-            timeout_seconds=0,
-            maximum_output_bytes=1024,
-        )
-
-    assert sentinel.read_text(encoding="utf-8") == "complete"
+_execute_bootstrap_test_component(RELEASE_BOOTSTRAP_TEST_COMPONENT_FILES[2])
 
 
 def _sha256(path: Path) -> str:
@@ -1187,7 +993,6 @@ def _runner(
     action: str,
     *,
     trusted_mutation: Path | None = None,
-    observed_scaling_environment: Path | None = None,
     receipt_mutation_override: str | None = None,
 ) -> str:
     retained_root = launch_count.parent / "release-runner"
@@ -2142,17 +1947,6 @@ python3 -I -S "$IROHA_RELEASE_RUNTIME_HELPER" \
     if action in {"missing-receipt", "unlisted-command"}:
         receipt_script = ":"
         validation_script = ":"
-    environment_probe = ""
-    if observed_scaling_environment is not None:
-        required = "\n".join(f': "${{{name}:?}}"' for name in SCALING_TRUST_ENV)
-        values = " ".join(
-            f"{shlex.quote(name)} \"${{{name}}}\"" for name in SCALING_TRUST_ENV
-        )
-        environment_probe = (
-            f"{required}\n"
-            f"printf '%s=%s\\n' {values}"
-            f" > {shlex.quote(str(observed_scaling_environment))}"
-        )
     return f'''#!/bin/bash
 set -eu
 : "${{SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION:?}}"
@@ -2181,7 +1975,6 @@ count=0
 if test -f {launch_count}; then count=$(<{launch_count}); fi
 count=$((count + 1))
 printf '%s\n' "$count" > {launch_count}
-{environment_probe}
 {receipt_script}
 {post_receipt_action}
 {action_script}
@@ -2267,6 +2060,11 @@ class Fixture:
     bash: Path
     allowed: Path
     revocation: Path
+    scaling_plan: Path
+    scaling_budget: Path
+    scaling_handoff_helper: Path
+    scaling_dependencies: Path
+    cargo_home: Path
 
     @property
     def retained_root(self) -> Path:
@@ -2289,6 +2087,13 @@ class Fixture:
         assert set(approvals) == set(self.approvals)
         self.approvals = approvals
 
+    def install_production_runner(self) -> None:
+        """Bind the actual release runner before selected-source qualification."""
+        source = REPO_ROOT / "scripts/run_sumeragi_v2_release_gates.sh"
+        self.install_planned_runner(source.read_bytes())
+        # TODO: provision the complete signed selected source and native build
+        # outputs before this fixture can assert a successful terminal release.
+
     def arguments(self) -> list[str]:
         arguments = [
             str(PYTHON),
@@ -2297,6 +2102,17 @@ class Fixture:
             "-S",
             str(BOOTSTRAP),
             "--candidate-root", str(self.candidate),
+            "--scaling-plan", str(self.scaling_plan),
+            "--expected-scaling-plan-sha256", _sha256(self.scaling_plan),
+            "--scaling-budget", str(self.scaling_budget),
+            "--expected-scaling-budget-sha256", _sha256(self.scaling_budget),
+            "--scaling-handoff-helper", str(self.scaling_handoff_helper),
+            "--expected-scaling-handoff-helper-sha256",
+            _sha256(self.scaling_handoff_helper),
+            "--scaling-dependency-source", str(self.scaling_dependencies),
+            "--scaling-machine-id", "bootstrap-fixture-machine",
+            "--scaling-storage-model", "bootstrap-fixture-storage",
+            "--scaling-observation-overhead-seconds", "1",
             "--evidence-dir", str(self.evidence),
             "--expected-bootstrap-sha256", _sha256(BOOTSTRAP),
             "--python-bin", str(PYTHON),
@@ -2356,19 +2172,9 @@ class Fixture:
             "--expected-ssh-revocation-sha256", _sha256(self.revocation),
             "--command-timeout-seconds", "10",
         ]
-        scaling_environment = {
-            **DEFAULT_SCALING_DIGESTS,
-            SCALING_EVIDENCE_ENV: str(
-                self.retained_root
-                / "output"
-                / "scaling"
-                / "scaling_evidence.json"
-            ),
-        }
-        for name in SCALING_TRUST_ENV:
-            arguments.extend(
-                ["--runner-environment", f"{name}={scaling_environment[name]}"]
-            )
+        arguments.extend(
+            ["--runner-environment", f"CARGO_HOME={self.cargo_home}"]
+        )
         formal_replay_environment = {
             "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
                 self.formal_replay.source_receipt
@@ -2532,6 +2338,23 @@ def release_fixture(
     tool_manifest = _write(
         trust / "runner-tool-manifest.json", _tool_support.runner_tool_manifest(trust), 0o400
     )
+    scaling_fixture_root = REPO_ROOT / "pytests/scripts/scaling_preflight/fixtures"
+    scaling_plan = _write(
+        trust / "scaling-plan.json", (scaling_fixture_root / "plan.json").read_bytes(), 0o400
+    )
+    scaling_budget = _write(
+        trust / "scaling-budget.json", (scaling_fixture_root / "budget.json").read_bytes(), 0o400
+    )
+    scaling_handoff_helper = _write(
+        trust / "scaling-handoff.py",
+        (REPO_ROOT / "scripts/sumeragi_v2_release_scaling_handoff.py").read_bytes(),
+        0o400,
+    )
+    package_spec = importlib.util.find_spec("blake3")
+    assert package_spec is not None and package_spec.origin is not None
+    scaling_dependencies = Path(package_spec.origin).resolve(strict=True).parent.parent
+    cargo_home = trust / "cargo-home"
+    cargo_home.mkdir(mode=0o700)
     git = _write(trust / "git", "#!/bin/sh\nexit 0\n", 0o500)
     sdk_manifest = _write(
         trust / "sdk-dependency-bundle-manifest.json",
@@ -2593,6 +2416,11 @@ def release_fixture(
         bash,
         allowed,
         revocation,
+        scaling_plan,
+        scaling_budget,
+        scaling_handoff_helper,
+        scaling_dependencies,
+        cargo_home,
     )
 
 

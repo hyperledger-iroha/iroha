@@ -10,7 +10,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-fn credential(seed: u8) -> (tempfile::TempDir, PathBuf) {
+/// Write an owner-only canonical test credential below the checkout's target directory.
+pub(super) fn credential(seed: u8) -> (tempfile::TempDir, PathBuf) {
     let parent = std::env::current_dir()
         .expect("checkout directory")
         .join("target");

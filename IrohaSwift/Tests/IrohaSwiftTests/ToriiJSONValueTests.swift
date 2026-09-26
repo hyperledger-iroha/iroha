@@ -213,9 +213,9 @@ final class ToriiJSONValueTests: XCTestCase {
     func testGovernanceLargeIntegersAreLimitedToSccpCaps() throws {
         let exact = "1000000000000000000000"
         let data = Data("{\"max_wrapped_supply\":\(exact)}".utf8)
-        let exactIntegerLexemes = try governanceExactJSONIntegerLexemes(data)
+        let exactIntegerLexemes = try governanceValidatedProposalJSON(data).numberLexemes
         let decoder = JSONDecoder()
-        decoder.userInfo[governanceExactIntegerLexemesUserInfoKey] = exactIntegerLexemes
+        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = exactIntegerLexemes
         let proposal = try decoder.decode(ToriiJSONValue.self, from: data)
         XCTAssertNoThrow(
             try governanceRequireExactJSONIntegers(
@@ -232,6 +232,34 @@ final class ToriiJSONValueTests: XCTestCase {
                 context: "proposal"
             )
         )
+    }
+
+    func testGovernanceCanonicalScannerRetainsStricterUnsignedPolicy() throws {
+        let maximum = SccpUInt128.maximumDecimal
+        let accepted = Data(
+            "{\"max_wrapped_supply\":\(maximum),\"checkpoint_height\":9007199254740991}".utf8
+        )
+        let validated = try governanceValidatedProposalJSON(accepted)
+        XCTAssertEqual(validated.value["max_wrapped_supply"], .integer(maximum))
+        XCTAssertEqual(validated.numberLexemes.count, 2)
+
+        let invalid = [
+            #"{"checkpoint_height":9007199254740992}"#,
+            #"{"checkpoint_height":-0}"#,
+            #"{"checkpoint_height":1.0}"#,
+            #"{"checkpoint_height":1e0}"#,
+            #"{"max_wrapped_supply":340282366920938463463374607431768211456}"#,
+            #"{"max_wrapped_supply":"1"}"#,
+            #"{"max_outstanding_liability":null}"#,
+            #"{"max_wrapped_supply":1,"max_wrapped_supply":2}"#,
+            #"[1,2]"#,
+        ]
+        for (index, json) in invalid.enumerated() {
+            XCTAssertThrowsError(
+                try governanceValidatedProposalJSON(Data(json.utf8)),
+                "invalid governance JSON \(index)"
+            )
+        }
     }
 
 }

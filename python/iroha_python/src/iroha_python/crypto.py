@@ -21,6 +21,7 @@ from typing import (
 )
 
 from iroha_native import load_crypto_extension
+
 from ._validation import _normalize_mapping_payload, _optional_uint
 from .address import AccountAddress
 
@@ -59,7 +60,7 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 23
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 24
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
 PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
@@ -358,6 +359,17 @@ if TYPE_CHECKING:
         def from_json(cls, payload: str) -> Instruction: ...
 
         @staticmethod
+        def update_plain_conviction(
+            referendum_id: str,
+            owner: str,
+            amount: str,
+            duration_blocks: int,
+        ) -> Instruction:
+            """Build the exact choice-free public conviction update."""
+
+            ...
+
+        @staticmethod
         def cancel_asset_lock(
             escrow_id: str,
             expected_remaining_amount: str,
@@ -443,6 +455,22 @@ else:
             return isinstance(instance, _NativeInstruction)
 
     class Instruction(metaclass=_InstructionFacadeMeta):
+        @staticmethod
+        def update_plain_conviction(
+            referendum_id: str,
+            owner: str,
+            amount: str,
+            duration_blocks: int,
+        ) -> Any:
+            """Build the canonical four-field native conviction update."""
+
+            return _native_instruction_builder("update_plain_conviction")(
+                referendum_id,
+                owner,
+                amount,
+                duration_blocks,
+            )
+
         @staticmethod
         def cancel_asset_lock(
             escrow_id: str,

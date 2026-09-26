@@ -120,11 +120,15 @@ class TairaPrepareTests(unittest.TestCase):
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
         def check(_root, *, environment, source_commit, lock_fds,
-                  completed_independent_checks, update_independent_checks, qualification_scope):
+                  completed_independent_checks, update_independent_checks,
+                  completed_pre_network_checks, update_pre_network_checks,
+                  qualification_scope):
             events.append("gate")
             self.assertEqual(qualification_scope, "basic")
             self.assertIsNone(completed_independent_checks)
             self.assertTrue(callable(update_independent_checks))
+            self.assertIsNone(completed_pre_network_checks)
+            self.assertTrue(callable(update_pre_network_checks))
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
             self.assertEqual(len(lock_fds), 3)
             self.assertEqual(lock_fds[1], 88)  # Existing source-custody fixture descriptor.
@@ -594,7 +598,9 @@ class TairaPrepareTests(unittest.TestCase):
                 self.out = self.root / ("prepared-incremental-" + preference)
                 self.args.output_dir = self.out
                 def check(_root, *, environment, source_commit, lock_fds,
-                          completed_independent_checks, update_independent_checks, qualification_scope):
+                          completed_independent_checks, update_independent_checks,
+                          completed_pre_network_checks, update_pre_network_checks,
+                          qualification_scope):
                     self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
                     self.assertEqual(qualification_scope, "basic")
                     self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))

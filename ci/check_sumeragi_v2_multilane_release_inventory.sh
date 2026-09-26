@@ -433,7 +433,7 @@ require_exact_token \
   '      --tests org.hyperledger.iroha.sdk.consensus.SumeragiV2WireFixtureTests \'
 require_exact_token \
   "$sdk_diagnostics_harness" \
-  '      assert_node_tap "$javascript_transcript" 45'
+  '      assert_node_tap "$javascript_transcript" 46'
 require_exact_token \
   "$js_sdk_diagnostics_test" \
   '  "typed Sumeragi endpoints reject swapped status and diagnostics payloads",'

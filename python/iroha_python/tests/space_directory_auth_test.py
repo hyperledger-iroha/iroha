@@ -49,6 +49,7 @@ class _Session(requests.Session):
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
         response._content = json.dumps(_draft()).encode("utf-8")
+        response._content_consumed = True
         response.encoding = "utf-8"
         return response
 
@@ -68,6 +69,7 @@ class _Session(requests.Session):
         response.status_code = 200
         response.headers["Content-Type"] = "application/json"
         response._content = json.dumps(_draft()).encode("utf-8")
+        response._content_consumed = True
         response.encoding = "utf-8"
         return response
 

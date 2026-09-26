@@ -5,7 +5,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{ElectionState, State, World, WorldReadOnly},
+    state::{ElectionState, StandaloneBallotCorpusEntryV1, State, World, WorldReadOnly},
     zk::{ZK_BACKEND_HALO2_IPA, hash_vk},
 };
 use iroha_data_model::{
@@ -53,6 +53,39 @@ fn election_request(options: u32) -> CreateElection {
         vk_tally: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "tally"),
         domain_tag: "gov:ballot:v1".to_owned(),
     }
+}
+
+#[test]
+fn retained_election_tally_roundtrips_exact_u128_weight() {
+    let large_weight = u128::from(u64::MAX) + 1;
+    let first = StandaloneBallotCorpusEntryV1 {
+        nullifier: [0x11; 32],
+        commitment: [0x21; 32],
+    };
+    let second = StandaloneBallotCorpusEntryV1 {
+        nullifier: [0x12; 32],
+        commitment: [0x22; 32],
+    };
+    let original = ElectionState {
+        options: 2,
+        tally: vec![large_weight, 1],
+        accepted_ballots: vec![first, second],
+        ..ElectionState::default()
+    };
+    let encoded = norito::encode_canonical(&original).expect("encode retained election");
+    let decoded: ElectionState =
+        norito::decode_canonical(&encoded).expect("decode exact retained election");
+    assert_eq!(decoded.options, original.options);
+    assert_eq!(decoded.tally, original.tally);
+    assert_eq!(decoded.accepted_ballots, [first, second]);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), encoded);
+    let mut reordered = decoded;
+    reordered.accepted_ballots.reverse();
+    assert_ne!(
+        norito::encode_canonical(&reordered).unwrap(),
+        encoded,
+        "the canonical state must bind admission order"
+    );
 }
 
 #[test]

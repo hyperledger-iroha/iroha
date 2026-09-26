@@ -68,4 +68,15 @@ fn release_manifest_authority_instruction_has_one_canonical_wire_identity() {
             .unwrap()
             .is_err()
     );
+    let json = norito::json::to_json(&instruction).expect("one instruction JSON shape");
+    assert_eq!(
+        norito::json::from_str::<MutateSorafsReleaseManifestAuthority>(&json)
+            .expect("strict instruction JSON"),
+        instruction
+    );
+    let foreign_field = json.replacen("\"deployment_id\":", "\"extra\":1,\"deployment_id\":", 1);
+    assert_ne!(foreign_field, json);
+    assert!(
+        norito::json::from_str::<MutateSorafsReleaseManifestAuthority>(&foreign_field).is_err()
+    );
 }

@@ -168,6 +168,11 @@ encoding:
   - If set: unsigned varint (7-bit continuation).
   - If not set: fixed 8-byte little-endian u64.
 - Sequence length headers are fixed 8-byte little-endian u64 in v1.
+- The first-release standalone election finalization instruction, retained
+  `ElectionState`, Torii tally response, and IVM `VoteGetTallyResponse` encode
+  each option weight as canonical `u128`. Proof public-input limbs are 32-byte
+  little-endian values whose upper 16 bytes must be zero; no `u64` tally layout
+  or fallback decoder is admitted.
 - `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
   length prefixes), regardless of `PACKED_SEQ`. Decoders reject per-element
   length-prefixed byte vectors.

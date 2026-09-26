@@ -95,6 +95,40 @@ fn apply_retired_canonical_recovery_requests(
         }
     }
 }
+/// The live interrupted-tip corridor may send only its own canonical-body
+/// request or chunk response through the otherwise generic lane output service.
+/// An old lane consensus effect must not acquire that production output path.
+fn canonical_recovery_is_request_effect(effect: &V2LaneWorkEffect) -> Result<bool, V2RunnerError> {
+    use super::message::{LaneHistoricalRecoveryKindV1, LaneHistoricalRecoveryPayloadV1};
+
+    match effect {
+        V2LaneWorkEffect::PostLaneBlock {
+            message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+            ..
+        } if request.certificate.is_none()
+            && request.signer_pops.is_empty()
+            && matches!(
+                &request.kind,
+                LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock { .. }
+            ) =>
+        {
+            Ok(true)
+        }
+        V2LaneWorkEffect::PostLaneBlock {
+            message: BlockMessage::LaneHistoricalRecoveryResponse(response),
+            ..
+        } if matches!(
+            &response.payload,
+            LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk { .. }
+        ) =>
+        {
+            Ok(false)
+        }
+        _ => Err(V2RunnerError::Service(
+            "canonical executed-block recovery emitted a non-recovery lane effect".to_owned(),
+        )),
+    }
+}
 fn dispatch_canonical_executed_block_recovery_effects(
     recovery: &mut CanonicalExecutedBlockRecovery,
     services: &ProductionV2Services,
@@ -110,19 +144,8 @@ fn dispatch_canonical_executed_block_recovery_effects(
         let Some(effect) = recovery.next_effect() else {
             break;
         };
-        let is_request = matches!(
-            &effect,
-            V2LaneWorkEffect::PostLaneBlock {
-                message: BlockMessage::LaneHistoricalRecoveryRequest(_),
-                ..
-            }
-        );
+        let is_request = canonical_recovery_is_request_effect(&effect)?;
         let is_current_request = recovery.is_current_request_effect(&effect);
-        if !matches!(&effect, V2LaneWorkEffect::PostLaneBlock { .. }) {
-            return Err(V2RunnerError::Service(
-                "canonical executed-block recovery emitted a non-recovery lane effect".to_owned(),
-            ));
-        }
         if is_request && !is_current_request {
             let _ = require_peeked_lane_work_effect(recovery.drain_effects(1).pop())?;
             summary.handled = summary.handled.saturating_add(1);

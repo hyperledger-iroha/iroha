@@ -9,7 +9,9 @@ fn verified_current(f: &mut Fixture) -> VerifiedFinalPromotionCheckV1 {
         [true]
     );
     pending
-        .verify_finalized(|| Ok(interval(NOW, NOW + 10)))
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            Ok(interval(NOW, NOW + 10))
+        })
         .unwrap()
 }
 
@@ -27,7 +29,9 @@ fn initial_interval_enforces_earliest_observation_age_at_exact_boundary() {
             f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
             [true]
         );
-        let result = pending.verify_finalized(|| Ok(interval(1500, upper)));
+        let result = pending.verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            Ok(interval(1500, upper))
+        });
         if let Some(error) = expected {
             assert_eq!(result.err(), Some(error));
         } else {
@@ -129,7 +133,10 @@ fn retained_interval_does_not_claim_newer_native_authority() {
     assert_eq!(f.snapshot(), changed);
     assert_eq!(
         pending
-            .verify_finalized(|| Ok(interval(NOW + 1, NOW + 2)))
+            .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(interval(
+                NOW + 1,
+                NOW + 2
+            )))
             .err(),
         Some(Error::Authority),
         "only a fresh Check can observe the subsequent revocation"
@@ -141,6 +148,7 @@ fn verified_subject(
     subject: FinalPromotionCheckSubjectV1,
 ) -> VerifiedFinalPromotionCheckV1 {
     let mut expected = f.expected();
+    expected.floor = f.reserve_floor.expect("pre-Reserve independent floor");
     expected.subject = subject;
     let prepared =
         begin_final_promotion_check_v1(Arc::clone(&f.state), expected, Duration::from_secs(60))
@@ -157,7 +165,12 @@ fn verified_subject(
         [true]
     );
     pending
-        .verify_finalized(|| Ok(interval(NOW + 2, NOW + 2)))
+        .verify_finalized(
+            FinalPromotionCheckSourceV1::Reserved(
+                f.reserve_signed.as_ref().expect("original signed Reserve"),
+            ),
+            || Ok(interval(NOW + 2, NOW + 2)),
+        )
         .unwrap()
 }
 
@@ -192,7 +205,7 @@ fn retained_reserved_interval_keeps_all_three_exclusive_phase_expiries() {
 }
 
 #[test]
-fn retained_completed_interval_preserves_timely_completion_after_reservation_expiry() {
+fn completed_phase_has_no_retained_result_without_exact_complete_source_proof() {
     use iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCompleteV1;
     use sorafs_manifest::signer::protocol::{
         SignerOperationAuditHeadV1, SignerOperationCommitmentV1,
@@ -230,16 +243,29 @@ fn retained_completed_interval_preserves_timely_completion_after_reservation_exp
         } else {
             FinalPromotionCheckSubjectV1::AfterCommit(row.clone())
         };
-        let verified = verified_subject(&mut f, subject);
-        let after_expiry = row.reservation.expires_at_unix_ms + 1;
+        let mut expected = f.expected();
+        expected.subject = subject;
+        let prepared =
+            begin_final_promotion_check_v1(Arc::clone(&f.state), expected, Duration::from_secs(60))
+                .unwrap();
+        let signed = f.sign(prepared_instruction(&prepared), 3, NOW + 2);
+        let pending = prepared.bind_signed_transaction(signed).unwrap();
         assert_eq!(
-            verified.recheck_use_interval(interval(after_expiry, after_expiry)),
-            Ok(())
+            f.commit(
+                NOW + 2,
+                vec![pending.signed_transaction().clone()],
+                true,
+                true,
+            ),
+            [true]
         );
-        assert_eq!(verified.snapshot().operation.as_ref(), Some(&row));
         assert_eq!(
-            verified.eligibility_time_interval(),
-            interval(NOW + 2, NOW + 2)
+            pending
+                .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+                    panic!("completed source must precede clock")
+                })
+                .err(),
+            Some(Error::Execution)
         );
     }
 }

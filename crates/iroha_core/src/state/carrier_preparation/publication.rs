@@ -253,7 +253,7 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
             .source_prefix
             .retains_carrier(journals.valid.as_ref(), &journals.context)
             || journals.effects.header != journals.valid.as_ref().header()
-            || journals.staged_legacy_source()
+            || journals.untransferred_merge_authority()
         {
             Some(CarrierPublicationError::Source)
         } else if !journals
@@ -456,7 +456,7 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
 }
 
 impl<A, Block, C> PreparedCarrierJournals<A, Block, C> {
-    fn staged_legacy_source(&self) -> bool {
+    fn untransferred_merge_authority(&self) -> bool {
         self.effects.staged_merge_entry.is_some()
             || self
                 .effects

@@ -10,7 +10,7 @@ exact JNI export ownership. Export names alone cannot attest native argument
 types or receiver semantics. The report seals the inspected class files and
 library; it does not replace signature validation, source-bound build provenance,
 native execution, or hardware qualification. C exports are checked by
-check_native_sdk_abi23_artifact.py.
+check_native_sdk_artifact.py.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _load_sibling(name: str):
 
 
 JVM = _load_sibling("jvm_classfile")
-ARTIFACT = _load_sibling("check_native_sdk_abi23_artifact")
+ARTIFACT = _load_sibling("check_native_sdk_artifact")
 MODULES = ("core-jvm", "client-android", "kagemusha-wallet-android")
 SDK_PACKAGE = "org/hyperledger/iroha/sdk/"
 MAX_CLASS_FILES = 20_000

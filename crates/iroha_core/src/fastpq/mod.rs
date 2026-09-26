@@ -4,10 +4,8 @@ mod quantity_statement;
 #[cfg(test)]
 pub(crate) use quantity_statement::quantity_materializer_invocations_for_testing;
 mod source_capture;
-#[cfg(test)]
-mod source_prefix_lengths;
-#[cfg(test)]
-mod source_reservation;
+pub(crate) mod source_prefix_lengths;
+pub(crate) mod source_reservation;
 pub(crate) use source_capture::{
     FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage,
     preflight_fastpq_source_transcripts,

@@ -7,10 +7,12 @@ import pytest
 
 from iroha_python.address import AccountAddress
 from iroha_python.client import ToriiClient
+from iroha_python.crypto import Ed25519KeyPair
 
 from .helpers import RecordingSession, StubResponse
 
-ACCOUNT_ID = AccountAddress.from_account(public_key=bytes([0x31]) * 32).to_i105(0x0171)
+ACCOUNT_PUBLIC_KEY = Ed25519KeyPair.from_private_key(bytes([0x31]) * 32).public_key
+ACCOUNT_ID = AccountAddress.from_account(public_key=ACCOUNT_PUBLIC_KEY).to_i105(0x0171)
 
 
 def _manifest_list_payload() -> dict[str, Any]:

@@ -981,6 +981,45 @@ impl GoldilocksDigest384LastFieldStreamV1 {
         Ok(stream)
     }
 
+    // Only a typed immutable domain cache can create the opaque handoff. Keep
+    // the independent new()/one-shot domain construction unchanged as an oracle.
+    pub(crate) fn from_cached_domain(
+        domain: crate::poseidon_digest384_prefix::CachedDomainSuffix,
+        prefix_fields: &[&[u8]],
+        final_field_len: usize,
+    ) -> Result<Self, GoldilocksDigest384LastFieldStreamErrorV1> {
+        let field_count = prefix_fields
+            .len()
+            .checked_add(1)
+            .filter(|count| *count <= MAX_FRAMED_FIELD_BYTES_V1)
+            .ok_or(GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded)?;
+        if final_field_len > MAX_FRAMED_FIELD_BYTES_V1
+            || prefix_fields
+                .iter()
+                .any(|field| field.len() > MAX_FRAMED_FIELD_BYTES_V1)
+        {
+            return Err(GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded);
+        }
+        let (lane_states, pending, pending_len) = domain.into_parts();
+        let mut stream = Self {
+            lane_states,
+            pending,
+            pending_len,
+            byte_chunk: [0; 7],
+            byte_chunk_len: 0,
+            expected_final_field_len: final_field_len,
+            received_final_field_len: 0,
+        };
+        stream.absorb_element(11);
+        stream.absorb_element(field_count as u64);
+        for (index, field) in prefix_fields.iter().enumerate() {
+            stream.absorb_framed_byte_field(12 + index as u64, field);
+        }
+        stream.absorb_element(12 + prefix_fields.len() as u64);
+        stream.absorb_element(final_field_len as u64);
+        Ok(stream)
+    }
+
     /// Return the exact final-field byte length bound at construction.
     #[must_use]
     pub const fn expected_len(&self) -> usize {

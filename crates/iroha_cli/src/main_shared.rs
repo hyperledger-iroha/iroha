@@ -189,25 +189,6 @@ pub(crate) fn quote_and_sign_transaction_with_admission(
     )
 }
 
-/// Bound the exact unsigned payload to its authorization before fee quoting.
-/// Quoting and signing retain that payload's original timestamp and bounded TTL.
-pub(crate) fn quote_and_sign_transaction_with_expiry(
-    client: &BlockingClient,
-    executable: Executable,
-    requested_fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-    execution_expiry_ms: u64,
-) -> Result<(SignedTransaction, FeeQuoteResponse)> {
-    quote_and_sign_transaction_inner(
-        client,
-        executable,
-        requested_fee_payment,
-        metadata,
-        Some(execution_expiry_ms),
-        None,
-    )
-}
-
 /// Select an intentional admission corridor before quoting the exact payload.
 /// Ordinary lifecycle certificates still retain the signed execution expiry;
 /// callers of the default helpers keep the account draft's Ordinary intent.

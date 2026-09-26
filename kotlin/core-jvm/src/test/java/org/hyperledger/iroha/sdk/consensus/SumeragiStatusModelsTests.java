@@ -68,6 +68,29 @@ public final class SumeragiStatusModelsTests {
   }
 
   @Test
+  public void executionCommitmentRequiresAndValidatesTransactionTreeOptions() {
+    final String inputField = "\"transaction_input_commitment\":null";
+    final String outputField = "\"transaction_output_commitment\":null";
+    final String inputTree = "\"transaction_input_commitment\":{\"root\":\""
+        + hash(0x39) + "\",\"leaf_count\":2}";
+    final String outputTree = "\"transaction_output_commitment\":{\"root\":\""
+        + hash(0x3a) + "\",\"leaf_count\":3}";
+    final String payload = statusJson("2", "123", "19");
+    final String withTrees = payload.replace(inputField, inputTree).replace(outputField, outputTree);
+    final SumeragiStatusExecutionCommitment commitment =
+        SumeragiV2Status.parseJson(withTrees).lastCommitQc.certificate.executionCommitment;
+    assertEquals(hash(0x39), commitment.transactionInputCommitment.root);
+    assertEquals(BigInteger.valueOf(2), commitment.transactionInputCommitment.leafCount);
+    assertEquals(hash(0x3a), commitment.transactionOutputCommitment.root);
+    assertEquals(BigInteger.valueOf(3), commitment.transactionOutputCommitment.leafCount);
+
+    assertRejected(payload.replace(inputField + ",", ""));
+    assertRejected(withTrees.replace(outputTree, outputField));
+    assertRejected(withTrees.replace("\"leaf_count\":3", "\"leaf_count\":1"));
+    assertRejected(withTrees.replace("\"leaf_count\":2", "\"leaf_count\":0"));
+  }
+
+  @Test
   public void parserRejectsUnknownMissingDuplicateTrailingAndNoncanonicalScalars() {
     final String payload = statusJson("2", "123", "19");
     assertRejected(payload.replaceFirst("\\{", "{\"mode_tag\":\"legacy\","));
@@ -262,7 +285,9 @@ public final class SumeragiStatusModelsTests {
         + "\"lane_finality_manifest\": null,"
         + "\"merge_carrier\": null,"
         + "\"executed_block_wire_len\": " + executedWireLen + ","
-        + "\"executed_block_wire_hash\":\"" + hash(0x37) + "\"}";
+        + "\"executed_block_wire_hash\":\"" + hash(0x37) + "\","
+        + "\"transaction_input_commitment\":null,"
+        + "\"transaction_output_commitment\":null}";
   }
 
   private static String subject() {

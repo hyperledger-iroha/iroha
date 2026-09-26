@@ -44,9 +44,9 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
     assert source_match is not None
     assert canonical_match is not None
     assert header_match is not None
-    assert canonical_match.group(1) == header_match.group(1) == "23"
+    assert canonical_match.group(1) == header_match.group(1) == "24"
     assert "bridge source ABI is now 12" not in plan
-    assert "sole first-release ABI, version 23" in plan
+    assert "sole first-release ABI, version 24" in plan
 
 
 def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
@@ -118,7 +118,7 @@ def test_fixture_readmes_do_not_claim_native_or_provider_qualification() -> None
         in provider
     )
     assert (
-        "It is not evidence of clean ABI-23 builds for all five native release "
+        "It is not evidence of clean ABI-24 builds for all five native release "
         "targets, skip-free SDK parity, published packages, external software signing, "
         "a qualified provider deployment, or L1/L2 promotion."
         in cookbook

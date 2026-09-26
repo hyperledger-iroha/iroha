@@ -117,7 +117,8 @@ mod raw_ivm_work {
             block.gas_limit_per_block = block_limit;
             block.gas_used_in_block = already_used;
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
             let error = Executor::Initial
                 .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
                 .expect_err("the actual raw VM must exhaust its effective gas limit");
@@ -201,7 +202,8 @@ seiyaku RawMeteredFailure {
             .unwrap();
         setup.apply();
         let fragments = block.committed_fragment_count();
-        let mut tx = block.transaction();
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut cache)
             .expect_err("the genuinely bound and permitted raw contract must exhaust VM gas");
@@ -291,7 +293,8 @@ seiyaku UnverifiedBallot {
             .unwrap();
         setup.apply();
         let fragments = block.committed_fragment_count();
-        let mut tx = block.transaction();
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .expect_err(
@@ -356,7 +359,8 @@ seiyaku UnverifiedBallot {
         let transaction = signed(&state, &program, GAS);
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let fragments = block.committed_fragment_count();
-        let mut tx = block.transaction();
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let error = Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .expect_err("the deferred missing-role instruction must reject after the first write");
@@ -399,7 +403,8 @@ seiyaku UnverifiedBallot {
         let transaction = signed(&state, &program, GAS);
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let fragments = block.committed_fragment_count();
-        let mut tx = block.transaction();
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         Executor::Initial
             .execute_transaction(&mut tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .unwrap();
@@ -451,7 +456,8 @@ seiyaku UnverifiedBallot {
             let source = signed(&state, &program, GAS);
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = count_cap;
             tx.pipeline.overlay_max_bytes = byte_cap;
             let error = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache)
@@ -520,7 +526,12 @@ seiyaku UnverifiedBallot {
             let (marker, cap, success, finite) = match case {
                 0 => (Some(Json::new(true)), CYCLES, true, true),
                 1 => (Some(Json::new(true)), measured_cycles.unwrap(), true, true),
-                2 => (Some(Json::new(true)), measured_cycles.unwrap() - 1, false, true),
+                2 => (
+                    Some(Json::new(true)),
+                    measured_cycles.unwrap() - 1,
+                    false,
+                    true,
+                ),
                 3 => (Some(Json::new(true)), 0, true, false),
                 4 => (Some(Json::new(false)), 1, true, false),
                 5 => (Some(Json::new("true")), 1, true, false),
@@ -532,19 +543,26 @@ seiyaku UnverifiedBallot {
                 metadata.insert(crate::tx::QUARANTINE_METADATA_KEY.parse().unwrap(), marker);
             }
             let source = TransactionBuilder::new(
-                state.network_id, ALICE_ID.clone(),
+                state.network_id,
+                ALICE_ID.clone(),
                 FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(GAS)),
-            ).with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
-                .sign(ALICE_KEYPAIR.private_key());
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+            .sign(ALICE_KEYPAIR.private_key());
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.quarantine_tx_max_cycles = cap;
-            let result = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result =
+                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
             let cycles = tx.completed_execution_cycles_for_tests();
             assert_eq!(cycles.is_some(), finite);
-            assert!(!tx.execution_effect_limit_exceeded(), "actual VM work is not fee-exempt instruction preflight");
+            assert!(
+                !tx.execution_effect_limit_exceeded(),
+                "actual VM work is not fee-exempt instruction preflight"
+            );
             if case == 0 {
                 measured_cycles = cycles;
                 assert!(cycles.unwrap() > 1);
@@ -552,22 +570,45 @@ seiyaku UnverifiedBallot {
             if success {
                 result.unwrap();
                 assert_eq!(tx.last_tx_gas_used, expected_gas);
-                if finite { assert_eq!(cycles, measured_cycles); }
+                if finite {
+                    assert_eq!(cycles, measured_cycles);
+                }
                 tx.apply();
             } else {
-                assert!(matches!(result, Err(ValidationFail::NotPermitted(ref reason))
-                    if reason == &format!("quarantine cycle budget exceeded: {cap}")));
+                assert!(
+                    matches!(result, Err(ValidationFail::NotPermitted(ref reason))
+                    if reason == &format!("quarantine cycle budget exceeded: {cap}"))
+                );
                 assert_eq!(cycles, Some(cap));
                 // Only the final, zero-gas HALT is refused. All metered work
                 // completed, even though its queued effects cannot be applied.
                 assert_eq!(tx.last_tx_gas_used, expected_gas);
                 assert!(!tx.execution_effects_allow_apply());
-                assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("raw_work_written").is_none(),
-                    "a queued write cannot apply after HALT was refused");
+                assert!(
+                    tx.world
+                        .account(&ALICE_ID)
+                        .unwrap()
+                        .metadata()
+                        .get("raw_work_written")
+                        .is_none(),
+                    "a queued write cannot apply after HALT was refused"
+                );
                 drop(tx);
             }
-            assert_eq!(block.committed_fragment_count(), fragments + usize::from(success));
-            assert_eq!(block.world.account(&ALICE_ID).unwrap().metadata().get("raw_work_written").is_some(), success);
+            assert_eq!(
+                block.committed_fragment_count(),
+                fragments + usize::from(success)
+            );
+            assert_eq!(
+                block
+                    .world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get("raw_work_written")
+                    .is_some(),
+                success
+            );
         }
     }
 }

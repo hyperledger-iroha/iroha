@@ -34,7 +34,7 @@ TRACKED_NATIVE_EXTENSIONS="$(
     'python/iroha_native/src/iroha_native/*.dll'
 )"
 if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
-  echo "error: Python native SDK artifacts must be rebuilt in the ABI-23 lane, not tracked:" >&2
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-24 lane, not tracked:" >&2
   printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
   exit 1
 fi
@@ -90,8 +90,8 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
 
 NATIVE_TARGET="$("${VENV_PYTHON}" -I -c \
   'import platform, sys; print(f"{platform.system().lower()}-{platform.machine().lower()}-python{sys.version_info.major}{sys.version_info.minor}")')"
-NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py" \
+NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi24.json"
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_artifact.py" \
   record \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \
@@ -99,7 +99,7 @@ NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi23.json"
   --python "${VENV_PYTHON}" \
   --sdk python \
   --target "${NATIVE_TARGET}"
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py" \
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_artifact.py" \
   verify \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \
@@ -144,7 +144,7 @@ if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then
     --evidence-dir "${SORAFS_PYTHON_SDK_EVIDENCE_DIR}"
   )
 fi
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py" \
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_artifact.py" \
   verify \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \

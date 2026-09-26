@@ -16,7 +16,7 @@ This file focuses on getting a .NET application connected safely.
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing
 
 Account construction, parsing, and every operation that admits account identities
-require the packaged ABI-23 Rust bridge for the current runtime identifier. Privacy
+require the packaged ABI-24 Rust bridge for the current runtime identifier. Privacy
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
@@ -181,6 +181,12 @@ Major first-release areas include:
 - contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, SCCP, VPN, and
   SoraFS routes.
 
+For an existing public standalone ballot, use
+`TransactionBuilder.UpdatePlainConviction(referendumId, newTotalBond, durationBlocks)`.
+The direct V1 instruction contains only the referendum selector, owner, new total
+bond and requested lock duration. The choice is immutable and read from finalized
+state; a repeated cast is not an update.
+
 Contract-call drafts require the signature-bound `QueuePlanSynced` admission
 intent. `CallContractAsync` checks it with the exact caller-trusted network,
 authority, invocation, metadata and fee before returning a draft for local signing.
@@ -283,7 +289,7 @@ matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
 NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
 encoding covers all eleven published controller curve IDs and complete canonical
 multisig policies with a u16 member count. Address decoding checks key envelopes;
-every public address constructor and parser additionally requires the ABI-23
+every public address constructor and parser additionally requires the ABI-24
 Rust address owner for complete key and policy admission. Missing native
 validation raises `NativeBridgeUnavailable`; structural checks cannot admit an
 account by themselves. Canonical I105 parsing rejects surrounding Unicode

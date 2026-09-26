@@ -93,8 +93,12 @@ COMPLETED_EQUIVOCATION_BINDINGS = (
         'fn',
         'retain_validated_local_evidence',
         (
-            'let snapshot = v2_committed_evidence_snapshot(view.world())',
-            'snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded',
+            'let records = world.consensus_evidence();',
+            'if record_count == MAX_V2_COMMITTED_EVIDENCE_RECORDS {\n            return false;\n        }',
+            'let record_bytes = v2_evidence_encoded_len(&record.evidence.equivocation);',
+            'if record_bytes > MAX_V2_EVIDENCE_ADMISSION_BYTES {\n            return false;\n        }',
+            'let Some(next_bytes) = checked_v2_evidence_byte_sum(\n            table_bytes,\n            [record_bytes],\n            MAX_V2_COMMITTED_EVIDENCE_BYTES,\n        ) else {\n            return false;\n        };',
+            'table_bytes = next_bytes;',
             'if subject_height > next_height',
             'next_height.max(after_subject_height)',
             '!evidence_within_configured_horizon(earliest_admission_height, horizon, Some(subject_height))',
@@ -1164,6 +1168,22 @@ NATIVE_RECOVERY_TRANSITIONS = (
 )
 
 PASSIVE_RECOVERY_ORDERED_CHECKS = (
+    (
+        'crates/iroha_core/src/sumeragi/evidence.rs',
+        'fn',
+        'retain_validated_local_evidence',
+        (
+            'let world = view.world();',
+            'let records = world.consensus_evidence();',
+            'for (_, record) in records.iter() {',
+            'if record_count == MAX_V2_COMMITTED_EVIDENCE_RECORDS {\n            return false;\n        }',
+            'let record_bytes = v2_evidence_encoded_len(&record.evidence.equivocation);',
+            'if record_bytes > MAX_V2_EVIDENCE_ADMISSION_BYTES {\n            return false;\n        }',
+            'let Some(next_bytes) = checked_v2_evidence_byte_sum(\n            table_bytes,\n            [record_bytes],\n            MAX_V2_COMMITTED_EVIDENCE_BYTES,\n        ) else {\n            return false;\n        };',
+            'table_bytes = next_bytes;',
+            'if records.iter().any(',
+        ),
+    ),
     (
         'crates/iroha_core/src/sumeragi/evidence.rs',
         'fn',

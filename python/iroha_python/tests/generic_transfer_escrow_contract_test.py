@@ -507,7 +507,6 @@ def test_public_query_helpers_reject_raw_network_bytes_before_native_dispatch(
             transaction_hash="11" * 32,
             authority="authority@payments",
             network_id=raw_network_id,
-            executed_block_wire=b"wire",
             finality_bundle_chain_json="[]",
             trusted_height_context_id="trusted-root",
             private_key=b"\x11" * 32,
@@ -705,13 +704,15 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     with pytest.raises(ValueError, match="must contain exactly"):
         VerifiedCommittedTransaction.from_payload(unknown_field)
 
-    for retired in (
-        {**payload, "result_hash": payload["output_hash"]},
-        {**payload, "proof_kind": "ordinary"},
-        {**payload, "proof_kind": "certified_merge"},
-    ):
-        with pytest.raises(ValueError, match="must contain exactly"):
-            VerifiedCommittedTransaction.from_payload(retired)
+    with pytest.raises(ValueError, match="must contain exactly"):
+        VerifiedCommittedTransaction.from_payload(
+            {**payload, "result_hash": payload["output_hash"]}
+        )
+    for retired_kind in ("ordinary", "certified_merge"):
+        with pytest.raises(ValueError, match="current selective proof_kind required"):
+            VerifiedCommittedTransaction.from_payload(
+                {**payload, "proof_kind": retired_kind}
+            )
     with pytest.raises(ValueError, match="entrypoint_kind is not recognized"):
         VerifiedCommittedTransaction.from_payload({**payload, "entrypoint_kind": "Time"})
 

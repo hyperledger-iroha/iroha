@@ -1,6 +1,6 @@
 //! Exact signed native custody Check execution and same-State finalized lineage.
 //!
-//! This crate-private owner authenticates only the two closed native Check purposes. It never
+//! This crate-private owner authenticates closed native Check purposes. It never
 //! accepts an eligibility callback, supplies a clock, or turns a caller-provided history into
 //! authority. Purpose-owned wrappers must check current custody and both UTC endpoints before
 //! producing their distinct successes. Historical finality alone is not a current-authority read.
@@ -20,11 +20,17 @@ use iroha_data_model::{
     },
     isi::{
         InstructionBox,
-        sorafs::{MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority},
+        sorafs::{
+            MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
+            MutateSorafsTopologyAuthority,
+        },
     },
     sorafs::{
         final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
         final_promotion_authority::FinalPromotionAuthorityActionV1,
+        release_manifest_authority::ReleaseManifestActionV1,
+        stream_token_authority::StreamTokenAuthorityActionV1, topology_authority::TopologyActionV1,
     },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
@@ -41,6 +47,20 @@ use std::{
 /// This is a structural capacity bound, not signing, spending, custody or currentness authority.
 pub const FINAL_PROMOTION_NATIVE_TRANSACTION_MAX_BYTES_V1: usize = 64 * 1024;
 const MAX_ROUND: Duration = Duration::from_secs(60);
+/// Maximum canonical lineage a one-use native Check may replay from its trusted floor.
+/// Shared preflight runs before any Kura finality or block-body read.
+const MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1: u64 = 4_096;
+
+fn check_history_span_v1(floor_height: u64, applied_height: u64) -> Result<(), Error> {
+    if applied_height
+        .checked_sub(floor_height)
+        .and_then(|distance| distance.checked_add(1))
+        .is_none_or(|span| span > MAX_NATIVE_CHECK_HISTORY_BLOCKS_V1)
+    {
+        return Err(Error::Finality);
+    }
+    Ok(())
+}
 
 /// Shared proof failures, mapped into each purpose's payload-free public errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,16 +145,47 @@ impl NativeCheckRoundV1 {
     }
 }
 
-/// Closed native purpose; neither can substitute for the other's proof consumer.
+/// Closed native purposes; none can substitute for another's proof consumer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NativeCustodyCheckPurposeV1 {
     FinalPromotion,
     FinalPromotionAccount,
+    ReleaseManifest,
+    StreamToken,
+    /// Proof binding only; role-16 Core execution and current authority remain closed.
+    Topology,
 }
-/// Only the two native instruction owners can enter the common proof path.
+/// Purpose-typed native instructions can enter the common proof path.
+///
+/// The role-13 and role-16 variants bind signed Checks to execution evidence only. Their
+/// Core instructions remain closed and cannot produce signer or topology authority.
 pub(crate) enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "release-manifest native Check has no production caller yet"
+        )
+    )]
+    ReleaseManifest(&'a MutateSorafsReleaseManifestAuthority),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stream-token native Check has no production caller yet"
+        )
+    )]
+    StreamToken(&'a MutateSorafsStreamTokenAuthority),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "topology native Check has no production caller yet"
+        )
+    )]
+    Topology(&'a MutateSorafsTopologyAuthority),
 }
 impl NativeCustodyCheckRefV1<'_> {
     fn coordinates(
@@ -146,6 +197,7 @@ impl NativeCustodyCheckRefV1<'_> {
             [u8; 32],
             u64,
             [u8; 32],
+            Option<HeightContextId>,
         ),
         Error,
     > {
@@ -160,6 +212,7 @@ impl NativeCustodyCheckRefV1<'_> {
                     check.network_id,
                     check.minimum_height,
                     check.minimum_block_hash,
+                    None,
                 ))
             }
             Self::FinalPromotionAccount(instruction) => {
@@ -172,6 +225,50 @@ impl NativeCustodyCheckRefV1<'_> {
                     check.network_id,
                     check.minimum_height,
                     check.minimum_block_hash,
+                    None,
+                ))
+            }
+            Self::ReleaseManifest(instruction) => {
+                let ReleaseManifestActionV1::Check(check) = &instruction.action else {
+                    return Err(Error::Transaction);
+                };
+                // This binds a signed role-13 Check only to exact execution evidence. Its Core
+                // instruction remains closed, so this cannot grant signer-operation authority.
+                Ok((
+                    NativeCustodyCheckPurposeV1::ReleaseManifest,
+                    check.challenge,
+                    check.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    None,
+                ))
+            }
+            Self::StreamToken(instruction) => {
+                let StreamTokenAuthorityActionV1::Check(check) = &instruction.request.action else {
+                    return Err(Error::Transaction);
+                };
+                Ok((
+                    NativeCustodyCheckPurposeV1::StreamToken,
+                    check.challenge,
+                    instruction.request.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    Some(check.floor.context_id),
+                ))
+            }
+            Self::Topology(instruction) => {
+                let TopologyActionV1::Check(check) = &instruction.transition.action else {
+                    return Err(Error::Transaction);
+                };
+                // The signed role-16 Check carries height/hash, while the independent floor
+                // owner supplies the context ID. This is proof plumbing, not topology authority.
+                Ok((
+                    NativeCustodyCheckPurposeV1::Topology,
+                    check.challenge,
+                    check.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    None,
                 ))
             }
         }
@@ -180,6 +277,9 @@ impl NativeCustodyCheckRefV1<'_> {
         match self {
             Self::FinalPromotion(instruction) => (*instruction).clone().into(),
             Self::FinalPromotionAccount(instruction) => (*instruction).clone().into(),
+            Self::ReleaseManifest(instruction) => (*instruction).clone().into(),
+            Self::StreamToken(instruction) => (*instruction).clone().into(),
+            Self::Topology(instruction) => (*instruction).clone().into(),
         }
     }
 }
@@ -218,7 +318,7 @@ pub(crate) fn bind_signed_check_v1(
     }
     round.bound = true;
     floor.validate()?;
-    let (purpose, challenge, check_network, minimum_height, minimum_block_hash) =
+    let (purpose, challenge, check_network, minimum_height, minimum_block_hash, check_context_id) =
         instruction.coordinates()?;
     if round.challenge != Some(challenge)
         || challenge == [0; 32]
@@ -227,6 +327,7 @@ pub(crate) fn bind_signed_check_v1(
         || check_network != network_id
         || minimum_height != floor.height
         || minimum_block_hash != floor.block_hash
+        || check_context_id.is_some_and(|context_id| context_id != floor.context_id)
     {
         return Err(Error::Transaction);
     }
@@ -383,8 +484,9 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
     if check_height <= bound.floor.height || check_height > applied_height {
         return Err(Error::NotApplied);
     }
+    check_history_span_v1(bound.floor.height, applied_height)?;
     let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
-    let mut check_artifact = None;
+    let mut check_block_hash = None;
     let mut applied_floor = bound.floor;
     for height in bound.floor.height..=applied_height {
         round.ensure_live()?;
@@ -439,10 +541,36 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
             }
         }
         if height == check_height {
-            // Retain the target context only after checking its exact successor
-            // chain from the independent floor above. An unverified artifact's
-            // own context is never an expected-context authority.
-            check_artifact = Some((artifact.clone(), artifact.context_id()));
+            // Verify execution against this same authenticated lineage body. Keeping only
+            // its hash avoids a second Kura body read or a whole-block overlap while
+            // the remaining finalized successor chain is checked below.
+            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                &entry_hash,
+            )
+            .map_err(|_| Error::Execution)?;
+            let proofs = block
+                .network_execution_proof(&entry_hash)
+                .ok_or(Error::Execution)?;
+            if !proofs.verify(&anchor) {
+                return Err(Error::Execution);
+            }
+            let entry_index =
+                usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
+            let actual = block
+                .network_entrypoint_at(entry_index)
+                .ok_or(Error::Execution)?;
+            let (_, output) = block
+                .network_output_at(anchor.entry_index())
+                .ok_or(Error::Execution)?;
+            if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
+                || !output.result.is_ok()
+            {
+                return Err(Error::Execution);
+            }
+            check_block_hash = Some(*block.hash().as_ref());
         }
         applied_floor = NativeCheckFloorV1 {
             height,
@@ -452,37 +580,7 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
         parent = Some((artifact, receipt));
     }
     round.ensure_live()?;
-    let block = view
-        .canonical_block_by_height(height_index)
-        .map_err(|_| Error::Execution)?;
-    let (artifact, expected_context) = check_artifact.ok_or(Error::Execution)?;
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &block,
-        &artifact,
-        expected_context,
-        &entry_hash,
-    )
-    .map_err(|_| Error::Execution)?;
-    // Construct both paths from the very same executed image authenticated by
-    // the anchor, without rereading another State frontier or block body.
-    let proofs = block
-        .network_execution_proof(&entry_hash)
-        .ok_or(Error::Execution)?;
-    if !proofs.verify(&anchor) {
-        return Err(Error::Execution);
-    }
-    let index = usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
-    let actual = block.network_entrypoint_at(index).ok_or(Error::Execution)?;
-    let (_, output) = block
-        .network_output_at(anchor.entry_index())
-        .ok_or(Error::Execution)?;
-    if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
-        || !output.result.is_ok()
-    {
-        return Err(Error::Execution);
-    }
-    round.ensure_live()?;
-    let check_block_hash = *block.hash().as_ref();
+    let check_block_hash = check_block_hash.ok_or(Error::Execution)?;
     Ok(AuthenticatedCheckExecutionCutV1 {
         view,
         check_height,

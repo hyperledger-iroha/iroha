@@ -371,6 +371,12 @@ fn print_usage() {
     );
     eprintln!("  cargo xtask norito-rpc-fixtures --output-root <absent-absolute-external-dir>");
     eprintln!("{NORITO_RPC_FIXTURES_USAGE_DESCRIPTION}");
+    eprintln!(
+        "  cargo xtask norito-rpc-fixtures --local-integration --output-root <checkout>/target/norito-rpc-local/<absent-name>"
+    );
+    eprintln!(
+        "    Checkout-local test publication only; target/norito-rpc-local must already be an owner-private mode-0700 directory."
+    );
     eprintln!("  cargo xtask norito-rpc-verify [--json-out <path|->]");
     eprintln!("{NORITO_RPC_VERIFY_USAGE_DESCRIPTION}");
     eprintln!("  cargo xtask soranet-testnet-kit [--out <dir>]");

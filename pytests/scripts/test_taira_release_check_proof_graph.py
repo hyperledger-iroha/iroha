@@ -4,11 +4,11 @@ import contextlib
 import copy
 import io
 from pathlib import Path
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 import test_taira_release_check as existing
+from taira_fake_libtest import executable
 
 gate = existing.gate
 
@@ -31,16 +31,7 @@ class ProofGraphTests(unittest.TestCase):
         }
         self.assertEqual([len(self.names[name]) for name in ("proof", "proof-flows")], [4, 2])
         for name, tests in self.names.items():
-            payload = (
-                f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                f"if '--list' in sys.argv: print({chr(10).join(test + ': test' for test in tests)!r}); sys.exit(0)\n"
-                "name = sys.argv[1]\n"
-                f"with Path({str(self.executed)!r}).open('a') as f: f.write(name + '\\n')\n"
-                f"failed = name in Path({str(self.failures)!r}).read_text().splitlines()\n"
-                "print('test ' + name + (' ... FAILED' if failed else ' ... ok'))\n"
-                "print('fixture failure' if failed else 'test result: ok. 1 passed; 0 failed; 0 ignored;')\n"
-                "sys.exit(101 if failed else 0)\n"
-            ).encode()
+            payload = executable(tests, self.executed, failure_file=self.failures).encode()
             self.rows[name] = self.artifact(name, payload)[1]
         self.checkpoint = None
         self.updates = []
@@ -53,7 +44,7 @@ class ProofGraphTests(unittest.TestCase):
         stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", tuple(self.names["cli"])),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network fixture", tuple(self.names["network"])),)))
         for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks",
-                         "require_network_fixture_capacity"):
+                         "require_network_fixture_capacity", "check_test_harnesses"):
             stack.enter_context(patch.object(gate, function))
         stack.enter_context(patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=1024**4)))
         stack.enter_context(patch.object(gate, "native_artifact_guard", side_effect=lambda *_: contextlib.nullcontext()))
@@ -74,9 +65,10 @@ class ProofGraphTests(unittest.TestCase):
 
     def network(self, root, fixture_root, env, lock_fds, *, harness, stages):
         self.network_calls += 1
-        self.assertIsNotNone(self.checkpoint, "all proof gates must pass before production/network work")
+        # The four-peer fixture runs before the deferred proof census, so a
+        # shipping failure can surface without running the long proof checks.
         for row in self.copies[-1]:
-            self.assertEqual(Path(row["path"]).exists(), row["selection"] == "network")
+            self.assertTrue(Path(row["path"]).exists())
         self.assertEqual(stages, gate.NETWORK_STAGES)
         gate.run_stages(harness, fixture_root, env, stages, lock_fds)
         if self.network_failure:
@@ -94,9 +86,12 @@ class ProofGraphTests(unittest.TestCase):
     def independent_names(self):
         return self.names["cli"] + self.names["proof"] + self.names["proof-flows"]
 
-    def test_all_six_proof_regressions_run_before_production_and_bind_checkpoint(self):
+    def complete_order(self):
+        return self.names["cli"] + self.names["network"] + self.names["proof"] + self.names["proof-flows"]
+
+    def test_all_six_proof_regressions_bind_complete_checkpoint(self):
         self.run_gate()
-        self.assertEqual(self.ran(), self.independent_names() + self.names["network"])
+        self.assertEqual(self.ran(), self.complete_order())
         self.assertEqual(self.compile.call_count, 1)
         self.assertEqual([row["selection"] for row in self.checkpoint["selected_tests"]],
                          ["cli", "proof", "proof-flows"])
@@ -104,25 +99,26 @@ class ProofGraphTests(unittest.TestCase):
                          ["cli", "proof", "proof-flows"])
         self.assertTrue(all(not Path(row["path"]).exists() for row in self.copies[0]))
 
-    def test_proof_failures_collect_both_harnesses_and_block_production(self):
+    def test_proof_failures_collect_both_harnesses_and_block_complete_checkpoint(self):
         self.failures.write_text(self.names["proof"][0] + "\n" + self.names["proof-flows"][0] + "\n")
         with self.assertRaises(gate.SelectedRegressionFailures) as caught:
             self.run_gate()
         self.assertEqual(len(caught.exception.failures), 2)
-        self.assertEqual(self.ran(), self.independent_names())
-        self.assertEqual(self.network_calls, 0)
+        self.assertEqual(self.ran(), self.complete_order())
+        self.assertEqual(self.network_calls, 1)
         self.assertEqual(self.updates, [None])
         self.later_compile.assert_not_called()
 
-    def test_network_retry_reuses_proof_pass_across_fresh_copy_paths(self):
+    def test_network_failure_does_not_publish_deferred_proof_pass(self):
         self.network_failure = True
         with self.assertRaisesRegex(gate.CheckError, "network failure"):
             self.run_gate()
-        saved = copy.deepcopy(self.checkpoint)
+        self.assertIsNone(self.checkpoint)
+        self.assertEqual(self.ran(), self.names["cli"] + self.names["network"])
         self.network_failure = False
         self.run_gate()
-        self.assertEqual(self.ran(), self.independent_names() + self.names["network"] * 2)
-        self.assertEqual(self.checkpoint, saved)
+        self.assertEqual(self.ran(), self.names["cli"] + self.names["network"] + self.complete_order())
+        self.assertIsNotNone(self.checkpoint)
         self.assertNotEqual(self.copies[0][0]["path"], self.copies[1][0]["path"])
         self.assertEqual(self.network_calls, 2)
 
@@ -134,8 +130,8 @@ class ProofGraphTests(unittest.TestCase):
         with self.assertRaises(gate.SelectedRegressionFailures):
             self.run_gate()
         self.assertIsNone(self.checkpoint)
-        self.assertEqual(self.network_calls, 1)
-        self.assertEqual(self.ran(), self.independent_names() + self.names["network"] + self.independent_names())
+        self.assertEqual(self.network_calls, 2)
+        self.assertEqual(self.ran(), self.complete_order() * 2)
 
     def test_incomplete_or_changed_proof_census_cannot_reuse_pass(self):
         self.run_gate()
@@ -144,7 +140,7 @@ class ProofGraphTests(unittest.TestCase):
         changed = (("updated proof ownership", tuple(self.names["proof"])),)
         with patch.object(gate, "PROOF_STAGES", changed):
             self.run_gate()
-        self.assertEqual(self.ran(), (self.independent_names() + self.names["network"]) * 3)
+        self.assertEqual(self.ran(), self.complete_order() * 3)
         self.assertEqual(self.updates.count(None), 3)
 
 

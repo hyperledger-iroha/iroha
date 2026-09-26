@@ -113,6 +113,30 @@ mod canonical_codec_tests {
         ));
     }
     #[test]
+    fn exact_canonical_frame_verifier_ignores_ambient_layout_and_rejects_drift() {
+        let value = vec!["first".to_owned(), "second".to_owned()];
+        let canonical = encode_canonical(&value).expect("canonical frame");
+        let alternate_flags = core::default_encode_flags() ^ core::header_flags::COMPACT_LEN;
+        let _ambient = core::DecodeFlagsGuard::enter(alternate_flags);
+        verify_exact_canonical_frame(&value, &canonical).expect("canonical frame verifies");
+        let mut changed = canonical.clone();
+        *changed.last_mut().expect("nonempty frame") ^= 1;
+        assert!(matches!(
+            verify_exact_canonical_frame(&value, &changed),
+            Err(Error::NonCanonicalEncoding)
+        ));
+        assert!(matches!(
+            verify_exact_canonical_frame(&value, &canonical[..canonical.len() - 1]),
+            Err(Error::NonCanonicalEncoding)
+        ));
+        let mut extended = canonical.clone();
+        extended.push(0);
+        assert!(matches!(
+            verify_exact_canonical_frame(&value, &extended),
+            Err(Error::NonCanonicalEncoding)
+        ));
+    }
+    #[test]
     fn canonical_allocation_budget_covers_large_signed_genesis() {
         // A production signed-genesis payload of this size accounts for slightly
         // more than the former 32x-plus-64-KiB allocation envelope while it is

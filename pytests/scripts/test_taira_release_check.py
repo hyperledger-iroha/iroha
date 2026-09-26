@@ -263,7 +263,7 @@ class BeaconGateTests(unittest.TestCase):
             'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
             'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
             'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
+            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
             'state::tests::native_preparation_preserves_local_recorder_conflict',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',

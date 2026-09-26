@@ -110,7 +110,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         rust_commit = "b" * 40
         self.payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 23,
+            "native_bridge_abi_version": 24,
             "privacy_production_enabled": False,
             "cargo_features": [],
             "build_environment": {
@@ -339,10 +339,15 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
             self.validate()
 
-    def test_rejects_manifest_missing_iphone_coordinator_close_or_state_observer(self) -> None:
+    def test_rejects_manifest_missing_iphone_coordinator_or_state_observer(self) -> None:
         for missing in (
             "connect_norito_kagemusha_core_coordinator_close_v1",
             "connect_norito_kagemusha_testnet_state_proof_observe_v1",
+            "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+            "connect_norito_kagemusha_testnet_value_admit_v1",
+            "connect_norito_kagemusha_testnet_value_credit_v1",
+            "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+            "connect_norito_kagemusha_testnet_native_startup_activate_v1",
         ):
             with self.subTest(missing=missing):
                 self.payload["required_symbols"] = [

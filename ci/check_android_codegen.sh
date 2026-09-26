@@ -368,6 +368,8 @@ run_replay() {
     --builder-index "${codegen_root}/builder_index.json" \
     --metadata "${generated_root}/codegen_manifest_metadata.json" \
     --json-out "${summary_path}" \
+    --codegen-root "${codegen_root}" \
+    --source-root "${source_root}" \
     --js-source "${source_root}/javascript/iroha_js/src/norito.js"
 
   for required in \

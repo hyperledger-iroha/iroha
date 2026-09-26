@@ -197,6 +197,7 @@ mod tests {
             crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
             "iroha.instruction.v1::governance::CastZkBallot",
             "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::UpdatePlainConviction",
         ] {
             assert!(
                 registry.contains(active),
@@ -358,11 +359,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 369;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 373;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 369;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 373;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 352;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 355;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -412,9 +413,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "da2a94f1e81c7b7e18ad85b19c43d18da70531347f46054a507830b86d2b790e";
+            "7fabfe7484927a2ca897d1d138eff9a532eff0bc9a3a3c1851611c31bee42e0f";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "69b34c7c0f84edd3514b9cf318a5df3c76ed6822a17a279cfffdab34ee61456e";
+            "35685ff1107e09b08a474dfc36a53f0805b43572baa7e9b3169363564648d59c";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -441,7 +442,7 @@ mod tests {
                     .iter()
                     .filter(|entry| entry.governance_only)
                     .count(),
-                17,
+                18,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
@@ -468,6 +469,7 @@ mod tests {
             "iroha.governance.parliament.transition.submit.v1",
             "iroha.instruction.v1::governance::CastZkBallot",
             "iroha.instruction.v1::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::UpdatePlainConviction",
             "iroha.instruction.v1::governance::SlashGovernanceLock",
             "iroha.instruction.v1::governance::RestituteGovernanceLock",
             "iroha.instruction.v1::governance::RegisterCitizen",
@@ -1545,6 +1547,9 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "registry/stream_token_authority_tests.rs"]
+mod stream_token_authority_tests;
+#[cfg(test)]
 #[path = "registry/stream_token_custody_tests.rs"]
 mod stream_token_custody_tests;
 
@@ -1554,6 +1559,9 @@ mod final_promotion_authority_tests;
 #[cfg(test)]
 #[path = "registry/release_manifest_authority_tests.rs"]
 mod release_manifest_authority_tests;
+#[cfg(test)]
+#[path = "registry/topology_authority_tests.rs"]
+mod topology_authority_tests;
 
 #[cfg(test)]
 #[path = "registry/final_promotion_account_custody_tests.rs"]

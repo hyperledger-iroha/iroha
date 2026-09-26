@@ -1,5 +1,7 @@
 {
-  "envelope_digest_hex": "294b8940c05ba5508c9810333307578fbbbcec45df907a6d71b1538fdc9c2cde",
-  "previous_envelope_digest_hex": "18609199622ef5f3d94488c52857a3a42ba2529c2f189625878898937e840c2e",
+  "admission_revision": 2,
+  "envelope_digest_hex": "beef94ab215a87cafe92743cd7b8a37afbe24fcfcd50476a93cc64ac77b080a6",
+  "expected_current_event_digest_hex": "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2",
+  "previous_envelope_digest_hex": "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2",
   "retention_epoch": 900
 }

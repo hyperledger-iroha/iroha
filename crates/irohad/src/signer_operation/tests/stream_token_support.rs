@@ -1,6 +1,8 @@
 //! Simulated independent custody/source/provider fixtures; never hardware qualification evidence.
 
 use super::*;
+use iroha_data_model::sorafs::stream_token_authority::StreamTokenReviewedV1;
+use sorafs_manifest::signer::stream_token::SignerStreamTokenRequestV1;
 use sorafs_manifest::signer::stream_token::validate_stream_token_signatures_v1;
 use std::{
     collections::BTreeMap,
@@ -70,6 +72,7 @@ pub(super) struct StreamSource {
     pub record: Vec<u8>,
     pub trust: SignerCustodyTrustV1,
     pub reads: Mutex<Reads>,
+    pub last_reserved_review: Mutex<Option<StreamTokenReviewedV1>>,
     pub history: Mutex<BTreeMap<[u8; 32], Completion>>,
     commit_transaction: Mutex<()>,
     bodies: Mutex<BTreeMap<[u8; 32], StreamTokenBodyV1>>,
@@ -197,6 +200,36 @@ impl SignerOperationStateSourceV1 for StreamSource {
     ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1> {
         self.reads.lock().unwrap().reserves += 1;
         self.base.reserve(request)
+    }
+
+    fn reserve_stream_token(
+        &self,
+        request: &SignerOperationReservationRequestV1<'_>,
+        review: &SignerStreamTokenReservationReviewV1<'_>,
+    ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1> {
+        let body_bytes = review
+            .signing_payload()
+            .strip_prefix(sorafs_manifest::token::STREAM_TOKEN_SIGNATURE_DOMAIN_V1)
+            .ok_or(SignerOperationErrorV1::InvalidOperation)?;
+        norito::verify_exact_canonical_frame(review.body(), body_bytes)
+            .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+        let expected = SignerStreamTokenExpectedV1::new(review.body(), &self.base.binding)
+            .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+        let exact = SignerStreamTokenRequestV1::new(request.custody(), &expected, review.body())
+            .map_err(|_| SignerOperationErrorV1::InvalidOperation)?;
+        if review.reviewed().request != exact
+            || review.reviewed().intent != *request.intent()
+            || review.reviewed().intent.request_digest
+                != exact
+                    .digest()
+                    .map_err(|_| SignerOperationErrorV1::InvalidOperation)?
+        {
+            return Err(SignerOperationErrorV1::InvalidOperation);
+        }
+        self.reads.lock().unwrap().reserves += 1;
+        let reservation = self.base.reserve(request)?;
+        *self.last_reserved_review.lock().unwrap() = Some(*review.reviewed());
+        Ok(reservation)
     }
 
     fn observe_reserved(
@@ -349,6 +382,7 @@ impl Harness {
             record: fixture.coordinator.record.clone(),
             trust: fixture.coordinator.trust.clone(),
             reads: Mutex::new(Reads::default()),
+            last_reserved_review: Mutex::new(None),
             history: Mutex::new(BTreeMap::new()),
             commit_transaction: Mutex::new(()),
             bodies: Mutex::new(BTreeMap::new()),
@@ -360,7 +394,7 @@ impl Harness {
         fixture.coordinator.source = source.clone();
         let service = SignerStreamTokenServiceV1::new(
             fixture.coordinator,
-            SignerReceiptJournalV1::open(&directory_path, SignerReceiptPurposeV1::StreamToken)
+            SignerReceiptJournalV1::open_test(&directory_path, SignerReceiptPurposeV1::StreamToken)
                 .unwrap(),
         )
         .unwrap();
@@ -393,7 +427,7 @@ impl Harness {
         self.service = Some(
             SignerStreamTokenServiceV1::new(
                 coordinator,
-                SignerReceiptJournalV1::open(
+                SignerReceiptJournalV1::open_test(
                     &self.source.directory,
                     SignerReceiptPurposeV1::StreamToken,
                 )

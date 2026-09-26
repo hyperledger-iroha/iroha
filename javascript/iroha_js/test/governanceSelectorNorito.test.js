@@ -63,6 +63,17 @@ const SELECTOR_INSTRUCTIONS = [
     }),
   ],
   [
+    "UpdatePlainConviction",
+    (selector) => ({
+      UpdatePlainConviction: {
+        referendum_id: selector,
+        owner: TEST_ACCOUNT,
+        amount: "1",
+        duration_blocks: 1,
+      },
+    }),
+  ],
+  [
     "CreateElection",
     (selector) => ({
       zk: {
@@ -173,6 +184,22 @@ test("valid selector boundary lengths reach the selected native owner", () => {
     }
   }
   assert.equal(nativeCalls, VALID_SELECTORS.length * SELECTOR_INSTRUCTIONS.length);
+});
+
+test("raw conviction updates reject an injected choice before native dispatch", () => {
+  let nativeCalls = 0;
+  const encode = instructionEncoder({
+    noritoEncodeInstruction() {
+      nativeCalls += 1;
+      return Buffer.from([0]);
+    },
+  });
+  const update = SELECTOR_INSTRUCTIONS.find(([name]) => name === "UpdatePlainConviction")[1]("ref-2");
+  update.UpdatePlainConviction.direction = 1;
+  for (const input of [update, JSON.stringify(update)]) {
+    assert.throws(() => encode(input, 753), /UpdatePlainConviction.*direction/u);
+  }
+  assert.equal(nativeCalls, 0);
 });
 
 // Native ProofAttachment JSON is a complete six-field record. An absent

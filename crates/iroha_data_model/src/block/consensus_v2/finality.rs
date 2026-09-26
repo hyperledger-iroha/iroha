@@ -78,8 +78,11 @@ impl FinalizedNextEpochSnapshot {
                 .validate_successor(&context.kagemusha_mint_finality_authorization)
                 .is_err()
             || authorization.epoch != self.epoch
-            || authorization.last_height != self.epoch_end_height
         {
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
+        }
+        // The authorization ends at this snapshot's epoch boundary.
+        if authorization.last_height != self.epoch_end_height {
             return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
         }
         if authority.validators.len() != self.roster.len()

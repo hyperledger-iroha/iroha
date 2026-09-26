@@ -163,11 +163,11 @@ impl NativeLaneTransport {
             if packet.destinations != lane.frozen().committee {
                 return Err("native outbox changed its frozen destinations".to_owned());
             }
-            let encoded =
-                norito::encode_canonical(&packet.envelope).map_err(|error| error.to_string())?;
-            if encoded != packet.canonical_bytes {
-                return Err("native outbox changed its original canonical bytes".to_owned());
-            }
+            // The packet already owns its canonical envelope. Compare the exact
+            // frame in place before allocating the distinct P2P BlockMessage
+            // frame; another full envelope copy has no admission owner here.
+            norito::verify_exact_canonical_frame(&packet.envelope, &packet.canonical_bytes)
+                .map_err(|_| "native outbox changed its original canonical bytes".to_owned())?;
             packet
                 .envelope
                 .message

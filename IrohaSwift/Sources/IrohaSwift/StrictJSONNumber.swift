@@ -42,15 +42,6 @@ func exactJSONNumberCodingPathKey(_ path: [CodingKey]) -> String {
     }.joined(separator: "/")
 }
 
-func legacyExactJSONIntegerCodingPathKey(_ path: [CodingKey]) -> String {
-    path.map { key in
-        if let index = key.intValue {
-            return "i:\(index)"
-        }
-        return "k:\(key.stringValue)"
-    }.joined(separator: "/")
-}
-
 enum ExactJSONNumberLexemeScanner {
     enum ScanError: Swift.Error {
         case invalidJSON

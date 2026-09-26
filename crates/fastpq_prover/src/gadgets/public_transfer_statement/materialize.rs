@@ -1,9 +1,9 @@
-//! Bounded private SMT materialization from validated public transfer facts.
+//! Bounded private SMT materialization from validated public two-update facts.
 //!
 //! Initial leaves come from each key's first chronological occurrence. Every
 //! subsequent update must match the current leaf exactly. Public arithmetic,
 //! full keys and path allocation belong to the shared public preparation engine.
-//! Derived roots describe this touched-balance tree, not authenticated finality.
+//! Derived roots describe the touched-state tree and establish no finality.
 
 use std::collections::BTreeMap;
 
@@ -11,23 +11,119 @@ use iroha_crypto::Hash;
 use iroha_data_model::fastpq::{FastpqQuantityUnits, TransferSmtWitness};
 
 use super::{
-    ByteBudget, DeltaView, PreparedPublicTransfers, PublicTransferLimits, PublicTransferTranscript,
-    asset_scales, balance_key, check_limit, checked_add, checked_u32, encode_quantity_units_v1,
-    invariant, measure_delta, measure_header, normalized_values_for,
+    ByteBudget, DeltaView, PreparedPublicTransfers, PublicKeyAllocation, PublicTransferLimits,
+    PublicTransferTranscript, asset_scales, balance_key, check_limit, checked_add, checked_u32,
+    encode_quantity_units_v1, invariant, measure_delta, measure_header, normalized_values_for,
     prepare_quantity_public_transfers,
 };
-use crate::{OperationKind, ProofSemantics, PublicInputs, Result, StateTransition};
+use crate::{
+    OperationKind, ProofSemantics, PublicInputs, Result, StateTransition,
+    gadgets::compact_smt_air::PublicUpdate,
+};
 
 const HEIGHT: usize = 32;
 const NODE_DOMAIN: &[u8] = b"fastpq:v1:smt:node|";
 const PAD_DOMAIN: &[u8] = b"fastpq:v1:smt:pad|";
 
-/// Explicit limits for private touched-balance tree and path construction.
+/// One checked canonical row projected by a strict internal public preparation.
+/// It carries no authority and is never accepted directly from external callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::gadgets) struct CheckedUpdateRow {
+    /// Index into the complete collision-resolved key table.
+    pub(in crate::gadgets) key_index: usize,
+    /// Group, effect-within-group and global pair ordinals, respectively.
+    pub(in crate::gadgets) occurrence: [u32; 3],
+    /// Sequential update position within the pair, exactly zero or one.
+    pub(in crate::gadgets) leg: usize,
+    /// Complete leaf and collision-resolved path binding.
+    pub(in crate::gadgets) update: PublicUpdate,
+}
+
+/// Exact chronological ports for one pair of sequential state updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::gadgets) struct CheckedUpdatePair {
+    /// Group, effect-within-group and global pair ordinals, respectively.
+    pub(in crate::gadgets) occurrence: [u32; 3],
+    /// Canonical row ports in chronological update order.
+    pub(in crate::gadgets) row_indices: [usize; 2],
+    /// Full public update ports in the same order.
+    pub(in crate::gadgets) updates: [PublicUpdate; 2],
+}
+
+/// Immutable, allocation-free view of a strictly prepared internal update table.
+///
+/// Implementations must originate from bounded public preparation: exact typed
+/// semantics, canonical key/value hashes, deterministic collision allocation,
+/// quantity arithmetic and public occurrence coverage remain that owner's work.
+/// Materialization independently rechecks every port and chronological leaf,
+/// but does not authenticate the public claims or their expected root authority.
+/// No public artifact API accepts this trait or caller-constructed update ports.
+/// Every method must expose the same immutable table for the entire invocation.
+pub(in crate::gadgets) trait CheckedUpdateTable {
+    /// Public context; only empty construction keeps the supplied root pair.
+    fn public_inputs(&self) -> PublicInputs;
+    /// Complete sorted, collision-resolved key table from strict preparation.
+    fn keys(&self) -> &[PublicKeyAllocation];
+    /// Exact canonical row count.
+    fn row_count(&self) -> usize;
+    /// Exact chronological two-update pair count.
+    fn pair_count(&self) -> usize;
+    /// Borrow one canonical row's checked ports without allocating a projection.
+    fn row(&self, index: usize) -> Option<CheckedUpdateRow>;
+    /// Borrow one chronological pair's checked ports without allocating a projection.
+    fn pair(&self, index: usize) -> Option<CheckedUpdatePair>;
+}
+
+impl<V> CheckedUpdateTable for PreparedPublicTransfers<'_, V> {
+    fn public_inputs(&self) -> PublicInputs {
+        self.public_inputs
+    }
+
+    fn keys(&self) -> &[PublicKeyAllocation] {
+        &self.keys
+    }
+
+    fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn pair_count(&self) -> usize {
+        self.pairs.len()
+    }
+
+    fn row(&self, index: usize) -> Option<CheckedUpdateRow> {
+        self.rows.get(index).map(|row| CheckedUpdateRow {
+            key_index: row.key_index,
+            occurrence: [
+                row.occurrence.transcript_ordinal,
+                row.occurrence.delta_ordinal,
+                row.occurrence.pair_ordinal,
+            ],
+            // The unchanged pair-port check requires debit first and credit second.
+            leg: usize::from(row.role.is_debit() == 0),
+            update: row.update,
+        })
+    }
+
+    fn pair(&self, index: usize) -> Option<CheckedUpdatePair> {
+        self.pairs.get(index).map(|pair| CheckedUpdatePair {
+            occurrence: [
+                pair.occurrence.transcript_ordinal,
+                pair.occurrence.delta_ordinal,
+                pair.occurrence.pair_ordinal,
+            ],
+            row_indices: pair.row_indices,
+            updates: pair.updates,
+        })
+    }
+}
+
+/// Explicit limits for private touched-state tree and path construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferSmtBuildLimits {
     /// Maximum chronological participant updates, including zero/self updates.
     pub max_updates: usize,
-    /// Maximum distinct full balance keys.
+    /// Maximum distinct full state keys.
     pub max_unique_keys: usize,
     /// Maximum retained occupied nodes across all 33 tree levels.
     pub max_retained_nodes: usize,
@@ -68,7 +164,8 @@ pub struct TransferSmtBuildWork {
     pub node_hashes: usize,
 }
 
-/// Locally generated private paths in original pair order, debit then credit.
+/// Locally generated private paths in original pair and sequential update order.
+/// For transfers, the first update is the debit and the second is the credit.
 /// These data establish no source authority or proof-verification result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedTransferSmtWitnesses {
@@ -78,13 +175,13 @@ pub struct DerivedTransferSmtWitnesses {
 }
 
 impl DerivedTransferSmtWitnesses {
-    /// Exact initial and final roots of the constructed touched-balance tree.
+    /// Exact initial and final roots of the constructed touched-state tree.
     #[must_use]
     pub const fn roots(&self) -> ([u8; 32], [u8; 32]) {
         self.roots
     }
 
-    /// Roots after each complete debit/credit pair except the final pair.
+    /// Roots after each complete two-update pair except the final pair.
     ///
     /// These are the chronological boundaries between segments of this already
     /// materialized complete batch. The iterator borrows the existing witnesses;
@@ -338,16 +435,15 @@ fn digest(limbs: [u32; 8]) -> Result<Hash> {
     Ok(Hash::prehashed(bytes))
 }
 
-fn preflight<V>(
-    prepared: &PreparedPublicTransfers<'_, V>,
+fn preflight<T: CheckedUpdateTable + ?Sized>(
+    prepared: &T,
     limits: TransferSmtBuildLimits,
 ) -> Result<TransferSmtBuildWork> {
     let updates = prepared
-        .pairs
-        .len()
+        .pair_count()
         .checked_mul(2)
         .ok_or_else(|| invariant("SMT update count overflows"))?;
-    let unique_keys = prepared.keys.len();
+    let unique_keys = prepared.keys().len();
     check_limit("max_transfer_smt_updates", updates, limits.max_updates)?;
     check_limit("max_transfer_smt_keys", unique_keys, limits.max_unique_keys)?;
     check_limit(
@@ -355,7 +451,7 @@ fn preflight<V>(
         unique_keys,
         limits.max_retained_nodes,
     )?;
-    if updates != prepared.rows.len() || (updates == 0) != (unique_keys == 0) {
+    if updates != prepared.row_count() || (updates == 0) != (unique_keys == 0) {
         return Err(invariant("SMT public table cardinality is inconsistent"));
     }
     let sibling_hashes = updates
@@ -366,7 +462,7 @@ fn preflight<V>(
         sibling_hashes,
         limits.max_sibling_hashes,
     )?;
-    let mut paths: Vec<_> = prepared.keys.iter().map(|key| key.path).collect();
+    let mut paths: Vec<_> = prepared.keys().iter().map(|key| key.path).collect();
     paths.sort_unstable();
     if paths.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(invariant("SMT public key paths are not unique"));
@@ -406,13 +502,29 @@ fn derive<V>(
     prepared: &PreparedPublicTransfers<'_, V>,
     limits: TransferSmtBuildLimits,
 ) -> Result<DerivedTransferSmtWitnesses> {
+    derive_two_update_smt(prepared, limits)
+}
+
+/// Materialize one immutable, strictly prepared sequence of two-update effects.
+///
+/// This is the sole private-tree implementation for transfer and execution-effect
+/// preparation. It rechecks cardinality, exact occurrence/leg/key ports, unique
+/// paths and chronological leaves under the existing bounded tree-work rules.
+/// Nonempty roots are derived locally; callers binding expected public roots must
+/// compare them afterward. Empty construction requires an unchanged supplied root.
+/// Neither result roots nor successful preparation authenticate source finality.
+pub(in crate::gadgets) fn derive_two_update_smt<T: CheckedUpdateTable + ?Sized>(
+    prepared: &T,
+    limits: TransferSmtBuildLimits,
+) -> Result<DerivedTransferSmtWitnesses> {
     let work = preflight(prepared, limits)?;
     if work.updates == 0 {
+        let public_inputs = prepared.public_inputs();
+        if public_inputs.old_root != public_inputs.new_root {
+            return Err(invariant("empty SMT update sequence changes its root"));
+        }
         return Ok(DerivedTransferSmtWitnesses {
-            roots: (
-                prepared.public_inputs.old_root,
-                prepared.public_inputs.new_root,
-            ),
+            roots: (public_inputs.old_root, public_inputs.new_root),
             pairs: Vec::new(),
             work,
         });
@@ -425,21 +537,27 @@ fn derive<V>(
     };
     let mut initial = vec![false; work.unique_keys];
     let mut rows_seen = vec![false; work.updates];
-    for (ordinal, pair) in prepared.pairs.iter().enumerate() {
-        if pair.occurrence.pair_ordinal as usize != ordinal {
+    let pair_count = work.updates / 2;
+    for ordinal in 0..pair_count {
+        let pair = prepared
+            .pair(ordinal)
+            .ok_or_else(|| invariant("SMT pair index is invalid"))?;
+        if pair.occurrence[2] as usize != ordinal {
             return Err(invariant("SMT pair occurrence order is inconsistent"));
         }
         for (leg, index) in pair.row_indices.into_iter().enumerate() {
+            let seen = rows_seen
+                .get_mut(index)
+                .ok_or_else(|| invariant("SMT row index is invalid"))?;
             let row = prepared
-                .rows
-                .get(index)
+                .row(index)
                 .ok_or_else(|| invariant("SMT row index is invalid"))?;
             let key = prepared
-                .keys
+                .keys()
                 .get(row.key_index)
                 .ok_or_else(|| invariant("SMT key index is invalid"))?;
-            if std::mem::replace(&mut rows_seen[index], true)
-                || row.role.is_debit() != u64::from(leg == 0)
+            if std::mem::replace(seen, true)
+                || row.leg != leg
                 || row.update != pair.updates[leg]
                 || row.update.path != key.path
                 || row.occurrence != pair.occurrence
@@ -454,16 +572,22 @@ fn derive<V>(
             }
         }
     }
+    if rows_seen.iter().any(|seen| !seen) {
+        return Err(invariant("SMT row lacks a chronological occurrence"));
+    }
     if initial.iter().any(|seen| !seen) {
         return Err(invariant("SMT key lacks a first public occurrence"));
     }
     tree.seed();
     let old_root = tree.root().into();
-    let mut pairs = Vec::with_capacity(prepared.pairs.len());
-    for pair in &prepared.pairs {
-        let debit = tree.update(pair.updates[0])?;
-        let credit = tree.update(pair.updates[1])?;
-        pairs.push([debit, credit]);
+    let mut pairs = Vec::with_capacity(pair_count);
+    for ordinal in 0..pair_count {
+        let pair = prepared
+            .pair(ordinal)
+            .ok_or_else(|| invariant("SMT pair index is invalid"))?;
+        let first = tree.update(pair.updates[0])?;
+        let second = tree.update(pair.updates[1])?;
+        pairs.push([first, second]);
     }
     if tree.hashes != work.node_hashes
         || tree.levels.iter().map(BTreeMap::len).sum::<usize>() != work.retained_nodes
@@ -517,10 +641,7 @@ impl Tree {
             .unwrap_or(self.pads[HEIGHT])
     }
 
-    fn update(
-        &mut self,
-        update: super::super::compact_smt_air::PublicUpdate,
-    ) -> Result<TransferSmtWitness> {
+    fn update(&mut self, update: PublicUpdate) -> Result<TransferSmtWitness> {
         let before = digest(update.old_leaf)?;
         let after = digest(update.new_leaf)?;
         if self.levels[0].get(&update.path) != Some(&before) {
@@ -556,3 +677,6 @@ impl Tree {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod checked_tests;

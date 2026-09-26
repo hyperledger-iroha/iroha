@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test
 private typealias Operation = KagemushaDeviceLifecycleBridgeV1.Operation
 
 /**
- * Exercises the ABI-23 APDU recovery seam with a deterministic test-only applet model.
+ * Exercises the ABI-24 APDU recovery seam with a deterministic test-only applet model.
  *
  * The model has no secure storage or signing key and grants no device qualification. A
  * provisioned eSE must independently satisfy the same lost-result and competing-successor

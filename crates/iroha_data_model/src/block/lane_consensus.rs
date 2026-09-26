@@ -28,7 +28,7 @@ pub struct LaneAdmissionPriorityError(
     pub String,
 );
 
-/// Total order of first canonical QueuePlan admission within one network.
+/// Total order of first canonical `QueuePlan` admission within one network.
 ///
 /// The carrier owns this position; the original signed ingress binding does not.
 /// It is immutable when the same certificate is carried again. Structural
@@ -59,6 +59,10 @@ pub struct QueuePlanAdmissionPriorityV1 {
 
 impl QueuePlanAdmissionPriorityV1 {
     /// Check the protocol bounds of a carrier-derived position.
+    ///
+    /// # Errors
+    /// Rejects a zero carrier height, an index at or above the per-block admission
+    /// limit, or an index that cannot be represented as `u32`.
     pub fn new(
         carrier_height: u64,
         admission_index: usize,
@@ -78,6 +82,10 @@ impl QueuePlanAdmissionPriorityV1 {
     }
 
     /// Reject a zero carrier or an out-of-range position.
+    ///
+    /// # Errors
+    /// Rejects an index that cannot be represented as `usize`, or a carrier
+    /// height or index rejected by [`Self::new`].
     pub fn validate(self) -> Result<(), LaneAdmissionPriorityError> {
         let index = usize::try_from(self.admission_index).map_err(|_| {
             LaneAdmissionPriorityError(
@@ -199,7 +207,7 @@ pub enum LaneConsensusContextError {
     /// Roster count, order, or uniqueness violates exact production geometry.
     #[error("frozen lane committee is not a strictly ordered bounded exact 3f+1 roster")]
     Committee,
-    /// PoP count or individual encoded proof length exceeds the native bounds.
+    /// `PoP` count or individual encoded proof length exceeds the native bounds.
     #[error("frozen lane proof-of-possession alignment or size is invalid")]
     ProofShape,
     /// The native proof verifier rejected a key or its aligned proof.
@@ -228,7 +236,11 @@ impl FrozenLaneConsensusContextV1 {
         (self.lane_id, self.dataspace_id, self.lane_incarnation)
     }
 
-    /// Validate structure and native PoPs without granting finality authority.
+    /// Validate structure and native `PoPs` without granting finality authority.
+    ///
+    /// # Errors
+    /// Rejects an unsupported revision, zero identities, invalid admission or predecessor
+    /// position, malformed committee or proofs, failed proof verification, or invalid policy.
     pub fn validate(&self) -> Result<(), LaneConsensusContextError> {
         if self.protocol_version != wire::PROTOCOL_VERSION {
             return Err(LaneConsensusContextError::ProtocolVersion(
@@ -302,12 +314,18 @@ impl FrozenLaneConsensusContextV1 {
     }
 
     /// Return the exact `2f + 1` quorum after validation.
+    ///
+    /// # Errors
+    /// Rejects a frozen context that fails [`Self::validate`].
     pub fn minimum_signer_count(&self) -> Result<usize, LaneConsensusContextError> {
         self.validate()?;
         Ok(2 * ((self.committee.len() - 1) / 3) + 1)
     }
 
     /// Hash every canonical frozen field; this does not authenticate an opening.
+    ///
+    /// # Errors
+    /// Rejects an invalid frozen context or failure to encode its canonical frame.
     pub fn canonical_hash(&self) -> Result<Hash, LaneConsensusContextError> {
         self.validate()?;
         let bytes = norito::encode_canonical(self)
@@ -318,6 +336,9 @@ impl FrozenLaneConsensusContextV1 {
 
 impl LaneConsensusContextsV1 {
     /// Validate an already canonically ordered set; never silently sort it.
+    ///
+    /// # Errors
+    /// Rejects excessive, unordered, duplicate-lane, mixed-network, or invalid contexts.
     pub fn new(
         contexts: Vec<FrozenLaneConsensusContextV1>,
     ) -> Result<Self, LaneConsensusContextError> {
@@ -327,6 +348,9 @@ impl LaneConsensusContextsV1 {
     }
 
     /// Validate the complete set and every native committee without proving finality.
+    ///
+    /// # Errors
+    /// Rejects excessive, unordered, duplicate-lane, mixed-network, or invalid contexts.
     pub fn validate(&self) -> Result<(), LaneConsensusContextError> {
         if self.contexts.len() > MAX_ACTIVE_EXECUTION_LANES {
             return Err(LaneConsensusContextError::TooManyContexts(
@@ -351,6 +375,9 @@ impl LaneConsensusContextsV1 {
     }
 
     /// Commit the complete canonical set, including the explicit empty state.
+    ///
+    /// # Errors
+    /// Rejects an invalid context set or failure to encode its canonical frame.
     pub fn canonical_hash(&self) -> Result<Hash, LaneConsensusContextError> {
         self.validate()?;
         let bytes = norito::encode_canonical(self)
@@ -375,14 +402,14 @@ pub struct LaneWireError(
     pub String,
 );
 
-fn bad(reason: impl ToString) -> LaneWireError {
+fn bad<T: ToString + ?Sized>(reason: &T) -> LaneWireError {
     LaneWireError(reason.to_string())
 }
 fn preimage<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
 ) -> Result<Vec<u8>, LaneWireError> {
-    let frame = norito::encode_canonical(value).map_err(bad)?;
+    let frame = norito::encode_canonical(value).map_err(|error| bad(&error))?;
     let mut bytes = Vec::with_capacity(domain.len() + frame.len());
     bytes.extend_from_slice(domain);
     bytes.extend(frame);
@@ -485,6 +512,9 @@ pub struct LaneValueRefV1 {
 
 impl LaneValueRefV1 {
     /// Commit every immutable native value field without granting authority.
+    ///
+    /// # Errors
+    /// Returns a native wire error if canonical value serialization fails.
     pub fn subject_hash(&self) -> Result<Hash, LaneWireError> {
         Ok(Hash::new(preimage(VALUE_DOMAIN, self)?))
     }
@@ -531,7 +561,8 @@ pub fn lane_availability_hash(
     byte_len: u64,
     chunk_count: u32,
 ) -> Result<Hash, LaneWireError> {
-    let expected = wire::expected_encoded_chunk_count(byte_len, layout).map_err(bad)?;
+    let expected =
+        wire::expected_encoded_chunk_count(byte_len, layout).map_err(|error| bad(&error))?;
     if chunk_count != expected || chunk_root == Hash::prehashed([0; Hash::LENGTH]) {
         return Err(bad("manifest differs from exact signed RS16 geometry"));
     }
@@ -544,6 +575,10 @@ pub fn lane_availability_hash(
 impl LaneManifestV1 {
     /// Require the value's signed availability commitment to match this manifest.
     /// Geometry/hash equality grants neither body readiness nor signature authority.
+    ///
+    /// # Errors
+    /// Rejects invalid signed geometry, a zero root, a mismatched commitment, or
+    /// failure to encode the canonical availability preimage.
     pub fn validate_availability(&self) -> Result<(), LaneWireError> {
         let expected = lane_availability_hash(
             self.layout,
@@ -700,12 +735,15 @@ pub struct LaneTimeoutBodyV1 {
 
 impl LaneTimeoutBodyV1 {
     /// Sign the stable Prepare statement, excluding an incidental QC signer set.
+    ///
+    /// # Errors
+    /// Returns a native wire error if canonical timeout-statement serialization fails.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, LaneWireError> {
         preimage(
             TIMEOUT_DOMAIN,
             &(
                 self.round,
-                self.highest_prepare.as_ref().map(|qc| qc.statement.clone()),
+                self.highest_prepare.as_ref().map(|qc| qc.statement),
             ),
         )
     }
@@ -887,7 +925,7 @@ pub struct LaneMessageEnvelopeV1 {
 /// with the reducer's durable lock/recovery owner where required.
 ///
 /// This is untrusted evidence, not an authority capability. TODO: replace the
-/// old MergeLaneExecution authority fields with this value only when the native
+/// old `MergeLaneExecution` authority fields with this value only when the native
 /// finalized-context proof owner and exact canonical input/body verifier are
 /// wired through Kura, merge validation and snapshot recovery. Until then,
 /// callers must not accept this DTO as independently portable finality proof.
@@ -914,6 +952,9 @@ pub struct LaneDecisionV1 {
 
 impl LaneVoteStatementV1 {
     /// Native signing bytes; includes phase and voting round, excluding signer.
+    ///
+    /// # Errors
+    /// Returns a native wire error if canonical vote-statement serialization fails.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, LaneWireError> {
         preimage(VOTE_DOMAIN, self)
     }
@@ -921,6 +962,9 @@ impl LaneVoteStatementV1 {
 
 impl LaneProposalBodyV1 {
     /// Native proposal signing bytes, including manifest and timeout evidence.
+    ///
+    /// # Errors
+    /// Returns a native wire error if canonical proposal serialization fails.
     pub fn signature_preimage(&self) -> Result<Vec<u8>, LaneWireError> {
         preimage(PROPOSAL_DOMAIN, self)
     }
@@ -946,9 +990,18 @@ fn value_shape(
     committee_len: usize,
 ) -> Result<(), LaneWireError> {
     round_shape(round)?;
-    if value.instance_id != round.instance_id
-        || value.origin_view > round.voting_view
-        || value.origin_producer as usize >= committee_len
+    if value.instance_id != round.instance_id {
+        return Err(bad(
+            "value differs from instance or has malformed immutable origin",
+        ));
+    }
+    // An immutable origin may precede, but cannot follow, the voting view.
+    if value.origin_view > round.voting_view {
+        return Err(bad(
+            "value differs from instance or has malformed immutable origin",
+        ));
+    }
+    if value.origin_producer as usize >= committee_len
         || [
             value.admitted_binding_hash,
             value.descriptor_hash,
@@ -1054,6 +1107,10 @@ impl LaneMessageV1 {
     ///
     /// The committee count must come from the separately authenticated context.
     /// This method does not choose a highest Prepare or implement a vote guard.
+    ///
+    /// # Errors
+    /// Rejects invalid committee geometry or malformed proposal, vote, certificate,
+    /// timeout, or signed availability evidence.
     pub fn validate_shape(&self, committee_len: usize) -> Result<(), LaneWireError> {
         committee_quorum(committee_len)?;
         match self {
@@ -1096,6 +1153,10 @@ impl LaneMessageEnvelopeV1 {
     ///
     /// This returns untrusted native evidence. The caller must authenticate the
     /// exact current context and signatures before admitting a reducer event.
+    ///
+    /// # Errors
+    /// Rejects an oversized or malformed canonical frame, unsupported revision,
+    /// or invalid native message shape.
     pub fn decode_canonical(
         bytes: &[u8],
         maximum_bytes: usize,
@@ -1104,7 +1165,7 @@ impl LaneMessageEnvelopeV1 {
         if bytes.len() > maximum_bytes {
             return Err(bad("native evidence exceeds ingress bound"));
         }
-        let envelope: Self = norito::decode_canonical(bytes).map_err(bad)?;
+        let envelope: Self = norito::decode_canonical(bytes).map_err(|error| bad(&error))?;
         if envelope.version != LANE_MESSAGE_VERSION_V1 {
             return Err(bad("unsupported native lane envelope revision"));
         }
@@ -1124,11 +1185,15 @@ impl LaneDecisionV1 {
     /// A verified current/opening context must separately bind `instance_id`.
     /// Core must verify every signature, original leader, and exact body hashes.
     /// Globally cancelled/closed pre-merge evidence must not become live here.
+    ///
+    /// # Errors
+    /// Rejects an invalid frozen context, malformed certificate or manifest, or
+    /// a mismatch with the exact Commit subject or frozen input policy.
     pub fn validate_shape(
         &self,
         frozen: &FrozenLaneConsensusContextV1,
     ) -> Result<(), LaneWireError> {
-        frozen.validate().map_err(bad)?;
+        frozen.validate().map_err(|error| bad(&error))?;
         qc_shape(&self.commit_qc, frozen.committee.len())?;
         if self.commit_qc.statement.phase != LanePhaseV1::Commit
             || self.commit_qc.statement.value != self.manifest.value

@@ -2591,6 +2591,7 @@ mod app_api_integration_tests {
         body.validate().expect("fixture body must validate");
         let mut advert = sorafs_manifest::ProviderAdvertV1 {
             version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at,
             expires_at,
             body: body.clone(),
@@ -2659,6 +2660,12 @@ mod app_api_integration_tests {
         let council_key = SigningKey::from_bytes(&[0x42; 32]);
         let mut envelope = sorafs_manifest::ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body: body,
@@ -2692,9 +2699,12 @@ mod app_api_integration_tests {
             1,
         )
         .expect("fixture council policy");
-        let admission =
-            crate::sorafs::AdmissionRegistry::from_envelopes(policy, [fixture.envelope.clone()])
-                .expect("fixture envelope must validate");
+        let admission = crate::sorafs::AdmissionRegistry::from_envelopes(
+            fixture.envelope.network_id,
+            policy,
+            [fixture.envelope.clone()],
+        )
+        .expect("fixture envelope must validate");
         let mut cache = crate::sorafs::ProviderAdvertCache::new(
             vec![
                 sorafs_manifest::CapabilityType::ToriiGateway,

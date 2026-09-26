@@ -9,11 +9,13 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
+    isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
     permission::{Permission, Permissions},
+    sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
 };
 use iroha_executor_data_model::permission::sorafs::{
-    CanCheckSorafsFinalPromotion, CanManageSorafsFinalPromotionCustody,
-    CanOperateSorafsFinalPromotion,
+    CanCheckSorafsFinalPromotion, CanManageSorafsFinalPromotionAccountCustody,
+    CanManageSorafsFinalPromotionCustody, CanOperateSorafsFinalPromotion,
 };
 use iroha_sccp::{
     SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1, sccp_taira_finality_network_id_v1,
@@ -49,7 +51,10 @@ pub(super) fn key(seed: u8) -> KeyPair {
 pub(super) struct Fixture {
     pub(super) state: Arc<State>,
     pub(super) policy: SignerCustodyPolicyV1,
+    pub(super) account_policy: SignerCustodyPolicyV1,
     pub(super) finalized: Vec<SccpFinalizedBlockTestFixtureV1>,
+    pub(super) reserve_signed: Option<SignedTransaction>,
+    pub(super) reserve_floor: Option<FinalPromotionCheckFloorV1>,
 }
 
 impl Fixture {
@@ -79,7 +84,7 @@ impl Fixture {
                 }),
             ),
             (
-                manager,
+                manager.clone(),
                 Permission::from(CanManageSorafsFinalPromotionCustody {
                     deployment_id: DEPLOYMENT.into(),
                 }),
@@ -93,6 +98,13 @@ impl Fixture {
         ] {
             let mut permissions = Permissions::new();
             permissions.insert(permission);
+            if authority == manager {
+                permissions.insert(Permission::from(
+                    CanManageSorafsFinalPromotionAccountCustody {
+                        deployment_id: DEPLOYMENT.into(),
+                    },
+                ));
+            }
             if authority == observer {
                 permissions.extend(extra_permissions.take().unwrap());
             }
@@ -136,10 +148,26 @@ impl Fixture {
             max_validity_ms: 120_000,
             max_anchor_age_ms: 60_000,
         };
+        let mut account_policy = policy.clone();
+        account_policy.binding.runtime_handle =
+            "software://sorafs/final-promotion-account-transaction/primary".into();
+        account_policy.binding.key_handle =
+            "software://sorafs/final-promotion-account-transaction/key-1".into();
+        account_policy.binding.role = SignerRoleV1::FinalPromotionAccountTransaction;
+        account_policy.binding.purpose = SignerPurposeBindingV1::FinalPromotionAccountTransaction {
+            deployment_id: DEPLOYMENT.into(),
+        };
+        account_policy.binding.public_key = key(2).public_key().clone();
+        account_policy.binding.policy_digest = [8; 32];
+        account_policy.attester_public_key = key(8).public_key().clone();
+        account_policy.attester_authority.policy_digest = [8; 32];
         let mut f = Self {
             state,
             policy,
+            account_policy,
             finalized: Vec::new(),
+            reserve_signed: None,
+            reserve_floor: None,
         };
         let configure = MutateSorafsFinalPromotionAuthority {
             deployment_id: DEPLOYMENT.into(),
@@ -149,9 +177,25 @@ impl Fixture {
                 norito::encode_canonical(&f.policy).unwrap(),
             ),
         };
+        let configure_account = MutateSorafsFinalPromotionAccountCustody {
+            deployment_id: DEPLOYMENT.into(),
+            expected_control_revision: 0,
+            expected_control_digest: [0; 32],
+            action: FinalPromotionAccountCustodyActionV1::Configure(
+                norito::encode_canonical(&f.account_policy).unwrap(),
+            ),
+        };
         assert_eq!(
-            f.commit(1_000, vec![f.sign(configure.into(), 1, 1_000)], true, true),
-            [true]
+            f.commit(
+                1_000,
+                vec![
+                    f.sign(configure.into(), 1, 1_000),
+                    f.sign(configure_account.into(), 1, 1_000)
+                ],
+                true,
+                true
+            ),
+            [true, true]
         );
         let current = f.snapshot();
         let statement = SignerCustodyStatementV1 {
@@ -177,9 +221,54 @@ impl Fixture {
         let enroll = f.instruction(FinalPromotionAuthorityActionV1::Enroll(
             norito::encode_canonical(&record).unwrap(),
         ));
+        let account = crate::query::final_promotion_account_custody::read_final_promotion_account_custody_at_v1(
+            &f.state.view(),
+            &f.account_policy.binding,
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        let account_statement = SignerCustodyStatementV1 {
+            magic: SIGNER_CUSTODY_MAGIC_V1,
+            version: SIGNER_CUSTODY_VERSION_V1,
+            binding: f.account_policy.binding.clone(),
+            authority: f.account_policy.attester_authority.clone(),
+            anchor: account.custody_anchor,
+            sequence: account.control.next_sequence,
+            predecessor_digest: account.control.predecessor_digest,
+            issued_at_unix_ms: 1_500,
+            expires_at_unix_ms: 100_000,
+            evidence_digest: [13; 32],
+            revoked: false,
+        };
+        let account_signature = Signature::try_new(
+            key(8).private_key(),
+            &account_statement.signing_payload().unwrap(),
+        )
+        .unwrap();
+        let account_record = SignerCustodyRecordV1 {
+            statement: account_statement,
+            attestation: account_signature.payload().try_into().unwrap(),
+        };
+        let enroll_account = MutateSorafsFinalPromotionAccountCustody {
+            deployment_id: DEPLOYMENT.into(),
+            expected_control_revision: account.control_record.revision,
+            expected_control_digest: account.custody_anchor.state_digest,
+            action: FinalPromotionAccountCustodyActionV1::Enroll(
+                norito::encode_canonical(&account_record).unwrap(),
+            ),
+        };
         assert_eq!(
-            f.commit(1_500, vec![f.sign(enroll.into(), 1, 1_500)], true, true),
-            [true]
+            f.commit(
+                1_500,
+                vec![
+                    f.sign(enroll.into(), 1, 1_500),
+                    f.sign(enroll_account.into(), 1, 1_500)
+                ],
+                true,
+                true
+            ),
+            [true, true]
         );
         f
     }

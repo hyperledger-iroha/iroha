@@ -15,6 +15,9 @@ use super::{
         frozen_release_kat_evidence_v1, frozen_resource_evidence_v1, frozen_wire_evidence_v1,
     },
     resource::{ZkAmsMkheResourceCertificateV1, derive_resource_certificate_v1},
+    rns_native_profile::{
+        ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1, ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1,
+    },
     security::{
         ZkAmsMkheSecurityCandidateV1, ZkAmsMkheSecurityCertificateV1, derive_security_candidate_v1,
         frozen_security_certificate_v1, security_candidate_input_digest_v1,
@@ -43,86 +46,28 @@ const RELEASE_PROFILE_ID_V1: [u8; 32] = [
     0x26, 0x07, 0xf2, 0x03, 0x92, 0x5d, 0x98, 0xf4, 0xfb, 0xed, 0x1d, 0x27, 0xbb, 0xef, 0x1b, 0x09,
     0x56, 0xb2, 0x01, 0x67, 0xf3, 0x02, 0x16, 0x3b, 0x2b, 0x14, 0x31, 0x3f, 0x7d, 0x48, 0x9f, 0xd5,
 ];
-pub(super) const RELEASE_MODULI_V1: [u64; 38] = [
-    1_152_921_504_606_584_833,
-    1_152_921_504_598_720_513,
-    1_152_921_504_592_429_057,
-    1_152_921_504_581_419_009,
-    1_152_921_504_580_894_721,
-    1_152_921_504_578_273_281,
-    1_152_921_504_577_748_993,
-    1_152_921_504_577_486_849,
-    1_152_921_504_568_836_097,
-    1_152_921_504_565_166_081,
-    1_152_921_504_563_331_073,
-    1_152_921_504_556_515_329,
-    1_152_921_504_555_466_753,
-    1_152_921_504_554_156_033,
-    1_152_921_504_552_583_169,
-    1_152_921_504_542_883_841,
-    1_152_921_504_538_951_681,
-    1_152_921_504_537_378_817,
-    1_152_921_504_531_873_793,
-    1_152_921_504_521_650_177,
-    1_152_921_504_509_853_697,
-    1_152_921_504_508_280_833,
-    1_152_921_504_506_970_113,
-    1_152_921_504_495_697_921,
-    1_152_921_504_491_241_473,
-    1_152_921_504_488_620_033,
-    1_152_921_504_479_444_993,
-    1_152_921_504_470_794_241,
-    1_152_921_504_468_172_801,
-    1_152_921_504_462_929_921,
-    1_152_921_504_462_667_777,
-    1_152_921_504_455_589_889,
-    1_152_921_504_447_987_713,
-    1_152_921_504_442_482_689,
-    1_152_921_504_436_191_233,
-    1_152_921_504_427_278_337,
-    1_152_921_504_419_414_017,
-    1_152_921_504_409_190_401,
-];
-pub(super) const RELEASE_NEGACYCLIC_ROOTS_V1: [u64; 38] = [
-    720_645_352_895_426_071,
-    282_755_386_997_791_573,
-    1_129_868_644_045_593_393,
-    853_812_227_483_389_373,
-    313_941_090_484_177_697,
-    430_486_680_513_317_260,
-    143_942_864_930_673_074,
-    807_173_726_984_510_404,
-    191_722_530_547_666_486,
-    467_567_141_367_137_610,
-    941_895_608_111_266_529,
-    164_841_987_874_738_392,
-    662_956_088_516_163_749,
-    418_880_473_612_227_419,
-    392_461_511_604_930_516,
-    764_249_630_711_722_482,
-    864_013_988_376_557_277,
-    705_763_476_696_323_117,
-    1_036_023_418_809_922_092,
-    1_093_496_573_364_979_026,
-    465_626_502_647_312_456,
-    108_719_633_419_962_724,
-    1_009_384_194_290_538_050,
-    926_844_163_581_853_650,
-    935_039_477_417_276_816,
-    950_668_019_576_080_971,
-    551_479_639_661_014_597,
-    612_386_825_931_585_809,
-    452_213_060_731_776_498,
-    215_387_729_362_370_611,
-    506_439_537_974_696_847,
-    1_138_741_943_693_016_536,
-    378_985_449_492_583_188,
-    143_344_989_960_478_445,
-    879_283_036_444_379_690,
-    150_226_471_703_910_190,
-    1_049_010_867_608_938_030,
-    533_899_346_966_036_544,
-];
+pub(super) const RELEASE_MODULI_V1: [u64; 38] = {
+    // The prior release geometry remains unavailable to native40 publication.
+    // Its ordered values are sourced from the single governed full chain.
+    let mut values = [0; 38];
+    let mut index = 0;
+    while index < values.len() {
+        values[index] = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[index];
+        index += 1;
+    }
+    values
+};
+pub(super) const RELEASE_NEGACYCLIC_ROOTS_V1: [u64; 38] = {
+    // The prior release geometry remains unavailable to native40 publication.
+    // Its ordered values are sourced from the single governed full chain.
+    let mut values = [0; 38];
+    let mut index = 0;
+    while index < values.len() {
+        values[index] = ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1[index];
+        index += 1;
+    }
+    values
+};
 /// Frozen, consensus-digestible MKHE release manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheReleaseManifestV1 {
