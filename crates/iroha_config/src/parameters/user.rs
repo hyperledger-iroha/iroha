@@ -1225,7 +1225,17 @@ impl Root {
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
-        let sumeragi = self.sumeragi.parse(&mut emitter);
+        let sumeragi = self.sumeragi.parse(&mut emitter, &kura.store_dir);
+        if let Some(sumeragi) = sumeragi.as_ref()
+            && sumeragi.retired_keys.contains(peer.id().public_key())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.retired_keys must not contain the node's configured key {}",
+                    peer.id().public_key()
+                )),
+            );
+        }
         if let Some(sumeragi) = sumeragi.as_ref() {
             let lane_profile = network.lane_profile;
             let reply_source_capacity = network
@@ -6381,6 +6391,47 @@ pub struct Sumeragi {
     /// Consensus key-rotation and algorithm policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
+    /// Override of the base view timeout `T_base` in milliseconds (`specs/sumeragi.md` §9.3).
+    ///
+    /// Every local-parameter override below is optional: an unset value takes the §9.3 default
+    /// for the committee size, resolved by the node once the committee is known. The complete
+    /// set is validated against the chain parameters at startup (§9.4).
+    pub view_timeout_base_ms: Option<DurationMs>,
+    /// Override of the view timeout cap `T_max` in milliseconds.
+    pub view_timeout_max_ms: Option<DurationMs>,
+    /// Override of the largest pacemaker start level.
+    pub start_level_cap: Option<u32>,
+    /// Override of the number of fast commits that lowers the start level by one.
+    pub start_level_decay_after: Option<u32>,
+    /// Override of the state rebroadcast interval while unsettled, in milliseconds.
+    pub rebroadcast_interval_ms: Option<DurationMs>,
+    /// Override of the status keepalive interval while settled, in milliseconds.
+    pub status_keepalive_ms: Option<DurationMs>,
+    /// Override of the payload build timeout in milliseconds.
+    pub build_timeout_ms: Option<DurationMs>,
+    /// Override of the block-body fetch retry interval in milliseconds.
+    pub fetch_retry_ms: Option<DurationMs>,
+    /// Override of the number of entries per sync request.
+    pub sync_batch: Option<u16>,
+    /// Override of the sync request retry interval in milliseconds.
+    pub sync_retry_ms: Option<DurationMs>,
+    /// Override of the byte limit of one sync response (at least `max_block_bytes + 64 KiB`).
+    pub sync_max_bytes: Option<u32>,
+    /// Override of the number of observers kept in the peer table besides the committee.
+    pub max_observers: Option<u32>,
+    /// Directory holding the Sumeragi safety records (one file per instance and key) and the
+    /// record-store id (§7.4). It must not be inside the Kura store directory and must be
+    /// excluded from backups. Default: a sibling of `kura.store_dir` named
+    /// `<store dir name>-sumeragi-records`.
+    pub records_dir: Option<WithOrigin<PathBuf>>,
+    /// File holding the Sumeragi key installation log (§7.4); it must be outside
+    /// `records_dir`. Default: a sibling of `kura.store_dir` named
+    /// `<store dir name>-sumeragi-installation.log`.
+    pub installation_log: Option<WithOrigin<PathBuf>>,
+    /// Consensus keys that no longer sign but keep their safety records (§7.4 Keys, §10.3):
+    /// after a key rotation the old key is listed here and never removed.
+    #[config(default)]
+    pub retired_keys: Vec<PublicKey>,
 }
 /// Node role in consensus participation (user view).
 /// User-level enumeration translating `NodeRole` settings.
@@ -6470,7 +6521,116 @@ mod trusted_peers_pop_env_tests {
     }
 }
 impl Sumeragi {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
+    /// Validate the optional local-parameter overrides: every interval and `sync_batch` must be
+    /// non-zero (the remaining §9.4 rules need the committee and chain parameters and are
+    /// checked by the node at startup).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per optional flat `[sumeragi]` local-parameter key"
+    )]
+    fn parse_local_overrides(
+        view_timeout_base_ms: Option<DurationMs>,
+        view_timeout_max_ms: Option<DurationMs>,
+        start_level_cap: Option<u32>,
+        start_level_decay_after: Option<u32>,
+        rebroadcast_interval_ms: Option<DurationMs>,
+        status_keepalive_ms: Option<DurationMs>,
+        build_timeout_ms: Option<DurationMs>,
+        fetch_retry_ms: Option<DurationMs>,
+        sync_batch: Option<u16>,
+        sync_retry_ms: Option<DurationMs>,
+        sync_max_bytes: Option<u32>,
+        max_observers: Option<u32>,
+    ) -> core::result::Result<actual::SumeragiLocalOverrides, String> {
+        let intervals = [
+            ("view_timeout_base_ms", view_timeout_base_ms),
+            ("view_timeout_max_ms", view_timeout_max_ms),
+            ("rebroadcast_interval_ms", rebroadcast_interval_ms),
+            ("status_keepalive_ms", status_keepalive_ms),
+            ("build_timeout_ms", build_timeout_ms),
+            ("fetch_retry_ms", fetch_retry_ms),
+            ("sync_retry_ms", sync_retry_ms),
+        ];
+        let mut zero: Vec<&str> = intervals
+            .iter()
+            .filter(|(_, value)| value.is_some_and(|value| value.get().is_zero()))
+            .map(|(name, _)| *name)
+            .collect();
+        if sync_batch == Some(0) {
+            zero.push("sync_batch");
+        }
+        if !zero.is_empty() {
+            return Err(format!(
+                "sumeragi local-parameter overrides must be non-zero: {}",
+                zero.join(", ")
+            ));
+        }
+        Ok(actual::SumeragiLocalOverrides {
+            t_base: view_timeout_base_ms.map(DurationMs::get),
+            t_max: view_timeout_max_ms.map(DurationMs::get),
+            start_cap: start_level_cap,
+            decay_after: start_level_decay_after,
+            rebroadcast_interval: rebroadcast_interval_ms.map(DurationMs::get),
+            status_keepalive: status_keepalive_ms.map(DurationMs::get),
+            build_timeout: build_timeout_ms.map(DurationMs::get),
+            fetch_retry: fetch_retry_ms.map(DurationMs::get),
+            sync_batch,
+            sync_retry: sync_retry_ms.map(DurationMs::get),
+            sync_max_bytes,
+            max_observers,
+        })
+    }
+
+    /// Resolve the safety-record directory and installation log (§7.4): explicit values are
+    /// resolved relative to their configuration file, defaults are siblings of the Kura store
+    /// directory. The records must live outside the Kura store (which is backed up, restored
+    /// and, in test networks, recreated) and the installation log outside the records.
+    fn parse_record_paths(
+        records_dir: Option<WithOrigin<PathBuf>>,
+        installation_log: Option<WithOrigin<PathBuf>>,
+        kura_store_dir: &WithOrigin<PathBuf>,
+    ) -> core::result::Result<(PathBuf, PathBuf), String> {
+        let store_dir = kura_store_dir.resolve_relative_path();
+        let records_dir = match records_dir {
+            Some(path) => path.resolve_relative_path(),
+            None => actual::Sumeragi::default_records_dir(&store_dir).ok_or_else(|| {
+                format!(
+                    "sumeragi.records_dir has no default for kura.store_dir `{}` (no final path component); set it explicitly",
+                    store_dir.display()
+                )
+            })?,
+        };
+        let installation_log = match installation_log {
+            Some(path) => path.resolve_relative_path(),
+            None => actual::Sumeragi::default_installation_log(&store_dir).ok_or_else(|| {
+                format!(
+                    "sumeragi.installation_log has no default for kura.store_dir `{}` (no final path component); set it explicitly",
+                    store_dir.display()
+                )
+            })?,
+        };
+        if actual::path_is_within(&records_dir, &store_dir) {
+            return Err(format!(
+                "sumeragi.records_dir `{}` must not be inside kura.store_dir `{}`: safety records are never backed up or restored with the block store",
+                records_dir.display(),
+                store_dir.display()
+            ));
+        }
+        if actual::path_is_within(&installation_log, &records_dir) {
+            return Err(format!(
+                "sumeragi.installation_log `{}` must be outside sumeragi.records_dir `{}`",
+                installation_log.display(),
+                records_dir.display()
+            ));
+        }
+        Ok((records_dir, installation_log))
+    }
+
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+        kura_store_dir: &WithOrigin<PathBuf>,
+    ) -> Option<actual::Sumeragi> {
         let Self {
             role,
             global_beacon_partial_signer_provider_handle,
@@ -6481,8 +6641,63 @@ impl Sumeragi {
             limits,
             storage,
             keys,
+            view_timeout_base_ms,
+            view_timeout_max_ms,
+            start_level_cap,
+            start_level_decay_after,
+            rebroadcast_interval_ms,
+            status_keepalive_ms,
+            build_timeout_ms,
+            fetch_retry_ms,
+            sync_batch,
+            sync_retry_ms,
+            sync_max_bytes,
+            max_observers,
+            records_dir,
+            installation_log,
+            retired_keys,
         } = self;
         let mut valid = true;
+        let local = match Self::parse_local_overrides(
+            view_timeout_base_ms,
+            view_timeout_max_ms,
+            start_level_cap,
+            start_level_decay_after,
+            rebroadcast_interval_ms,
+            status_keepalive_ms,
+            build_timeout_ms,
+            fetch_retry_ms,
+            sync_batch,
+            sync_retry_ms,
+            sync_max_bytes,
+            max_observers,
+        ) {
+            Ok(local) => local,
+            Err(message) => {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(message));
+                valid = false;
+                actual::SumeragiLocalOverrides::default()
+            }
+        };
+        let record_paths =
+            match Self::parse_record_paths(records_dir, installation_log, kura_store_dir) {
+                Ok(paths) => Some(paths),
+                Err(message) => {
+                    emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(message));
+                    valid = false;
+                    None
+                }
+            };
+        let mut unique_retired = BTreeSet::new();
+        for key in &retired_keys {
+            if !unique_retired.insert(key) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("sumeragi.retired_keys lists {key} more than once")),
+                );
+                valid = false;
+            }
+        }
         let global_beacon_partial_signer_provider_policy_digest =
             match validate_consensus_signer_provider_binding_v1(
                 global_beacon_partial_signer_provider_handle.as_deref(),
@@ -6632,7 +6847,12 @@ impl Sumeragi {
         if !valid {
             return None;
         }
+        let (records_dir, installation_log) = record_paths?;
         Some(actual::Sumeragi {
+            local,
+            records_dir,
+            installation_log,
+            retired_keys,
             role: match role {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
@@ -6703,6 +6923,123 @@ impl Sumeragi {
                 allowed_algorithms: key_algorithms,
             },
         })
+    }
+}
+#[cfg(test)]
+mod sumeragi_core_parse_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn ms(value: u64) -> Option<DurationMs> {
+        Some(DurationMs(Duration::from_millis(value)))
+    }
+
+    #[test]
+    fn local_overrides_map_every_field() {
+        let local = Sumeragi::parse_local_overrides(
+            ms(1),
+            ms(2),
+            Some(3),
+            Some(4),
+            ms(5),
+            ms(6),
+            ms(7),
+            ms(8),
+            Some(9),
+            ms(10),
+            Some(11),
+            Some(12),
+        )
+        .expect("non-zero overrides");
+        assert_eq!(local.t_base, Some(Duration::from_millis(1)));
+        assert_eq!(local.t_max, Some(Duration::from_millis(2)));
+        assert_eq!(local.start_cap, Some(3));
+        assert_eq!(local.decay_after, Some(4));
+        assert_eq!(local.rebroadcast_interval, Some(Duration::from_millis(5)));
+        assert_eq!(local.status_keepalive, Some(Duration::from_millis(6)));
+        assert_eq!(local.build_timeout, Some(Duration::from_millis(7)));
+        assert_eq!(local.fetch_retry, Some(Duration::from_millis(8)));
+        assert_eq!(local.sync_batch, Some(9));
+        assert_eq!(local.sync_retry, Some(Duration::from_millis(10)));
+        assert_eq!(local.sync_max_bytes, Some(11));
+        assert_eq!(local.max_observers, Some(12));
+        let none = Sumeragi::parse_local_overrides(
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        )
+        .expect("no overrides");
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn local_overrides_name_every_zero_interval() {
+        let error = Sumeragi::parse_local_overrides(
+            ms(0),
+            None,
+            Some(0),
+            Some(0),
+            None,
+            None,
+            ms(0),
+            None,
+            Some(0),
+            None,
+            Some(0),
+            Some(0),
+        )
+        .expect_err("zero intervals");
+        assert_eq!(
+            error,
+            "sumeragi local-parameter overrides must be non-zero: view_timeout_base_ms, build_timeout_ms, sync_batch"
+        );
+    }
+
+    #[test]
+    fn record_paths_default_to_store_siblings_and_reject_nesting() {
+        let store = WithOrigin::inline(PathBuf::from("/data/kura"));
+        let (records, log) =
+            Sumeragi::parse_record_paths(None, None, &store).expect("default record paths");
+        assert_eq!(records, PathBuf::from("/data/kura-sumeragi-records"));
+        assert_eq!(log, PathBuf::from("/data/kura-sumeragi-installation.log"));
+
+        let inside = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/data/kura/records"))),
+            None,
+            &store,
+        )
+        .expect_err("records inside the store");
+        assert!(
+            inside.contains("must not be inside kura.store_dir"),
+            "{inside}"
+        );
+
+        let nested_log = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/srv/records"))),
+            Some(WithOrigin::inline(PathBuf::from("/srv/records/log"))),
+            &store,
+        )
+        .expect_err("log inside the records");
+        assert!(
+            nested_log.contains("must be outside sumeragi.records_dir"),
+            "{nested_log}"
+        );
+
+        let rootless = WithOrigin::inline(PathBuf::from("/"));
+        let no_default = Sumeragi::parse_record_paths(None, None, &rootless)
+            .expect_err("no default for a store without a final component");
+        assert!(
+            no_default.contains("sumeragi.records_dir has no default"),
+            "{no_default}"
+        );
+        let explicit = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/records"))),
+            None,
+            &rootless,
+        )
+        .expect_err("records inside `/` and no log default");
+        assert!(
+            explicit.contains("installation_log has no default"),
+            "{explicit}"
+        );
     }
 }
 /// SoraNet handshake configuration (user view).

@@ -1,9 +1,6 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
-    crate::captured_schema_tests::Case::bidirectional::<super::ConsensusMode>(
-        "iroha_data_model::block::consensus_v2::ConsensusMode",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::ValidatorPower>(
         "iroha_data_model::block::consensus_v2::ValidatorPower",
     ),

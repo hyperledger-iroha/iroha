@@ -1464,6 +1464,7 @@ pub(crate) mod tests {
         signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
+        commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
     }
     // Structural codec corruption only: the actual query reader must still
     // authenticate the original exact wire from its independent CommitQC.

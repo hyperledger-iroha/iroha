@@ -93,6 +93,64 @@ impl JsonDeserialize for ConsensusFingerprint {
         Ok(Self(bytes))
     }
 }
+/// Where the committee of a Sumeragi instance comes from (§10 of `specs/sumeragi.md`).
+///
+/// Every committee member has one vote in both modes; the mode only selects the application
+/// policy that schedules committees: the genesis roster and permissioned changes, or `NPoS`
+/// elections.
+// TODO(WP9): merge with `SumeragiConsensusMode` once the Sumeragi v2 runtime is deleted; both
+// exist only because v2 signs this JSON-tagged form while genesis builders use the other.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Decode,
+    norito::codec::Encode,
+    iroha_schema::IntoSchema,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+#[norito(
+    tag = "mode",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parameter::system::ConsensusMode")]
+pub enum ConsensusMode {
+    /// Every validator has voting power one.
+    Permissioned,
+    /// Stake selects the finalized epoch committee; every member has one vote.
+    Npos,
+}
+impl ConsensusMode {
+    /// Return whether this is permissioned consensus.
+    #[must_use]
+    pub const fn is_permissioned(self) -> bool {
+        matches!(self, Self::Permissioned)
+    }
+}
+impl From<SumeragiConsensusMode> for ConsensusMode {
+    fn from(mode: SumeragiConsensusMode) -> Self {
+        match mode {
+            SumeragiConsensusMode::Permissioned => Self::Permissioned,
+            SumeragiConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
+impl From<ConsensusMode> for SumeragiConsensusMode {
+    fn from(mode: ConsensusMode) -> Self {
+        match mode {
+            ConsensusMode::Permissioned => Self::Permissioned,
+            ConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
 /// Canonical signed Sumeragi v2 handshake metadata stored in genesis.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parameter::system::ConsensusHandshakeMetadata")]
@@ -221,6 +279,19 @@ mod json_support {
             message: String::from("expected non-zero integer"),
         })
     }
+    pub(super) fn expect_nonzero_u32(
+        value: &json::Value,
+        field: &str,
+    ) -> Result<NonZeroU32, json::Error> {
+        let raw = expect_u64(value, field)?;
+        u32::try_from(raw)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| json::Error::InvalidField {
+                field: field.to_owned(),
+                message: String::from("expected non-zero integer that fits u32"),
+            })
+    }
     pub(super) fn expect_bool(value: &json::Value, field: &str) -> Result<bool, json::Error> {
         match value {
             json::Value::Bool(b) => Ok(*b),
@@ -288,12 +359,17 @@ mod model {
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("{block_cadence_ms},{max_clock_drift_ms}_SL")]
     pub struct SumeragiParameters {
-        /// Signed-genesis block cadence in milliseconds.
+        /// Signed-genesis block cadence in milliseconds (default 1000).
         ///
         /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
         /// Sumeragi v2 freezes this value at startup for both permissioned and
         /// `NPoS` operation; post-genesis updates are rejected.
+        ///
+        /// Under Sumeragi this is the target block time `ChainParams.block_time` (§9.3 of
+        /// `specs/sumeragi.md`).
+        // TODO(WP5): once the v2 handshake no longer freezes the cadence, give it a mutable
+        // `SumeragiParameter` variant scheduled at `h + 2` like the other chain parameters.
         #[norito(default = "defaults::sumeragi::block_cadence_ms")]
         pub block_cadence_ms: NonZeroU64,
         /// Maximal allowed random deviation from the nominal rate
@@ -307,6 +383,9 @@ mod model {
         #[norito(default = "defaults::sumeragi::key_activation_lead_blocks")]
         pub key_activation_lead_blocks: u64,
         /// Overlap/grace window (blocks) permitting dual-signing during rotation.
+        // TODO(WP9): delete. Sumeragi rotates a key at a single height and a committee never holds
+        // two keys of one validator (§10.3 of `specs/sumeragi.md`); the v2 runtime still reads
+        // this window for consensus-key liveness.
         #[norito(default = "defaults::sumeragi::key_overlap_grace_blocks")]
         pub key_overlap_grace_blocks: u64,
         /// Expiry grace window (blocks) after declared expiry.
@@ -315,6 +394,32 @@ mod model {
         /// Allowed algorithms for consensus/committee keys.
         #[norito(default = "defaults::sumeragi::key_allowed_algorithms")]
         pub key_allowed_algorithms: Vec<iroha_crypto::Algorithm>,
+        /// Heartbeat interval of an idle chain in milliseconds, `ChainParams.idle_block_interval`
+        /// (default 5000). Must not be below [`Self::block_cadence_ms`] (§9.4).
+        #[norito(default = "defaults::sumeragi::idle_block_interval_ms")]
+        pub idle_block_interval_ms: NonZeroU64,
+        /// Execution budget `E_max` in milliseconds, `ChainParams.e_max` (default 4000).
+        #[norito(default = "defaults::sumeragi::exec_budget_ms")]
+        pub exec_budget_ms: NonZeroU64,
+        /// Apply budget `A_max` in milliseconds, `ChainParams.a_max` (default 1000).
+        #[norito(default = "defaults::sumeragi::apply_budget_ms")]
+        pub apply_budget_ms: NonZeroU64,
+        /// Largest payload a block may carry in bytes, `ChainParams.max_block_bytes`
+        /// (default 4 MiB). Must fit the transport frame limit with its overhead (§9.4, O10).
+        #[norito(default = "defaults::sumeragi::max_block_bytes")]
+        pub max_block_bytes: NonZeroU32,
+        /// Fresh blocks from this view on must be `EMPTY`, `ChainParams.empty_after_views`
+        /// (default 2, at least 1).
+        #[norito(default = "defaults::sumeragi::empty_after_views")]
+        pub empty_after_views: NonZeroU64,
+        /// Epoch length in heights, `ChainParams.epoch_length` (default 3600, §11.7).
+        #[norito(default = "defaults::sumeragi::epoch_length_blocks")]
+        pub epoch_length_blocks: NonZeroU64,
+        /// Demotion window `W` in heights (default 128; should be at least `4n`), a genesis
+        /// constant of the instance passed in `Init.demotion_window` (§2.1, §10.1). It is not a
+        /// chain parameter: it may only be set in the genesis block.
+        #[norito(default = "defaults::sumeragi::demotion_window")]
+        pub demotion_window: NonZeroU64,
     }
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
     #[derive(norito::NoritoSchema)]
@@ -542,10 +647,33 @@ mod model {
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
+    ///
+    /// The Sumeragi chain parameters (`IdleBlockIntervalMs` .. `EpochLengthBlocks`) are
+    /// committed in the state after height `h` and take effect at `h + 2` (§10.1 of
+    /// `specs/sumeragi.md`). `DemotionWindow` is a genesis constant: it is accepted only in the
+    /// genesis block ([`Self::is_genesis_only`]).
+    // TODO(WP5): iroha_core must validate the chain parameters with
+    // `iroha_sumeragi::pacemaker::validate_chain`, schedule them through the lag-2 consensus
+    // schedule and reject `DemotionWindow` above the genesis height; until then the node applies
+    // none of the Sumeragi chain-parameter variants.
     pub enum SumeragiParameter {
         /// Maximum admitted clock drift. Block cadence is frozen in genesis and
         /// therefore deliberately has no mutable parameter variant.
         MaxClockDriftMs(u64),
+        /// [`SumeragiParameters::idle_block_interval_ms`].
+        IdleBlockIntervalMs(NonZeroU64),
+        /// [`SumeragiParameters::exec_budget_ms`].
+        ExecBudgetMs(NonZeroU64),
+        /// [`SumeragiParameters::apply_budget_ms`].
+        ApplyBudgetMs(NonZeroU64),
+        /// [`SumeragiParameters::max_block_bytes`].
+        MaxBlockBytes(NonZeroU32),
+        /// [`SumeragiParameters::empty_after_views`].
+        EmptyAfterViews(NonZeroU64),
+        /// [`SumeragiParameters::epoch_length_blocks`].
+        EpochLengthBlocks(NonZeroU64),
+        /// [`SumeragiParameters::demotion_window`]; genesis block only.
+        DemotionWindow(NonZeroU64),
     }
     /// Limits that a block must obey to be accepted.
     #[derive(norito::NoritoSchema)]
@@ -1098,16 +1226,51 @@ impl SumeragiParameters {
     }
 }
 
+impl SumeragiParameter {
+    /// Canonical JSON tag of this variant.
+    #[must_use]
+    pub const fn json_tag(&self) -> &'static str {
+        match self {
+            Self::MaxClockDriftMs(_) => "MaxClockDriftMs",
+            Self::IdleBlockIntervalMs(_) => "IdleBlockIntervalMs",
+            Self::ExecBudgetMs(_) => "ExecBudgetMs",
+            Self::ApplyBudgetMs(_) => "ApplyBudgetMs",
+            Self::MaxBlockBytes(_) => "MaxBlockBytes",
+            Self::EmptyAfterViews(_) => "EmptyAfterViews",
+            Self::EpochLengthBlocks(_) => "EpochLengthBlocks",
+            Self::DemotionWindow(_) => "DemotionWindow",
+        }
+    }
+
+    /// The carried value widened to `u64` (every variant carries one unsigned integer).
+    #[must_use]
+    pub fn value_u64(&self) -> u64 {
+        match self {
+            Self::MaxClockDriftMs(value) => *value,
+            Self::IdleBlockIntervalMs(value)
+            | Self::ExecBudgetMs(value)
+            | Self::ApplyBudgetMs(value)
+            | Self::EmptyAfterViews(value)
+            | Self::EpochLengthBlocks(value)
+            | Self::DemotionWindow(value) => value.get(),
+            Self::MaxBlockBytes(value) => u64::from(value.get()),
+        }
+    }
+
+    /// Whether this parameter may only be set in the genesis block (a genesis constant of the
+    /// Sumeragi instance, never a chain parameter).
+    #[must_use]
+    pub const fn is_genesis_only(&self) -> bool {
+        matches!(self, Self::DemotionWindow(_))
+    }
+}
+
 impl JsonSerialize for SumeragiParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
-        match self {
-            SumeragiParameter::MaxClockDriftMs(v) => {
-                json::write_json_string("MaxClockDriftMs", out);
-                out.push(':');
-                v.json_serialize(out);
-            }
-        }
+        json::write_json_string(self.json_tag(), out);
+        out.push(':');
+        self.value_u64().json_serialize(out);
         out.push('}');
     }
     fn json_serialize_to(
@@ -1115,12 +1278,10 @@ impl JsonSerialize for SumeragiParameter {
         out: &mut dyn json::JsonWriteSink,
     ) -> Result<(), json::BoundedJsonError> {
         out.begin_container()?;
-        match self {
-            SumeragiParameter::MaxClockDriftMs(value) => {
-                out.push_str("{\"MaxClockDriftMs\":")?;
-                value.json_serialize_to(out)?;
-            }
-        }
+        out.push('{')?;
+        json::write_json_string_to(self.json_tag(), out)?;
+        out.push(':')?;
+        self.value_u64().json_serialize_to(out)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1139,11 +1300,21 @@ impl JsonDeserialize for SumeragiParameter {
         if let Some((extra, _)) = iter.next() {
             return Err(json::Error::UnknownField { field: extra });
         }
+        let nonzero = |name: &str| json_support::expect_nonzero_u64(&payload, name);
         match field.as_str() {
             "MaxClockDriftMs" => Ok(Self::MaxClockDriftMs(json_support::expect_u64(
                 &payload,
                 "MaxClockDriftMs",
             )?)),
+            "IdleBlockIntervalMs" => Ok(Self::IdleBlockIntervalMs(nonzero(&field)?)),
+            "ExecBudgetMs" => Ok(Self::ExecBudgetMs(nonzero(&field)?)),
+            "ApplyBudgetMs" => Ok(Self::ApplyBudgetMs(nonzero(&field)?)),
+            "MaxBlockBytes" => Ok(Self::MaxBlockBytes(json_support::expect_nonzero_u32(
+                &payload, &field,
+            )?)),
+            "EmptyAfterViews" => Ok(Self::EmptyAfterViews(nonzero(&field)?)),
+            "EpochLengthBlocks" => Ok(Self::EpochLengthBlocks(nonzero(&field)?)),
+            "DemotionWindow" => Ok(Self::DemotionWindow(nonzero(&field)?)),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
             }),
@@ -1186,6 +1357,28 @@ impl JsonSerialize for SumeragiParameters {
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
         );
+        json_support::write_field(
+            out,
+            &mut first,
+            "idle_block_interval_ms",
+            &self.idle_block_interval_ms,
+        );
+        json_support::write_field(out, &mut first, "exec_budget_ms", &self.exec_budget_ms);
+        json_support::write_field(out, &mut first, "apply_budget_ms", &self.apply_budget_ms);
+        json_support::write_field(out, &mut first, "max_block_bytes", &self.max_block_bytes);
+        json_support::write_field(
+            out,
+            &mut first,
+            "empty_after_views",
+            &self.empty_after_views,
+        );
+        json_support::write_field(
+            out,
+            &mut first,
+            "epoch_length_blocks",
+            &self.epoch_length_blocks,
+        );
+        json_support::write_field(out, &mut first, "demotion_window", &self.demotion_window);
         out.push('}');
     }
     fn json_serialize_to(
@@ -1226,6 +1419,28 @@ impl JsonSerialize for SumeragiParameters {
             "key_allowed_algorithms",
             &self.key_allowed_algorithms,
         )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "idle_block_interval_ms",
+            &self.idle_block_interval_ms,
+        )?;
+        json_support::write_field_to(out, &mut first, "exec_budget_ms", &self.exec_budget_ms)?;
+        json_support::write_field_to(out, &mut first, "apply_budget_ms", &self.apply_budget_ms)?;
+        json_support::write_field_to(out, &mut first, "max_block_bytes", &self.max_block_bytes)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "empty_after_views",
+            &self.empty_after_views,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "epoch_length_blocks",
+            &self.epoch_length_blocks,
+        )?;
+        json_support::write_field_to(out, &mut first, "demotion_window", &self.demotion_window)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1266,6 +1481,30 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::parse_value_as::<Vec<Algorithm>>(&value))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::key_allowed_algorithms);
+        let mut nonzero = |field: &str, default: fn() -> NonZeroU64| {
+            map.remove(field)
+                .map(|value| json_support::expect_nonzero_u64(&value, field))
+                .transpose()
+                .map(|value| value.unwrap_or_else(default))
+        };
+        let idle_block_interval_ms = nonzero(
+            "idle_block_interval_ms",
+            defaults::sumeragi::idle_block_interval_ms,
+        )?;
+        let exec_budget_ms = nonzero("exec_budget_ms", defaults::sumeragi::exec_budget_ms)?;
+        let apply_budget_ms = nonzero("apply_budget_ms", defaults::sumeragi::apply_budget_ms)?;
+        let empty_after_views =
+            nonzero("empty_after_views", defaults::sumeragi::empty_after_views)?;
+        let epoch_length_blocks = nonzero(
+            "epoch_length_blocks",
+            defaults::sumeragi::epoch_length_blocks,
+        )?;
+        let demotion_window = nonzero("demotion_window", defaults::sumeragi::demotion_window)?;
+        let max_block_bytes = map
+            .remove("max_block_bytes")
+            .map(|value| json_support::expect_nonzero_u32(&value, "max_block_bytes"))
+            .transpose()?
+            .unwrap_or_else(defaults::sumeragi::max_block_bytes);
         json_support::ensure_no_extra(map)?;
         let params = Self {
             block_cadence_ms,
@@ -1274,16 +1513,52 @@ impl JsonDeserialize for SumeragiParameters {
             key_overlap_grace_blocks,
             key_expiry_grace_blocks,
             key_allowed_algorithms,
+            idle_block_interval_ms,
+            exec_budget_ms,
+            apply_budget_ms,
+            max_block_bytes,
+            empty_after_views,
+            epoch_length_blocks,
+            demotion_window,
         };
         Ok(params)
     }
 }
 mod defaults {
     pub mod sumeragi {
-        use core::num::NonZeroU64;
+        use core::num::{NonZeroU32, NonZeroU64};
         use iroha_crypto::Algorithm;
+        /// §9.3 default target block time: one second.
         pub const fn block_cadence_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(100_u64)
+            nonzero_ext::nonzero!(1_000_u64)
+        }
+        /// §9.3 default idle heartbeat interval.
+        pub const fn idle_block_interval_ms() -> NonZeroU64 {
+            nonzero_ext::nonzero!(5_000_u64)
+        }
+        /// §9.3 default execution budget `E_max`.
+        pub const fn exec_budget_ms() -> NonZeroU64 {
+            nonzero_ext::nonzero!(4_000_u64)
+        }
+        /// §9.3 default apply budget `A_max`.
+        pub const fn apply_budget_ms() -> NonZeroU64 {
+            nonzero_ext::nonzero!(1_000_u64)
+        }
+        /// §9.3 default block payload limit: 4 MiB.
+        pub const fn max_block_bytes() -> NonZeroU32 {
+            nonzero_ext::nonzero!(4_194_304_u32)
+        }
+        /// §9.3 default first view whose fresh blocks are `EMPTY`.
+        pub const fn empty_after_views() -> NonZeroU64 {
+            nonzero_ext::nonzero!(2_u64)
+        }
+        /// Default epoch length: one hour at the default block time (Appendix E, E12).
+        pub const fn epoch_length_blocks() -> NonZeroU64 {
+            nonzero_ext::nonzero!(3_600_u64)
+        }
+        /// Default demotion window `W` (covers `W ≥ 4n` up to 32 members).
+        pub const fn demotion_window() -> NonZeroU64 {
+            nonzero_ext::nonzero!(128_u64)
         }
         pub const fn max_clock_drift_ms() -> u64 {
             1_000
@@ -1407,6 +1682,13 @@ impl Default for SumeragiParameters {
             key_overlap_grace_blocks: key_overlap_grace_blocks(),
             key_expiry_grace_blocks: key_expiry_grace_blocks(),
             key_allowed_algorithms: key_allowed_algorithms(),
+            idle_block_interval_ms: idle_block_interval_ms(),
+            exec_budget_ms: exec_budget_ms(),
+            apply_budget_ms: apply_budget_ms(),
+            max_block_bytes: max_block_bytes(),
+            empty_after_views: empty_after_views(),
+            epoch_length_blocks: epoch_length_blocks(),
+            demotion_window: demotion_window(),
         }
     }
 }
@@ -1543,6 +1825,13 @@ impl Parameters {
         }
         apply_parameter!(
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
+            Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+            Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
+            Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
+            Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
+            Sumeragi(sumeragi.empty_after_views) => SumeragiParameter::EmptyAfterViews,
+            Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
+            Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
             Block(block.max_transactions) => BlockParameter::MaxTransactions,
             Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
             Block(block.execution_output) => BlockParameter::ExecutionOutput,
@@ -1729,11 +2018,28 @@ impl SumeragiParameters {
             key_overlap_grace_blocks: defaults::sumeragi::key_overlap_grace_blocks(),
             key_expiry_grace_blocks: defaults::sumeragi::key_expiry_grace_blocks(),
             key_allowed_algorithms: defaults::sumeragi::key_allowed_algorithms(),
+            idle_block_interval_ms: defaults::sumeragi::idle_block_interval_ms(),
+            exec_budget_ms: defaults::sumeragi::exec_budget_ms(),
+            apply_budget_ms: defaults::sumeragi::apply_budget_ms(),
+            max_block_bytes: defaults::sumeragi::max_block_bytes(),
+            empty_after_views: defaults::sumeragi::empty_after_views(),
+            epoch_length_blocks: defaults::sumeragi::epoch_length_blocks(),
+            demotion_window: defaults::sumeragi::demotion_window(),
         }
     }
     /// Convert [`Self`] into iterator of individual parameters
     pub fn parameters(&self) -> impl Iterator<Item = SumeragiParameter> {
-        [SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms)].into_iter()
+        [
+            SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms),
+            SumeragiParameter::IdleBlockIntervalMs(self.idle_block_interval_ms),
+            SumeragiParameter::ExecBudgetMs(self.exec_budget_ms),
+            SumeragiParameter::ApplyBudgetMs(self.apply_budget_ms),
+            SumeragiParameter::MaxBlockBytes(self.max_block_bytes),
+            SumeragiParameter::EmptyAfterViews(self.empty_after_views),
+            SumeragiParameter::EpochLengthBlocks(self.epoch_length_blocks),
+            SumeragiParameter::DemotionWindow(self.demotion_window),
+        ]
+        .into_iter()
     }
 }
 impl BlockParameters {
@@ -2512,6 +2818,223 @@ mod tests {
             let parsed: SumeragiParameters = norito::json::from_str(&j).expect("json de");
             assert_eq!(params, parsed);
         }
+    }
+
+    fn every_sumeragi_parameter_variant() -> [SumeragiParameter; 8] {
+        [
+            SumeragiParameter::MaxClockDriftMs(1_500),
+            SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(7_000).unwrap()),
+            SumeragiParameter::ExecBudgetMs(NonZeroU64::new(3_000).unwrap()),
+            SumeragiParameter::ApplyBudgetMs(NonZeroU64::new(900).unwrap()),
+            SumeragiParameter::MaxBlockBytes(NonZeroU32::new(2 * 1024 * 1024).unwrap()),
+            SumeragiParameter::EmptyAfterViews(NonZeroU64::new(3).unwrap()),
+            SumeragiParameter::EpochLengthBlocks(NonZeroU64::new(7_200).unwrap()),
+            SumeragiParameter::DemotionWindow(NonZeroU64::new(256).unwrap()),
+        ]
+    }
+
+    #[test]
+    fn sumeragi_parameter_defaults_match_the_consensus_core() {
+        let params = SumeragiParameters::default();
+        assert_eq!(params.block_cadence_ms.get(), 1_000);
+        assert_eq!(params.idle_block_interval_ms.get(), 5_000);
+        assert_eq!(params.exec_budget_ms.get(), 4_000);
+        assert_eq!(params.apply_budget_ms.get(), 1_000);
+        assert_eq!(params.max_block_bytes.get(), 4 * 1024 * 1024);
+        assert_eq!(params.empty_after_views.get(), 2);
+        assert_eq!(params.epoch_length_blocks.get(), 3_600);
+        assert_eq!(params.demotion_window.get(), 128);
+        // The on-chain defaults are the core's §9.3 defaults and pass its §9.4 validation.
+        let chain = iroha_sumeragi::types::ChainParams {
+            block_time: params.block_cadence_ms.get(),
+            idle_block_interval: params.idle_block_interval_ms.get(),
+            e_max: params.exec_budget_ms.get(),
+            a_max: params.apply_budget_ms.get(),
+            max_block_bytes: params.max_block_bytes.get(),
+            empty_after_views: params.empty_after_views.get(),
+            epoch_length: params.epoch_length_blocks.get(),
+        };
+        assert_eq!(chain, iroha_sumeragi::types::ChainParams::default());
+        let transport = u64::from(params.max_block_bytes.get()) + 64 * 1024;
+        iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
+            .expect("default chain parameters are valid");
+        assert_eq!(
+            SumeragiParameters::new(Duration::from_millis(1_000), Duration::ZERO).demotion_window,
+            params.demotion_window
+        );
+    }
+
+    #[test]
+    fn sumeragi_parameter_every_variant_round_trips() {
+        for value in every_sumeragi_parameter_variant() {
+            let bytes = value.encode();
+            let decoded = SumeragiParameter::decode_all(&mut bytes.as_slice())
+                .expect("decode Sumeragi parameter");
+            assert_eq!(value, decoded);
+            let json = norito::json::to_json(&value).expect("json");
+            assert_eq!(
+                json,
+                format!("{{\"{}\":{}}}", value.json_tag(), value.value_u64())
+            );
+            let parsed: SumeragiParameter = norito::json::from_str(&json).expect("json de");
+            assert_eq!(parsed, value);
+            let wrapped = Parameter::Sumeragi(value);
+            let json = norito::json::to_json(&wrapped).expect("json");
+            let parsed: Parameter = norito::json::from_str(&json).expect("json de");
+            assert_eq!(parsed, wrapped);
+        }
+    }
+
+    #[test]
+    fn sumeragi_parameter_json_rejects_zero_and_out_of_range_values() {
+        for tag in [
+            "IdleBlockIntervalMs",
+            "ExecBudgetMs",
+            "ApplyBudgetMs",
+            "MaxBlockBytes",
+            "EmptyAfterViews",
+            "EpochLengthBlocks",
+            "DemotionWindow",
+        ] {
+            let json = format!("{{\"{tag}\":0}}");
+            assert!(
+                norito::json::from_str::<SumeragiParameter>(&json).is_err(),
+                "zero `{tag}` must fail"
+            );
+        }
+        assert!(
+            norito::json::from_str::<SumeragiParameter>(r#"{"MaxBlockBytes":4294967296}"#).is_err()
+        );
+        assert!(norito::json::from_str::<SumeragiParameter>(r#"{"BlockCadenceMs":1000}"#).is_err());
+        assert!(norito::json::from_str::<SumeragiParameter>(r#"{"MaxClockDriftMs":0}"#).is_ok());
+    }
+
+    #[test]
+    fn sumeragi_parameter_value_and_genesis_only() {
+        let values = every_sumeragi_parameter_variant();
+        assert_eq!(
+            values.map(|value| value.value_u64()),
+            [1_500, 7_000, 3_000, 900, 2 * 1024 * 1024, 3, 7_200, 256]
+        );
+        assert_eq!(
+            values.map(|value| value.is_genesis_only()),
+            [false, false, false, false, false, false, false, true]
+        );
+        let tags = values.map(|value| value.json_tag());
+        let unique: std::collections::BTreeSet<_> = tags.iter().collect();
+        assert_eq!(unique.len(), tags.len());
+    }
+
+    #[test]
+    fn sumeragi_parameters_set_and_enumerate_every_variant() {
+        let mut params = Parameters::default();
+        for value in every_sumeragi_parameter_variant() {
+            params.set_parameter(Parameter::Sumeragi(value));
+        }
+        let sumeragi = params.sumeragi();
+        assert_eq!(sumeragi.max_clock_drift_ms, 1_500);
+        assert_eq!(sumeragi.idle_block_interval_ms.get(), 7_000);
+        assert_eq!(sumeragi.exec_budget_ms.get(), 3_000);
+        assert_eq!(sumeragi.apply_budget_ms.get(), 900);
+        assert_eq!(sumeragi.max_block_bytes.get(), 2 * 1024 * 1024);
+        assert_eq!(sumeragi.empty_after_views.get(), 3);
+        assert_eq!(sumeragi.epoch_length_blocks.get(), 7_200);
+        assert_eq!(sumeragi.demotion_window.get(), 256);
+        assert_eq!(
+            sumeragi.parameters().collect::<Vec<_>>(),
+            every_sumeragi_parameter_variant().to_vec()
+        );
+        // Every settable Sumeragi parameter survives the individual-parameter round trip.
+        let rebuilt: Parameters = params.parameters().collect();
+        assert_eq!(
+            rebuilt.sumeragi().parameters().collect::<Vec<_>>(),
+            every_sumeragi_parameter_variant().to_vec()
+        );
+    }
+
+    #[test]
+    fn sumeragi_parameters_json_new_fields_default_when_absent_and_round_trip() {
+        let parsed: SumeragiParameters =
+            norito::json::from_str(r#"{"block_cadence_ms":500}"#).expect("json de");
+        assert_eq!(parsed.block_cadence_ms.get(), 500);
+        assert_eq!(
+            parsed.idle_block_interval_ms,
+            defaults::sumeragi::idle_block_interval_ms()
+        );
+        assert_eq!(
+            parsed.demotion_window,
+            defaults::sumeragi::demotion_window()
+        );
+        let mut custom = SumeragiParameters::default();
+        custom.idle_block_interval_ms = NonZeroU64::new(9_000).unwrap();
+        custom.max_block_bytes = NonZeroU32::new(1_024).unwrap();
+        custom.demotion_window = NonZeroU64::new(512).unwrap();
+        let json = norito::json::to_json(&custom).expect("json");
+        for field in [
+            "\"idle_block_interval_ms\":9000",
+            "\"exec_budget_ms\":4000",
+            "\"apply_budget_ms\":1000",
+            "\"max_block_bytes\":1024",
+            "\"empty_after_views\":2",
+            "\"epoch_length_blocks\":3600",
+            "\"demotion_window\":512",
+        ] {
+            assert!(json.contains(field), "{field} missing from {json}");
+        }
+        let parsed: SumeragiParameters = norito::json::from_str(&json).expect("json de");
+        assert_eq!(parsed, custom);
+        let bytes = custom.encode();
+        let decoded = SumeragiParameters::decode_all(&mut bytes.as_slice()).expect("decode");
+        assert_eq!(decoded, custom);
+        for field in [
+            "idle_block_interval_ms",
+            "exec_budget_ms",
+            "apply_budget_ms",
+            "max_block_bytes",
+            "empty_after_views",
+            "epoch_length_blocks",
+            "demotion_window",
+        ] {
+            let json = format!(r#"{{"{field}":0}}"#);
+            assert!(
+                norito::json::from_str::<SumeragiParameters>(&json).is_err(),
+                "zero `{field}` must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn consensus_mode_conversions_and_json() {
+        for (mode, legacy, json) in [
+            (
+                ConsensusMode::Permissioned,
+                SumeragiConsensusMode::Permissioned,
+                r#"{"mode":"permissioned","details":null}"#,
+            ),
+            (
+                ConsensusMode::Npos,
+                SumeragiConsensusMode::Npos,
+                r#"{"mode":"npos","details":null}"#,
+            ),
+        ] {
+            assert_eq!(ConsensusMode::from(legacy), mode);
+            assert_eq!(SumeragiConsensusMode::from(mode), legacy);
+            assert_eq!(norito::json::to_json(&mode).expect("json"), json);
+            assert_eq!(
+                norito::json::from_str::<ConsensusMode>(json).expect("json de"),
+                mode
+            );
+            let bytes = mode.encode();
+            assert_eq!(
+                ConsensusMode::decode_all(&mut bytes.as_slice()).expect("decode"),
+                mode
+            );
+        }
+        assert!(ConsensusMode::Permissioned.is_permissioned());
+        assert!(!ConsensusMode::Npos.is_permissioned());
+        // The v2 path keeps resolving to the same type until WP9.
+        let v2: crate::block::consensus_v2::ConsensusMode = ConsensusMode::Npos;
+        assert_eq!(v2, ConsensusMode::Npos);
     }
 
     #[test]

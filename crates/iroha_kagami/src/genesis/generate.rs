@@ -20,7 +20,7 @@ use iroha_data_model::{
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
-        system::{SumeragiConsensusMode, SumeragiNposParameters},
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
     prelude::*,
 };
@@ -521,7 +521,12 @@ fn format_profile_summary(
         "kagami profile summary: profile={:?} chain_id={} block_cadence_ms={} vrf_seed={} consensus_fingerprint={} kagami_version={}",
         profile,
         summary_chain,
-        profile_defaults.map_or(100, |defaults| defaults.block_cadence_ms.get()),
+        profile_defaults
+            .map_or_else(
+                || SumeragiParameters::default().block_cadence_ms(),
+                |defaults| defaults.block_cadence_ms,
+            )
+            .get(),
         vrf_seed_hex,
         summary_fingerprint,
         env!("CARGO_PKG_VERSION")
@@ -932,6 +937,55 @@ mod consensus_manifest_tests {
             defaults.block_cadence_ms
         );
         assert_eq!(npos.epoch_seed(), seed);
+    }
+    #[test]
+    fn profile_summary_without_profile_defaults_reports_the_data_model_cadence() {
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("summary-default-cadence"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+        )
+        .expect("generate unprofiled permissioned genesis");
+        let signed_cadence = manifest
+            .effective_parameters()
+            .expect("generated manifest has one structured parameter block")
+            .sumeragi()
+            .block_cadence_ms();
+        assert_eq!(
+            signed_cadence,
+            SumeragiParameters::default().block_cadence_ms()
+        );
+        let summary = format_profile_summary(
+            GenesisProfile::Iroha3Dev,
+            &ChainId::from("summary-default-cadence"),
+            None,
+            &manifest,
+            None,
+        );
+        assert!(
+            summary.contains(&format!(" block_cadence_ms={signed_cadence} ")),
+            "{summary}"
+        );
+        assert!(summary.contains(" block_cadence_ms=1000 "), "{summary}");
+        let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
+        let summary = format_profile_summary(
+            GenesisProfile::Iroha3Dev,
+            &defaults.chain_id,
+            Some(&defaults),
+            &manifest,
+            None,
+        );
+        assert!(
+            summary.contains(&format!(" block_cadence_ms={} ", defaults.block_cadence_ms)),
+            "{summary}"
+        );
     }
     #[test]
     fn npos_genesis_rejects_missing_seed() {

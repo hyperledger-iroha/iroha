@@ -360,6 +360,7 @@ struct MutableEventBlockWire {
     signatures: BTreeSet<BlockSignature>,
     payload: BlockPayload,
     result: Option<BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 fn mutate_event_body(

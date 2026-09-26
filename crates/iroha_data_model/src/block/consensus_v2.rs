@@ -163,35 +163,10 @@ pub type Height = u64;
 pub type View = u64;
 /// Index into the ordered voting roster frozen in a [`HeightContext`].
 pub type ValidatorIndex = u32;
-/// Consensus mode used to select the frozen equal-vote committee.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(
-    tag = "mode",
-    content = "details",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMode")]
-pub enum ConsensusMode {
-    /// Every validator has voting power one.
-    Permissioned,
-    /// Stake selects the finalized epoch committee; every member has one vote.
-    Npos,
-}
+// TODO(WP9): `ConsensusMode` moved to `crate::parameter::system`; this re-export and the v2-only
+// helpers below (`tag`, `bls_domain`) exist only while the Sumeragi v2 runtime still compiles and
+// disappear with the `consensus_v2` family.
+pub use crate::parameter::system::ConsensusMode;
 impl ConsensusMode {
     /// Return the canonical handshake and signing-domain tag for this mode.
     #[must_use]
@@ -207,27 +182,6 @@ impl ConsensusMode {
         match self {
             Self::Permissioned => PERMISSIONED_BLS_DOMAIN,
             Self::Npos => NPOS_BLS_DOMAIN,
-        }
-    }
-    /// Return whether this is permissioned consensus.
-    #[must_use]
-    pub const fn is_permissioned(self) -> bool {
-        matches!(self, Self::Permissioned)
-    }
-}
-impl From<crate::parameter::system::SumeragiConsensusMode> for ConsensusMode {
-    fn from(mode: crate::parameter::system::SumeragiConsensusMode) -> Self {
-        match mode {
-            crate::parameter::system::SumeragiConsensusMode::Permissioned => Self::Permissioned,
-            crate::parameter::system::SumeragiConsensusMode::Npos => Self::Npos,
-        }
-    }
-}
-impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
-    fn from(mode: ConsensusMode) -> Self {
-        match mode {
-            ConsensusMode::Permissioned => Self::Permissioned,
-            ConsensusMode::Npos => Self::Npos,
         }
     }
 }

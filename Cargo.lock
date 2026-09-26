@@ -5139,6 +5139,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm_abi",

@@ -3288,6 +3288,22 @@
       }
     ]
   },
+  "CommitCertificate": {
+    "Struct": [
+      {
+        "name": "consensus_header",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "commit_qc",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "result_preimage",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "CommittedTransaction": {
     "Struct": [
       {
@@ -6025,6 +6041,14 @@
       {
         "name": "executed_block_wire_hash",
         "type": "Hash"
+      },
+      {
+        "name": "transaction_input_commitment",
+        "type": "Option<MerkleTreeCommitment<TransactionEntrypoint>>"
+      },
+      {
+        "name": "transaction_output_commitment",
+        "type": "Option<MerkleTreeCommitment<ExecutionOutputV1>>"
       }
     ]
   },
@@ -10353,6 +10377,7 @@
   "HashOf<LaneBlockCommitment>": "Hash",
   "HashOf<LaneFinalityStatement>": "Hash",
   "HashOf<MergeLedgerEntry>": "Hash",
+  "HashOf<MerkleTree<ExecutionOutputV1>>": "Hash",
   "HashOf<MerkleTree<LaneFinalityStatement>>": "Hash",
   "HashOf<MerkleTree<TransactionEntrypoint>>": "Hash",
   "HashOf<MerkleTree<TransactionResult>>": "Hash",
@@ -12884,11 +12909,35 @@
       "Vec<HashOf<SignedTransaction>>"
     ]
   },
+  "MerkleTreeCommitment<ExecutionOutputV1>": {
+    "Struct": [
+      {
+        "name": "root",
+        "type": "HashOf<MerkleTree<ExecutionOutputV1>>"
+      },
+      {
+        "name": "leaf_count",
+        "type": "NonZero<u64>"
+      }
+    ]
+  },
   "MerkleTreeCommitment<LaneFinalityStatement>": {
     "Struct": [
       {
         "name": "root",
         "type": "HashOf<MerkleTree<LaneFinalityStatement>>"
+      },
+      {
+        "name": "leaf_count",
+        "type": "NonZero<u64>"
+      }
+    ]
+  },
+  "MerkleTreeCommitment<TransactionEntrypoint>": {
+    "Struct": [
+      {
+        "name": "root",
+        "type": "HashOf<MerkleTree<TransactionEntrypoint>>"
       },
       {
         "name": "leaf_count",
@@ -17657,6 +17706,9 @@
   "Option<CertifiedMergeLedgerReference>": {
     "Option": "CertifiedMergeLedgerReference"
   },
+  "Option<CommitCertificate>": {
+    "Option": "CommitCertificate"
+  },
   "Option<ConditionalEscrowAttestation>": {
     "Option": "ConditionalEscrowAttestation"
   },
@@ -17822,8 +17874,14 @@
   "Option<MergeExecutionBatch>": {
     "Option": "MergeExecutionBatch"
   },
+  "Option<MerkleTreeCommitment<ExecutionOutputV1>>": {
+    "Option": "MerkleTreeCommitment<ExecutionOutputV1>"
+  },
   "Option<MerkleTreeCommitment<LaneFinalityStatement>>": {
     "Option": "MerkleTreeCommitment<LaneFinalityStatement>"
+  },
+  "Option<MerkleTreeCommitment<TransactionEntrypoint>>": {
+    "Option": "MerkleTreeCommitment<TransactionEntrypoint>"
   },
   "Option<ModerationChallengeDecisionV1>": {
     "Option": "ModerationChallengeDecisionV1"
@@ -25414,6 +25472,10 @@
       {
         "name": "result",
         "type": "Option<BlockResult>"
+      },
+      {
+        "name": "commit_certificate",
+        "type": "Option<CommitCertificate>"
       }
     ]
   },
@@ -28958,6 +29020,41 @@
         "discriminant": 0,
         "tag": "MaxClockDriftMs",
         "type": "u64"
+      },
+      {
+        "discriminant": 1,
+        "tag": "IdleBlockIntervalMs",
+        "type": "NonZero<u64>"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ExecBudgetMs",
+        "type": "NonZero<u64>"
+      },
+      {
+        "discriminant": 3,
+        "tag": "ApplyBudgetMs",
+        "type": "NonZero<u64>"
+      },
+      {
+        "discriminant": 4,
+        "tag": "MaxBlockBytes",
+        "type": "NonZero<u32>"
+      },
+      {
+        "discriminant": 5,
+        "tag": "EmptyAfterViews",
+        "type": "NonZero<u64>"
+      },
+      {
+        "discriminant": 6,
+        "tag": "EpochLengthBlocks",
+        "type": "NonZero<u64>"
+      },
+      {
+        "discriminant": 7,
+        "tag": "DemotionWindow",
+        "type": "NonZero<u64>"
       }
     ]
   },
@@ -28986,6 +29083,34 @@
       {
         "name": "key_allowed_algorithms",
         "type": "Vec<Algorithm>"
+      },
+      {
+        "name": "idle_block_interval_ms",
+        "type": "NonZero<u64>"
+      },
+      {
+        "name": "exec_budget_ms",
+        "type": "NonZero<u64>"
+      },
+      {
+        "name": "apply_budget_ms",
+        "type": "NonZero<u64>"
+      },
+      {
+        "name": "max_block_bytes",
+        "type": "NonZero<u32>"
+      },
+      {
+        "name": "empty_after_views",
+        "type": "NonZero<u64>"
+      },
+      {
+        "name": "epoch_length_blocks",
+        "type": "NonZero<u64>"
+      },
+      {
+        "name": "demotion_window",
+        "type": "NonZero<u64>"
       }
     ]
   },

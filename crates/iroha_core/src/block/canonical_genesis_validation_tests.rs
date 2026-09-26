@@ -6,6 +6,7 @@ struct MutableGenesisBlockWire {
     signatures: std::collections::BTreeSet<BlockSignature>,
     payload: BlockPayload,
     result: Option<BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 fn install_genesis_outputs(

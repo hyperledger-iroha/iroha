@@ -1,0 +1,5 @@
+extends = ["base.toml"]
+
+[sumeragi]
+records_dir = "sumeragi/records"
+installation_log = "keys/installation.log"

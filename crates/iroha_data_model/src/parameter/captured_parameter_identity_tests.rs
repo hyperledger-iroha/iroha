@@ -38,6 +38,12 @@ macro_rules! parameter_owners {
             "847eca5152f46ee278ecc4fb1e64d7fd",
         );
         $check!(
+            super::system::ConsensusMode,
+            "iroha_data_model::parameter::system::ConsensusMode",
+            "c05071af4e6a7cc499fc123b35357a21",
+            "c05071af4e6a7cc499fc123b35357a21",
+        );
+        $check!(
             super::system::SumeragiConsensusMode,
             "iroha_data_model::parameter::system::model::SumeragiConsensusMode",
             "871cda753b21fdf37553e46af3668304",
@@ -155,4 +161,14 @@ fn captured_parameter_deserialize_hashes() {
         };
     }
     parameter_owners!(check);
+}
+
+#[test]
+fn consensus_mode_keeps_its_captured_codec_row_after_the_move() {
+    // `ConsensusMode` moved out of `block::consensus_v2`; the compiler-captured codec row moved
+    // with it (same codec, new nominal identity).
+    crate::captured_schema_tests::Case::bidirectional::<super::system::ConsensusMode>(
+        "iroha_data_model::parameter::system::ConsensusMode",
+    )
+    .check();
 }

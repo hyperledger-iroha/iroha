@@ -4245,6 +4245,12 @@ pub mod sumeragi {
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()
     }
+    /// Suffix of the default safety-record directory, a sibling of the Kura store directory
+    /// (`specs/sumeragi.md` §7.4: records are never backed up or restored with the store).
+    pub const RECORDS_DIR_SUFFIX: &str = "-sumeragi-records";
+    /// Suffix of the default key installation log, a sibling of the Kura store directory and
+    /// outside the record directory (§7.4).
+    pub const INSTALLATION_LOG_SUFFIX: &str = "-sumeragi-installation.log";
     /// NPoS epoch, randomness, election, and reconfiguration defaults.
     pub mod npos {
         /// Epoch length in blocks.
